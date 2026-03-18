@@ -27,18 +27,21 @@ pub fn spawn_block_highlighter(
     commands: &mut Commands,
     materials: &BlockMaterials,
     mesh: &Handle<Mesh>,
+    render_origin_root: Entity,
 ) {
     let highlight_material = materials.highlight.clone();
 
-    commands
-        .spawn((
-            Mesh3d(mesh.clone()),
-            MeshMaterial3d(highlight_material),
-            Transform::from_scale(Vec3::splat(1.01)),
-            Visibility::Hidden,
-            BlockHighlighter,
-        ))
-        .insert(Name::new("BlockHighlighter"));
+    commands.entity(render_origin_root).with_children(|parent| {
+        parent
+            .spawn((
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(highlight_material),
+                Transform::from_scale(Vec3::splat(1.01)),
+                Visibility::Hidden,
+                BlockHighlighter,
+            ))
+            .insert(Name::new("BlockHighlighter"));
+    });
 }
 
 #[derive(SystemParam)]
@@ -306,9 +309,13 @@ fn place_block_at_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::transform::TransformPlugin;
     use bevy::window::CursorGrabMode;
 
-    use crate::world::{BlockEntityIndex, BlockMesh, sync_block_render_system};
+    use crate::world::{
+        BlockEntityIndex, BlockMesh, RenderOriginRoot, RenderOriginRootEntity,
+        sync_block_render_system, sync_render_origin_root_system,
+    };
 
     fn test_block_materials() -> BlockMaterials {
         BlockMaterials {
@@ -330,6 +337,18 @@ mod tests {
         app.insert_resource(test_block_materials());
         app.insert_resource(HighlightTarget::default());
         app.init_resource::<SelectedBlock>();
+        let render_origin_root = app
+            .world_mut()
+            .spawn((
+                RenderOriginRoot,
+                Transform::default(),
+                GlobalTransform::default(),
+                Visibility::Visible,
+                InheritedVisibility::VISIBLE,
+                ViewVisibility::default(),
+            ))
+            .id();
+        app.insert_resource(RenderOriginRootEntity(render_origin_root));
         app.add_systems(
             Update,
             (
@@ -423,5 +442,53 @@ mod tests {
         app.update();
 
         assert_eq!(app.world().resource::<HighlightTarget>().0, None);
+    }
+
+    #[test]
+    fn highlighter_global_transform_is_camera_relative() {
+        let mut app = App::new();
+        app.add_plugins(TransformPlugin);
+        app.insert_resource(HighlightTarget(Some((IVec3::new(10, 0, 0), IVec3::X))));
+        let render_origin_root = app
+            .world_mut()
+            .spawn((
+                RenderOriginRoot,
+                Transform::default(),
+                GlobalTransform::default(),
+                Visibility::Visible,
+                InheritedVisibility::VISIBLE,
+                ViewVisibility::default(),
+            ))
+            .id();
+        app.insert_resource(RenderOriginRootEntity(render_origin_root));
+        app.add_systems(
+            Update,
+            (highlight_system, sync_render_origin_root_system).chain(),
+        );
+        let materials = test_block_materials();
+        let mesh = Handle::default();
+        app.add_systems(Startup, move |mut commands: Commands| {
+            commands.entity(render_origin_root).with_children(|parent| {
+                parent.spawn((
+                    MainCamera,
+                    Camera3d::default(),
+                    Transform::from_translation(Vec3::new(8.0, 0.0, 0.0)),
+                ));
+            });
+            spawn_block_highlighter(&mut commands, &materials, &mesh, render_origin_root);
+        });
+
+        app.update();
+
+        let mut highlighter_query = app
+            .world_mut()
+            .query_filtered::<&GlobalTransform, With<BlockHighlighter>>();
+        let highlighter_transform = highlighter_query
+            .single(app.world_mut())
+            .expect("highlighter should exist");
+        assert_eq!(
+            highlighter_transform.translation(),
+            Vec3::new(2.0, 0.0, 0.0)
+        );
     }
 }

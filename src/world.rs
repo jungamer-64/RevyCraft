@@ -497,6 +497,12 @@ impl BlockEntityIndex {
     }
 }
 
+#[derive(Component)]
+pub struct RenderOriginRoot;
+
+#[derive(Resource, Clone, Copy)]
+pub struct RenderOriginRootEntity(pub(crate) Entity);
+
 #[derive(Resource, Default)]
 pub struct RenderSyncQueue(HashSet<IVec3>);
 
@@ -540,19 +546,29 @@ fn render_sync_state_at(world: &VoxelWorld, coordinate: IVec3) -> RenderSyncStat
 
 fn spawn_block_entity(
     commands: &mut Commands,
+    render_origin_root: RenderOriginRootEntity,
     entity_index: &mut BlockEntityIndex,
     mesh: &Handle<Mesh>,
     materials: &BlockMaterials,
     coordinate: IVec3,
     block_type: BlockType,
 ) {
-    let entity = commands
-        .spawn((
-            Mesh3d(mesh.clone()),
-            MeshMaterial3d(materials.material_for(block_type)),
-            Transform::from_translation(coordinate.as_vec3()),
-        ))
-        .id();
+    let mut spawned_entity = None;
+    commands
+        .entity(render_origin_root.0)
+        .with_children(|parent| {
+            spawned_entity = Some(
+                parent
+                    .spawn((
+                        Mesh3d(mesh.clone()),
+                        MeshMaterial3d(materials.material_for(block_type)),
+                        Transform::from_translation(coordinate.as_vec3()),
+                    ))
+                    .id(),
+            );
+        });
+
+    let entity = spawned_entity.expect("block entity spawn should produce a child entity");
 
     entity_index.insert(coordinate, entity);
 }
@@ -560,6 +576,7 @@ fn spawn_block_entity(
 fn sync_dirty_block(
     commands: &mut Commands,
     world: &VoxelWorld,
+    render_origin_root: RenderOriginRootEntity,
     entity_index: &mut BlockEntityIndex,
     mesh: &Handle<Mesh>,
     materials: &BlockMaterials,
@@ -572,6 +589,7 @@ fn sync_dirty_block(
     if let RenderSyncState::Exposed(block_type) = render_sync_state_at(world, coordinate) {
         spawn_block_entity(
             commands,
+            render_origin_root,
             entity_index,
             mesh,
             materials,
@@ -585,6 +603,7 @@ fn sync_dirty_block(
 pub struct RenderSyncResources<'w, 's> {
     commands: Commands<'w, 's>,
     voxel_world: Res<'w, VoxelWorld>,
+    render_origin_root: Res<'w, RenderOriginRootEntity>,
     block_entity_index: ResMut<'w, BlockEntityIndex>,
     render_sync_queue: ResMut<'w, RenderSyncQueue>,
     block_mesh: Res<'w, BlockMesh>,
@@ -597,6 +616,7 @@ impl RenderSyncResources<'_, '_> {
             sync_dirty_block(
                 &mut self.commands,
                 &self.voxel_world,
+                *self.render_origin_root,
                 &mut self.block_entity_index,
                 &self.block_mesh.0,
                 &self.block_materials,
@@ -607,6 +627,30 @@ impl RenderSyncResources<'_, '_> {
 }
 
 pub fn sync_block_render_system(resources: RenderSyncResources) {
+    resources.run();
+}
+
+#[derive(SystemParam)]
+pub struct RenderOriginSyncResources<'w, 's> {
+    camera_query: Query<'w, 's, &'static Transform, With<MainCamera>>,
+    root_query:
+        Query<'w, 's, &'static mut Transform, (With<RenderOriginRoot>, Without<MainCamera>)>,
+}
+
+impl RenderOriginSyncResources<'_, '_> {
+    fn run(mut self) {
+        let Ok(camera_transform) = self.camera_query.single() else {
+            return;
+        };
+        let Ok(mut root_transform) = self.root_query.single_mut() else {
+            return;
+        };
+
+        root_transform.translation = -camera_transform.translation;
+    }
+}
+
+pub fn sync_render_origin_root_system(resources: RenderOriginSyncResources) {
     resources.run();
 }
 
@@ -740,18 +784,34 @@ pub fn initialize_visible_world(
     );
 }
 
-pub fn spawn_directional_light(commands: &mut Commands) {
-    commands.spawn((
-        DirectionalLight {
-            shadows_enabled: true,
-            illuminance: 10_000.0,
-            ..default()
-        },
-        Transform::from_rotation(
-            Quat::from_rotation_y(-std::f32::consts::FRAC_PI_8)
-                * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4),
-        ),
-    ));
+pub fn spawn_render_origin_root(commands: &mut Commands) -> Entity {
+    commands
+        .spawn((
+            Name::new("RenderOriginRoot"),
+            RenderOriginRoot,
+            Transform::from_translation(-INITIAL_CAMERA_EYE_POSITION),
+            GlobalTransform::default(),
+            Visibility::Visible,
+            InheritedVisibility::VISIBLE,
+            ViewVisibility::default(),
+        ))
+        .id()
+}
+
+pub fn spawn_directional_light(commands: &mut Commands, render_origin_root: Entity) {
+    commands.entity(render_origin_root).with_children(|parent| {
+        parent.spawn((
+            DirectionalLight {
+                shadows_enabled: true,
+                illuminance: 10_000.0,
+                ..default()
+            },
+            Transform::from_rotation(
+                Quat::from_rotation_y(-std::f32::consts::FRAC_PI_8)
+                    * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_4),
+            ),
+        ));
+    });
 }
 
 pub fn generate_chunk(
@@ -1078,6 +1138,7 @@ fn rounded_height_to_i32(height: f64) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::transform::TransformPlugin;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1098,6 +1159,22 @@ mod tests {
             "revycraft-{label}-{}-{unique_suffix}",
             std::process::id()
         ))
+    }
+
+    fn insert_render_origin_root(app: &mut App, translation: Vec3) -> Entity {
+        let render_origin_root = app
+            .world_mut()
+            .spawn((
+                RenderOriginRoot,
+                Transform::from_translation(translation),
+                GlobalTransform::default(),
+                Visibility::Visible,
+                InheritedVisibility::VISIBLE,
+                ViewVisibility::default(),
+            ))
+            .id();
+        app.insert_resource(RenderOriginRootEntity(render_origin_root));
+        render_origin_root
     }
 
     fn top_block_at(
@@ -1314,6 +1391,7 @@ mod tests {
         app.insert_resource(RenderSyncQueue::default());
         app.insert_resource(BlockMesh(Handle::default()));
         app.insert_resource(test_block_materials());
+        let _ = insert_render_origin_root(&mut app, Vec3::ZERO);
         app.add_systems(Update, sync_block_render_system);
 
         {
@@ -1337,6 +1415,7 @@ mod tests {
         app.insert_resource(RenderSyncQueue::default());
         app.insert_resource(BlockMesh(Handle::default()));
         app.insert_resource(test_block_materials());
+        let _ = insert_render_origin_root(&mut app, Vec3::ZERO);
         app.add_systems(Update, sync_block_render_system);
 
         {
@@ -1370,6 +1449,7 @@ mod tests {
         app.insert_resource(RenderSyncQueue::default());
         app.insert_resource(BlockMesh(Handle::default()));
         app.insert_resource(test_block_materials());
+        let _ = insert_render_origin_root(&mut app, Vec3::ZERO);
         app.add_systems(Update, sync_block_render_system);
 
         let hidden_target = IVec3::X;
@@ -1425,6 +1505,7 @@ mod tests {
         app.insert_resource(RenderSyncQueue::default());
         app.insert_resource(BlockMesh(Handle::default()));
         app.insert_resource(test_block_materials());
+        let _ = insert_render_origin_root(&mut app, Vec3::ZERO);
         app.insert_resource(WorldSeed(7));
         app.insert_resource(TerrainSettings::default());
         app.insert_resource(chunk_load_settings);
@@ -1506,6 +1587,7 @@ mod tests {
         app.insert_resource(RenderSyncQueue::default());
         app.insert_resource(BlockMesh(Handle::default()));
         app.insert_resource(test_block_materials());
+        let _ = insert_render_origin_root(&mut app, Vec3::ZERO);
         app.insert_resource(WorldSeed(11));
         app.insert_resource(TerrainSettings::default());
         app.insert_resource(chunk_load_settings);
@@ -1537,5 +1619,81 @@ mod tests {
             top_block_at(&chunk_data, layout, 0, 0),
             Some(BlockType::Grass | BlockType::Stone)
         ));
+    }
+
+    #[test]
+    fn render_origin_root_tracks_negative_camera_world_position() {
+        let mut app = App::new();
+        let _ = insert_render_origin_root(&mut app, Vec3::ZERO);
+        app.world_mut().spawn((
+            MainCamera,
+            Transform::from_translation(Vec3::new(8.0, 3.0, -2.0)),
+        ));
+        app.add_systems(Update, sync_render_origin_root_system);
+
+        app.update();
+
+        let mut root_query = app
+            .world_mut()
+            .query_filtered::<&Transform, With<RenderOriginRoot>>();
+        let root_transform = root_query
+            .single(app.world_mut())
+            .expect("render origin root should exist");
+        assert_eq!(root_transform.translation, Vec3::new(-8.0, -3.0, 2.0));
+    }
+
+    #[test]
+    fn block_global_transform_becomes_camera_relative() {
+        let mut app = App::new();
+        app.add_plugins(TransformPlugin);
+        app.insert_resource(VoxelWorld::default());
+        app.insert_resource(BlockEntityIndex::default());
+        app.insert_resource(RenderSyncQueue::default());
+        app.insert_resource(BlockMesh(Handle::default()));
+        app.insert_resource(test_block_materials());
+        let render_origin_root = insert_render_origin_root(&mut app, -Vec3::new(8.0, 0.0, 0.0));
+        app.add_systems(
+            Update,
+            (sync_block_render_system, sync_render_origin_root_system).chain(),
+        );
+        app.add_systems(Startup, move |mut commands: Commands| {
+            commands.entity(render_origin_root).with_children(|parent| {
+                parent.spawn((
+                    MainCamera,
+                    Camera3d::default(),
+                    Transform::from_translation(Vec3::new(8.0, 0.0, 0.0)),
+                ));
+            });
+        });
+
+        {
+            let mut world = app.world_mut().resource_mut::<VoxelWorld>();
+            let _ = world.try_insert_block(IVec3::new(10, 0, 0), BlockType::Stone);
+        }
+        app.world_mut()
+            .resource_mut::<RenderSyncQueue>()
+            .mark(IVec3::new(10, 0, 0));
+
+        app.update();
+
+        let block_entity = *app
+            .world()
+            .resource::<BlockEntityIndex>()
+            .0
+            .get(&IVec3::new(10, 0, 0))
+            .expect("block entity should be indexed");
+        let global_transform = app
+            .world()
+            .get::<GlobalTransform>(block_entity)
+            .expect("block entity should have a global transform");
+        assert_eq!(global_transform.translation(), Vec3::new(2.0, 0.0, 0.0));
+
+        let mut camera_query = app
+            .world_mut()
+            .query_filtered::<&Transform, With<MainCamera>>();
+        let camera_transform = camera_query
+            .single(app.world_mut())
+            .expect("camera should exist");
+        assert_eq!(camera_transform.translation, Vec3::new(8.0, 0.0, 0.0));
     }
 }

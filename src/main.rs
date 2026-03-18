@@ -18,10 +18,11 @@ use player::{
     camera_look_system, camera_movement_system, lock_cursor, spawn_camera, toggle_cursor_grab,
 };
 use world::{
-    BlockEntityIndex, BlockMesh, ChunkLoadSettings, RenderSyncQueue, TerrainSettings, VoxelWorld,
-    WorldSaveDirectory, WorldSeed, create_block_materials, create_cube_mesh,
-    initialize_visible_world, save_loaded_chunks_on_exit_system, spawn_directional_light,
-    sync_block_render_system, sync_visible_chunks_system,
+    BlockEntityIndex, BlockMesh, ChunkLoadSettings, RenderOriginRootEntity, RenderSyncQueue,
+    TerrainSettings, VoxelWorld, WorldSaveDirectory, WorldSeed, create_block_materials,
+    create_cube_mesh, initialize_visible_world, save_loaded_chunks_on_exit_system,
+    spawn_directional_light, spawn_render_origin_root, sync_block_render_system,
+    sync_render_origin_root_system, sync_visible_chunks_system,
 };
 
 #[derive(SystemParam)]
@@ -48,8 +49,12 @@ impl SetupResources<'_, '_> {
         let cube_mesh = create_cube_mesh(&mut self.meshes);
         self.commands.insert_resource(BlockMesh(cube_mesh.clone()));
 
-        spawn_directional_light(&mut self.commands);
-        spawn_camera(&mut self.commands);
+        let render_origin_root = spawn_render_origin_root(&mut self.commands);
+        self.commands
+            .insert_resource(RenderOriginRootEntity(render_origin_root));
+
+        spawn_directional_light(&mut self.commands, render_origin_root);
+        spawn_camera(&mut self.commands, render_origin_root);
         initialize_visible_world(
             &mut self.voxel_world,
             &mut self.render_sync_queue,
@@ -58,7 +63,12 @@ impl SetupResources<'_, '_> {
             &self.chunk_load_settings,
             &self.world_save_directory,
         );
-        spawn_block_highlighter(&mut self.commands, &block_materials, &cube_mesh);
+        spawn_block_highlighter(
+            &mut self.commands,
+            &block_materials,
+            &cube_mesh,
+            render_origin_root,
+        );
     }
 }
 
@@ -90,15 +100,16 @@ fn main() {
         .add_systems(
             Update,
             (
-                sync_visible_chunks_system,
                 camera_movement_system,
                 camera_look_system,
+                sync_visible_chunks_system,
                 update_highlight_target_pre_edit_system,
                 block_edit_system,
                 sync_block_render_system,
                 update_highlight_target_post_edit_system,
                 block_selection_system,
                 highlight_system,
+                sync_render_origin_root_system,
                 toggle_cursor_grab,
             )
                 .chain(),

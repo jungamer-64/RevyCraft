@@ -47,22 +47,24 @@ struct PlayerPhysics {
     grounded: bool,
 }
 
-pub fn spawn_camera(commands: &mut Commands) {
+pub fn spawn_camera(commands: &mut Commands, render_origin_root: Entity) {
     let yaw = 0.0;
     let pitch = -0.2;
     let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch);
 
-    commands
-        .spawn((
-            Camera3d::default(),
-            Transform::from_translation(INITIAL_CAMERA_EYE_POSITION).with_rotation(rotation),
-        ))
-        .insert(MainCamera)
-        .insert(CameraOrientation { yaw, pitch })
-        .insert(PlayerPhysics {
-            velocity: Vec3::ZERO,
-            grounded: false,
-        });
+    commands.entity(render_origin_root).with_children(|parent| {
+        parent
+            .spawn((
+                Camera3d::default(),
+                Transform::from_translation(INITIAL_CAMERA_EYE_POSITION).with_rotation(rotation),
+            ))
+            .insert(MainCamera)
+            .insert(CameraOrientation { yaw, pitch })
+            .insert(PlayerPhysics {
+                velocity: Vec3::ZERO,
+                grounded: false,
+            });
+    });
 }
 
 pub fn lock_cursor(cursor: &mut Query<&mut CursorOptions, With<PrimaryWindow>>) {
