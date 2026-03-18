@@ -1,4 +1,8 @@
-use bevy::input::{ButtonInput, keyboard::KeyCode, mouse::{AccumulatedMouseMotion, MouseButton}};
+use bevy::input::{
+    ButtonInput,
+    keyboard::KeyCode,
+    mouse::{AccumulatedMouseMotion, MouseButton},
+};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowResolution};
 use std::collections::{HashMap, HashSet};
@@ -57,14 +61,33 @@ fn setup(
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut voxel_world: ResMut<VoxelWorld>,
 ) {
-    // Lock the cursor for a first-person look.
+    lock_cursor(&mut cursor);
+
+    let block_materials = create_block_materials(&mut materials);
+    commands.insert_resource(block_materials.clone());
+
+    let cube_mesh = create_cube_mesh(&mut meshes);
+    commands.insert_resource(BlockMesh(cube_mesh.clone()));
+
+    build_terrain(
+        &mut commands,
+        &mut voxel_world,
+        &cube_mesh,
+        &block_materials,
+    );
+    spawn_directional_light(&mut commands);
+    spawn_camera(&mut commands);
+}
+
+fn lock_cursor(cursor: &mut Query<&mut CursorOptions, With<PrimaryWindow>>) {
     if let Ok(mut cursor) = cursor.single_mut() {
         cursor.visible = false;
         cursor.grab_mode = CursorGrabMode::Locked;
     }
+}
 
-    // Shared block materials.
-    let block_materials = BlockMaterials {
+fn create_block_materials(materials: &mut ResMut<Assets<StandardMaterial>>) -> BlockMaterials {
+    BlockMaterials {
         grass: materials.add(StandardMaterial {
             base_color: Color::srgb(0.35, 0.7, 0.25),
             perceptual_roughness: 0.9,
@@ -80,34 +103,41 @@ fn setup(
             perceptual_roughness: 0.95,
             ..Default::default()
         }),
-    };
+    }
+}
 
-    commands.insert_resource(block_materials.clone());
+fn create_cube_mesh(meshes: &mut ResMut<Assets<Mesh>>) -> Handle<Mesh> {
+    meshes.add(Mesh::from(Cuboid::new(1.0, 1.0, 1.0)))
+}
 
-    // Ground mesh (unit cube) reused for all blocks.
-    let cube_mesh = meshes.add(Mesh::from(Cuboid::new(1.0, 1.0, 1.0)));
-    commands.insert_resource(BlockMesh(cube_mesh.clone()));
-
-    // Create a simple heightmap terrain.
+fn build_terrain(
+    commands: &mut Commands,
+    voxel_world: &mut VoxelWorld,
+    cube_mesh: &Handle<Mesh>,
+    block_materials: &BlockMaterials,
+) {
     let chunk_size = 16;
+
     for x in -chunk_size..chunk_size {
         for z in -chunk_size..chunk_size {
             // Simple height function for rolling hills.
             let height = ((x as f32 * 0.3).sin() + (z as f32 * 0.3).cos()) * 2.5 + 4.0;
             let height = height.round() as i32;
+
             for y in 0..=height {
                 spawn_block(
-                    &mut commands,
-                    &mut voxel_world,
-                    &cube_mesh,
-                    &block_materials,
+                    commands,
+                    voxel_world,
+                    cube_mesh,
+                    block_materials,
                     IVec3::new(x, y, z),
                 );
             }
         }
     }
+}
 
-    // Lighting.
+fn spawn_directional_light(commands: &mut Commands) {
     commands.spawn((
         DirectionalLight {
             shadows_enabled: true,
@@ -118,13 +148,13 @@ fn setup(
             .with_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_8)),
         GlobalTransform::default(),
     ));
+}
 
-    // Camera.
+fn spawn_camera(commands: &mut Commands) {
     commands
         .spawn((
             Camera3d::default(),
-            Transform::from_xyz(0.0, 8.0, 15.0)
-                .looking_at(Vec3::new(0.0, 4.0, 0.0), Vec3::Y),
+            Transform::from_xyz(0.0, 8.0, 15.0).looking_at(Vec3::new(0.0, 4.0, 0.0), Vec3::Y),
             GlobalTransform::default(),
         ))
         .insert(MainCamera);
@@ -183,30 +213,27 @@ fn camera_movement_system(
         Err(_) => return,
     };
 
-    let mut direction = Vec3::ZERO;
     let forward: Vec3 = transform.forward().into();
     let forward = forward.with_y(0.).normalize_or_zero();
     let right: Vec3 = transform.right().into();
     let right = right.with_y(0.).normalize_or_zero();
 
-    if keyboard.pressed(KeyCode::KeyW) {
-        direction += forward;
-    }
-    if keyboard.pressed(KeyCode::KeyS) {
-        direction -= forward;
-    }
-    if keyboard.pressed(KeyCode::KeyA) {
-        direction -= right;
-    }
-    if keyboard.pressed(KeyCode::KeyD) {
-        direction += right;
-    }
-    if keyboard.pressed(KeyCode::Space) {
-        direction += Vec3::Y;
-    }
-    if keyboard.pressed(KeyCode::ShiftLeft) {
-        direction -= Vec3::Y;
-    }
+    let direction = [
+        (KeyCode::KeyW, forward),
+        (KeyCode::KeyS, -forward),
+        (KeyCode::KeyA, -right),
+        (KeyCode::KeyD, right),
+        (KeyCode::Space, Vec3::Y),
+        (KeyCode::ShiftLeft, -Vec3::Y),
+    ]
+    .iter()
+    .fold(Vec3::ZERO, |acc, (key, dir)| {
+        if keyboard.pressed(*key) {
+            acc + *dir
+        } else {
+            acc
+        }
+    });
 
     if direction.length_squared() > 0.0 {
         let speed = 10.0;
