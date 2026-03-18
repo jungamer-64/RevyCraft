@@ -21,10 +21,15 @@ const JUMP_SPEED: f32 = 5.0;
 const MOVE_SPEED: f32 = 10.0;
 const TERMINAL_VELOCITY: f32 = -50.0;
 
-const MOVEMENT_COLLISION_SAMPLE_Y: [f32; 3] =
-    [PLAYER_RADIUS, PLAYER_HEIGHT * 0.5, PLAYER_HEIGHT - 0.1];
-const MAX_Y_STEP: f32 = 0.4;
-const MAX_Y_SUBSTEPS: i32 = 20;
+const MOVEMENT_COLLISION_SAMPLE_Y: [f32; 3] = [
+    PLAYER_RADIUS,
+    PLAYER_HEIGHT * 0.5,
+    PLAYER_HEIGHT - PLAYER_RADIUS,
+];
+const MAX_AXIS_STEP: f32 = 0.4;
+const MAX_AXIS_SUBSTEPS: i32 = 32;
+const AXIS_SWEEP_REFINEMENT_STEPS: i32 = 10;
+const SUPPORT_CHECK_EPSILON: f32 = 0.002;
 
 #[derive(Clone, Copy)]
 enum CollisionBoundary {
@@ -98,8 +103,8 @@ impl CameraMovementResources<'_, '_> {
 
         let delta = player.velocity * self.time.delta_secs();
         resolve_horizontal_movement(&self.voxel_world, &mut foot_position, &mut player, delta);
-        player.grounded =
-            resolve_vertical_movement(&self.voxel_world, &mut foot_position, &mut player, delta.y);
+        resolve_vertical_movement(&self.voxel_world, &mut foot_position, &mut player, delta.y);
+        player.grounded = has_support_below(&self.voxel_world, foot_position);
         transform.translation = foot_to_eye_position(foot_position);
     }
 }
@@ -314,11 +319,7 @@ fn resolve_horizontal_axis(
     delta: f32,
     axis: Vec3,
 ) {
-    *foot_position += axis * delta;
-    if collides(world, *foot_position) {
-        *foot_position -= axis * delta;
-        *velocity = 0.0;
-    }
+    let _ = resolve_axis_movement(world, foot_position, velocity, delta, axis);
 }
 
 fn resolve_vertical_movement(
@@ -326,30 +327,86 @@ fn resolve_vertical_movement(
     foot_position: &mut Vec3,
     player: &mut PlayerPhysics,
     delta_y: f32,
+) {
+    let _ = resolve_axis_movement(
+        world,
+        foot_position,
+        &mut player.velocity.y,
+        delta_y,
+        Vec3::Y,
+    );
+}
+
+fn resolve_axis_movement(
+    world: &VoxelWorld,
+    foot_position: &mut Vec3,
+    velocity: &mut f32,
+    delta: f32,
+    axis: Vec3,
 ) -> bool {
-    let mut grounded = false;
-    let mut remaining_y = delta_y;
+    let mut remaining = delta;
 
-    for _ in 0..MAX_Y_SUBSTEPS {
-        if remaining_y.abs() < f32::EPSILON {
-            break;
+    for _ in 0..MAX_AXIS_SUBSTEPS {
+        if remaining.abs() < f32::EPSILON {
+            return false;
         }
 
-        let dy_step = remaining_y.clamp(-MAX_Y_STEP, MAX_Y_STEP);
-        foot_position.y += dy_step;
-        if collides(world, *foot_position) {
-            foot_position.y -= dy_step;
-            if player.velocity.y <= 0.0 {
-                grounded = true;
-            }
-            player.velocity.y = 0.0;
-            break;
+        let step = remaining.clamp(-MAX_AXIS_STEP, MAX_AXIS_STEP);
+        if move_to_axis_contact(world, foot_position, step, axis) {
+            *velocity = 0.0;
+            return true;
         }
 
-        remaining_y -= dy_step;
+        remaining -= step;
     }
 
-    grounded
+    false
+}
+
+fn move_to_axis_contact(
+    world: &VoxelWorld,
+    foot_position: &mut Vec3,
+    delta: f32,
+    axis: Vec3,
+) -> bool {
+    if delta.abs() < f32::EPSILON {
+        return false;
+    }
+
+    let start = *foot_position;
+    *foot_position += axis * delta;
+    if !collides(world, *foot_position) {
+        return false;
+    }
+
+    *foot_position = start;
+
+    let direction = delta.signum();
+    let mut safe_distance = 0.0;
+    let mut blocked_distance = delta.abs();
+
+    for _ in 0..AXIS_SWEEP_REFINEMENT_STEPS {
+        let candidate_distance = 0.5 * (safe_distance + blocked_distance);
+        let candidate = start + axis * (direction * candidate_distance);
+        if collides(world, candidate) {
+            blocked_distance = candidate_distance;
+        } else {
+            safe_distance = candidate_distance;
+        }
+    }
+
+    *foot_position = start + axis * (direction * safe_distance);
+    true
+}
+
+fn has_support_below(world: &VoxelWorld, foot_position: Vec3) -> bool {
+    let support_center = foot_position + Vec3::Y * (PLAYER_RADIUS - SUPPORT_CHECK_EPSILON);
+    sphere_collides_world(
+        world,
+        support_center,
+        PLAYER_RADIUS,
+        CollisionBoundary::Exclusive,
+    )
 }
 
 fn collides(world: &VoxelWorld, position: Vec3) -> bool {
@@ -379,6 +436,35 @@ fn collides(world: &VoxelWorld, position: Vec3) -> bool {
                     block_coord,
                     CollisionBoundary::Exclusive,
                 ) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn sphere_collides_world(
+    world: &VoxelWorld,
+    center: Vec3,
+    radius: f32,
+    boundary: CollisionBoundary,
+) -> bool {
+    let min = (center - Vec3::splat(radius)).floor().as_ivec3();
+    let max = (center + Vec3::splat(radius)).floor().as_ivec3();
+
+    for x in min.x..=max.x {
+        for y in min.y..=max.y {
+            for z in min.z..=max.z {
+                let block_coord = IVec3::new(x, y, z);
+                if !world.contains_block(block_coord) {
+                    continue;
+                }
+
+                let block_min = block_coord.as_vec3();
+                let block_max = block_min + Vec3::ONE;
+                if sphere_aabb_collides(center, radius, block_min, block_max, boundary) {
                     return true;
                 }
             }
@@ -445,6 +531,7 @@ fn sample_points_overlap_voxel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::{BlockType, VoxelWorld, WorldLayout};
 
     #[test]
     fn player_collides_when_capsule_overlaps_voxel() {
@@ -487,5 +574,33 @@ mod tests {
             aabb_max,
             CollisionBoundary::Inclusive,
         ));
+    }
+
+    #[test]
+    fn support_check_requires_block_below_player() {
+        let mut world = VoxelWorld::new(WorldLayout::default());
+        assert!(world.try_insert_block(IVec3::new(0, 1, 0), BlockType::Stone));
+
+        let foot_position = Vec3::new(1.35, 1.0, 0.5);
+        assert!(!collides(&world, foot_position));
+        assert!(!has_support_below(&world, foot_position));
+    }
+
+    #[test]
+    fn vertical_resolution_stops_close_to_floor_contact() {
+        let mut world = VoxelWorld::new(WorldLayout::default());
+        assert!(world.try_insert_block(IVec3::ZERO, BlockType::Stone));
+
+        let mut foot_position = Vec3::new(0.5, 1.2, 0.5);
+        let mut player = PlayerPhysics {
+            velocity: Vec3::new(0.0, -12.0, 0.0),
+            grounded: false,
+        };
+
+        resolve_vertical_movement(&world, &mut foot_position, &mut player, -0.4);
+
+        assert!((foot_position.y - 1.0).abs() < 0.01);
+        assert!(player.velocity.y.abs() < f32::EPSILON);
+        assert!(has_support_below(&world, foot_position));
     }
 }
