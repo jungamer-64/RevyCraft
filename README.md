@@ -1,6 +1,6 @@
 # RevyCraft
 
-Small Bevy voxel sandbox with first-person movement, block placement/removal, strict Clippy checks, and a lightweight `HashMap`-backed world.
+Small Bevy voxel sandbox with first-person movement, block placement/removal, strict Clippy checks, chunk streaming terrain generation, caves, biome variation, and chunk autosave.
 
 ## Run
 
@@ -28,9 +28,21 @@ cargo test --all-targets
 
 `cargo lint` is an alias for `cargo clippy --all-targets --all-features`, and the project enables strict Clippy groups directly in `Cargo.toml`.
 
-## Terrain Presets
+## World Generation
 
-The startup terrain comes from `TerrainSettings::from_env()`. By default it uses `rolling_hills`.
+Terrain is generated per chunk from a deterministic seed with:
+
+- biome variation (`plains`, `hills`, `dry_stone`)
+- layered surface blocks
+- 3D cave carving with a protected surface buffer
+- automatic chunk load/unload around the player
+- autosave for edited chunks
+
+The current world is saved under `worlds/seed-<seed>/`.
+
+## Environment
+
+`TerrainSettings::from_env()` controls the terrain preset. By default it uses `rolling_hills`.
 
 To try a different preset for one run:
 
@@ -49,3 +61,12 @@ Available presets:
 - `TerrainSettings::rolling_hills()`
 - `TerrainSettings::plains()`
 - `TerrainSettings::rugged()`
+
+You can also change the seed and visible chunk radius:
+
+```bash
+BEVY_WORLD_SEED=12345 BEVY_VIEW_RADIUS=3 cargo run
+```
+
+- `BEVY_WORLD_SEED`: deterministic world seed, defaults to a fixed built-in value
+- `BEVY_VIEW_RADIUS`: chunk load radius around the player, defaults to `2`

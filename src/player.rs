@@ -11,6 +11,8 @@ use crate::cursor::cursor_is_locked;
 use crate::world::VoxelWorld;
 
 pub const EYE_HEIGHT: f32 = 1.62;
+pub const INITIAL_CAMERA_EYE_POSITION: Vec3 = Vec3::new(0.0, 36.0, 0.0);
+
 const PLAYER_HEIGHT: f32 = 1.8;
 const PLAYER_RADIUS: f32 = 0.3;
 
@@ -53,7 +55,7 @@ pub fn spawn_camera(commands: &mut Commands) {
     commands
         .spawn((
             Camera3d::default(),
-            Transform::from_xyz(0.0, 8.0, 15.0).with_rotation(rotation),
+            Transform::from_translation(INITIAL_CAMERA_EYE_POSITION).with_rotation(rotation),
         ))
         .insert(MainCamera)
         .insert(CameraOrientation { yaw, pitch })

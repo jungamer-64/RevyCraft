@@ -11,6 +11,7 @@ categories = ["game", "simulation"]
 
 [dependencies]
 bevy = { version = "0.18", features = ["bevy_ui", "bevy_text", "debug"] }
+noise = "0.9"
 
 [lints.rust]
 warnings = "deny"
