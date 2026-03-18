@@ -44,7 +44,9 @@ impl VoxelWorld {
     }
 
     fn block_kind(&self, coordinate: IVec3) -> Option<BlockType> {
-        self.blocks.get(&coordinate).map(|block_data| block_data.kind)
+        self.blocks
+            .get(&coordinate)
+            .map(|block_data| block_data.kind)
     }
 
     fn remove_block_data(&mut self, coordinate: &IVec3) -> Option<BlockData> {

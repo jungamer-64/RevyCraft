@@ -158,7 +158,7 @@ fn advance_to_next_voxel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{BlockData, BlockType};
+    use crate::world::BlockType;
 
     #[test]
     fn raycast_hits_single_block_and_reports_face_normal() {
