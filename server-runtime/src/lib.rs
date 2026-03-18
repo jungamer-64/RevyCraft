@@ -5,8 +5,8 @@ use mc_core::{
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeNextState, LoginRequest, MinecraftWireCodec, PacketWriter,
-    ProtocolAdapter, ProtocolError, ServerListStatus, SessionEncodingContext, StatusRequest,
-    WireCodec,
+    PlayEncodingContext, ProtocolAdapter, ProtocolError, ServerListStatus, SessionAdapter,
+    StatusRequest, WireCodec,
 };
 use mc_proto_je_1_7_10::Je1710Adapter;
 use md5::{Digest, Md5};
@@ -542,7 +542,7 @@ impl RuntimeServer {
 
     async fn handle_outgoing_message(
         &self,
-        connection_id: ConnectionId,
+        _connection_id: ConnectionId,
         writer: &mut tokio::net::tcp::OwnedWriteHalf,
         session: &mut SessionState,
         message: SessionMessage,
@@ -552,13 +552,27 @@ impl RuntimeServer {
             .adapter
             .as_ref()
             .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
-        let context = SessionEncodingContext {
-            connection_id,
-            phase: session.phase,
-            player_id: session.player_id,
-            entity_id: session.entity_id,
+        let packets = match &event {
+            CoreEvent::LoginAccepted { player, .. } => vec![current.encode_login_success(player)?],
+            CoreEvent::Disconnect { reason } => {
+                vec![current.encode_disconnect(session.phase, reason)?]
+            }
+            _ => {
+                let player_id = session.player_id.ok_or_else(|| {
+                    RuntimeError::Config("missing player id for play event encoding".to_string())
+                })?;
+                let entity_id = session.entity_id.ok_or_else(|| {
+                    RuntimeError::Config("missing entity id for play event encoding".to_string())
+                })?;
+                current.encode_play_event(
+                    &event,
+                    &PlayEncodingContext {
+                        player_id,
+                        entity_id,
+                    },
+                )?
+            }
         };
-        let packets = current.encode_event(&event, &context)?;
         for packet in packets {
             write_payload(writer, current.wire_codec(), &packet).await?;
         }
@@ -685,7 +699,7 @@ impl RuntimeServer {
     }
 }
 
-fn handshake_adapter() -> impl ProtocolAdapter {
+fn handshake_adapter() -> impl SessionAdapter {
     Je1710Adapter::new()
 }
 

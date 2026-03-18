@@ -2,14 +2,18 @@ mod storage;
 
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
+use mc_core::catalog::{
+    BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_PLANKS, SAND, SANDSTONE, STONE,
+};
 use mc_core::{
     BlockFace, BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DimensionId, EntityId,
-    ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, ProtocolVersion, Vec3, WorldMeta,
+    InventoryContainer, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, ProtocolVersion,
+    Vec3, WorldMeta,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeNextState, LoginRequest, MinecraftWireCodec,
-    PacketReader, PacketWriter, ProtocolAdapter, ProtocolError, ServerListStatus,
-    SessionEncodingContext, StatusRequest, StorageAdapter, WireCodec,
+    PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter,
+    ProtocolError, ServerListStatus, SessionAdapter, StatusRequest, StorageAdapter, WireCodec,
 };
 use num_traits::ToPrimitive;
 use serde_json::json;
@@ -75,21 +79,9 @@ impl Je1710Adapter {
     }
 }
 
-impl ProtocolAdapter for Je1710Adapter {
-    fn protocol_version(&self) -> ProtocolVersion {
-        ProtocolVersion(PROTOCOL_VERSION_1_7_10)
-    }
-
-    fn version_name(&self) -> &'static str {
-        VERSION_NAME_1_7_10
-    }
-
+impl SessionAdapter for Je1710Adapter {
     fn wire_codec(&self) -> &dyn WireCodec {
         &self.codec
-    }
-
-    fn storage_adapter(&self) -> &dyn StorageAdapter {
-        &self.storage
     }
 
     fn decode_handshake(&self, frame: &[u8]) -> Result<HandshakeIntent, ProtocolError> {
@@ -137,56 +129,6 @@ impl ProtocolAdapter for Je1710Adapter {
             }),
             PACKET_LOGIN_ENCRYPTION_RESPONSE => Ok(LoginRequest::EncryptionResponse),
             packet_id => Err(ProtocolError::UnsupportedPacket(packet_id)),
-        }
-    }
-
-    fn decode_play(
-        &self,
-        player_id: PlayerId,
-        frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError> {
-        let mut reader = PacketReader::new(frame);
-        let packet_id = reader.read_varint()?;
-        match packet_id {
-            PACKET_SB_KEEP_ALIVE => Ok(Some(CoreCommand::KeepAliveResponse {
-                player_id,
-                keep_alive_id: reader.read_i32()?,
-            })),
-            PACKET_SB_FLYING => Ok(Some(CoreCommand::MoveIntent {
-                player_id,
-                position: None,
-                yaw: None,
-                pitch: None,
-                on_ground: reader.read_bool()?,
-            })),
-            PACKET_SB_POSITION => Ok(Some(decode_position_packet(player_id, &mut reader)?)),
-            PACKET_SB_LOOK => Ok(Some(CoreCommand::MoveIntent {
-                player_id,
-                position: None,
-                yaw: Some(reader.read_f32()?),
-                pitch: Some(reader.read_f32()?),
-                on_ground: reader.read_bool()?,
-            })),
-            PACKET_SB_POSITION_LOOK => {
-                Ok(Some(decode_position_look_packet(player_id, &mut reader)?))
-            }
-            PACKET_SB_PLAYER_DIGGING => Ok(Some(decode_digging_packet(player_id, &mut reader)?)),
-            PACKET_SB_PLAYER_BLOCK_PLACEMENT => decode_place_block_packet(player_id, &mut reader),
-            PACKET_SB_HELD_ITEM_CHANGE => Ok(Some(CoreCommand::SetHeldSlot {
-                player_id,
-                slot: reader.read_i16()?,
-            })),
-            PACKET_SB_CREATIVE_INVENTORY_ACTION => Ok(Some(CoreCommand::CreativeInventorySet {
-                player_id,
-                slot: reader.read_i16()?,
-                stack: read_slot(&mut reader)?,
-            })),
-            PACKET_SB_SETTINGS => Ok(Some(decode_client_settings_packet(player_id, &mut reader)?)),
-            PACKET_SB_CLIENT_COMMAND => Ok(Some(CoreCommand::ClientStatus {
-                player_id,
-                action_id: reader.read_i8()?,
-            })),
-            _ => Ok(None),
         }
     }
 
@@ -238,34 +180,86 @@ impl ProtocolAdapter for Je1710Adapter {
         Ok(writer.into_inner())
     }
 
-    fn encode_event(
+    fn encode_login_success(&self, player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
+        encode_login_success(player)
+    }
+}
+
+impl PlaySyncAdapter for Je1710Adapter {
+    fn decode_play(
+        &self,
+        player_id: PlayerId,
+        frame: &[u8],
+    ) -> Result<Option<CoreCommand>, ProtocolError> {
+        let mut reader = PacketReader::new(frame);
+        let packet_id = reader.read_varint()?;
+        match packet_id {
+            PACKET_SB_KEEP_ALIVE => Ok(Some(CoreCommand::KeepAliveResponse {
+                player_id,
+                keep_alive_id: reader.read_i32()?,
+            })),
+            PACKET_SB_FLYING => Ok(Some(CoreCommand::MoveIntent {
+                player_id,
+                position: None,
+                yaw: None,
+                pitch: None,
+                on_ground: reader.read_bool()?,
+            })),
+            PACKET_SB_POSITION => Ok(Some(decode_position_packet(player_id, &mut reader)?)),
+            PACKET_SB_LOOK => Ok(Some(CoreCommand::MoveIntent {
+                player_id,
+                position: None,
+                yaw: Some(reader.read_f32()?),
+                pitch: Some(reader.read_f32()?),
+                on_ground: reader.read_bool()?,
+            })),
+            PACKET_SB_POSITION_LOOK => {
+                Ok(Some(decode_position_look_packet(player_id, &mut reader)?))
+            }
+            PACKET_SB_PLAYER_DIGGING => Ok(Some(decode_digging_packet(player_id, &mut reader)?)),
+            PACKET_SB_PLAYER_BLOCK_PLACEMENT => decode_place_block_packet(player_id, &mut reader),
+            PACKET_SB_HELD_ITEM_CHANGE => Ok(Some(CoreCommand::SetHeldSlot {
+                player_id,
+                slot: reader.read_i16()?,
+            })),
+            PACKET_SB_CREATIVE_INVENTORY_ACTION => Ok(Some(CoreCommand::CreativeInventorySet {
+                player_id,
+                slot: reader.read_i16()?,
+                stack: read_slot(&mut reader)?,
+            })),
+            PACKET_SB_SETTINGS => Ok(Some(decode_client_settings_packet(player_id, &mut reader)?)),
+            PACKET_SB_CLIENT_COMMAND => Ok(Some(CoreCommand::ClientStatus {
+                player_id,
+                action_id: reader.read_i8()?,
+            })),
+            _ => Ok(None),
+        }
+    }
+
+    fn encode_play_event(
         &self,
         event: &CoreEvent,
-        context: &SessionEncodingContext,
+        _context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         match event {
-            CoreEvent::LoginAccepted { player, .. } => Ok(vec![encode_login_success(player)?]),
-            CoreEvent::InitialWorld {
+            CoreEvent::PlayBootstrap {
                 player,
                 entity_id,
                 world_meta,
-                visible_chunks,
                 ..
-            } => {
-                let mut packets = vec![
-                    encode_join_game(*entity_id, world_meta, player),
-                    encode_spawn_position(world_meta.spawn),
-                    encode_time_update(world_meta.age, world_meta.time),
-                    encode_update_health(player),
-                    encode_player_abilities(world_meta.game_mode == 1),
-                ];
-                if !visible_chunks.is_empty() {
-                    packets.push(encode_chunk_bulk(visible_chunks)?);
-                }
-                packets.push(encode_position_and_look(player));
-                Ok(packets)
-            }
-            CoreEvent::ChunkVisible { chunk } => Ok(vec![encode_chunk(chunk)?]),
+            } => Ok(vec![
+                encode_join_game(*entity_id, world_meta, player),
+                encode_spawn_position(world_meta.spawn),
+                encode_time_update(world_meta.age, world_meta.time),
+                encode_update_health(player),
+                encode_player_abilities(world_meta.game_mode == 1),
+                encode_position_and_look(player),
+            ]),
+            CoreEvent::ChunkBatch { chunks } => match chunks.len() {
+                0 => Ok(Vec::new()),
+                1 => Ok(vec![encode_chunk(&chunks[0])?]),
+                _ => Ok(vec![encode_chunk_bulk(chunks)?]),
+            },
             CoreEvent::EntitySpawned { entity_id, player } => Ok(vec![
                 encode_named_entity_spawn(*entity_id, player)?,
                 encode_entity_head_rotation(*entity_id, player.yaw),
@@ -277,12 +271,19 @@ impl ProtocolAdapter for Je1710Adapter {
             CoreEvent::EntityDespawned { entity_ids } => {
                 Ok(vec![encode_destroy_entities(entity_ids)?])
             }
-            CoreEvent::InventorySnapshot { inventory } => {
-                Ok(vec![encode_window_items(0, inventory)?])
-            }
-            CoreEvent::InventorySlotUpdated { slot, stack } => {
-                Ok(vec![encode_set_slot(0, *slot, stack.as_ref())?])
-            }
+            CoreEvent::InventoryContents {
+                container,
+                inventory,
+            } => Ok(vec![encode_window_items(window_id(*container), inventory)?]),
+            CoreEvent::InventorySlotChanged {
+                container,
+                slot,
+                stack,
+            } => Ok(vec![encode_set_slot(
+                window_id(*container),
+                *slot,
+                stack.as_ref(),
+            )?]),
             CoreEvent::SelectedHotbarSlotChanged { slot } => {
                 Ok(vec![encode_held_item_change(*slot)])
             }
@@ -292,25 +293,39 @@ impl ProtocolAdapter for Je1710Adapter {
             CoreEvent::KeepAliveRequested { keep_alive_id } => {
                 Ok(vec![encode_keep_alive(*keep_alive_id)])
             }
-            CoreEvent::Disconnect { reason } => {
-                Ok(vec![self.encode_disconnect(context.phase, reason)?])
-            }
+            CoreEvent::LoginAccepted { .. } | CoreEvent::Disconnect { .. } => Err(
+                ProtocolError::InvalidPacket("session event cannot be encoded as play sync"),
+            ),
         }
+    }
+}
+
+impl ProtocolAdapter for Je1710Adapter {
+    fn protocol_version(&self) -> ProtocolVersion {
+        ProtocolVersion(PROTOCOL_VERSION_1_7_10)
+    }
+
+    fn version_name(&self) -> &'static str {
+        VERSION_NAME_1_7_10
+    }
+
+    fn storage_adapter(&self) -> &dyn StorageAdapter {
+        &self.storage
     }
 }
 
 pub(crate) fn legacy_block(state: &BlockState) -> (u16, u8) {
     match state.key.as_str() {
-        "minecraft:stone" => (1, 0),
-        "minecraft:grass_block" => (2, 0),
-        "minecraft:dirt" => (3, 0),
-        "minecraft:cobblestone" => (4, 0),
-        "minecraft:oak_planks" => (5, 0),
-        "minecraft:bedrock" => (7, 0),
-        "minecraft:sand" => (12, 0),
-        "minecraft:glass" => (20, 0),
-        "minecraft:sandstone" => (24, 0),
-        "minecraft:bricks" => (45, 0),
+        STONE => (1, 0),
+        GRASS_BLOCK => (2, 0),
+        DIRT => (3, 0),
+        COBBLESTONE => (4, 0),
+        OAK_PLANKS => (5, 0),
+        BEDROCK => (7, 0),
+        SAND => (12, 0),
+        GLASS => (20, 0),
+        SANDSTONE => (24, 0),
+        BRICKS => (45, 0),
         _ => (0, 0),
     }
 }
@@ -334,33 +349,39 @@ pub(crate) fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
 fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
     let damage = stack.damage;
     match stack.key.as_str() {
-        "minecraft:stone" => Some((1, damage)),
-        "minecraft:grass_block" => Some((2, damage)),
-        "minecraft:dirt" => Some((3, damage)),
-        "minecraft:cobblestone" => Some((4, damage)),
-        "minecraft:oak_planks" => Some((5, damage)),
-        "minecraft:sand" => Some((12, damage)),
-        "minecraft:glass" => Some((20, damage)),
-        "minecraft:sandstone" => Some((24, damage)),
-        "minecraft:bricks" => Some((45, damage)),
+        STONE => Some((1, damage)),
+        GRASS_BLOCK => Some((2, damage)),
+        DIRT => Some((3, damage)),
+        COBBLESTONE => Some((4, damage)),
+        OAK_PLANKS => Some((5, damage)),
+        SAND => Some((12, damage)),
+        GLASS => Some((20, damage)),
+        SANDSTONE => Some((24, damage)),
+        BRICKS => Some((45, damage)),
         _ => None,
     }
 }
 
 fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
     let key = match item_id {
-        1 => "minecraft:stone",
-        2 => "minecraft:grass_block",
-        3 => "minecraft:dirt",
-        4 => "minecraft:cobblestone",
-        5 if damage == 0 => "minecraft:oak_planks",
-        12 if damage == 0 => "minecraft:sand",
-        20 => "minecraft:glass",
-        24 if damage == 0 => "minecraft:sandstone",
-        45 => "minecraft:bricks",
+        1 => STONE,
+        2 => GRASS_BLOCK,
+        3 => DIRT,
+        4 => COBBLESTONE,
+        5 if damage == 0 => OAK_PLANKS,
+        12 if damage == 0 => SAND,
+        20 => GLASS,
+        24 if damage == 0 => SANDSTONE,
+        45 => BRICKS,
         _ => return ItemStack::unsupported(count, damage),
     };
     ItemStack::new(key, count, damage)
+}
+
+const fn window_id(container: InventoryContainer) -> u8 {
+    match container {
+        InventoryContainer::Player => 0,
+    }
 }
 
 fn encode_login_success(player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
@@ -771,20 +792,15 @@ fn decode_client_settings_packet(
     player_id: PlayerId,
     reader: &mut PacketReader<'_>,
 ) -> Result<CoreCommand, ProtocolError> {
-    let locale = reader.read_string(16)?;
+    let _locale = reader.read_string(16)?;
     let view_distance = i8_to_u8(reader.read_i8()?);
-    let chat_flags = reader.read_i8()?;
-    let chat_colors = reader.read_bool()?;
-    let difficulty = reader.read_u8()?;
-    let show_cape = reader.read_bool()?;
-    Ok(CoreCommand::ClientSettings {
+    let _chat_flags = reader.read_i8()?;
+    let _chat_colors = reader.read_bool()?;
+    let _difficulty = reader.read_u8()?;
+    let _show_cape = reader.read_bool()?;
+    Ok(CoreCommand::UpdateClientView {
         player_id,
-        locale,
         view_distance: view_distance.max(1),
-        chat_flags,
-        chat_colors,
-        difficulty,
-        show_cape,
     })
 }
 
@@ -830,11 +846,12 @@ mod tests {
     use super::{Je1710Adapter, PROTOCOL_VERSION_1_7_10, get_nibble, legacy_block};
     use mc_core::{
         BlockState, ChunkColumn, ChunkPos, ConnectionId, CoreCommand, CoreConfig, CoreEvent,
-        PlayerId, PlayerInventory, PlayerSnapshot, ProtocolVersion, ServerCore, Vec3,
+        InventoryContainer, PlayerId, PlayerInventory, PlayerSnapshot, ProtocolVersion, ServerCore,
+        Vec3,
     };
     use mc_proto_common::{
-        ConnectionPhase, LoginRequest, PacketWriter, ProtocolAdapter, ServerListStatus,
-        SessionEncodingContext, StatusRequest,
+        LoginRequest, PacketWriter, PlayEncodingContext, PlaySyncAdapter, ServerListStatus,
+        SessionAdapter, StatusRequest,
     };
     use uuid::Uuid;
 
@@ -902,23 +919,10 @@ mod tests {
         assert_eq!(status_packet[0], 0x00);
 
         let player = player_snapshot("alpha");
-        let login_packets = adapter
-            .encode_event(
-                &CoreEvent::LoginAccepted {
-                    player_id: player.id,
-                    entity_id: mc_core::EntityId(1),
-                    player,
-                },
-                &SessionEncodingContext {
-                    connection_id: ConnectionId(1),
-                    phase: ConnectionPhase::Login,
-                    player_id: None,
-                    entity_id: None,
-                },
-            )
+        let login_packet = adapter
+            .encode_login_success(&player)
             .expect("login event should encode");
-        assert_eq!(login_packets.len(), 1);
-        assert_eq!(login_packets[0][0], 0x02);
+        assert_eq!(login_packet[0], 0x02);
     }
 
     #[test]
@@ -959,6 +963,26 @@ mod tests {
             .expect("held item change should decode")
             .expect("held item change should produce command");
         assert!(matches!(command, CoreCommand::SetHeldSlot { slot: 4, .. }));
+
+        let mut settings = PacketWriter::default();
+        settings.write_varint(0x15);
+        let _ = settings.write_string("ja_JP");
+        settings.write_i8(7);
+        settings.write_i8(0);
+        settings.write_bool(true);
+        settings.write_u8(1);
+        settings.write_bool(true);
+        let command = adapter
+            .decode_play(player_id, &settings.into_inner())
+            .expect("settings should decode")
+            .expect("settings should produce command");
+        assert!(matches!(
+            command,
+            CoreCommand::UpdateClientView {
+                view_distance: 7,
+                ..
+            }
+        ));
 
         let mut creative_inventory = PacketWriter::default();
         creative_inventory.write_varint(0x10);
@@ -1018,7 +1042,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_world_event_emits_join_game_and_chunks() {
+    fn play_bootstrap_and_chunk_batch_emit_join_game_and_chunks() {
         let adapter = Je1710Adapter::new();
         let mut core = ServerCore::new(CoreConfig::default());
         let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"initial-world"));
@@ -1032,72 +1056,70 @@ mod tests {
             0,
         );
 
-        let initial_world = events
-            .into_iter()
-            .find_map(|event| match event.event {
-                CoreEvent::InitialWorld { .. } => Some(event.event),
-                _ => None,
-            })
-            .expect("initial world event should exist");
+        let mut play_bootstrap = None;
+        let mut chunk_batch = None;
+        for event in events {
+            let core_event = event.event;
+            match core_event {
+                CoreEvent::PlayBootstrap { .. } if play_bootstrap.is_none() => {
+                    play_bootstrap = Some(core_event);
+                }
+                CoreEvent::ChunkBatch { .. } if chunk_batch.is_none() => {
+                    chunk_batch = Some(core_event);
+                }
+                _ => {}
+            }
+        }
+        let play_bootstrap = play_bootstrap.expect("play bootstrap event should exist");
+        let chunk_batch = chunk_batch.expect("chunk batch event should exist");
 
-        let packets = adapter
-            .encode_event(
-                &initial_world,
-                &SessionEncodingContext {
-                    connection_id: ConnectionId(1),
-                    phase: ConnectionPhase::Play,
-                    player_id: Some(player_id),
-                    entity_id: Some(mc_core::EntityId(1)),
-                },
-            )
-            .expect("initial world should encode");
-        assert!(packets.iter().any(|packet| packet[0] == 0x01));
-        assert!(packets.iter().any(|packet| packet[0] == 0x26));
-        assert!(packets.iter().any(|packet| packet[0] == 0x39));
+        let context = PlayEncodingContext {
+            player_id,
+            entity_id: mc_core::EntityId(1),
+        };
+        let bootstrap_packets = adapter
+            .encode_play_event(&play_bootstrap, &context)
+            .expect("play bootstrap should encode");
+        let chunk_packets = adapter
+            .encode_play_event(&chunk_batch, &context)
+            .expect("chunk batch should encode");
+
+        assert!(bootstrap_packets.iter().any(|packet| packet[0] == 0x01));
+        assert!(chunk_packets.iter().any(|packet| packet[0] == 0x26));
+        assert!(bootstrap_packets.iter().any(|packet| packet[0] == 0x39));
     }
 
     #[test]
     fn encodes_inventory_and_block_events() {
         let adapter = Je1710Adapter::new();
+        let context = PlayEncodingContext {
+            player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"encode-play-events")),
+            entity_id: mc_core::EntityId(1),
+        };
         let inventory = PlayerInventory::creative_starter();
         let packets = adapter
-            .encode_event(
-                &CoreEvent::InventorySnapshot { inventory },
-                &SessionEncodingContext {
-                    connection_id: ConnectionId(1),
-                    phase: ConnectionPhase::Play,
-                    player_id: None,
-                    entity_id: None,
+            .encode_play_event(
+                &CoreEvent::InventoryContents {
+                    container: InventoryContainer::Player,
+                    inventory,
                 },
+                &context,
             )
             .expect("inventory snapshot should encode");
         assert_eq!(packets[0][0], 0x30);
 
         let packets = adapter
-            .encode_event(
-                &CoreEvent::SelectedHotbarSlotChanged { slot: 4 },
-                &SessionEncodingContext {
-                    connection_id: ConnectionId(1),
-                    phase: ConnectionPhase::Play,
-                    player_id: None,
-                    entity_id: None,
-                },
-            )
+            .encode_play_event(&CoreEvent::SelectedHotbarSlotChanged { slot: 4 }, &context)
             .expect("held slot change should encode");
         assert_eq!(packets[0][0], 0x09);
 
         let packets = adapter
-            .encode_event(
+            .encode_play_event(
                 &CoreEvent::BlockChanged {
                     position: mc_core::BlockPos::new(2, 4, 0),
                     block: BlockState::glass(),
                 },
-                &SessionEncodingContext {
-                    connection_id: ConnectionId(1),
-                    phase: ConnectionPhase::Play,
-                    player_id: None,
-                    entity_id: None,
-                },
+                &context,
             )
             .expect("block change should encode");
         assert_eq!(packets[0][0], 0x23);

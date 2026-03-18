@@ -1,3 +1,5 @@
+pub mod catalog;
+
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -177,7 +179,7 @@ impl ItemStack {
 
     #[must_use]
     pub fn is_supported_placeable(&self) -> bool {
-        placeable_block_state_from_item_key(self.key.as_str()).is_some()
+        catalog::is_supported_placeable_item(self.key.as_str())
     }
 }
 
@@ -204,7 +206,7 @@ impl PlayerInventory {
     pub fn creative_starter() -> Self {
         let mut inventory = Self::new_empty();
         for (slot, key) in (HOTBAR_START_SLOT..HOTBAR_START_SLOT + HOTBAR_SLOT_COUNT)
-            .zip(starter_hotbar_item_keys())
+            .zip(catalog::starter_hotbar_item_keys())
         {
             let _ = inventory.set(slot, Some(ItemStack::new(key, 64, 0)));
         }
@@ -233,6 +235,11 @@ impl PlayerInventory {
         }
         self.get(HOTBAR_START_SLOT + selected_hotbar_slot)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InventoryContainer {
+    Player,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -580,14 +587,9 @@ pub enum CoreCommand {
         username: String,
         player_id: PlayerId,
     },
-    ClientSettings {
+    UpdateClientView {
         player_id: PlayerId,
-        locale: String,
         view_distance: u8,
-        chat_flags: i8,
-        chat_colors: bool,
-        difficulty: u8,
-        show_cape: bool,
     },
     ClientStatus {
         player_id: PlayerId,
@@ -637,15 +639,14 @@ pub enum CoreEvent {
         entity_id: EntityId,
         player: PlayerSnapshot,
     },
-    InitialWorld {
+    PlayBootstrap {
         player: PlayerSnapshot,
         entity_id: EntityId,
         world_meta: WorldMeta,
-        visible_chunks: Vec<ChunkColumn>,
         view_distance: u8,
     },
-    ChunkVisible {
-        chunk: ChunkColumn,
+    ChunkBatch {
+        chunks: Vec<ChunkColumn>,
     },
     EntitySpawned {
         entity_id: EntityId,
@@ -658,10 +659,12 @@ pub enum CoreEvent {
     EntityDespawned {
         entity_ids: Vec<EntityId>,
     },
-    InventorySnapshot {
+    InventoryContents {
+        container: InventoryContainer,
         inventory: PlayerInventory,
     },
-    InventorySlotUpdated {
+    InventorySlotChanged {
+        container: InventoryContainer,
         slot: u8,
         stack: Option<ItemStack>,
     },
@@ -793,14 +796,9 @@ impl ServerCore {
                 username,
                 player_id,
             } => self.login_player(connection_id, username, player_id, now_ms),
-            CoreCommand::ClientSettings {
+            CoreCommand::UpdateClientView {
                 player_id,
-                locale: _,
                 view_distance,
-                chat_flags: _,
-                chat_colors: _,
-                difficulty: _,
-                show_cape: _,
             } => self.update_client_settings(player_id, view_distance),
             CoreCommand::ClientStatus {
                 player_id: _,
@@ -878,28 +876,13 @@ impl ServerCore {
         now_ms: u64,
     ) -> Vec<TargetedEvent> {
         if username.is_empty() || username.len() > 16 {
-            return vec![TargetedEvent {
-                target: EventTarget::Connection(connection_id),
-                event: CoreEvent::Disconnect {
-                    reason: "Invalid username".to_string(),
-                },
-            }];
+            return Self::reject_connection(connection_id, "Invalid username");
         }
         if self.online_players.len() >= usize::from(self.config.max_players) {
-            return vec![TargetedEvent {
-                target: EventTarget::Connection(connection_id),
-                event: CoreEvent::Disconnect {
-                    reason: "Server is full".to_string(),
-                },
-            }];
+            return Self::reject_connection(connection_id, "Server is full");
         }
         if self.online_players.contains_key(&player_id) {
-            return vec![TargetedEvent {
-                target: EventTarget::Connection(connection_id),
-                event: CoreEvent::Disconnect {
-                    reason: "Player is already online".to_string(),
-                },
-            }];
+            return Self::reject_connection(connection_id, "Player is already online");
         }
 
         let mut player = self
@@ -934,7 +917,38 @@ impl ServerCore {
             },
         );
 
-        let mut events = vec![
+        let mut events =
+            self.login_initial_events(connection_id, player_id, entity_id, &player, visible_chunks);
+        events.extend(Self::existing_player_spawn_events(
+            connection_id,
+            existing_players,
+        ));
+
+        events.push(TargetedEvent {
+            target: EventTarget::EveryoneExcept(player_id),
+            event: CoreEvent::EntitySpawned { entity_id, player },
+        });
+        events
+    }
+
+    fn reject_connection(connection_id: ConnectionId, reason: &str) -> Vec<TargetedEvent> {
+        vec![TargetedEvent {
+            target: EventTarget::Connection(connection_id),
+            event: CoreEvent::Disconnect {
+                reason: reason.to_string(),
+            },
+        }]
+    }
+
+    fn login_initial_events(
+        &self,
+        connection_id: ConnectionId,
+        player_id: PlayerId,
+        entity_id: EntityId,
+        player: &PlayerSnapshot,
+        visible_chunks: Vec<ChunkColumn>,
+    ) -> Vec<TargetedEvent> {
+        vec![
             TargetedEvent {
                 target: EventTarget::Connection(connection_id),
                 event: CoreEvent::LoginAccepted {
@@ -945,17 +959,23 @@ impl ServerCore {
             },
             TargetedEvent {
                 target: EventTarget::Connection(connection_id),
-                event: CoreEvent::InitialWorld {
+                event: CoreEvent::PlayBootstrap {
                     player: player.clone(),
                     entity_id,
                     world_meta: self.world_meta.clone(),
-                    visible_chunks,
                     view_distance: self.config.view_distance,
                 },
             },
             TargetedEvent {
                 target: EventTarget::Connection(connection_id),
-                event: CoreEvent::InventorySnapshot {
+                event: CoreEvent::ChunkBatch {
+                    chunks: visible_chunks,
+                },
+            },
+            TargetedEvent {
+                target: EventTarget::Connection(connection_id),
+                event: CoreEvent::InventoryContents {
+                    container: InventoryContainer::Player,
                     inventory: player.inventory.clone(),
                 },
             },
@@ -965,23 +985,20 @@ impl ServerCore {
                     slot: player.selected_hotbar_slot,
                 },
             },
-        ];
+        ]
+    }
 
-        for (existing_entity_id, existing_player) in existing_players {
-            events.push(TargetedEvent {
+    fn existing_player_spawn_events(
+        connection_id: ConnectionId,
+        existing_players: Vec<(EntityId, PlayerSnapshot)>,
+    ) -> Vec<TargetedEvent> {
+        existing_players
+            .into_iter()
+            .map(|(entity_id, player)| TargetedEvent {
                 target: EventTarget::Connection(connection_id),
-                event: CoreEvent::EntitySpawned {
-                    entity_id: existing_entity_id,
-                    player: existing_player,
-                },
-            });
-        }
-
-        events.push(TargetedEvent {
-            target: EventTarget::EveryoneExcept(player_id),
-            event: CoreEvent::EntitySpawned { entity_id, player },
-        });
-        events
+                event: CoreEvent::EntitySpawned { entity_id, player },
+            })
+            .collect()
     }
 
     fn update_client_settings(
@@ -1001,8 +1018,8 @@ impl ServerCore {
             .into_iter()
             .map(|chunk_pos| TargetedEvent {
                 target: EventTarget::Player(player_id),
-                event: CoreEvent::ChunkVisible {
-                    chunk: self.ensure_chunk(chunk_pos).clone(),
+                event: CoreEvent::ChunkBatch {
+                    chunks: vec![self.ensure_chunk(chunk_pos).clone()],
                 },
             })
             .collect()
@@ -1044,8 +1061,8 @@ impl ServerCore {
         for chunk_pos in added_chunks {
             events.push(TargetedEvent {
                 target: EventTarget::Player(player_id),
-                event: CoreEvent::ChunkVisible {
-                    chunk: self.ensure_chunk(chunk_pos).clone(),
+                event: CoreEvent::ChunkBatch {
+                    chunks: vec![self.ensure_chunk(chunk_pos).clone()],
                 },
             });
         }
@@ -1111,7 +1128,8 @@ impl ServerCore {
             return vec![
                 TargetedEvent {
                     target: EventTarget::Player(player_id),
-                    event: CoreEvent::InventorySnapshot {
+                    event: CoreEvent::InventoryContents {
+                        container: InventoryContainer::Player,
                         inventory: player.snapshot.inventory.clone(),
                     },
                 },
@@ -1138,7 +1156,11 @@ impl ServerCore {
             .insert(player_id, player.snapshot.clone());
         vec![TargetedEvent {
             target: EventTarget::Player(player_id),
-            event: CoreEvent::InventorySlotUpdated { slot, stack },
+            event: CoreEvent::InventorySlotChanged {
+                container: InventoryContainer::Player,
+                slot,
+                stack,
+            },
         }]
     }
 
@@ -1208,7 +1230,8 @@ impl ServerCore {
             return self.place_rejection_events(player_id, place_pos, &player.snapshot);
         }
 
-        let Some(block) = placeable_block_state_from_item_key(selected_stack.key.as_str()) else {
+        let Some(block) = catalog::placeable_block_state_from_item_key(selected_stack.key.as_str())
+        else {
             return self.place_rejection_events(player_id, place_pos, &player.snapshot);
         };
 
@@ -1232,7 +1255,8 @@ impl ServerCore {
         vec![
             TargetedEvent {
                 target: EventTarget::Player(player_id),
-                event: CoreEvent::InventorySlotUpdated {
+                event: CoreEvent::InventorySlotChanged {
+                    container: InventoryContainer::Player,
                     slot: selected_slot,
                     stack: player.inventory.get(selected_slot).cloned(),
                 },
@@ -1365,35 +1389,6 @@ fn default_player(player_id: PlayerId, username: String, spawn: BlockPos) -> Pla
     }
 }
 
-const fn starter_hotbar_item_keys() -> [&'static str; 9] {
-    [
-        "minecraft:stone",
-        "minecraft:dirt",
-        "minecraft:grass_block",
-        "minecraft:cobblestone",
-        "minecraft:oak_planks",
-        "minecraft:sand",
-        "minecraft:sandstone",
-        "minecraft:glass",
-        "minecraft:bricks",
-    ]
-}
-
-fn placeable_block_state_from_item_key(key: &str) -> Option<BlockState> {
-    match key {
-        "minecraft:stone" => Some(BlockState::stone()),
-        "minecraft:dirt" => Some(BlockState::dirt()),
-        "minecraft:grass_block" => Some(BlockState::grass_block()),
-        "minecraft:cobblestone" => Some(BlockState::cobblestone()),
-        "minecraft:oak_planks" => Some(BlockState::oak_planks()),
-        "minecraft:sand" => Some(BlockState::sand()),
-        "minecraft:sandstone" => Some(BlockState::sandstone()),
-        "minecraft:glass" => Some(BlockState::glass()),
-        "minecraft:bricks" => Some(BlockState::bricks()),
-        _ => None,
-    }
-}
-
 fn distance_squared_to_block_center(position: Vec3, block: BlockPos) -> f64 {
     let eye_x = position.x;
     let eye_y = position.y + 1.62;
@@ -1453,7 +1448,8 @@ fn reject_inventory_slot_events(
     {
         events.push(TargetedEvent {
             target: EventTarget::Player(player_id),
-            event: CoreEvent::InventorySlotUpdated {
+            event: CoreEvent::InventorySlotChanged {
+                container: InventoryContainer::Player,
                 slot,
                 stack: player.snapshot.inventory.get(slot).cloned(),
             },
@@ -1461,7 +1457,8 @@ fn reject_inventory_slot_events(
     } else {
         events.push(TargetedEvent {
             target: EventTarget::Player(player_id),
-            event: CoreEvent::InventorySnapshot {
+            event: CoreEvent::InventoryContents {
+                container: InventoryContainer::Player,
                 inventory: player.snapshot.inventory.clone(),
             },
         });
@@ -1549,15 +1546,25 @@ mod tests {
             },
             0,
         );
-        assert!(events
-            .iter()
-            .any(|event| matches!(event.event, CoreEvent::InitialWorld { ref visible_chunks, .. } if visible_chunks.len() == 9)));
+        assert!(events.iter().any(|event| matches!(
+            event.event,
+            CoreEvent::PlayBootstrap {
+                view_distance: 1,
+                ..
+            }
+        )));
+        assert!(events.iter().any(|event| {
+            matches!(event.event, CoreEvent::ChunkBatch { ref chunks } if chunks.len() == 9)
+        }));
         assert!(events.iter().any(|event| {
             matches!(
                 event,
                 TargetedEvent {
                     target: EventTarget::Connection(ConnectionId(1)),
-                    event: CoreEvent::InventorySnapshot { .. },
+                    event: CoreEvent::InventoryContents {
+                        container: InventoryContainer::Player,
+                        ..
+                    },
                 }
             )
         }));
@@ -1651,7 +1658,15 @@ mod tests {
         assert!(
             events
                 .iter()
-                .filter(|event| matches!(event.target, EventTarget::Player(id) if id == second))
+                .filter(|event| {
+                    matches!(
+                        event,
+                        TargetedEvent {
+                            target: EventTarget::Player(id),
+                            event: CoreEvent::ChunkBatch { .. },
+                        } if *id == second
+                    )
+                })
                 .count()
                 >= 3
         );
@@ -1755,7 +1770,11 @@ mod tests {
                 event,
                 TargetedEvent {
                     target: EventTarget::Player(id),
-                    event: CoreEvent::InventorySlotUpdated { slot: 36, .. },
+                    event: CoreEvent::InventorySlotChanged {
+                        container: InventoryContainer::Player,
+                        slot: 36,
+                        ..
+                    },
                 } if *id == first
             )
         }));
@@ -1788,6 +1807,56 @@ mod tests {
                 .key
                 .as_str(),
             "minecraft:glass"
+        );
+    }
+
+    #[test]
+    fn update_client_view_clamps_to_server_distance() {
+        let mut core = ServerCore::new(CoreConfig {
+            view_distance: 2,
+            ..CoreConfig::default()
+        });
+        let first = player_id("first");
+        let _ = core.apply_command(
+            CoreCommand::LoginStart {
+                connection_id: ConnectionId(1),
+                protocol_version: ProtocolVersion(5),
+                username: "first".to_string(),
+                player_id: first,
+            },
+            0,
+        );
+
+        let _ = core.apply_command(
+            CoreCommand::UpdateClientView {
+                player_id: first,
+                view_distance: 1,
+            },
+            0,
+        );
+
+        let events = core.apply_command(
+            CoreCommand::UpdateClientView {
+                player_id: first,
+                view_distance: 8,
+            },
+            0,
+        );
+
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        TargetedEvent {
+                            target: EventTarget::Player(id),
+                            event: CoreEvent::ChunkBatch { chunks },
+                        } if *id == first && chunks.len() == 1
+                    )
+                })
+                .count(),
+            16
         );
     }
 
@@ -1901,7 +1970,11 @@ mod tests {
             event,
             TargetedEvent {
                 target: EventTarget::Player(id),
-                event: CoreEvent::InventorySlotUpdated { slot: 36, .. },
+                event: CoreEvent::InventorySlotChanged {
+                    container: InventoryContainer::Player,
+                    slot: 36,
+                    ..
+                },
             } if *id == lone
         )));
     }

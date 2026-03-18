@@ -1,6 +1,6 @@
 use bytes::BytesMut;
 use mc_core::{
-    ConnectionId, CoreCommand, CoreEvent, EntityId, PlayerId, ProtocolVersion, WorldSnapshot,
+    CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot, ProtocolVersion, WorldSnapshot,
 };
 use std::path::Path;
 use thiserror::Error;
@@ -48,12 +48,10 @@ pub struct ServerListStatus {
     pub description: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SessionEncodingContext {
-    pub connection_id: ConnectionId,
-    pub phase: ConnectionPhase,
-    pub player_id: Option<PlayerId>,
-    pub entity_id: Option<EntityId>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlayEncodingContext {
+    pub player_id: PlayerId,
+    pub entity_id: EntityId,
 }
 
 #[derive(Debug, Error)]
@@ -111,11 +109,8 @@ pub trait StorageAdapter: Send + Sync {
     -> Result<(), StorageError>;
 }
 
-pub trait ProtocolAdapter: Send + Sync {
-    fn protocol_version(&self) -> ProtocolVersion;
-    fn version_name(&self) -> &'static str;
+pub trait SessionAdapter: Send + Sync {
     fn wire_codec(&self) -> &dyn WireCodec;
-    fn storage_adapter(&self) -> &dyn StorageAdapter;
 
     /// # Errors
     ///
@@ -138,15 +133,6 @@ pub trait ProtocolAdapter: Send + Sync {
     /// # Errors
     ///
     /// Returns [`ProtocolError`] when the frame is malformed or unsupported for
-    /// the adapter's play phase.
-    fn decode_play(
-        &self,
-        player_id: PlayerId,
-        frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError>;
-
-    /// # Errors
-    ///
     /// Returns [`ProtocolError`] when the status response cannot be encoded for
     /// the adapter's protocol version.
     fn encode_status_response(&self, status: &ServerListStatus) -> Result<Vec<u8>, ProtocolError>;
@@ -169,13 +155,37 @@ pub trait ProtocolAdapter: Send + Sync {
 
     /// # Errors
     ///
+    /// Returns [`ProtocolError`] when the login success payload cannot be
+    /// encoded for the adapter's protocol version.
+    fn encode_login_success(&self, player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError>;
+}
+
+pub trait PlaySyncAdapter: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the frame is malformed or unsupported for
+    /// the adapter's play phase.
+    fn decode_play(
+        &self,
+        player_id: PlayerId,
+        frame: &[u8],
+    ) -> Result<Option<CoreCommand>, ProtocolError>;
+
+    /// # Errors
+    ///
     /// Returns [`ProtocolError`] when the core event cannot be represented in
-    /// the target protocol for the provided session context.
-    fn encode_event(
+    /// the target protocol for the provided play session context.
+    fn encode_play_event(
         &self,
         event: &CoreEvent,
-        context: &SessionEncodingContext,
+        context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+}
+
+pub trait ProtocolAdapter: SessionAdapter + PlaySyncAdapter + Send + Sync {
+    fn protocol_version(&self) -> ProtocolVersion;
+    fn version_name(&self) -> &'static str;
+    fn storage_adapter(&self) -> &dyn StorageAdapter;
 }
 
 #[derive(Default)]
