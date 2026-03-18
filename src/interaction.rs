@@ -1,12 +1,16 @@
 use bevy::ecs::system::SystemParam;
 use bevy::input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton};
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use crate::cursor::cursor_is_locked;
-use crate::player::{EYE_HEIGHT, MainCamera, player_blocks_block_placement};
+use crate::player::{EYE_HEIGHT, MainCamera, WorldPosition, player_blocks_block_placement};
 use crate::raycast::raycast_voxel;
-use crate::world::{BlockMaterials, BlockType, RenderSyncQueue, VoxelWorld};
+use crate::world::render::world_position_to_render_translation;
+use crate::world::{
+    BlockMaterials, BlockType, RenderAnchor, RenderSyncQueue, VoxelWorld, block_world_origin,
+};
 
 #[derive(Resource, Clone, Copy)]
 pub struct SelectedBlock(pub(crate) BlockType);
@@ -71,7 +75,7 @@ pub fn block_selection_system(resources: BlockSelectionResources) {
 #[derive(SystemParam)]
 pub struct HighlightTargetUpdateResources<'w, 's> {
     cursor_options: Query<'w, 's, &'static CursorOptions, With<PrimaryWindow>>,
-    camera_query: Query<'w, 's, &'static Transform, With<MainCamera>>,
+    camera_query: Query<'w, 's, (&'static Transform, &'static WorldPosition), With<MainCamera>>,
     voxel_world: Res<'w, VoxelWorld>,
     highlight_target: ResMut<'w, HighlightTarget>,
 }
@@ -97,7 +101,7 @@ pub fn update_highlight_target_post_edit_system(resources: HighlightTargetUpdate
 #[derive(SystemParam)]
 pub struct BlockEditResources<'w, 's> {
     mouse_button: Res<'w, ButtonInput<MouseButton>>,
-    camera_query: Query<'w, 's, &'static Transform, With<MainCamera>>,
+    camera_query: Query<'w, 's, (&'static Transform, &'static WorldPosition), With<MainCamera>>,
     selected_block: Res<'w, SelectedBlock>,
     highlight_target: Res<'w, HighlightTarget>,
     voxel_world: ResMut<'w, VoxelWorld>,
@@ -147,6 +151,8 @@ type HighlighterComponents = (&'static mut Transform, &'static mut Visibility);
 pub struct HighlightResources<'w, 's> {
     highlighter_query: Query<'w, 's, HighlighterComponents, HighlighterFilter>,
     highlight_target: Res<'w, HighlightTarget>,
+    render_anchor: Res<'w, RenderAnchor>,
+    voxel_world: Res<'w, VoxelWorld>,
 }
 
 impl HighlightResources<'_, '_> {
@@ -157,7 +163,11 @@ impl HighlightResources<'_, '_> {
         };
 
         if let Some((hit_block, _)) = self.highlight_target.0 {
-            highlight_transform.translation = hit_block.as_vec3();
+            highlight_transform.translation = world_position_to_render_translation(
+                block_world_origin(hit_block),
+                *self.render_anchor,
+                self.voxel_world.layout(),
+            );
             *visibility = Visibility::Visible;
         } else {
             *visibility = Visibility::Hidden;
@@ -178,9 +188,9 @@ enum EditAction {
 
 #[derive(Clone, Copy)]
 struct BlockEditContext {
-    ray_origin: Vec3,
-    ray_direction: Vec3,
-    foot_position: Vec3,
+    ray_origin: DVec3,
+    ray_direction: DVec3,
+    foot_position: DVec3,
     current_raycast: Option<(IVec3, IVec3)>,
     selected_block: BlockType,
 }
@@ -198,18 +208,18 @@ fn current_edit_action(mouse_button: &ButtonInput<MouseButton>) -> Option<EditAc
 }
 
 fn build_block_edit_context(
-    camera_transform: Option<&Transform>,
+    camera_transform: Option<(&Transform, &WorldPosition)>,
     current_raycast: Option<(IVec3, IVec3)>,
     selected_block: BlockType,
 ) -> Option<BlockEditContext> {
-    let transform = camera_transform?;
-    let ray_origin = transform.translation;
+    let (transform, world_position) = camera_transform?;
+    let ray_origin = world_position.0;
     let ray_direction: Vec3 = transform.forward().into();
 
     Some(BlockEditContext {
         ray_origin,
-        ray_direction,
-        foot_position: ray_origin - Vec3::Y * EYE_HEIGHT,
+        ray_direction: ray_direction.as_dvec3(),
+        foot_position: ray_origin - DVec3::Y * EYE_HEIGHT,
         current_raycast,
         selected_block,
     })
@@ -257,17 +267,17 @@ fn apply_edit_action(
 
 fn compute_highlight_target(
     cursor_options: Option<&CursorOptions>,
-    camera_transform: Option<&Transform>,
+    camera_transform: Option<(&Transform, &WorldPosition)>,
     voxel_world: &VoxelWorld,
 ) -> Option<(IVec3, IVec3)> {
     if !cursor_is_locked(cursor_options) {
         return None;
     }
 
-    let transform = camera_transform?;
-    let ray_origin = transform.translation;
+    let (transform, world_position) = camera_transform?;
+    let ray_origin = world_position.0;
     let ray_direction: Vec3 = transform.forward().into();
-    raycast_voxel(voxel_world, ray_origin, ray_direction, 8.0)
+    raycast_voxel(voxel_world, ray_origin, ray_direction.as_dvec3(), 8.0)
 }
 
 fn remove_highlighted_block(
@@ -286,7 +296,7 @@ fn place_block_at_target(
     render_sync_queue: &mut RenderSyncQueue,
     selected_block: BlockType,
     current_raycast: Option<(IVec3, IVec3)>,
-    foot_position: Vec3,
+    foot_position: DVec3,
 ) -> bool {
     let Some((hit_block, hit_normal)) = current_raycast else {
         return false;
@@ -314,8 +324,8 @@ mod tests {
 
     use crate::world::render::RenderOriginRoot;
     use crate::world::{
-        BlockEntityIndex, BlockMesh, RenderOriginRootEntity, sync_block_render_system,
-        sync_render_origin_root_system,
+        BlockEntityIndex, BlockMesh, ChunkCoord, RenderAnchor, RenderOriginRootEntity,
+        sync_block_render_system, sync_render_origin_root_system,
     };
 
     fn test_block_materials() -> BlockMaterials {
@@ -338,6 +348,9 @@ mod tests {
         app.insert_resource(test_block_materials());
         app.insert_resource(HighlightTarget::default());
         app.init_resource::<SelectedBlock>();
+        app.insert_resource(RenderAnchor {
+            chunk: ChunkCoord::new(0, 0),
+        });
         let render_origin_root = app
             .world_mut()
             .spawn((
@@ -371,6 +384,7 @@ mod tests {
         app.world_mut().spawn((
             MainCamera,
             Transform::from_xyz(1.25, 3.62, 0.5).looking_to(Vec3::X, Vec3::Y),
+            WorldPosition(DVec3::new(1.25, 3.62, 0.5)),
         ));
 
         app
@@ -449,7 +463,11 @@ mod tests {
     fn highlighter_global_transform_is_camera_relative() {
         let mut app = App::new();
         app.add_plugins(TransformPlugin);
+        app.insert_resource(VoxelWorld::default());
         app.insert_resource(HighlightTarget(Some((IVec3::new(10, 0, 0), IVec3::X))));
+        app.insert_resource(RenderAnchor {
+            chunk: ChunkCoord::new(0, 0),
+        });
         let render_origin_root = app
             .world_mut()
             .spawn((
@@ -474,6 +492,7 @@ mod tests {
                     MainCamera,
                     Camera3d::default(),
                     Transform::from_translation(Vec3::new(8.0, 0.0, 0.0)),
+                    WorldPosition(DVec3::new(8.0, 0.0, 0.0)),
                 ));
             });
             spawn_block_highlighter(&mut commands, &materials, &mesh, render_origin_root);

@@ -1,10 +1,13 @@
 use bevy::ecs::system::SystemParam;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use crate::player::{INITIAL_CAMERA_EYE_POSITION, MainCamera};
+use crate::player::{MainCamera, WorldPosition};
 
-use super::{BlockType, ChunkCoord, ChunkData, NEIGHBORS, VoxelWorld};
+use super::{
+    BlockType, ChunkCoord, ChunkData, NEIGHBORS, VoxelWorld, WorldLayout, block_world_origin,
+};
 
 #[derive(Resource, Default)]
 pub struct BlockEntityIndex(pub(crate) HashMap<IVec3, Entity>);
@@ -22,8 +25,28 @@ impl BlockEntityIndex {
 #[derive(Component)]
 pub struct RenderOriginRoot;
 
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockWorldCoord(pub(crate) IVec3);
+
 #[derive(Resource, Clone, Copy)]
 pub struct RenderOriginRootEntity(pub(crate) Entity);
+
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RenderAnchor {
+    pub(crate) chunk: ChunkCoord,
+}
+
+impl RenderAnchor {
+    pub(crate) fn from_world_position(position: DVec3, layout: WorldLayout) -> Self {
+        Self {
+            chunk: ChunkCoord::from_world_position(position, layout),
+        }
+    }
+
+    pub(crate) fn origin(self, layout: WorldLayout) -> DVec3 {
+        self.chunk.world_origin(layout)
+    }
+}
 
 #[derive(Resource, Default)]
 pub struct RenderSyncQueue(pub(crate) HashSet<IVec3>);
@@ -71,14 +94,30 @@ pub(super) fn render_sync_state_at(world: &VoxelWorld, coordinate: IVec3) -> Ren
     }
 }
 
+pub fn world_position_to_render_translation(
+    world_position: DVec3,
+    render_anchor: RenderAnchor,
+    layout: WorldLayout,
+) -> Vec3 {
+    (world_position - render_anchor.origin(layout)).as_vec3()
+}
+
+fn block_to_render_translation(
+    coordinate: IVec3,
+    render_anchor: RenderAnchor,
+    layout: WorldLayout,
+) -> Vec3 {
+    world_position_to_render_translation(block_world_origin(coordinate), render_anchor, layout)
+}
+
 fn spawn_block_entity(
     commands: &mut Commands,
     render_origin_root: RenderOriginRootEntity,
     entity_index: &mut BlockEntityIndex,
     mesh: &Handle<Mesh>,
-    materials: &BlockMaterials,
+    material: Handle<StandardMaterial>,
     coordinate: IVec3,
-    block_type: BlockType,
+    translation: Vec3,
 ) {
     let mut spawned_entity = None;
     commands
@@ -88,8 +127,9 @@ fn spawn_block_entity(
                 parent
                     .spawn((
                         Mesh3d(mesh.clone()),
-                        MeshMaterial3d(materials.material_for(block_type)),
-                        Transform::from_translation(coordinate.as_vec3()),
+                        MeshMaterial3d(material),
+                        Transform::from_translation(translation),
+                        BlockWorldCoord(coordinate),
                     ))
                     .id(),
             );
@@ -98,38 +138,12 @@ fn spawn_block_entity(
     let entity = spawned_entity.expect("block entity spawn should produce a child entity");
     entity_index.insert(coordinate, entity);
 }
-
-fn sync_dirty_block(
-    commands: &mut Commands,
-    world: &VoxelWorld,
-    render_origin_root: RenderOriginRootEntity,
-    entity_index: &mut BlockEntityIndex,
-    mesh: &Handle<Mesh>,
-    materials: &BlockMaterials,
-    coordinate: IVec3,
-) {
-    if let Some(entity) = entity_index.remove(coordinate) {
-        commands.entity(entity).despawn();
-    }
-
-    if let RenderSyncState::Exposed(block_type) = render_sync_state_at(world, coordinate) {
-        spawn_block_entity(
-            commands,
-            render_origin_root,
-            entity_index,
-            mesh,
-            materials,
-            coordinate,
-            block_type,
-        );
-    }
-}
-
 #[derive(SystemParam)]
 pub struct RenderSyncResources<'w, 's> {
     commands: Commands<'w, 's>,
     voxel_world: Res<'w, VoxelWorld>,
     render_origin_root: Res<'w, RenderOriginRootEntity>,
+    render_anchor: Res<'w, RenderAnchor>,
     block_entity_index: ResMut<'w, BlockEntityIndex>,
     render_sync_queue: ResMut<'w, RenderSyncQueue>,
     block_mesh: Res<'w, BlockMesh>,
@@ -138,16 +152,25 @@ pub struct RenderSyncResources<'w, 's> {
 
 impl RenderSyncResources<'_, '_> {
     fn run(mut self) {
+        let layout = self.voxel_world.layout();
         for coordinate in self.render_sync_queue.drain() {
-            sync_dirty_block(
-                &mut self.commands,
-                &self.voxel_world,
-                *self.render_origin_root,
-                &mut self.block_entity_index,
-                &self.block_mesh.0,
-                &self.block_materials,
-                coordinate,
-            );
+            if let Some(entity) = self.block_entity_index.remove(coordinate) {
+                self.commands.entity(entity).despawn();
+            }
+
+            if let RenderSyncState::Exposed(block_type) =
+                render_sync_state_at(&self.voxel_world, coordinate)
+            {
+                spawn_block_entity(
+                    &mut self.commands,
+                    *self.render_origin_root,
+                    &mut self.block_entity_index,
+                    &self.block_mesh.0,
+                    self.block_materials.material_for(block_type),
+                    coordinate,
+                    block_to_render_translation(coordinate, *self.render_anchor, layout),
+                );
+            }
         }
     }
 }
@@ -158,25 +181,82 @@ pub fn sync_block_render_system(resources: RenderSyncResources) {
 
 #[derive(SystemParam)]
 pub struct RenderOriginSyncResources<'w, 's> {
-    camera_query: Query<'w, 's, &'static Transform, With<MainCamera>>,
+    voxel_world: Res<'w, VoxelWorld>,
+    render_anchor: Res<'w, RenderAnchor>,
+    camera_query: Query<'w, 's, (&'static mut Transform, &'static WorldPosition), With<MainCamera>>,
     root_query:
         Query<'w, 's, &'static mut Transform, (With<RenderOriginRoot>, Without<MainCamera>)>,
 }
 
 impl RenderOriginSyncResources<'_, '_> {
     fn run(mut self) {
-        let Ok(camera_transform) = self.camera_query.single() else {
+        let Ok((mut camera_transform, world_position)) = self.camera_query.single_mut() else {
             return;
         };
         let Ok(mut root_transform) = self.root_query.single_mut() else {
             return;
         };
 
+        camera_transform.translation = world_position_to_render_translation(
+            world_position.0,
+            *self.render_anchor,
+            self.voxel_world.layout(),
+        );
         root_transform.translation = -camera_transform.translation;
     }
 }
 
 pub fn sync_render_origin_root_system(resources: RenderOriginSyncResources) {
+    resources.run();
+}
+
+#[derive(SystemParam)]
+pub struct RenderAnchorSyncResources<'w, 's> {
+    voxel_world: Res<'w, VoxelWorld>,
+    render_anchor: ResMut<'w, RenderAnchor>,
+    camera_query: Query<'w, 's, &'static WorldPosition, With<MainCamera>>,
+}
+
+impl RenderAnchorSyncResources<'_, '_> {
+    fn run(mut self) {
+        let Ok(world_position) = self.camera_query.single() else {
+            return;
+        };
+
+        let next_anchor =
+            RenderAnchor::from_world_position(world_position.0, self.voxel_world.layout());
+        if *self.render_anchor != next_anchor {
+            *self.render_anchor = next_anchor;
+        }
+    }
+}
+
+pub fn sync_render_anchor_system(resources: RenderAnchorSyncResources) {
+    resources.run();
+}
+
+#[derive(SystemParam)]
+pub struct BlockTransformSyncResources<'w, 's> {
+    voxel_world: Res<'w, VoxelWorld>,
+    render_anchor: Res<'w, RenderAnchor>,
+    block_query: Query<'w, 's, (&'static BlockWorldCoord, &'static mut Transform)>,
+}
+
+impl BlockTransformSyncResources<'_, '_> {
+    fn run(mut self) {
+        if !self.render_anchor.is_changed() {
+            return;
+        }
+
+        let layout = self.voxel_world.layout();
+        for (block_world_coord, mut transform) in &mut self.block_query {
+            transform.translation =
+                block_to_render_translation(block_world_coord.0, *self.render_anchor, layout);
+        }
+    }
+}
+
+pub fn sync_block_world_transforms_system(resources: BlockTransformSyncResources) {
     resources.run();
 }
 
@@ -236,12 +316,15 @@ pub fn create_cube_mesh(meshes: &mut ResMut<Assets<Mesh>>) -> Handle<Mesh> {
     meshes.add(Mesh::from(Cuboid::new(1.0, 1.0, 1.0)))
 }
 
-pub fn spawn_render_origin_root(commands: &mut Commands) -> Entity {
+pub fn spawn_render_origin_root(
+    commands: &mut Commands,
+    initial_camera_translation: Vec3,
+) -> Entity {
     commands
         .spawn((
             Name::new("RenderOriginRoot"),
             RenderOriginRoot,
-            Transform::from_translation(-INITIAL_CAMERA_EYE_POSITION),
+            Transform::from_translation(-initial_camera_translation),
             GlobalTransform::default(),
             Visibility::Visible,
             InheritedVisibility::VISIBLE,

@@ -4,27 +4,28 @@ use bevy::input::{
     keyboard::KeyCode,
     mouse::{AccumulatedMouseMotion, MouseButton},
 };
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::cursor::cursor_is_locked;
 use crate::world::VoxelWorld;
 
-pub const EYE_HEIGHT: f32 = 1.62;
-pub const INITIAL_CAMERA_EYE_POSITION: Vec3 = Vec3::new(0.0, 36.0, 0.0);
+pub const EYE_HEIGHT: f64 = 1.62;
+pub const INITIAL_CAMERA_EYE_POSITION: DVec3 = DVec3::new(0.0, 36.0, 0.0);
 
-const PLAYER_HEIGHT: f32 = 1.8;
-const PLAYER_HALF_WIDTH: f32 = 0.3;
+const PLAYER_HEIGHT: f64 = 1.8;
+const PLAYER_HALF_WIDTH: f64 = 0.3;
 
-const GRAVITY: f32 = 9.81;
-const JUMP_SPEED: f32 = 5.0;
-const MOVE_SPEED: f32 = 10.0;
-const TERMINAL_VELOCITY: f32 = -50.0;
+const GRAVITY: f64 = 9.81;
+const JUMP_SPEED: f64 = 5.0;
+const MOVE_SPEED: f64 = 10.0;
+const TERMINAL_VELOCITY: f64 = -50.0;
 
-const MAX_AXIS_STEP: f32 = 0.4;
+const MAX_AXIS_STEP: f64 = 0.4;
 const MAX_AXIS_SUBSTEPS: i32 = 32;
 const AXIS_SWEEP_REFINEMENT_STEPS: i32 = 10;
-const SUPPORT_CHECK_DISTANCE: f32 = 0.002;
+const SUPPORT_CHECK_DISTANCE: f64 = 0.002;
 
 #[derive(Clone, Copy)]
 enum CollisionBoundary {
@@ -34,12 +35,15 @@ enum CollisionBoundary {
 
 #[derive(Clone, Copy)]
 struct Aabb {
-    min: Vec3,
-    max: Vec3,
+    min: DVec3,
+    max: DVec3,
 }
 
 #[derive(Component)]
 pub struct MainCamera;
+
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct WorldPosition(pub(crate) DVec3);
 
 #[derive(Component)]
 struct CameraOrientation {
@@ -49,11 +53,15 @@ struct CameraOrientation {
 
 #[derive(Component)]
 struct PlayerPhysics {
-    velocity: Vec3,
+    velocity: DVec3,
     grounded: bool,
 }
 
-pub fn spawn_camera(commands: &mut Commands, render_origin_root: Entity) {
+pub fn spawn_camera(
+    commands: &mut Commands,
+    render_origin_root: Entity,
+    initial_translation: Vec3,
+) {
     let yaw = 0.0;
     let pitch = -0.2;
     let rotation = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch);
@@ -62,12 +70,13 @@ pub fn spawn_camera(commands: &mut Commands, render_origin_root: Entity) {
         parent
             .spawn((
                 Camera3d::default(),
-                Transform::from_translation(INITIAL_CAMERA_EYE_POSITION).with_rotation(rotation),
+                Transform::from_translation(initial_translation).with_rotation(rotation),
             ))
             .insert(MainCamera)
+            .insert(WorldPosition(INITIAL_CAMERA_EYE_POSITION))
             .insert(CameraOrientation { yaw, pitch })
             .insert(PlayerPhysics {
-                velocity: Vec3::ZERO,
+                velocity: DVec3::ZERO,
                 grounded: false,
             });
     });
@@ -84,7 +93,16 @@ pub struct CameraMovementResources<'w, 's> {
     time: Res<'w, Time>,
     keyboard: Res<'w, ButtonInput<KeyCode>>,
     cursor_options: Query<'w, 's, &'static CursorOptions, With<PrimaryWindow>>,
-    query: Query<'w, 's, (&'static mut Transform, &'static mut PlayerPhysics), With<MainCamera>>,
+    query: Query<
+        'w,
+        's,
+        (
+            &'static Transform,
+            &'static mut PlayerPhysics,
+            &'static mut WorldPosition,
+        ),
+        With<MainCamera>,
+    >,
     voxel_world: Res<'w, VoxelWorld>,
 }
 
@@ -94,19 +112,19 @@ impl CameraMovementResources<'_, '_> {
             return;
         }
 
-        let Ok((mut transform, mut player)) = self.query.single_mut() else {
+        let Ok((transform, mut player, mut world_position)) = self.query.single_mut() else {
             return;
         };
 
-        let mut foot_position = eye_to_foot_position(transform.translation);
-        apply_horizontal_input(&self.keyboard, &transform, &mut player);
+        let mut foot_position = eye_to_foot_position(world_position.0);
+        apply_horizontal_input(&self.keyboard, transform, &mut player);
         integrate_vertical_velocity(&self.time, &self.keyboard, &mut player);
 
-        let delta = player.velocity * self.time.delta_secs();
+        let delta = player.velocity * f64::from(self.time.delta_secs());
         resolve_horizontal_movement(&self.voxel_world, &mut foot_position, &mut player, delta);
         resolve_vertical_movement(&self.voxel_world, &mut foot_position, &mut player, delta.y);
         player.grounded = has_support_below(&self.voxel_world, foot_position);
-        transform.translation = foot_to_eye_position(foot_position);
+        world_position.0 = foot_to_eye_position(foot_position);
     }
 }
 
@@ -153,7 +171,7 @@ pub fn camera_look_system(resources: CameraLookResources) {
 }
 
 #[cfg(test)]
-pub fn player_collides_voxel(foot_position: Vec3, voxel: IVec3) -> bool {
+pub fn player_collides_voxel(foot_position: DVec3, voxel: IVec3) -> bool {
     aabbs_overlap(
         player_aabb(foot_position),
         voxel_aabb(voxel),
@@ -161,7 +179,7 @@ pub fn player_collides_voxel(foot_position: Vec3, voxel: IVec3) -> bool {
     )
 }
 
-pub fn player_blocks_block_placement(foot_position: Vec3, voxel: IVec3) -> bool {
+pub fn player_blocks_block_placement(foot_position: DVec3, voxel: IVec3) -> bool {
     // Placement uses the same occupied volume as movement, but treats exact
     // tangential contact as blocked so block placement stays conservative.
     aabbs_overlap(
@@ -211,13 +229,13 @@ const fn release_cursor(cursor: &mut CursorOptions) {
 }
 
 #[inline]
-const fn eye_to_foot_position(eye_position: Vec3) -> Vec3 {
-    Vec3::new(eye_position.x, eye_position.y - EYE_HEIGHT, eye_position.z)
+const fn eye_to_foot_position(eye_position: DVec3) -> DVec3 {
+    DVec3::new(eye_position.x, eye_position.y - EYE_HEIGHT, eye_position.z)
 }
 
 #[inline]
-const fn foot_to_eye_position(foot_position: Vec3) -> Vec3 {
-    Vec3::new(
+const fn foot_to_eye_position(foot_position: DVec3) -> DVec3 {
+    DVec3::new(
         foot_position.x,
         foot_position.y + EYE_HEIGHT,
         foot_position.z,
@@ -234,9 +252,9 @@ fn apply_horizontal_input(
     player.velocity.z = desired_velocity.z;
 }
 
-fn desired_horizontal_velocity(transform: &Transform, keyboard: &ButtonInput<KeyCode>) -> Vec3 {
+fn desired_horizontal_velocity(transform: &Transform, keyboard: &ButtonInput<KeyCode>) -> DVec3 {
     let (forward, right) = movement_basis(transform);
-    let mut input_dir = Vec3::ZERO;
+    let mut input_dir = DVec3::ZERO;
 
     if keyboard.pressed(KeyCode::KeyW) {
         input_dir += forward;
@@ -254,17 +272,17 @@ fn desired_horizontal_velocity(transform: &Transform, keyboard: &ButtonInput<Key
     if input_dir.length_squared() > 0.0 {
         input_dir.normalize() * MOVE_SPEED
     } else {
-        Vec3::ZERO
+        DVec3::ZERO
     }
 }
 
-fn movement_basis(transform: &Transform) -> (Vec3, Vec3) {
+fn movement_basis(transform: &Transform) -> (DVec3, DVec3) {
     let forward: Vec3 = transform.forward().into();
     let right: Vec3 = transform.right().into();
 
     (
-        forward.with_y(0.0).normalize_or_zero(),
-        right.with_y(0.0).normalize_or_zero(),
+        forward.as_dvec3().with_y(0.0).normalize_or_zero(),
+        right.as_dvec3().with_y(0.0).normalize_or_zero(),
     )
 }
 
@@ -273,6 +291,8 @@ fn integrate_vertical_velocity(
     keyboard: &ButtonInput<KeyCode>,
     player: &mut PlayerPhysics,
 ) {
+    let delta_secs = f64::from(time.delta_secs());
+
     if player.grounded {
         player.velocity.y = 0.0;
         if keyboard.just_pressed(KeyCode::Space) {
@@ -283,15 +303,15 @@ fn integrate_vertical_velocity(
     }
 
     player.velocity.y = GRAVITY
-        .mul_add(-time.delta_secs(), player.velocity.y)
+        .mul_add(-delta_secs, player.velocity.y)
         .max(TERMINAL_VELOCITY);
 }
 
 fn resolve_horizontal_movement(
     world: &VoxelWorld,
-    foot_position: &mut Vec3,
+    foot_position: &mut DVec3,
     player: &mut PlayerPhysics,
-    delta: Vec3,
+    delta: DVec3,
 ) {
     // Resolve each horizontal axis independently so movement can slide along
     // walls instead of stopping completely on corner contact.
@@ -300,53 +320,53 @@ fn resolve_horizontal_movement(
         foot_position,
         &mut player.velocity.x,
         delta.x,
-        Vec3::X,
+        DVec3::X,
     );
     resolve_horizontal_axis(
         world,
         foot_position,
         &mut player.velocity.z,
         delta.z,
-        Vec3::Z,
+        DVec3::Z,
     );
 }
 
 fn resolve_horizontal_axis(
     world: &VoxelWorld,
-    foot_position: &mut Vec3,
-    velocity: &mut f32,
-    delta: f32,
-    axis: Vec3,
+    foot_position: &mut DVec3,
+    velocity: &mut f64,
+    delta: f64,
+    axis: DVec3,
 ) {
     let _ = resolve_axis_movement(world, foot_position, velocity, delta, axis);
 }
 
 fn resolve_vertical_movement(
     world: &VoxelWorld,
-    foot_position: &mut Vec3,
+    foot_position: &mut DVec3,
     player: &mut PlayerPhysics,
-    delta_y: f32,
+    delta_y: f64,
 ) {
     let _ = resolve_axis_movement(
         world,
         foot_position,
         &mut player.velocity.y,
         delta_y,
-        Vec3::Y,
+        DVec3::Y,
     );
 }
 
 fn resolve_axis_movement(
     world: &VoxelWorld,
-    foot_position: &mut Vec3,
-    velocity: &mut f32,
-    delta: f32,
-    axis: Vec3,
+    foot_position: &mut DVec3,
+    velocity: &mut f64,
+    delta: f64,
+    axis: DVec3,
 ) -> bool {
     let mut remaining = delta;
 
     for _ in 0..MAX_AXIS_SUBSTEPS {
-        if remaining.abs() < f32::EPSILON {
+        if remaining.abs() < f64::EPSILON {
             return false;
         }
 
@@ -364,11 +384,11 @@ fn resolve_axis_movement(
 
 fn move_to_axis_contact(
     world: &VoxelWorld,
-    foot_position: &mut Vec3,
-    delta: f32,
-    axis: Vec3,
+    foot_position: &mut DVec3,
+    delta: f64,
+    axis: DVec3,
 ) -> bool {
-    if delta.abs() < f32::EPSILON {
+    if delta.abs() < f64::EPSILON {
         return false;
     }
 
@@ -381,11 +401,11 @@ fn move_to_axis_contact(
     *foot_position = start;
 
     let direction = delta.signum();
-    let mut safe_distance = 0.0;
+    let mut safe_distance = 0.0_f64;
     let mut blocked_distance = delta.abs();
 
     for _ in 0..AXIS_SWEEP_REFINEMENT_STEPS {
-        let candidate_distance = 0.5 * (safe_distance + blocked_distance);
+        let candidate_distance = 0.5_f64 * (safe_distance + blocked_distance);
         let candidate = start + axis * (direction * candidate_distance);
         if collides(world, candidate) {
             blocked_distance = candidate_distance;
@@ -398,29 +418,29 @@ fn move_to_axis_contact(
     true
 }
 
-fn has_support_below(world: &VoxelWorld, foot_position: Vec3) -> bool {
+fn has_support_below(world: &VoxelWorld, foot_position: DVec3) -> bool {
     let mut support_aabb = player_aabb(foot_position);
     support_aabb.min.y -= SUPPORT_CHECK_DISTANCE;
     support_aabb.max.y -= SUPPORT_CHECK_DISTANCE;
     aabb_collides_world(world, support_aabb, CollisionBoundary::Exclusive)
 }
 
-fn collides(world: &VoxelWorld, position: Vec3) -> bool {
+fn collides(world: &VoxelWorld, position: DVec3) -> bool {
     aabb_collides_world(world, player_aabb(position), CollisionBoundary::Exclusive)
 }
 
-fn player_aabb(foot_position: Vec3) -> Aabb {
+fn player_aabb(foot_position: DVec3) -> Aabb {
     Aabb {
-        min: foot_position + Vec3::new(-PLAYER_HALF_WIDTH, 0.0, -PLAYER_HALF_WIDTH),
-        max: foot_position + Vec3::new(PLAYER_HALF_WIDTH, PLAYER_HEIGHT, PLAYER_HALF_WIDTH),
+        min: foot_position + DVec3::new(-PLAYER_HALF_WIDTH, 0.0, -PLAYER_HALF_WIDTH),
+        max: foot_position + DVec3::new(PLAYER_HALF_WIDTH, PLAYER_HEIGHT, PLAYER_HALF_WIDTH),
     }
 }
 
 fn voxel_aabb(voxel: IVec3) -> Aabb {
-    let min = voxel.as_vec3();
+    let min = DVec3::new(f64::from(voxel.x), f64::from(voxel.y), f64::from(voxel.z));
     Aabb {
         min,
-        max: min + Vec3::ONE,
+        max: min + DVec3::ONE,
     }
 }
 
@@ -474,13 +494,16 @@ mod tests {
 
     #[test]
     fn player_collides_when_aabb_overlaps_voxel() {
-        assert!(player_collides_voxel(Vec3::new(0.2, 0.0, 0.2), IVec3::ZERO));
+        assert!(player_collides_voxel(
+            DVec3::new(0.2, 0.0, 0.2),
+            IVec3::ZERO
+        ));
     }
 
     #[test]
     fn player_does_not_collide_when_clear_of_voxel() {
         assert!(!player_collides_voxel(
-            Vec3::new(2.0, 0.0, 2.0),
+            DVec3::new(2.0, 0.0, 2.0),
             IVec3::ZERO
         ));
     }
@@ -488,7 +511,7 @@ mod tests {
     #[test]
     fn player_collides_on_diagonal_corner_overlap_like_minecraft() {
         assert!(player_collides_voxel(
-            Vec3::new(1.29, 0.0, 1.29),
+            DVec3::new(1.29, 0.0, 1.29),
             IVec3::ZERO,
         ));
     }
@@ -496,7 +519,7 @@ mod tests {
     #[test]
     fn placement_collision_matches_player_volume() {
         assert!(player_blocks_block_placement(
-            Vec3::new(0.2, 0.0, 0.2),
+            DVec3::new(0.2, 0.0, 0.2),
             IVec3::ZERO
         ));
     }
@@ -504,8 +527,8 @@ mod tests {
     #[test]
     fn aabb_overlap_uses_exclusive_movement_and_inclusive_placement_boundaries() {
         let player_box = Aabb {
-            min: Vec3::new(1.0, 0.0, 0.2),
-            max: Vec3::new(1.6, PLAYER_HEIGHT, 0.8),
+            min: DVec3::new(1.0, 0.0, 0.2),
+            max: DVec3::new(1.6, PLAYER_HEIGHT, 0.8),
         };
 
         assert!(!aabbs_overlap(
@@ -525,7 +548,7 @@ mod tests {
         let mut world = VoxelWorld::new(WorldLayout::default());
         assert!(world.try_insert_block(IVec3::new(0, 1, 0), BlockType::Stone));
 
-        let foot_position = Vec3::new(1.35, 1.0, 0.5);
+        let foot_position = DVec3::new(1.35, 1.0, 0.5);
         assert!(!collides(&world, foot_position));
         assert!(!has_support_below(&world, foot_position));
     }
@@ -535,16 +558,41 @@ mod tests {
         let mut world = VoxelWorld::new(WorldLayout::default());
         assert!(world.try_insert_block(IVec3::ZERO, BlockType::Stone));
 
-        let mut foot_position = Vec3::new(0.5, 1.2, 0.5);
+        let mut foot_position = DVec3::new(0.5, 1.2, 0.5);
         let mut player = PlayerPhysics {
-            velocity: Vec3::new(0.0, -12.0, 0.0),
+            velocity: DVec3::new(0.0, -12.0, 0.0),
             grounded: false,
         };
 
         resolve_vertical_movement(&world, &mut foot_position, &mut player, -0.4);
 
         assert!((foot_position.y - 1.0).abs() < 0.01);
-        assert!(player.velocity.y.abs() < f32::EPSILON);
+        assert!(player.velocity.y.abs() < f64::EPSILON);
         assert!(has_support_below(&world, foot_position));
+    }
+
+    #[test]
+    fn wall_resolution_stays_stable_at_large_world_coordinates() {
+        let mut world = VoxelWorld::new(WorldLayout::default());
+        let wall_block = IVec3::new(16_777_217, 0, 0);
+        assert!(world.try_insert_block(wall_block, BlockType::Stone));
+
+        let mut foot_position = DVec3::new(16_777_216.4, 0.0, 0.5);
+        let mut player = PlayerPhysics {
+            velocity: DVec3::new(6.0, 0.0, 0.0),
+            grounded: true,
+        };
+
+        resolve_horizontal_axis(
+            &world,
+            &mut foot_position,
+            &mut player.velocity.x,
+            0.8,
+            DVec3::X,
+        );
+
+        assert!(foot_position.x < f64::from(wall_block.x));
+        assert!(player.velocity.x.abs() < f64::EPSILON);
+        assert!(!collides(&world, foot_position));
     }
 }

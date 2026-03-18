@@ -1,10 +1,12 @@
 use super::generation::{
     TerrainNoise, classify_biome, generate_chunk, should_carve_cave, surface_height_at,
 };
-use super::render::{RenderOriginRoot, RenderSyncState, render_sync_state_at};
+use super::render::world_position_to_render_translation;
+use super::render::{BlockWorldCoord, RenderOriginRoot, RenderSyncState, render_sync_state_at};
 use super::save::{chunk_path, load_chunk, save_chunk};
 use super::*;
-use crate::player::MainCamera;
+use crate::player::{MainCamera, WorldPosition};
+use bevy::math::DVec3;
 use bevy::transform::TransformPlugin;
 use std::collections::HashMap;
 use std::fs;
@@ -42,6 +44,9 @@ fn insert_render_origin_root(app: &mut App, translation: Vec3) -> Entity {
         ))
         .id();
     app.insert_resource(RenderOriginRootEntity(render_origin_root));
+    app.insert_resource(RenderAnchor {
+        chunk: ChunkCoord::new(0, 0),
+    });
     render_origin_root
 }
 
@@ -80,24 +85,33 @@ fn setup_streaming_app(temp_dir: PathBuf) -> (App, WorldLayout) {
     app.insert_resource(WorldSaveDirectory(temp_dir));
     app.add_systems(
         Update,
-        (sync_visible_chunks_system, sync_block_render_system).chain(),
+        (
+            sync_render_anchor_system,
+            sync_visible_chunks_system,
+            sync_block_render_system,
+            sync_block_world_transforms_system,
+            sync_render_origin_root_system,
+        )
+            .chain(),
     );
     app.world_mut().spawn((
         MainCamera,
         Transform::from_translation(Vec3::new(0.5, 36.0, 0.5)),
+        WorldPosition(DVec3::new(0.5, 36.0, 0.5)),
     ));
 
     (app, layout)
 }
 
-fn move_main_camera(app: &mut App, translation: Vec3) {
+fn move_main_camera(app: &mut App, translation: DVec3) {
     let mut camera = app
         .world_mut()
-        .query_filtered::<&mut Transform, With<MainCamera>>();
-    let mut transform = camera
+        .query_filtered::<(&mut Transform, &mut WorldPosition), With<MainCamera>>();
+    let (mut transform, mut world_position) = camera
         .single_mut(app.world_mut())
         .expect("main camera should exist");
-    transform.translation = translation;
+    world_position.0 = translation;
+    transform.translation = translation.as_vec3();
 }
 
 #[test]
@@ -248,6 +262,16 @@ fn world_coordinate_mapping_crosses_chunk_boundaries_correctly() {
         negative,
         Some((ChunkCoord::new(-1, -1), IVec3::new(15, 24, 15)))
     );
+}
+
+#[test]
+fn chunk_coord_from_far_world_position_preserves_precision() {
+    let layout = WorldLayout::default();
+    let position = DVec3::new(16_777_217.25, 0.0, -16_777_232.75);
+
+    let chunk_coord = ChunkCoord::from_world_position(position, layout);
+
+    assert_eq!(chunk_coord, ChunkCoord::new(1_048_576, -1_048_578));
 }
 
 #[test]
@@ -416,13 +440,13 @@ fn chunk_streaming_saves_modified_chunks_and_reloads_them() {
         .mark_with_neighbors(placed_block);
     app.update();
 
-    move_main_camera(&mut app, Vec3::new(48.5, 36.0, 0.5));
+    move_main_camera(&mut app, DVec3::new(48.5, 36.0, 0.5));
     app.update();
 
     assert_eq!(app.world().resource::<VoxelWorld>().loaded_chunk_count(), 1);
     assert!(chunk_path(&root_dir, ChunkCoord::new(0, 0)).exists());
 
-    move_main_camera(&mut app, Vec3::new(0.5, 36.0, 0.5));
+    move_main_camera(&mut app, DVec3::new(0.5, 36.0, 0.5));
     app.update();
 
     assert!(
@@ -468,10 +492,12 @@ fn top_block_sampler_can_find_surface_material() {
 #[test]
 fn render_origin_root_tracks_negative_camera_world_position() {
     let mut app = App::new();
+    app.insert_resource(VoxelWorld::default());
     let _ = insert_render_origin_root(&mut app, Vec3::ZERO);
     app.world_mut().spawn((
         MainCamera,
         Transform::from_translation(Vec3::new(8.0, 3.0, -2.0)),
+        WorldPosition(DVec3::new(8.0, 3.0, -2.0)),
     ));
     app.add_systems(Update, sync_render_origin_root_system);
 
@@ -495,28 +521,35 @@ fn block_global_transform_becomes_camera_relative() {
     app.insert_resource(RenderSyncQueue::default());
     app.insert_resource(BlockMesh(Handle::default()));
     app.insert_resource(test_block_materials());
-    let render_origin_root = insert_render_origin_root(&mut app, -Vec3::new(8.0, 0.0, 0.0));
+    let render_origin_root = insert_render_origin_root(&mut app, Vec3::ZERO);
     app.add_systems(
         Update,
-        (sync_block_render_system, sync_render_origin_root_system).chain(),
+        (
+            sync_render_anchor_system,
+            sync_block_render_system,
+            sync_block_world_transforms_system,
+            sync_render_origin_root_system,
+        )
+            .chain(),
     );
     app.add_systems(Startup, move |mut commands: Commands| {
         commands.entity(render_origin_root).with_children(|parent| {
             parent.spawn((
                 MainCamera,
                 Camera3d::default(),
-                Transform::from_translation(Vec3::new(8.0, 0.0, 0.0)),
+                Transform::from_translation(Vec3::new(24.0, 0.0, 0.0)),
+                WorldPosition(DVec3::new(24.0, 0.0, 0.0)),
             ));
         });
     });
 
     {
         let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-        let _ = world.try_insert_block(IVec3::new(10, 0, 0), BlockType::Stone);
+        let _ = world.try_insert_block(IVec3::new(26, 0, 0), BlockType::Stone);
     }
     app.world_mut()
         .resource_mut::<RenderSyncQueue>()
-        .mark(IVec3::new(10, 0, 0));
+        .mark(IVec3::new(26, 0, 0));
 
     app.update();
 
@@ -524,7 +557,7 @@ fn block_global_transform_becomes_camera_relative() {
         .world()
         .resource::<BlockEntityIndex>()
         .0
-        .get(&IVec3::new(10, 0, 0))
+        .get(&IVec3::new(26, 0, 0))
         .expect("block entity should be indexed");
     let global_transform = app
         .world()
@@ -534,9 +567,42 @@ fn block_global_transform_becomes_camera_relative() {
 
     let mut camera_query = app
         .world_mut()
-        .query_filtered::<&Transform, With<MainCamera>>();
-    let camera_transform = camera_query
+        .query_filtered::<(&Transform, &WorldPosition), With<MainCamera>>();
+    let (camera_transform, world_position) = camera_query
         .single(app.world_mut())
         .expect("camera should exist");
+    assert_eq!(world_position.0, DVec3::new(24.0, 0.0, 0.0));
     assert_eq!(camera_transform.translation, Vec3::new(8.0, 0.0, 0.0));
+}
+
+#[test]
+fn block_local_translation_rebases_when_render_anchor_changes() {
+    let mut app = App::new();
+    app.insert_resource(VoxelWorld::default());
+    app.insert_resource(RenderAnchor {
+        chunk: ChunkCoord::new(0, 0),
+    });
+    app.world_mut()
+        .spawn((BlockWorldCoord(IVec3::new(26, 0, 0)), Transform::default()));
+    app.add_systems(Update, sync_block_world_transforms_system);
+
+    app.world_mut().resource_mut::<RenderAnchor>().chunk = ChunkCoord::new(1, 0);
+    app.update();
+
+    let mut block_query = app
+        .world_mut()
+        .query_filtered::<(&BlockWorldCoord, &Transform), Without<MainCamera>>();
+    let (_, block_transform) = block_query
+        .single(app.world_mut())
+        .expect("block should exist");
+    assert_eq!(
+        block_transform.translation,
+        world_position_to_render_translation(
+            block_world_origin(IVec3::new(26, 0, 0)),
+            RenderAnchor {
+                chunk: ChunkCoord::new(1, 0),
+            },
+            WorldLayout::default(),
+        )
+    );
 }

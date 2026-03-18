@@ -1,10 +1,11 @@
 use bevy::app::AppExit;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::system::SystemParam;
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
 
-use crate::player::{INITIAL_CAMERA_EYE_POSITION, MainCamera};
+use crate::player::{INITIAL_CAMERA_EYE_POSITION, MainCamera, WorldPosition};
 
 use super::render::RenderSyncQueue;
 use super::{
@@ -14,7 +15,7 @@ use super::{
 
 #[derive(SystemParam)]
 pub struct ChunkStreamingResources<'w, 's> {
-    camera_query: Query<'w, 's, &'static Transform, With<MainCamera>>,
+    camera_query: Query<'w, 's, &'static WorldPosition, With<MainCamera>>,
     voxel_world: ResMut<'w, VoxelWorld>,
     render_sync_queue: ResMut<'w, RenderSyncQueue>,
     world_seed: Res<'w, WorldSeed>,
@@ -25,14 +26,14 @@ pub struct ChunkStreamingResources<'w, 's> {
 
 impl ChunkStreamingResources<'_, '_> {
     fn run(mut self) {
-        let Ok(camera_transform) = self.camera_query.single() else {
+        let Ok(camera_position) = self.camera_query.single() else {
             return;
         };
 
         sync_chunks_around_position(
             &mut self.voxel_world,
             &mut self.render_sync_queue,
-            camera_transform.translation,
+            camera_position.0,
             *self.world_seed,
             &self.terrain_settings,
             &self.chunk_load_settings,
@@ -136,7 +137,7 @@ pub fn generate_chunk(
 fn sync_chunks_around_position(
     voxel_world: &mut VoxelWorld,
     render_sync_queue: &mut RenderSyncQueue,
-    position: Vec3,
+    position: DVec3,
     seed: WorldSeed,
     terrain_settings: &TerrainSettings,
     chunk_load_settings: &ChunkLoadSettings,

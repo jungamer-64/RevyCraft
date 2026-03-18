@@ -8,6 +8,7 @@ mod save;
 #[path = "world/tests.rs"]
 mod tests;
 
+use bevy::math::DVec3;
 use bevy::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,9 +17,10 @@ pub use self::generation::{
     initialize_visible_world, save_loaded_chunks_on_exit_system, sync_visible_chunks_system,
 };
 pub use self::render::{
-    BlockEntityIndex, BlockMaterials, BlockMesh, RenderOriginRootEntity, RenderSyncQueue,
-    create_block_materials, create_cube_mesh, spawn_directional_light, spawn_render_origin_root,
-    sync_block_render_system, sync_render_origin_root_system,
+    BlockEntityIndex, BlockMaterials, BlockMesh, RenderAnchor, RenderOriginRootEntity,
+    RenderSyncQueue, create_block_materials, create_cube_mesh, spawn_directional_light,
+    spawn_render_origin_root, sync_block_render_system, sync_block_world_transforms_system,
+    sync_render_anchor_system, sync_render_origin_root_system,
 };
 
 const NEIGHBORS: [IVec3; 6] = [
@@ -74,13 +76,35 @@ impl ChunkCoord {
         }
     }
 
-    pub(crate) fn from_world_position(position: Vec3, layout: WorldLayout) -> Self {
-        Self::from_world_block(position.floor().as_ivec3(), layout)
+    pub(crate) fn from_world_position(position: DVec3, layout: WorldLayout) -> Self {
+        Self::from_world_block(world_block_from_position(position), layout)
     }
 
     pub(crate) fn chebyshev_distance(self, other: Self) -> i32 {
         (self.x - other.x).abs().max((self.z - other.z).abs())
     }
+
+    pub(crate) fn world_origin(self, layout: WorldLayout) -> DVec3 {
+        DVec3::new(
+            f64::from(self.x) * f64::from(layout.chunk_size),
+            0.0,
+            f64::from(self.z) * f64::from(layout.chunk_size),
+        )
+    }
+}
+
+#[inline]
+pub fn world_block_from_position(position: DVec3) -> IVec3 {
+    position.floor().as_ivec3()
+}
+
+#[inline]
+pub fn block_world_origin(coordinate: IVec3) -> DVec3 {
+    DVec3::new(
+        f64::from(coordinate.x),
+        f64::from(coordinate.y),
+        f64::from(coordinate.z),
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

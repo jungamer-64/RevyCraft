@@ -15,13 +15,15 @@ use interaction::{
     update_highlight_target_pre_edit_system,
 };
 use player::{
-    camera_look_system, camera_movement_system, lock_cursor, spawn_camera, toggle_cursor_grab,
+    INITIAL_CAMERA_EYE_POSITION, camera_look_system, camera_movement_system, lock_cursor,
+    spawn_camera, toggle_cursor_grab,
 };
 use world::{
-    BlockEntityIndex, BlockMesh, ChunkLoadSettings, RenderOriginRootEntity, RenderSyncQueue,
-    TerrainSettings, VoxelWorld, WorldSaveDirectory, WorldSeed, create_block_materials,
-    create_cube_mesh, initialize_visible_world, save_loaded_chunks_on_exit_system,
-    spawn_directional_light, spawn_render_origin_root, sync_block_render_system,
+    BlockEntityIndex, BlockMesh, ChunkLoadSettings, RenderAnchor, RenderOriginRootEntity,
+    RenderSyncQueue, TerrainSettings, VoxelWorld, WorldSaveDirectory, WorldSeed,
+    create_block_materials, create_cube_mesh, initialize_visible_world,
+    save_loaded_chunks_on_exit_system, spawn_directional_light, spawn_render_origin_root,
+    sync_block_render_system, sync_block_world_transforms_system, sync_render_anchor_system,
     sync_render_origin_root_system, sync_visible_chunks_system,
 };
 
@@ -37,6 +39,7 @@ struct SetupResources<'w, 's> {
     terrain_settings: Res<'w, TerrainSettings>,
     chunk_load_settings: Res<'w, ChunkLoadSettings>,
     world_save_directory: Res<'w, WorldSaveDirectory>,
+    render_anchor: Res<'w, RenderAnchor>,
 }
 
 impl SetupResources<'_, '_> {
@@ -49,12 +52,22 @@ impl SetupResources<'_, '_> {
         let cube_mesh = create_cube_mesh(&mut self.meshes);
         self.commands.insert_resource(BlockMesh(cube_mesh.clone()));
 
-        let render_origin_root = spawn_render_origin_root(&mut self.commands);
+        let initial_camera_translation = world::render::world_position_to_render_translation(
+            INITIAL_CAMERA_EYE_POSITION,
+            *self.render_anchor,
+            self.voxel_world.layout(),
+        );
+        let render_origin_root =
+            spawn_render_origin_root(&mut self.commands, initial_camera_translation);
         self.commands
             .insert_resource(RenderOriginRootEntity(render_origin_root));
 
         spawn_directional_light(&mut self.commands, render_origin_root);
-        spawn_camera(&mut self.commands, render_origin_root);
+        spawn_camera(
+            &mut self.commands,
+            render_origin_root,
+            initial_camera_translation,
+        );
         initialize_visible_world(
             &mut self.voxel_world,
             &mut self.render_sync_queue,
@@ -77,6 +90,10 @@ fn main() {
     let world_seed = WorldSeed::from_env();
     let terrain_settings = TerrainSettings::from_env();
     let world_save_directory = WorldSaveDirectory::from_seed(world_seed);
+    let render_anchor = RenderAnchor::from_world_position(
+        INITIAL_CAMERA_EYE_POSITION,
+        chunk_load_settings.layout(),
+    );
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -96,16 +113,19 @@ fn main() {
         .insert_resource(world_seed)
         .insert_resource(terrain_settings)
         .insert_resource(world_save_directory)
+        .insert_resource(render_anchor)
         .add_systems(Startup, setup)
         .add_systems(
             Update,
             (
                 camera_movement_system,
                 camera_look_system,
+                sync_render_anchor_system,
                 sync_visible_chunks_system,
                 update_highlight_target_pre_edit_system,
                 block_edit_system,
                 sync_block_render_system,
+                sync_block_world_transforms_system,
                 update_highlight_target_post_edit_system,
                 block_selection_system,
                 highlight_system,
