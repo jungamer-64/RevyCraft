@@ -220,9 +220,9 @@ pub struct BlockMesh(pub(crate) Handle<Mesh>);
 #[derive(Resource, Clone)]
 pub struct TerrainSettings {
     pub(crate) chunk_half_size: i32,
-    horizontal_frequency: f32,
-    height_amplitude: f32,
-    base_height: f32,
+    horizontal_frequency: f64,
+    height_amplitude: f64,
+    base_height: f64,
     surface_depth: i32,
 }
 
@@ -277,15 +277,10 @@ impl TerrainSettings {
         }
     }
 
-    // Terrain height is intentionally quantized to integer block levels after
-    // applying the float noise profile.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn surface_height(&self, x: i32, z: i32) -> i32 {
-        let noise = (x as f32 * self.horizontal_frequency).sin()
-            + (z as f32 * self.horizontal_frequency).cos();
-        noise
-            .mul_add(self.height_amplitude, self.base_height)
-            .round() as i32
+        let noise = (f64::from(x) * self.horizontal_frequency).sin()
+            + (f64::from(z) * self.horizontal_frequency).cos();
+        rounded_height_to_i32(noise.mul_add(self.height_amplitude, self.base_height))
     }
 
     const fn block_type_at_height(&self, y: i32, surface_height: i32) -> BlockType {
@@ -334,7 +329,6 @@ pub fn create_cube_mesh(meshes: &mut ResMut<Assets<Mesh>>) -> Handle<Mesh> {
     meshes.add(Mesh::from(Cuboid::new(1.0, 1.0, 1.0)))
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub fn populate_terrain(voxel_world: &mut VoxelWorld, terrain_settings: &TerrainSettings) {
     for x in -terrain_settings.chunk_half_size..terrain_settings.chunk_half_size {
         for z in -terrain_settings.chunk_half_size..terrain_settings.chunk_half_size {
@@ -344,6 +338,27 @@ pub fn populate_terrain(voxel_world: &mut VoxelWorld, terrain_settings: &Terrain
                 let block_type = terrain_settings.block_type_at_height(y, height);
                 let _ = voxel_world.try_insert_block(IVec3::new(x, y, z), block_type);
             }
+        }
+    }
+}
+
+fn rounded_height_to_i32(height: f64) -> i32 {
+    let rounded = height.round();
+    let mut quantized_height = 0;
+
+    if rounded.is_sign_negative() {
+        loop {
+            if f64::from(quantized_height) <= rounded {
+                break quantized_height;
+            }
+            quantized_height -= 1;
+        }
+    } else {
+        loop {
+            if f64::from(quantized_height) >= rounded {
+                break quantized_height;
+            }
+            quantized_height += 1;
         }
     }
 }
