@@ -1,3 +1,5 @@
+#![allow(clippy::multiple_crate_versions)]
+
 use bevy::input::{
     ButtonInput,
     keyboard::KeyCode,
@@ -110,6 +112,7 @@ fn create_cube_mesh(meshes: &mut ResMut<Assets<Mesh>>) -> Handle<Mesh> {
     meshes.add(Mesh::from(Cuboid::new(1.0, 1.0, 1.0)))
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn build_terrain(
     commands: &mut Commands,
     voxel_world: &mut VoxelWorld,
@@ -121,7 +124,7 @@ fn build_terrain(
     for x in -chunk_size..chunk_size {
         for z in -chunk_size..chunk_size {
             // Simple height function for rolling hills.
-            let height = ((x as f32 * 0.3).sin() + (z as f32 * 0.3).cos()) * 2.5 + 4.0;
+            let height = ((x as f32 * 0.3).sin() + (z as f32 * 0.3).cos()).mul_add(2.5, 4.0);
             let height = height.round() as i32;
 
             for y in 0..=height {
@@ -196,10 +199,10 @@ fn spawn_block(
     world.entities.insert(coordinate, entity);
 }
 
-fn remove_block(commands: &mut Commands, world: &mut VoxelWorld, coordinate: IVec3) {
-    if let Some(entity) = world.entities.remove(&coordinate) {
+fn remove_block(commands: &mut Commands, world: &mut VoxelWorld, coordinate: &IVec3) {
+    if let Some(entity) = world.entities.remove(coordinate) {
         commands.entity(entity).despawn();
-        world.blocks.remove(&coordinate);
+        world.blocks.remove(coordinate);
     }
 }
 
@@ -208,9 +211,8 @@ fn camera_movement_system(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut query: Query<&mut Transform, With<MainCamera>>,
 ) {
-    let mut transform = match query.single_mut() {
-        Ok(transform) => transform,
-        Err(_) => return,
+    let Ok(mut transform) = query.single_mut() else {
+        return;
     };
 
     let forward: Vec3 = transform.forward().into();
@@ -246,14 +248,11 @@ fn camera_look_system(
     cursor_options: Query<&CursorOptions, With<PrimaryWindow>>,
     mut query: Query<&mut Transform, With<MainCamera>>,
 ) {
-    let mut transform = match query.single_mut() {
-        Ok(transform) => transform,
-        Err(_) => return,
+    let Ok(mut transform) = query.single_mut() else {
+        return;
     };
-
-    let cursor_options = match cursor_options.single() {
-        Ok(cursor_options) => cursor_options,
-        Err(_) => return,
+    let Ok(cursor_options) = cursor_options.single() else {
+        return;
     };
 
     // Ignore mouse movement when the cursor isn't grabbed.
@@ -281,9 +280,8 @@ fn block_edit_system(
     block_materials: Res<BlockMaterials>,
     mut voxel_world: ResMut<VoxelWorld>,
 ) {
-    let transform = match camera_query.single() {
-        Ok(transform) => transform,
-        Err(_) => return,
+    let Ok(transform) = camera_query.single() else {
+        return;
     };
 
     let ray_origin = transform.translation;
@@ -293,7 +291,7 @@ fn block_edit_system(
     if let Some((hit, air)) = raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0, 0.1) {
         if mouse_button.just_pressed(MouseButton::Left) {
             // Remove a block.
-            remove_block(&mut commands, &mut voxel_world, hit);
+            remove_block(&mut commands, &mut voxel_world, &hit);
         }
         if mouse_button.just_pressed(MouseButton::Right) {
             // Place a block in the closest empty space.
@@ -322,7 +320,8 @@ fn raycast_voxel(
     );
 
     let dir = direction.normalize_or_zero();
-    let steps = (max_distance / step).ceil() as usize;
+    // Ensure we never cast a negative value to `usize`.
+    let steps = ((max_distance / step).ceil().max(0.0)) as usize;
     for i in 0..=steps {
         let dist = i as f32 * step;
         let position = origin + dir * dist;
@@ -346,16 +345,16 @@ fn toggle_cursor_grab(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) {
-        if let Ok(mut cursor) = cursor.single_mut() {
-            cursor.grab_mode = CursorGrabMode::None;
-            cursor.visible = true;
-        }
+    if keyboard.just_pressed(KeyCode::Escape)
+        && let Ok(mut cursor) = cursor.single_mut()
+    {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
     }
-    if keyboard.just_pressed(KeyCode::Enter) {
-        if let Ok(mut cursor) = cursor.single_mut() {
-            cursor.grab_mode = CursorGrabMode::Locked;
-            cursor.visible = false;
-        }
+    if keyboard.just_pressed(KeyCode::Enter)
+        && let Ok(mut cursor) = cursor.single_mut()
+    {
+        cursor.grab_mode = CursorGrabMode::Locked;
+        cursor.visible = false;
     }
 }
