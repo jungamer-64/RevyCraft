@@ -207,6 +207,7 @@ impl ServerConfig {
 #[derive(Clone, Default)]
 pub struct VersionRegistry {
     adapters: HashMap<i32, Arc<dyn ProtocolAdapter>>,
+    primary_protocol: Option<ProtocolVersion>,
 }
 
 impl VersionRegistry {
@@ -216,7 +217,9 @@ impl VersionRegistry {
     }
 
     pub fn register_adapter(&mut self, adapter: Arc<dyn ProtocolAdapter>) -> &mut Self {
-        self.adapters.insert(adapter.protocol_version().0, adapter);
+        let protocol_version = adapter.protocol_version();
+        self.primary_protocol.get_or_insert(protocol_version);
+        self.adapters.insert(protocol_version.0, adapter);
         self
     }
 
@@ -233,11 +236,11 @@ impl VersionRegistry {
     }
 
     fn primary_adapter(&self) -> Result<Arc<dyn ProtocolAdapter>, RuntimeError> {
-        self.adapters
-            .values()
-            .next()
-            .cloned()
-            .ok_or_else(|| RuntimeError::Config("no protocol adapters registered".to_string()))
+        let protocol = self
+            .primary_protocol
+            .ok_or_else(|| RuntimeError::Config("no protocol adapters registered".to_string()))?;
+        self.resolve(protocol)
+            .ok_or_else(|| RuntimeError::Config("primary protocol adapter is missing".to_string()))
     }
 }
 
@@ -398,15 +401,38 @@ impl RuntimeServer {
         match phase {
             ConnectionPhase::Handshaking => {
                 let intent = handshake_adapter().decode_handshake(&frame)?;
-                let Some(next_adapter) = self.registry.resolve(intent.protocol_version) else {
-                    return Ok(true);
-                };
-                *adapter = Some(next_adapter);
-                *phase = match intent.next_state {
+                let next_phase = match intent.next_state {
                     HandshakeNextState::Status => ConnectionPhase::Status,
                     HandshakeNextState::Login => ConnectionPhase::Login,
                 };
-                Ok(false)
+                if let Some(next_adapter) = self.registry.resolve(intent.protocol_version) {
+                    *adapter = Some(next_adapter);
+                    *phase = next_phase;
+                    return Ok(false);
+                }
+
+                let fallback = self.registry.primary_adapter()?;
+                match next_phase {
+                    ConnectionPhase::Status => {
+                        *adapter = Some(fallback);
+                        *phase = ConnectionPhase::Status;
+                        Ok(false)
+                    }
+                    ConnectionPhase::Login => {
+                        let disconnect = fallback.encode_disconnect(
+                            ConnectionPhase::Login,
+                            &format!(
+                                "Unsupported protocol {}. This server supports {} (protocol {}).",
+                                intent.protocol_version.0,
+                                fallback.version_name(),
+                                fallback.protocol_version().0
+                            ),
+                        )?;
+                        write_payload(writer, fallback.wire_codec(), &disconnect).await?;
+                        Ok(true)
+                    }
+                    _ => Ok(true),
+                }
             }
             ConnectionPhase::Status => {
                 let current = adapter
@@ -790,6 +816,13 @@ mod tests {
             .resolve(mc_core::ProtocolVersion(5))
             .expect("registered adapter should resolve");
         assert_eq!(adapter.version_name(), "1.7.10");
+        assert_eq!(
+            registry
+                .primary_adapter()
+                .expect("primary adapter should be available")
+                .protocol_version(),
+            mc_core::ProtocolVersion(5)
+        );
     }
 
     #[test]
@@ -901,6 +934,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unsupported_status_protocol_receives_server_list_response() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            VersionRegistry::with_je_1_7_10(),
+        )
+        .await?;
+        let addr = server.local_addr();
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(47, 1)?).await?;
+        write_packet(&mut stream, &codec, &status_request()).await?;
+        let mut buffer = BytesMut::new();
+        let status_response = read_packet(&mut stream, &codec, &mut buffer).await?;
+        assert_eq!(packet_id(&status_response), 0x00);
+        let mut reader = PacketReader::new(&status_response);
+        assert_eq!(reader.read_varint().expect("packet id should decode"), 0x00);
+        let payload = reader
+            .read_string(32767)
+            .expect("status json should decode");
+        assert!(payload.contains("\"protocol\":5"));
+        assert!(payload.contains("\"name\":\"1.7.10\""));
+
+        write_packet(&mut stream, &codec, &status_ping(99)).await?;
+        let pong = read_packet(&mut stream, &codec, &mut buffer).await?;
+        assert_eq!(packet_id(&pong), 0x01);
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
     async fn online_mode_fails_fast() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let result = spawn_server(
@@ -920,6 +991,37 @@ mod tests {
             matches!(error, RuntimeError::Unsupported(message) if message.contains("online-mode=true"))
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsupported_login_protocol_receives_disconnect() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            VersionRegistry::with_je_1_7_10(),
+        )
+        .await?;
+        let addr = server.local_addr();
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(47, 2)?).await?;
+        let mut buffer = BytesMut::new();
+        let disconnect = read_packet(&mut stream, &codec, &mut buffer).await?;
+        let mut reader = PacketReader::new(&disconnect);
+        assert_eq!(reader.read_varint().expect("packet id should decode"), 0x00);
+        let reason = reader
+            .read_string(32767)
+            .expect("disconnect reason should decode");
+        assert!(reason.contains("Unsupported protocol 47"));
+        assert!(reason.contains("1.7.10"));
+
+        server.shutdown().await
     }
 
     #[tokio::test]
