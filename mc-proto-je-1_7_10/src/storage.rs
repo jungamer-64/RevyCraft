@@ -11,8 +11,8 @@ use flate2::Compression;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::GzEncoder;
 use mc_core::{
-    BlockPos, ChunkColumn, ChunkPos, PlayerId, PlayerSnapshot, WorldMeta, WorldSnapshot,
-    expand_block_index,
+    BlockPos, ChunkColumn, ChunkPos, PlayerId, PlayerInventory, PlayerSnapshot, WorldMeta,
+    WorldSnapshot, expand_block_index,
 };
 use mc_proto_common::{StorageAdapter, StorageError};
 use std::collections::BTreeMap;
@@ -63,6 +63,7 @@ impl StorageAdapter for Je1710StorageAdapter {
 #[derive(Clone, Debug, PartialEq)]
 enum NbtTag {
     Byte(i8),
+    Short(i16),
     Int(i32),
     Long(i64),
     Float(f32),
@@ -197,6 +198,14 @@ fn player_to_nbt(player: &PlayerSnapshot) -> NbtTag {
         "foodSaturationLevel".to_string(),
         NbtTag::Float(player.food_saturation),
     );
+    compound.insert(
+        "SelectedItemSlot".to_string(),
+        NbtTag::Int(i32::from(player.selected_hotbar_slot)),
+    );
+    compound.insert(
+        "Inventory".to_string(),
+        NbtTag::List(10, inventory_to_nbt(&player.inventory)),
+    );
     compound.insert("Name".to_string(), NbtTag::String(player.username.clone()));
     NbtTag::Compound(compound)
 }
@@ -210,6 +219,11 @@ fn player_from_nbt(root: &NbtTag) -> Result<PlayerSnapshot, StorageError> {
     let mut uuid_bytes = [0_u8; 16];
     uuid_bytes[0..8].copy_from_slice(&most.to_be_bytes());
     uuid_bytes[8..16].copy_from_slice(&least.to_be_bytes());
+    let inventory = compound
+        .get("Inventory")
+        .map(inventory_from_tag)
+        .transpose()?
+        .unwrap_or_else(PlayerInventory::creative_starter);
     Ok(PlayerSnapshot {
         id: PlayerId(Uuid::from_u128(u128::from_be_bytes(uuid_bytes))),
         username: string_field(compound, "Name").unwrap_or_else(|_| "player".to_string()),
@@ -225,7 +239,85 @@ fn player_from_nbt(root: &NbtTag) -> Result<PlayerSnapshot, StorageError> {
         health: float_field(compound, "Health").unwrap_or(20.0),
         food: i16::try_from(int_field(compound, "foodLevel").unwrap_or(20)).unwrap_or(20),
         food_saturation: float_field(compound, "foodSaturationLevel").unwrap_or(5.0),
+        inventory,
+        selected_hotbar_slot: u8::try_from(int_field(compound, "SelectedItemSlot").unwrap_or(0))
+            .unwrap_or(0)
+            .min(8),
     })
+}
+
+fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
+    inventory
+        .slots
+        .iter()
+        .enumerate()
+        .filter_map(|(window_slot, stack)| {
+            let stack = stack.as_ref()?;
+            let (item_id, damage) = crate::legacy_item(stack)?;
+            let nbt_slot = window_slot_to_playerdata_slot(
+                u8::try_from(window_slot).expect("window slot should fit into u8"),
+            )?;
+            let mut compound = BTreeMap::new();
+            compound.insert("Slot".to_string(), NbtTag::Byte(nbt_slot));
+            compound.insert("id".to_string(), NbtTag::Short(item_id));
+            compound.insert(
+                "Damage".to_string(),
+                NbtTag::Short(i16::from_be_bytes(damage.to_be_bytes())),
+            );
+            compound.insert(
+                "Count".to_string(),
+                NbtTag::Byte(i8::try_from(stack.count).expect("count should fit into i8")),
+            );
+            Some(NbtTag::Compound(compound))
+        })
+        .collect()
+}
+
+fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
+    let mut inventory = PlayerInventory::new_empty();
+    let entries = match tag {
+        NbtTag::List(_, entries) => entries,
+        _ => {
+            return Err(StorageError::InvalidData(
+                "expected inventory list".to_string(),
+            ));
+        }
+    };
+    for entry in entries {
+        let compound = as_compound(entry)?;
+        let slot = byte_field(compound, "Slot")?;
+        let Some(window_slot) = playerdata_slot_to_window_slot(slot) else {
+            continue;
+        };
+        let count = byte_field(compound, "Count").unwrap_or(0);
+        if count <= 0 {
+            continue;
+        }
+        let item_id = short_field(compound, "id")?;
+        let damage = u16::from_be_bytes(short_field(compound, "Damage").unwrap_or(0).to_be_bytes());
+        let stack = crate::semantic_item(item_id, damage, count as u8);
+        if stack.key.as_str() == "minecraft:unsupported" {
+            continue;
+        }
+        let _ = inventory.set(window_slot, Some(stack));
+    }
+    Ok(inventory)
+}
+
+fn window_slot_to_playerdata_slot(window_slot: u8) -> Option<i8> {
+    match window_slot {
+        9..=35 => Some(i8::try_from(window_slot).expect("main inventory slot should fit into i8")),
+        36..=44 => Some(i8::try_from(window_slot - 36).expect("hotbar slot should fit into i8")),
+        _ => None,
+    }
+}
+
+fn playerdata_slot_to_window_slot(slot: i8) -> Option<u8> {
+    match slot {
+        0..=8 => Some(36 + u8::try_from(slot).expect("hotbar slot should fit into u8")),
+        9..=35 => Some(u8::try_from(slot).expect("main inventory slot should fit into u8")),
+        _ => None,
+    }
 }
 
 fn write_regions(
@@ -499,6 +591,7 @@ fn write_named_tag(
 fn write_tag_payload(writer: &mut impl Write, tag: &NbtTag) -> Result<(), StorageError> {
     match tag {
         NbtTag::Byte(value) => write_i8(writer, *value),
+        NbtTag::Short(value) => write_i16(writer, *value),
         NbtTag::Int(value) => write_i32(writer, *value),
         NbtTag::Long(value) => write_i64(writer, *value),
         NbtTag::Float(value) => write_f32(writer, *value),
@@ -547,6 +640,7 @@ fn write_tag_payload(writer: &mut impl Write, tag: &NbtTag) -> Result<(), Storag
 fn read_tag_payload(reader: &mut impl Read, tag_type: u8) -> Result<NbtTag, StorageError> {
     match tag_type {
         1 => Ok(NbtTag::Byte(read_i8(reader)?)),
+        2 => Ok(NbtTag::Short(read_i16(reader)?)),
         3 => Ok(NbtTag::Int(read_i32(reader)?)),
         4 => Ok(NbtTag::Long(read_i64(reader)?)),
         5 => Ok(NbtTag::Float(read_f32(reader)?)),
@@ -599,6 +693,7 @@ fn read_tag_payload(reader: &mut impl Read, tag_type: u8) -> Result<NbtTag, Stor
 fn tag_type(tag: &NbtTag) -> u8 {
     match tag {
         NbtTag::Byte(_) => 1,
+        NbtTag::Short(_) => 2,
         NbtTag::Int(_) => 3,
         NbtTag::Long(_) => 4,
         NbtTag::Float(_) => 5,
@@ -673,6 +768,15 @@ fn int_field(compound: &BTreeMap<String, NbtTag>, key: &str) -> Result<i32, Stor
     }
 }
 
+fn short_field(compound: &BTreeMap<String, NbtTag>, key: &str) -> Result<i16, StorageError> {
+    match compound.get(key) {
+        Some(NbtTag::Short(value)) => Ok(*value),
+        _ => Err(StorageError::InvalidData(format!(
+            "missing short field {key}"
+        ))),
+    }
+}
+
 fn long_field(compound: &BTreeMap<String, NbtTag>, key: &str) -> Result<i64, StorageError> {
     match compound.get(key) {
         Some(NbtTag::Long(value)) => Ok(*value),
@@ -724,6 +828,12 @@ fn read_i8(reader: &mut impl Read) -> Result<i8, StorageError> {
     Ok(i8::from_be_bytes([read_u8(reader)?]))
 }
 
+fn read_i16(reader: &mut impl Read) -> Result<i16, StorageError> {
+    let mut bytes = [0_u8; 2];
+    reader.read_exact(&mut bytes)?;
+    Ok(i16::from_be_bytes(bytes))
+}
+
 fn read_i32(reader: &mut impl Read) -> Result<i32, StorageError> {
     let mut bytes = [0_u8; 4];
     reader.read_exact(&mut bytes)?;
@@ -756,6 +866,11 @@ fn read_string_u16(reader: &mut impl Read) -> Result<String, StorageError> {
     reader.read_exact(&mut bytes)?;
     String::from_utf8(bytes)
         .map_err(|_| StorageError::InvalidData("invalid utf-8 string".to_string()))
+}
+
+fn write_i16(writer: &mut impl Write, value: i16) -> Result<(), StorageError> {
+    writer.write_all(&value.to_be_bytes())?;
+    Ok(())
 }
 
 fn write_u8(writer: &mut impl Write, value: u8) -> Result<(), StorageError> {

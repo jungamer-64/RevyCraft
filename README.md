@@ -26,6 +26,7 @@ cargo run -p revycraft-client
 
 `server-runtime` はルートの `server.properties` を読みます。ファイルが無い場合はデフォルト設定で起動します。
 現在のワールド生成は `level-type=FLAT` のみ対応です。
+creative-style block editing を使う場合は `gamemode=1` にしてください。
 
 ## Server Features
 
@@ -33,8 +34,12 @@ cargo run -p revycraft-client
 - offline-mode 認証
 - superflat overworld 生成
 - 初期 chunk bulk 送信
+- creative-style block break / place
+- player inventory window 0 同期
+- starter hotbar と held item 同期
 - 複数接続
 - 他プレイヤー spawn / teleport / head rotation 同期
+- block change 同期
 - keepalive
 - `level.dat`, `playerdata/*.dat`, `region/*.mca` の read/write
 - 将来の multi-version 対応を見据えた core / protocol 分離
@@ -60,5 +65,8 @@ cargo test --workspace
 
 - `online-mode=true` は未実装です。現在は fail fast します。
 - `level-type` は `FLAT` のみ対応です。その他の値は起動時に reject します。
-- 初期対象外: block editing over network, inventory, chat, mobs, combat, Nether/End
+- 現在の network editing は creative 前提です。survival の採掘時間、消費、drop は未実装です。
+- player inventory window 0 だけを扱います。containers、crafting、一般 window 操作は未実装です。
+- whitelist block/item: `stone`, `dirt`, `grass_block`, `cobblestone`, `oak_planks`, `sand`, `sandstone`, `glass`, `bricks`
+- 初期対象外: chat, mobs, combat, Nether/End
 - 既存配布ワールドの広範互換ではなく、サーバーが生成した 1.7.10 world の保存・再読込を優先しています。

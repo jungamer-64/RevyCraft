@@ -12,8 +12,8 @@ mod storage;
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DimensionId, EntityId, PlayerId,
-    PlayerSnapshot, ProtocolVersion, Vec3, WorldMeta,
+    BlockFace, BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DimensionId, EntityId,
+    ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, ProtocolVersion, Vec3, WorldMeta,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeNextState, LoginRequest, MinecraftWireCodec,
@@ -45,12 +45,17 @@ const PACKET_CB_TIME_UPDATE: i32 = 0x03;
 const PACKET_CB_SPAWN_POSITION: i32 = 0x05;
 const PACKET_CB_UPDATE_HEALTH: i32 = 0x06;
 const PACKET_CB_PLAYER_POSITION_AND_LOOK: i32 = 0x08;
+const PACKET_CB_HELD_ITEM_CHANGE: i32 = 0x09;
 const PACKET_CB_NAMED_ENTITY_SPAWN: i32 = 0x0c;
 const PACKET_CB_DESTROY_ENTITIES: i32 = 0x13;
 const PACKET_CB_ENTITY_TELEPORT: i32 = 0x18;
 const PACKET_CB_ENTITY_HEAD_ROTATION: i32 = 0x19;
 const PACKET_CB_MAP_CHUNK: i32 = 0x21;
+const PACKET_CB_BLOCK_CHANGE: i32 = 0x23;
 const PACKET_CB_MAP_CHUNK_BULK: i32 = 0x26;
+const PACKET_CB_SET_SLOT: i32 = 0x2f;
+const PACKET_CB_WINDOW_ITEMS: i32 = 0x30;
+const PACKET_CB_PLAYER_ABILITIES: i32 = 0x39;
 const PACKET_CB_PLAY_DISCONNECT: i32 = 0x40;
 
 const PACKET_SB_KEEP_ALIVE: i32 = 0x00;
@@ -58,6 +63,10 @@ const PACKET_SB_FLYING: i32 = 0x03;
 const PACKET_SB_POSITION: i32 = 0x04;
 const PACKET_SB_LOOK: i32 = 0x05;
 const PACKET_SB_POSITION_LOOK: i32 = 0x06;
+const PACKET_SB_PLAYER_DIGGING: i32 = 0x07;
+const PACKET_SB_PLAYER_BLOCK_PLACEMENT: i32 = 0x08;
+const PACKET_SB_HELD_ITEM_CHANGE: i32 = 0x09;
+const PACKET_SB_CREATIVE_INVENTORY_ACTION: i32 = 0x10;
 const PACKET_SB_SETTINGS: i32 = 0x15;
 const PACKET_SB_CLIENT_COMMAND: i32 = 0x16;
 
@@ -195,6 +204,46 @@ impl ProtocolAdapter for Je1710Adapter {
                     on_ground,
                 }))
             }
+            PACKET_SB_PLAYER_DIGGING => Ok(Some(CoreCommand::DigBlock {
+                player_id,
+                status: reader.read_u8()?,
+                position: BlockPos::new(
+                    reader.read_i32()?,
+                    i32::from(reader.read_u8()?),
+                    reader.read_i32()?,
+                ),
+                face: BlockFace::from_protocol_byte(reader.read_u8()?),
+            })),
+            PACKET_SB_PLAYER_BLOCK_PLACEMENT => {
+                let position = BlockPos::new(
+                    reader.read_i32()?,
+                    i32::from(reader.read_u8()?),
+                    reader.read_i32()?,
+                );
+                let direction = reader.read_u8()?;
+                let held_item = read_slot(&mut reader)?;
+                let _cursor_x = reader.read_u8()?;
+                let _cursor_y = reader.read_u8()?;
+                let _cursor_z = reader.read_u8()?;
+                if position.x == -1 && position.z == -1 && position.y == 255 && direction == 255 {
+                    return Ok(None);
+                }
+                Ok(Some(CoreCommand::PlaceBlock {
+                    player_id,
+                    position,
+                    face: BlockFace::from_protocol_byte(direction),
+                    held_item,
+                }))
+            }
+            PACKET_SB_HELD_ITEM_CHANGE => Ok(Some(CoreCommand::SetHeldSlot {
+                player_id,
+                slot: reader.read_i16()?,
+            })),
+            PACKET_SB_CREATIVE_INVENTORY_ACTION => Ok(Some(CoreCommand::CreativeInventorySet {
+                player_id,
+                slot: reader.read_i16()?,
+                stack: read_slot(&mut reader)?,
+            })),
             PACKET_SB_SETTINGS => {
                 let locale = reader.read_string(16)?;
                 let view_distance = i8_to_u8(reader.read_i8()?);
@@ -287,6 +336,7 @@ impl ProtocolAdapter for Je1710Adapter {
                     encode_spawn_position(world_meta.spawn),
                     encode_time_update(world_meta.age, world_meta.time),
                     encode_update_health(player),
+                    encode_player_abilities(world_meta.game_mode == 1),
                 ];
                 if !visible_chunks.is_empty() {
                     packets.push(encode_chunk_bulk(visible_chunks)?);
@@ -306,6 +356,18 @@ impl ProtocolAdapter for Je1710Adapter {
             CoreEvent::EntityDespawned { entity_ids } => {
                 Ok(vec![encode_destroy_entities(entity_ids)?])
             }
+            CoreEvent::InventorySnapshot { inventory } => {
+                Ok(vec![encode_window_items(0, inventory)?])
+            }
+            CoreEvent::InventorySlotUpdated { slot, stack } => {
+                Ok(vec![encode_set_slot(0, *slot, stack.as_ref())?])
+            }
+            CoreEvent::SelectedHotbarSlotChanged { slot } => {
+                Ok(vec![encode_held_item_change(*slot)])
+            }
+            CoreEvent::BlockChanged { position, block } => {
+                Ok(vec![encode_block_change(*position, block)])
+            }
             CoreEvent::KeepAliveRequested { keep_alive_id } => {
                 Ok(vec![encode_keep_alive(*keep_alive_id)])
             }
@@ -322,21 +384,64 @@ pub(crate) fn legacy_block(state: &BlockState) -> (u16, u8) {
         "minecraft:stone" => (1, 0),
         "minecraft:grass_block" => (2, 0),
         "minecraft:dirt" => (3, 0),
+        "minecraft:cobblestone" => (4, 0),
+        "minecraft:oak_planks" => (5, 0),
         "minecraft:bedrock" => (7, 0),
+        "minecraft:sand" => (12, 0),
+        "minecraft:glass" => (20, 0),
+        "minecraft:sandstone" => (24, 0),
+        "minecraft:bricks" => (45, 0),
         _ => (0, 0),
     }
 }
 
 pub(crate) fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
-    let _ = metadata;
     match block_id {
         0 => BlockState::air(),
         1 => BlockState::stone(),
         2 => BlockState::grass_block(),
         3 => BlockState::dirt(),
+        4 => BlockState::cobblestone(),
+        5 if metadata == 0 => BlockState::oak_planks(),
         7 => BlockState::bedrock(),
+        12 if metadata == 0 => BlockState::sand(),
+        20 => BlockState::glass(),
+        24 if metadata == 0 => BlockState::sandstone(),
+        45 => BlockState::bricks(),
         _ => BlockState::air(),
     }
+}
+
+fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
+    let damage = stack.damage;
+    match stack.key.as_str() {
+        "minecraft:stone" => Some((1, damage)),
+        "minecraft:grass_block" => Some((2, damage)),
+        "minecraft:dirt" => Some((3, damage)),
+        "minecraft:cobblestone" => Some((4, damage)),
+        "minecraft:oak_planks" => Some((5, damage)),
+        "minecraft:sand" => Some((12, damage)),
+        "minecraft:glass" => Some((20, damage)),
+        "minecraft:sandstone" => Some((24, damage)),
+        "minecraft:bricks" => Some((45, damage)),
+        _ => None,
+    }
+}
+
+fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
+    let key = match item_id {
+        1 => "minecraft:stone",
+        2 => "minecraft:grass_block",
+        3 => "minecraft:dirt",
+        4 => "minecraft:cobblestone",
+        5 if damage == 0 => "minecraft:oak_planks",
+        12 if damage == 0 => "minecraft:sand",
+        20 => "minecraft:glass",
+        24 if damage == 0 => "minecraft:sandstone",
+        45 => "minecraft:bricks",
+        _ => return ItemStack::unsupported(count, damage),
+    };
+    ItemStack::new(key, count, damage)
 }
 
 fn encode_login_success(player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
@@ -402,6 +507,23 @@ fn encode_position_and_look(player: &PlayerSnapshot) -> Vec<u8> {
     writer.into_inner()
 }
 
+fn encode_held_item_change(slot: u8) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(PACKET_CB_HELD_ITEM_CHANGE);
+    writer.write_i8(i8::try_from(slot).expect("held slot should fit into i8"));
+    writer.into_inner()
+}
+
+fn encode_player_abilities(creative_mode: bool) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(PACKET_CB_PLAYER_ABILITIES);
+    let flags = if creative_mode { 0x0d } else { 0x00 };
+    writer.write_u8(flags);
+    writer.write_f32(0.05);
+    writer.write_f32(0.1);
+    writer.into_inner()
+}
+
 fn encode_keep_alive(keep_alive_id: i32) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_KEEP_ALIVE);
@@ -457,6 +579,47 @@ fn encode_destroy_entities(entity_ids: &[EntityId]) -> Result<Vec<u8>, ProtocolE
     writer.write_i8(count);
     for entity_id in entity_ids {
         writer.write_i32(entity_id.0);
+    }
+    Ok(writer.into_inner())
+}
+
+fn encode_block_change(position: BlockPos, block: &BlockState) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    let (block_id, metadata) = legacy_block(block);
+    writer.write_varint(PACKET_CB_BLOCK_CHANGE);
+    writer.write_i32(position.x);
+    writer.write_u8(u8::try_from(position.y).expect("block change y should fit into u8"));
+    writer.write_i32(position.z);
+    writer.write_varint(i32::from(block_id));
+    writer.write_u8(metadata);
+    writer.into_inner()
+}
+
+fn encode_set_slot(
+    window_id: u8,
+    slot: u8,
+    stack: Option<&ItemStack>,
+) -> Result<Vec<u8>, ProtocolError> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(PACKET_CB_SET_SLOT);
+    writer.write_i8(i8::from_be_bytes([window_id]));
+    writer.write_i16(i16::from(slot));
+    write_slot(&mut writer, stack)?;
+    Ok(writer.into_inner())
+}
+
+fn encode_window_items(
+    window_id: u8,
+    inventory: &PlayerInventory,
+) -> Result<Vec<u8>, ProtocolError> {
+    let slot_count = i16::try_from(inventory.slots.len())
+        .map_err(|_| ProtocolError::InvalidPacket("too many inventory slots"))?;
+    let mut writer = PacketWriter::default();
+    writer.write_varint(PACKET_CB_WINDOW_ITEMS);
+    writer.write_i8(i8::from_be_bytes([window_id]));
+    writer.write_i16(slot_count);
+    for slot in &inventory.slots {
+        write_slot(&mut writer, slot.as_ref())?;
     }
     Ok(writer.into_inner())
 }
@@ -588,12 +751,49 @@ fn to_angle_byte(value: f32) -> i8 {
     i8::from_be_bytes([narrowed])
 }
 
+fn read_slot(reader: &mut PacketReader<'_>) -> Result<Option<ItemStack>, ProtocolError> {
+    let item_id = reader.read_i16()?;
+    if item_id < 0 {
+        return Ok(None);
+    }
+    let count = reader.read_u8()?;
+    let damage = u16::from_be_bytes(reader.read_i16()?.to_be_bytes());
+    skip_slot_nbt(reader)?;
+    Ok(Some(semantic_item(item_id, damage, count)))
+}
+
+fn write_slot(writer: &mut PacketWriter, stack: Option<&ItemStack>) -> Result<(), ProtocolError> {
+    let Some(stack) = stack else {
+        writer.write_i16(-1);
+        return Ok(());
+    };
+    let Some((item_id, damage)) = legacy_item(stack) else {
+        return Err(ProtocolError::InvalidPacket("unsupported inventory item"));
+    };
+    writer.write_i16(item_id);
+    writer.write_u8(stack.count);
+    writer.write_i16(i16::from_be_bytes(damage.to_be_bytes()));
+    writer.write_i16(-1);
+    Ok(())
+}
+
+fn skip_slot_nbt(reader: &mut PacketReader<'_>) -> Result<(), ProtocolError> {
+    let length = reader.read_i16()?;
+    if length < 0 {
+        return Ok(());
+    }
+    let length = usize::try_from(length)
+        .map_err(|_| ProtocolError::InvalidPacket("negative slot nbt length"))?;
+    let _ = reader.read_bytes(length)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Je1710Adapter, PROTOCOL_VERSION_1_7_10, get_nibble, legacy_block};
     use mc_core::{
         BlockState, ChunkColumn, ChunkPos, ConnectionId, CoreCommand, CoreConfig, CoreEvent,
-        PlayerId, PlayerSnapshot, ProtocolVersion, ServerCore, Vec3,
+        PlayerId, PlayerInventory, PlayerSnapshot, ProtocolVersion, ServerCore, Vec3,
     };
     use mc_proto_common::{
         ConnectionPhase, LoginRequest, PacketWriter, ProtocolAdapter, ServerListStatus,
@@ -613,6 +813,8 @@ mod tests {
             health: 20.0,
             food: 20,
             food_saturation: 5.0,
+            inventory: PlayerInventory::creative_starter(),
+            selected_hotbar_slot: 0,
         }
     }
 
@@ -708,6 +910,65 @@ mod tests {
     }
 
     #[test]
+    fn decodes_inventory_and_edit_packets_into_core_commands() {
+        let adapter = Je1710Adapter::new();
+        let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"decode-edit"));
+
+        let mut held_item = PacketWriter::default();
+        held_item.write_varint(0x09);
+        held_item.write_i16(4);
+        let command = adapter
+            .decode_play(player_id, &held_item.into_inner())
+            .expect("held item change should decode")
+            .expect("held item change should produce command");
+        assert!(matches!(command, CoreCommand::SetHeldSlot { slot: 4, .. }));
+
+        let mut creative_inventory = PacketWriter::default();
+        creative_inventory.write_varint(0x10);
+        creative_inventory.write_i16(36);
+        creative_inventory.write_i16(20);
+        creative_inventory.write_u8(64);
+        creative_inventory.write_i16(0);
+        creative_inventory.write_i16(-1);
+        let command = adapter
+            .decode_play(player_id, &creative_inventory.into_inner())
+            .expect("creative inventory should decode")
+            .expect("creative inventory should produce command");
+        assert!(matches!(
+            command,
+            CoreCommand::CreativeInventorySet { slot: 36, stack: Some(ref stack), .. }
+                if stack.key.as_str() == "minecraft:glass"
+        ));
+
+        let mut placement = PacketWriter::default();
+        placement.write_varint(0x08);
+        placement.write_i32(2);
+        placement.write_u8(3);
+        placement.write_i32(0);
+        placement.write_u8(1);
+        placement.write_i16(1);
+        placement.write_u8(64);
+        placement.write_i16(0);
+        placement.write_i16(-1);
+        placement.write_u8(8);
+        placement.write_u8(8);
+        placement.write_u8(8);
+        let command = adapter
+            .decode_play(player_id, &placement.into_inner())
+            .expect("placement should decode")
+            .expect("placement should produce command");
+        assert!(matches!(
+            command,
+            CoreCommand::PlaceBlock {
+                position: mc_core::BlockPos { x: 2, y: 3, z: 0 },
+                face: Some(mc_core::BlockFace::Top),
+                held_item: Some(ref stack),
+                ..
+            } if stack.key.as_str() == "minecraft:stone"
+        ));
+    }
+
+    #[test]
     fn chunk_encoding_uses_legacy_block_layout() {
         let mut chunk = ChunkColumn::new(ChunkPos::new(0, 0));
         chunk.set_block(0, 0, 0, BlockState::bedrock());
@@ -755,5 +1016,55 @@ mod tests {
             .expect("initial world should encode");
         assert!(packets.iter().any(|packet| packet[0] == 0x01));
         assert!(packets.iter().any(|packet| packet[0] == 0x26));
+        assert!(packets.iter().any(|packet| packet[0] == 0x39));
+    }
+
+    #[test]
+    fn encodes_inventory_and_block_events() {
+        let adapter = Je1710Adapter::new();
+        let inventory = PlayerInventory::creative_starter();
+        let packets = adapter
+            .encode_event(
+                &CoreEvent::InventorySnapshot {
+                    inventory: inventory.clone(),
+                },
+                &SessionEncodingContext {
+                    connection_id: ConnectionId(1),
+                    phase: ConnectionPhase::Play,
+                    player_id: None,
+                    entity_id: None,
+                },
+            )
+            .expect("inventory snapshot should encode");
+        assert_eq!(packets[0][0], 0x30);
+
+        let packets = adapter
+            .encode_event(
+                &CoreEvent::SelectedHotbarSlotChanged { slot: 4 },
+                &SessionEncodingContext {
+                    connection_id: ConnectionId(1),
+                    phase: ConnectionPhase::Play,
+                    player_id: None,
+                    entity_id: None,
+                },
+            )
+            .expect("held slot change should encode");
+        assert_eq!(packets[0][0], 0x09);
+
+        let packets = adapter
+            .encode_event(
+                &CoreEvent::BlockChanged {
+                    position: mc_core::BlockPos::new(2, 4, 0),
+                    block: BlockState::glass(),
+                },
+                &SessionEncodingContext {
+                    connection_id: ConnectionId(1),
+                    phase: ConnectionPhase::Play,
+                    player_id: None,
+                    entity_id: None,
+                },
+            )
+            .expect("block change should encode");
+        assert_eq!(packets[0][0], 0x23);
     }
 }

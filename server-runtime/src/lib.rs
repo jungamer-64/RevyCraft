@@ -545,6 +545,10 @@ impl RuntimeServer {
             command,
             CoreCommand::LoginStart { .. }
                 | CoreCommand::MoveIntent { .. }
+                | CoreCommand::SetHeldSlot { .. }
+                | CoreCommand::CreativeInventorySet { .. }
+                | CoreCommand::DigBlock { .. }
+                | CoreCommand::PlaceBlock { .. }
                 | CoreCommand::Disconnect { .. }
         );
         let events = {
@@ -886,6 +890,140 @@ mod tests {
         writer.into_inner()
     }
 
+    fn held_item_change(slot: i16) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x09);
+        writer.write_i16(slot);
+        writer.into_inner()
+    }
+
+    fn creative_inventory_action(slot: i16, item_id: i16, count: u8, damage: i16) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x10);
+        writer.write_i16(slot);
+        writer.write_i16(item_id);
+        writer.write_u8(count);
+        writer.write_i16(damage);
+        writer.write_i16(-1);
+        writer.into_inner()
+    }
+
+    fn player_block_placement(
+        x: i32,
+        y: u8,
+        z: i32,
+        face: u8,
+        held_item: Option<(i16, u8, i16)>,
+    ) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x08);
+        writer.write_i32(x);
+        writer.write_u8(y);
+        writer.write_i32(z);
+        writer.write_u8(face);
+        if let Some((item_id, count, damage)) = held_item {
+            writer.write_i16(item_id);
+            writer.write_u8(count);
+            writer.write_i16(damage);
+            writer.write_i16(-1);
+        } else {
+            writer.write_i16(-1);
+        }
+        writer.write_u8(8);
+        writer.write_u8(8);
+        writer.write_u8(8);
+        writer.into_inner()
+    }
+
+    fn player_digging(status: u8, x: i32, y: u8, z: i32, face: u8) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x07);
+        writer.write_u8(status);
+        writer.write_i32(x);
+        writer.write_u8(y);
+        writer.write_i32(z);
+        writer.write_u8(face);
+        writer.into_inner()
+    }
+
+    fn read_slot(reader: &mut PacketReader<'_>) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
+        let item_id = reader.read_i16()?;
+        if item_id < 0 {
+            return Ok(None);
+        }
+        let count = reader.read_u8()?;
+        let damage = reader.read_i16()?;
+        let nbt_length = reader.read_i16()?;
+        if nbt_length != -1 {
+            return Err(RuntimeError::Config(
+                "test helper only supports empty slot nbt".to_string(),
+            ));
+        }
+        Ok(Some((item_id, count, damage)))
+    }
+
+    fn window_items_slot(
+        packet: &[u8],
+        wanted_slot: usize,
+    ) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x30 {
+            return Err(RuntimeError::Config(
+                "expected window items packet".to_string(),
+            ));
+        }
+        let _window_id = reader.read_i8()?;
+        let count = usize::try_from(reader.read_i16()?)
+            .map_err(|_| RuntimeError::Config("negative window item count".to_string()))?;
+        if wanted_slot >= count {
+            return Err(RuntimeError::Config(
+                "wanted slot out of bounds".to_string(),
+            ));
+        }
+        for slot in 0..count {
+            let item = read_slot(&mut reader)?;
+            if slot == wanted_slot {
+                return Ok(item);
+            }
+        }
+        Err(RuntimeError::Config("wanted slot missing".to_string()))
+    }
+
+    fn held_item_from_packet(packet: &[u8]) -> Result<i8, RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x09 {
+            return Err(RuntimeError::Config(
+                "expected held item change packet".to_string(),
+            ));
+        }
+        reader.read_i8().map_err(RuntimeError::from)
+    }
+
+    fn block_change_from_packet(packet: &[u8]) -> Result<(i32, u8, i32, i32, u8), RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x23 {
+            return Err(RuntimeError::Config(
+                "expected block change packet".to_string(),
+            ));
+        }
+        let x = reader.read_i32()?;
+        let y = reader.read_u8()?;
+        let z = reader.read_i32()?;
+        let block_id = reader.read_varint()?;
+        let metadata = reader.read_u8()?;
+        Ok((x, y, z, block_id, metadata))
+    }
+
+    fn player_abilities_flags(packet: &[u8]) -> Result<u8, RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x39 {
+            return Err(RuntimeError::Config(
+                "expected player abilities packet".to_string(),
+            ));
+        }
+        reader.read_u8().map_err(RuntimeError::from)
+    }
+
     #[tokio::test]
     async fn status_ping_login_and_initial_world_work() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
@@ -920,15 +1058,61 @@ mod tests {
         assert_eq!(packet_id(&login_success), 0x02);
         let join_game = read_packet(&mut login_stream, &codec, &mut login_buffer).await?;
         assert_eq!(packet_id(&join_game), 0x01);
-        let mut saw_chunk_bulk = false;
-        for _ in 0..4 {
-            let packet = read_packet(&mut login_stream, &codec, &mut login_buffer).await?;
-            if packet_id(&packet) == 0x26 {
-                saw_chunk_bulk = true;
+        let chunk_bulk =
+            read_until_packet_id(&mut login_stream, &codec, &mut login_buffer, 0x26, 8).await?;
+        assert_eq!(packet_id(&chunk_bulk), 0x26);
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn creative_join_sends_inventory_selected_slot_and_abilities() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            VersionRegistry::with_je_1_7_10(),
+        )
+        .await?;
+        let addr = server.local_addr();
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("creative")).await?;
+        let mut buffer = BytesMut::new();
+        let mut window_items = None;
+        let mut held_item = None;
+        let mut abilities = None;
+        for _ in 0..12 {
+            let packet = read_packet(&mut stream, &codec, &mut buffer).await?;
+            match packet_id(&packet) {
+                0x30 if window_items.is_none() => window_items = Some(packet),
+                0x09 if held_item.is_none() => held_item = Some(packet),
+                0x39 if abilities.is_none() => abilities = Some(packet),
+                _ => {}
+            }
+            if window_items.is_some() && held_item.is_some() && abilities.is_some() {
                 break;
             }
         }
-        assert!(saw_chunk_bulk);
+        let window_items = window_items
+            .ok_or_else(|| RuntimeError::Config("window items not received".to_string()))?;
+        let held_item = held_item
+            .ok_or_else(|| RuntimeError::Config("held item change not received".to_string()))?;
+        let abilities = abilities
+            .ok_or_else(|| RuntimeError::Config("player abilities not received".to_string()))?;
+
+        assert_eq!(window_items_slot(&window_items, 36)?, Some((1, 64, 0)));
+        assert_eq!(window_items_slot(&window_items, 44)?, Some((45, 64, 0)));
+        assert_eq!(held_item_from_packet(&held_item)?, 0);
+        assert_eq!(player_abilities_flags(&abilities)? & 0x0d, 0x0d);
 
         server.shutdown().await
     }
@@ -1020,6 +1204,207 @@ mod tests {
             .expect("disconnect reason should decode");
         assert!(reason.contains("Unsupported protocol 47"));
         assert!(reason.contains("1.7.10"));
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn creative_place_and_break_broadcast_block_changes() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            VersionRegistry::with_je_1_7_10(),
+        )
+        .await?;
+        let addr = server.local_addr();
+        let codec = MinecraftWireCodec;
+
+        let mut first = connect(addr).await?;
+        write_packet(&mut first, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut first, &codec, &login_start("alpha")).await?;
+        let mut first_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x30, 12).await?;
+
+        let mut second = connect(addr).await?;
+        write_packet(&mut second, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut second, &codec, &login_start("beta")).await?;
+        let mut second_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut second, &codec, &mut second_buffer, 0x30, 12).await?;
+        let _ = read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x0c, 12).await?;
+
+        write_packet(
+            &mut first,
+            &codec,
+            &player_block_placement(2, 3, 0, 1, Some((1, 64, 0))),
+        )
+        .await?;
+        let place_change =
+            read_until_packet_id(&mut second, &codec, &mut second_buffer, 0x23, 8).await?;
+        assert_eq!(block_change_from_packet(&place_change)?, (2, 4, 0, 1, 0));
+
+        write_packet(&mut first, &codec, &player_digging(0, 2, 4, 0, 1)).await?;
+        let break_change =
+            read_until_packet_id(&mut second, &codec, &mut second_buffer, 0x23, 8).await?;
+        assert_eq!(block_change_from_packet(&break_change)?, (2, 4, 0, 0, 0));
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn creative_inventory_and_selected_slot_persist_across_restart()
+    -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let world_dir = temp_dir.path().join("world");
+        let codec = MinecraftWireCodec;
+
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                world_dir: world_dir.clone(),
+                ..ServerConfig::default()
+            },
+            VersionRegistry::with_je_1_7_10(),
+        )
+        .await?;
+        let addr = server.local_addr();
+
+        let mut stream = connect(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 12).await?;
+
+        write_packet(
+            &mut stream,
+            &codec,
+            &creative_inventory_action(36, 20, 64, 0),
+        )
+        .await?;
+        let set_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
+        let mut set_slot_reader = PacketReader::new(&set_slot);
+        assert_eq!(set_slot_reader.read_varint()?, 0x2f);
+        assert_eq!(set_slot_reader.read_i8()?, 0);
+        assert_eq!(set_slot_reader.read_i16()?, 36);
+        assert_eq!(read_slot(&mut set_slot_reader)?, Some((20, 64, 0)));
+
+        write_packet(&mut stream, &codec, &held_item_change(4)).await?;
+        let held_slot_packet =
+            read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 8).await?;
+        assert_eq!(held_item_from_packet(&held_slot_packet)?, 4);
+
+        server.shutdown().await?;
+
+        let restarted = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                world_dir,
+                ..ServerConfig::default()
+            },
+            VersionRegistry::with_je_1_7_10(),
+        )
+        .await?;
+        let addr = restarted.local_addr();
+        let mut stream = connect(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let window_items = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+        let held_item = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 12).await?;
+
+        assert_eq!(window_items_slot(&window_items, 36)?, Some((20, 64, 0)));
+        assert_eq!(held_item_from_packet(&held_item)?, 4);
+
+        restarted.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn unsupported_creative_inventory_action_is_corrected() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            VersionRegistry::with_je_1_7_10(),
+        )
+        .await?;
+        let addr = server.local_addr();
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+
+        write_packet(
+            &mut stream,
+            &codec,
+            &creative_inventory_action(36, 999, 64, 0),
+        )
+        .await?;
+        let set_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
+        let mut reader = PacketReader::new(&set_slot);
+        assert_eq!(reader.read_varint()?, 0x2f);
+        assert_eq!(reader.read_i8()?, 0);
+        assert_eq!(reader.read_i16()?, 36);
+        assert_eq!(read_slot(&mut reader)?, Some((1, 64, 0)));
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn survival_place_is_rejected_with_block_and_inventory_correction()
+    -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            VersionRegistry::with_je_1_7_10(),
+        )
+        .await?;
+        let addr = server.local_addr();
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+
+        write_packet(
+            &mut stream,
+            &codec,
+            &player_block_placement(2, 3, 0, 1, Some((1, 64, 0))),
+        )
+        .await?;
+        let block_change = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x23, 8).await?;
+        let set_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
+
+        assert_eq!(block_change_from_packet(&block_change)?, (2, 4, 0, 0, 0));
+        let mut reader = PacketReader::new(&set_slot);
+        assert_eq!(reader.read_varint()?, 0x2f);
+        assert_eq!(reader.read_i8()?, 0);
+        assert_eq!(reader.read_i16()?, 36);
+        assert_eq!(read_slot(&mut reader)?, Some((1, 64, 0)));
 
         server.shutdown().await
     }

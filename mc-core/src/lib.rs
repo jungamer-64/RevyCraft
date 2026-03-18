@@ -14,6 +14,12 @@ const CHUNK_WIDTH: i32 = 16;
 const SECTION_HEIGHT: i32 = 16;
 const DEFAULT_KEEPALIVE_INTERVAL_MS: u64 = 10_000;
 const DEFAULT_KEEPALIVE_TIMEOUT_MS: u64 = 30_000;
+const PLAYER_INVENTORY_SLOT_COUNT: usize = 45;
+const HOTBAR_START_SLOT: u8 = 36;
+const HOTBAR_SLOT_COUNT: u8 = 9;
+const PLAYER_WIDTH: f64 = 0.6;
+const PLAYER_HEIGHT: f64 = 1.8;
+const BLOCK_EDIT_REACH: f64 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ProtocolVersion(pub i32);
@@ -103,8 +109,172 @@ impl BlockState {
     }
 
     #[must_use]
+    pub fn cobblestone() -> Self {
+        Self::new("minecraft:cobblestone")
+    }
+
+    #[must_use]
+    pub fn oak_planks() -> Self {
+        Self::new("minecraft:oak_planks")
+    }
+
+    #[must_use]
+    pub fn sand() -> Self {
+        Self::new("minecraft:sand")
+    }
+
+    #[must_use]
+    pub fn sandstone() -> Self {
+        Self::new("minecraft:sandstone")
+    }
+
+    #[must_use]
+    pub fn glass() -> Self {
+        Self::new("minecraft:glass")
+    }
+
+    #[must_use]
+    pub fn bricks() -> Self {
+        Self::new("minecraft:bricks")
+    }
+
+    #[must_use]
     pub fn is_air(&self) -> bool {
         self.key.as_str() == "minecraft:air"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ItemKey(String);
+
+impl ItemKey {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemStack {
+    pub key: ItemKey,
+    pub count: u8,
+    pub damage: u16,
+}
+
+impl ItemStack {
+    #[must_use]
+    pub fn new(key: impl Into<String>, count: u8, damage: u16) -> Self {
+        Self {
+            key: ItemKey::new(key),
+            count,
+            damage,
+        }
+    }
+
+    #[must_use]
+    pub fn unsupported(count: u8, damage: u16) -> Self {
+        Self::new("minecraft:unsupported", count, damage)
+    }
+
+    #[must_use]
+    pub fn is_supported_placeable(&self) -> bool {
+        placeable_block_state_from_item_key(self.key.as_str()).is_some()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayerInventory {
+    pub slots: Vec<Option<ItemStack>>,
+}
+
+impl Default for PlayerInventory {
+    fn default() -> Self {
+        Self::new_empty()
+    }
+}
+
+impl PlayerInventory {
+    #[must_use]
+    pub fn new_empty() -> Self {
+        Self {
+            slots: vec![None; PLAYER_INVENTORY_SLOT_COUNT],
+        }
+    }
+
+    #[must_use]
+    pub fn creative_starter() -> Self {
+        let mut inventory = Self::new_empty();
+        for (index, key) in starter_hotbar_item_keys().into_iter().enumerate() {
+            let slot = HOTBAR_START_SLOT
+                + u8::try_from(index).expect("starter hotbar index should fit into u8");
+            let _ = inventory.set(slot, Some(ItemStack::new(key, 64, 0)));
+        }
+        inventory
+    }
+
+    #[must_use]
+    pub fn get(&self, slot: u8) -> Option<&ItemStack> {
+        self.slots
+            .get(usize::from(slot))
+            .and_then(std::option::Option::as_ref)
+    }
+
+    pub fn set(&mut self, slot: u8, stack: Option<ItemStack>) -> bool {
+        if usize::from(slot) >= PLAYER_INVENTORY_SLOT_COUNT {
+            return false;
+        }
+        self.slots[usize::from(slot)] = stack;
+        true
+    }
+
+    #[must_use]
+    pub fn selected_hotbar_stack(&self, selected_hotbar_slot: u8) -> Option<&ItemStack> {
+        if selected_hotbar_slot >= HOTBAR_SLOT_COUNT {
+            return None;
+        }
+        self.get(HOTBAR_START_SLOT + selected_hotbar_slot)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockFace {
+    Bottom,
+    Top,
+    North,
+    South,
+    West,
+    East,
+}
+
+impl BlockFace {
+    #[must_use]
+    pub fn from_protocol_byte(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Bottom),
+            1 => Some(Self::Top),
+            2 => Some(Self::North),
+            3 => Some(Self::South),
+            4 => Some(Self::West),
+            5 => Some(Self::East),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn offset(self) -> (i32, i32, i32) {
+        match self {
+            Self::Bottom => (0, -1, 0),
+            Self::Top => (0, 1, 0),
+            Self::North => (0, 0, -1),
+            Self::South => (0, 0, 1),
+            Self::West => (-1, 0, 0),
+            Self::East => (1, 0, 0),
+        }
     }
 }
 
@@ -119,6 +289,20 @@ impl BlockPos {
     #[must_use]
     pub const fn new(x: i32, y: i32, z: i32) -> Self {
         Self { x, y, z }
+    }
+
+    #[must_use]
+    pub fn chunk_pos(self) -> ChunkPos {
+        ChunkPos::new(
+            self.x.div_euclid(CHUNK_WIDTH),
+            self.z.div_euclid(CHUNK_WIDTH),
+        )
+    }
+
+    #[must_use]
+    pub fn offset(self, face: BlockFace) -> Self {
+        let (dx, dy, dz) = face.offset();
+        Self::new(self.x + dx, self.y + dy, self.z + dz)
     }
 }
 
@@ -315,6 +499,8 @@ pub struct PlayerSnapshot {
     pub health: f32,
     pub food: i16,
     pub food_saturation: f32,
+    pub inventory: PlayerInventory,
+    pub selected_hotbar_slot: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,6 +610,27 @@ pub enum CoreCommand {
         player_id: PlayerId,
         keep_alive_id: i32,
     },
+    SetHeldSlot {
+        player_id: PlayerId,
+        slot: i16,
+    },
+    CreativeInventorySet {
+        player_id: PlayerId,
+        slot: i16,
+        stack: Option<ItemStack>,
+    },
+    DigBlock {
+        player_id: PlayerId,
+        position: BlockPos,
+        status: u8,
+        face: Option<BlockFace>,
+    },
+    PlaceBlock {
+        player_id: PlayerId,
+        position: BlockPos,
+        face: Option<BlockFace>,
+        held_item: Option<ItemStack>,
+    },
     Disconnect {
         player_id: PlayerId,
     },
@@ -456,6 +663,20 @@ pub enum CoreEvent {
     },
     EntityDespawned {
         entity_ids: Vec<EntityId>,
+    },
+    InventorySnapshot {
+        inventory: PlayerInventory,
+    },
+    InventorySlotUpdated {
+        slot: u8,
+        stack: Option<ItemStack>,
+    },
+    SelectedHotbarSlotChanged {
+        slot: u8,
+    },
+    BlockChanged {
+        position: BlockPos,
+        block: BlockState,
     },
     KeepAliveRequested {
         keep_alive_id: i32,
@@ -605,6 +826,24 @@ impl ServerCore {
                 self.accept_keep_alive(player_id, keep_alive_id);
                 Vec::new()
             }
+            CoreCommand::SetHeldSlot { player_id, slot } => self.set_held_slot(player_id, slot),
+            CoreCommand::CreativeInventorySet {
+                player_id,
+                slot,
+                stack,
+            } => self.set_creative_inventory_slot(player_id, slot, stack),
+            CoreCommand::DigBlock {
+                player_id,
+                position,
+                status,
+                face,
+            } => self.apply_dig(player_id, position, status, face),
+            CoreCommand::PlaceBlock {
+                player_id,
+                position,
+                face,
+                held_item,
+            } => self.apply_place(player_id, position, face, held_item),
             CoreCommand::Disconnect { player_id } => self.disconnect_player(player_id),
         }
     }
@@ -720,6 +959,18 @@ impl ServerCore {
                     view_distance: self.config.view_distance,
                 },
             },
+            TargetedEvent {
+                target: EventTarget::Connection(connection_id),
+                event: CoreEvent::InventorySnapshot {
+                    inventory: player.inventory.clone(),
+                },
+            },
+            TargetedEvent {
+                target: EventTarget::Connection(connection_id),
+                event: CoreEvent::SelectedHotbarSlotChanged {
+                    slot: player.selected_hotbar_slot,
+                },
+            },
         ];
 
         for (existing_entity_id, existing_player) in existing_players {
@@ -825,6 +1076,200 @@ impl ServerCore {
         }
     }
 
+    fn set_held_slot(&mut self, player_id: PlayerId, slot: i16) -> Vec<TargetedEvent> {
+        let Some(player) = self.online_players.get_mut(&player_id) else {
+            return Vec::new();
+        };
+        let slot = match u8::try_from(slot) {
+            Ok(slot) if slot < HOTBAR_SLOT_COUNT => slot,
+            _ => {
+                return vec![TargetedEvent {
+                    target: EventTarget::Player(player_id),
+                    event: CoreEvent::SelectedHotbarSlotChanged {
+                        slot: player.snapshot.selected_hotbar_slot,
+                    },
+                }];
+            }
+        };
+        player.snapshot.selected_hotbar_slot = slot;
+        self.saved_players
+            .insert(player_id, player.snapshot.clone());
+        vec![TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::SelectedHotbarSlotChanged { slot },
+        }]
+    }
+
+    fn set_creative_inventory_slot(
+        &mut self,
+        player_id: PlayerId,
+        slot: i16,
+        stack: Option<ItemStack>,
+    ) -> Vec<TargetedEvent> {
+        let Some(player) = self.online_players.get_mut(&player_id) else {
+            return Vec::new();
+        };
+        if self.world_meta.game_mode != 1 {
+            return reject_inventory_slot_events(player_id, slot, player);
+        }
+
+        let Ok(slot) = u8::try_from(slot) else {
+            return vec![
+                TargetedEvent {
+                    target: EventTarget::Player(player_id),
+                    event: CoreEvent::InventorySnapshot {
+                        inventory: player.snapshot.inventory.clone(),
+                    },
+                },
+                TargetedEvent {
+                    target: EventTarget::Player(player_id),
+                    event: CoreEvent::SelectedHotbarSlotChanged {
+                        slot: player.snapshot.selected_hotbar_slot,
+                    },
+                },
+            ];
+        };
+        if !(9..PLAYER_INVENTORY_SLOT_COUNT as u8).contains(&slot) {
+            return reject_inventory_slot_events(player_id, i16::from(slot), player);
+        }
+
+        if let Some(stack) = stack.as_ref()
+            && (!stack.is_supported_placeable() || stack.count == 0 || stack.count > 64)
+        {
+            return reject_inventory_slot_events(player_id, i16::from(slot), player);
+        }
+
+        let _ = player.snapshot.inventory.set(slot, stack.clone());
+        self.saved_players
+            .insert(player_id, player.snapshot.clone());
+        vec![TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::InventorySlotUpdated { slot, stack },
+        }]
+    }
+
+    fn apply_dig(
+        &mut self,
+        player_id: PlayerId,
+        position: BlockPos,
+        status: u8,
+        _face: Option<BlockFace>,
+    ) -> Vec<TargetedEvent> {
+        if !matches!(status, 0 | 2) {
+            return Vec::new();
+        }
+        let Some(player) = self.online_players.get(&player_id) else {
+            return Vec::new();
+        };
+        if self.world_meta.game_mode != 1 || !self.can_edit_block(&player.snapshot, position) {
+            let current = self.block_at(position);
+            return vec![TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::BlockChanged {
+                    position,
+                    block: current,
+                },
+            }];
+        }
+
+        let current = self.block_at(position);
+        if current.is_air() || current.key.as_str() == "minecraft:bedrock" {
+            return vec![TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::BlockChanged {
+                    position,
+                    block: current,
+                },
+            }];
+        }
+
+        self.set_block_at(position, BlockState::air());
+        self.emit_block_change(position)
+    }
+
+    fn apply_place(
+        &mut self,
+        player_id: PlayerId,
+        position: BlockPos,
+        face: Option<BlockFace>,
+        held_item: Option<ItemStack>,
+    ) -> Vec<TargetedEvent> {
+        let Some(face) = face else {
+            return Vec::new();
+        };
+        let Some(player) = self.online_players.get(&player_id) else {
+            return Vec::new();
+        };
+        let place_pos = position.offset(face);
+        let Some(selected_stack) = player
+            .snapshot
+            .inventory
+            .selected_hotbar_stack(player.snapshot.selected_hotbar_slot)
+            .cloned()
+        else {
+            return self.place_rejection_events(player_id, place_pos, &player.snapshot);
+        };
+
+        if held_item.as_ref() != Some(&selected_stack) {
+            return self.place_rejection_events(player_id, place_pos, &player.snapshot);
+        }
+
+        let Some(block) = placeable_block_state_from_item_key(selected_stack.key.as_str()) else {
+            return self.place_rejection_events(player_id, place_pos, &player.snapshot);
+        };
+
+        if self.world_meta.game_mode != 1
+            || !self.can_edit_block(&player.snapshot, place_pos)
+            || self.block_at(position).is_air()
+            || !self.block_at(place_pos).is_air()
+        {
+            return self.place_rejection_events(player_id, place_pos, &player.snapshot);
+        }
+
+        self.set_block_at(place_pos, block);
+        self.emit_block_change(place_pos)
+    }
+
+    fn place_inventory_correction(
+        &self,
+        player_id: PlayerId,
+        player: &PlayerSnapshot,
+    ) -> Vec<TargetedEvent> {
+        let selected_slot = HOTBAR_START_SLOT + player.selected_hotbar_slot;
+        vec![
+            TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::InventorySlotUpdated {
+                    slot: selected_slot,
+                    stack: player.inventory.get(selected_slot).cloned(),
+                },
+            },
+            TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::SelectedHotbarSlotChanged {
+                    slot: player.selected_hotbar_slot,
+                },
+            },
+        ]
+    }
+
+    fn place_rejection_events(
+        &self,
+        player_id: PlayerId,
+        place_pos: BlockPos,
+        player: &PlayerSnapshot,
+    ) -> Vec<TargetedEvent> {
+        let mut events = vec![TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::BlockChanged {
+                position: place_pos,
+                block: self.block_at(place_pos),
+            },
+        }];
+        events.extend(self.place_inventory_correction(player_id, player));
+        events
+    }
+
     fn disconnect_player(&mut self, player_id: PlayerId) -> Vec<TargetedEvent> {
         let Some(player) = self.online_players.remove(&player_id) else {
             return Vec::new();
@@ -850,6 +1295,60 @@ impl ServerCore {
             .entry(chunk_pos)
             .or_insert_with(|| generate_superflat_chunk(chunk_pos))
     }
+
+    fn block_at(&self, position: BlockPos) -> BlockState {
+        let chunk_pos = position.chunk_pos();
+        let local_x =
+            u8::try_from(position.x.rem_euclid(CHUNK_WIDTH)).expect("local x should fit into u8");
+        let local_z =
+            u8::try_from(position.z.rem_euclid(CHUNK_WIDTH)).expect("local z should fit into u8");
+        self.chunks
+            .get(&chunk_pos)
+            .cloned()
+            .unwrap_or_else(|| generate_superflat_chunk(chunk_pos))
+            .get_block(local_x, position.y, local_z)
+    }
+
+    fn set_block_at(&mut self, position: BlockPos, state: BlockState) {
+        let chunk_pos = position.chunk_pos();
+        let local_x =
+            u8::try_from(position.x.rem_euclid(CHUNK_WIDTH)).expect("local x should fit into u8");
+        let local_z =
+            u8::try_from(position.z.rem_euclid(CHUNK_WIDTH)).expect("local z should fit into u8");
+        let chunk = self
+            .chunks
+            .entry(chunk_pos)
+            .or_insert_with(|| generate_superflat_chunk(chunk_pos));
+        chunk.set_block(local_x, position.y, local_z, state);
+    }
+
+    fn emit_block_change(&self, position: BlockPos) -> Vec<TargetedEvent> {
+        let block = self.block_at(position);
+        self.online_players
+            .iter()
+            .filter(|(_, player)| player.view.loaded_chunks.contains(&position.chunk_pos()))
+            .map(|(player_id, _)| TargetedEvent {
+                target: EventTarget::Player(*player_id),
+                event: CoreEvent::BlockChanged {
+                    position,
+                    block: block.clone(),
+                },
+            })
+            .collect()
+    }
+
+    fn can_edit_block(&self, actor: &PlayerSnapshot, position: BlockPos) -> bool {
+        if !(0..=255).contains(&position.y) {
+            return false;
+        }
+        if distance_squared_to_block_center(actor.position, position) > BLOCK_EDIT_REACH.powi(2) {
+            return false;
+        }
+        !self
+            .online_players
+            .iter()
+            .any(|(_, player)| block_intersects_player(position, &player.snapshot))
+    }
 }
 
 fn default_player(player_id: PlayerId, username: String, spawn: BlockPos) -> PlayerSnapshot {
@@ -868,7 +1367,108 @@ fn default_player(player_id: PlayerId, username: String, spawn: BlockPos) -> Pla
         health: 20.0,
         food: 20,
         food_saturation: 5.0,
+        inventory: PlayerInventory::creative_starter(),
+        selected_hotbar_slot: 0,
     }
+}
+
+fn starter_hotbar_item_keys() -> [&'static str; 9] {
+    [
+        "minecraft:stone",
+        "minecraft:dirt",
+        "minecraft:grass_block",
+        "minecraft:cobblestone",
+        "minecraft:oak_planks",
+        "minecraft:sand",
+        "minecraft:sandstone",
+        "minecraft:glass",
+        "minecraft:bricks",
+    ]
+}
+
+fn placeable_block_state_from_item_key(key: &str) -> Option<BlockState> {
+    match key {
+        "minecraft:stone" => Some(BlockState::stone()),
+        "minecraft:dirt" => Some(BlockState::dirt()),
+        "minecraft:grass_block" => Some(BlockState::grass_block()),
+        "minecraft:cobblestone" => Some(BlockState::cobblestone()),
+        "minecraft:oak_planks" => Some(BlockState::oak_planks()),
+        "minecraft:sand" => Some(BlockState::sand()),
+        "minecraft:sandstone" => Some(BlockState::sandstone()),
+        "minecraft:glass" => Some(BlockState::glass()),
+        "minecraft:bricks" => Some(BlockState::bricks()),
+        _ => None,
+    }
+}
+
+fn distance_squared_to_block_center(position: Vec3, block: BlockPos) -> f64 {
+    let eye_x = position.x;
+    let eye_y = position.y + 1.62;
+    let eye_z = position.z;
+    let center_x = f64::from(block.x) + 0.5;
+    let center_y = f64::from(block.y) + 0.5;
+    let center_z = f64::from(block.z) + 0.5;
+    let dx = eye_x - center_x;
+    let dy = eye_y - center_y;
+    let dz = eye_z - center_z;
+    dx * dx + dy * dy + dz * dz
+}
+
+fn block_intersects_player(block: BlockPos, player: &PlayerSnapshot) -> bool {
+    let half_width = PLAYER_WIDTH / 2.0;
+    let player_min_x = player.position.x - half_width;
+    let player_max_x = player.position.x + half_width;
+    let player_min_y = player.position.y;
+    let player_max_y = player.position.y + PLAYER_HEIGHT;
+    let player_min_z = player.position.z - half_width;
+    let player_max_z = player.position.z + half_width;
+
+    let block_min_x = f64::from(block.x);
+    let block_max_x = block_min_x + 1.0;
+    let block_min_y = f64::from(block.y);
+    let block_max_y = block_min_y + 1.0;
+    let block_min_z = f64::from(block.z);
+    let block_max_z = block_min_z + 1.0;
+
+    player_min_x < block_max_x
+        && player_max_x > block_min_x
+        && player_min_y < block_max_y
+        && player_max_y > block_min_y
+        && player_min_z < block_max_z
+        && player_max_z > block_min_z
+}
+
+fn reject_inventory_slot_events(
+    player_id: PlayerId,
+    slot: i16,
+    player: &OnlinePlayer,
+) -> Vec<TargetedEvent> {
+    let mut events = Vec::new();
+    if let Ok(slot) = u8::try_from(slot)
+        && usize::from(slot) < PLAYER_INVENTORY_SLOT_COUNT
+    {
+        events.push(TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::InventorySlotUpdated {
+                slot,
+                stack: player.snapshot.inventory.get(slot).cloned(),
+            },
+        });
+    } else {
+        events.push(TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::InventorySnapshot {
+                inventory: player.snapshot.inventory.clone(),
+            },
+        });
+    }
+    events.push(TargetedEvent {
+        target: EventTarget::Player(player_id),
+        event: CoreEvent::SelectedHotbarSlotChanged {
+            slot: player.snapshot.selected_hotbar_slot,
+        },
+    });
+    events
 }
 
 fn required_chunks(center: ChunkPos, view_distance: u8) -> BTreeSet<ChunkPos> {
@@ -953,6 +1553,24 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| matches!(event.event, CoreEvent::InitialWorld { ref visible_chunks, .. } if visible_chunks.len() == 9)));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                TargetedEvent {
+                    target: EventTarget::Connection(ConnectionId(1)),
+                    event: CoreEvent::InventorySnapshot { .. },
+                }
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                TargetedEvent {
+                    target: EventTarget::Connection(ConnectionId(1)),
+                    event: CoreEvent::SelectedHotbarSlotChanged { slot: 0 },
+                }
+            )
+        }));
 
         let second = player_id("second");
         let events = core.apply_command(
@@ -1092,5 +1710,197 @@ mod tests {
                 .as_str()
                 == "minecraft:grass_block"
         );
+        let player = decoded
+            .players
+            .get(&first)
+            .expect("logged in player should persist");
+        assert_eq!(player.selected_hotbar_slot, 0);
+        assert_eq!(
+            player
+                .inventory
+                .get(36)
+                .expect("starter slot 36 should exist")
+                .key
+                .as_str(),
+            "minecraft:stone"
+        );
+    }
+
+    #[test]
+    fn inventory_commands_update_selected_slot_and_slots() {
+        let mut core = ServerCore::new(CoreConfig {
+            game_mode: 1,
+            ..CoreConfig::default()
+        });
+        let first = player_id("first");
+        let _ = core.apply_command(
+            CoreCommand::LoginStart {
+                connection_id: ConnectionId(1),
+                protocol_version: ProtocolVersion(5),
+                username: "first".to_string(),
+                player_id: first,
+            },
+            0,
+        );
+
+        let slot_events = core.apply_command(
+            CoreCommand::CreativeInventorySet {
+                player_id: first,
+                slot: 36,
+                stack: Some(ItemStack::new("minecraft:glass", 64, 0)),
+            },
+            0,
+        );
+        assert!(slot_events.iter().any(|event| {
+            matches!(
+                event,
+                TargetedEvent {
+                    target: EventTarget::Player(id),
+                    event: CoreEvent::InventorySlotUpdated { slot: 36, .. },
+                } if *id == first
+            )
+        }));
+
+        let held_events = core.apply_command(
+            CoreCommand::SetHeldSlot {
+                player_id: first,
+                slot: 4,
+            },
+            0,
+        );
+        assert!(held_events.iter().any(|event| {
+            matches!(
+                event,
+                TargetedEvent {
+                    target: EventTarget::Player(id),
+                    event: CoreEvent::SelectedHotbarSlotChanged { slot: 4 },
+                } if *id == first
+            )
+        }));
+
+        let snapshot = core.snapshot();
+        let player = snapshot.players.get(&first).expect("player should persist");
+        assert_eq!(player.selected_hotbar_slot, 4);
+        assert_eq!(
+            player
+                .inventory
+                .get(36)
+                .expect("slot should be updated")
+                .key
+                .as_str(),
+            "minecraft:glass"
+        );
+    }
+
+    #[test]
+    fn creative_place_break_and_reject_emit_authoritative_corrections() {
+        let mut creative = ServerCore::new(CoreConfig {
+            game_mode: 1,
+            ..CoreConfig::default()
+        });
+        let first = player_id("first");
+        let second = player_id("second");
+        let _ = creative.apply_command(
+            CoreCommand::LoginStart {
+                connection_id: ConnectionId(1),
+                protocol_version: ProtocolVersion(5),
+                username: "first".to_string(),
+                player_id: first,
+            },
+            0,
+        );
+        let _ = creative.apply_command(
+            CoreCommand::LoginStart {
+                connection_id: ConnectionId(2),
+                protocol_version: ProtocolVersion(5),
+                username: "second".to_string(),
+                player_id: second,
+            },
+            0,
+        );
+
+        let place_events = creative.apply_command(
+            CoreCommand::PlaceBlock {
+                player_id: first,
+                position: BlockPos::new(2, 3, 0),
+                face: Some(BlockFace::Top),
+                held_item: Some(ItemStack::new("minecraft:stone", 64, 0)),
+            },
+            0,
+        );
+        assert!(
+            place_events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    CoreEvent::BlockChanged {
+                        position: BlockPos { x: 2, y: 4, z: 0 },
+                        ..
+                    }
+                ))
+                .count()
+                >= 2
+        );
+
+        let break_events = creative.apply_command(
+            CoreCommand::DigBlock {
+                player_id: first,
+                position: BlockPos::new(2, 4, 0),
+                status: 0,
+                face: Some(BlockFace::Top),
+            },
+            0,
+        );
+        assert!(
+            break_events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    CoreEvent::BlockChanged {
+                        position: BlockPos { x: 2, y: 4, z: 0 },
+                        ref block,
+                    } if block.is_air()
+                ))
+                .count()
+                >= 2
+        );
+
+        let mut survival = ServerCore::new(CoreConfig::default());
+        let lone = player_id("lone");
+        let _ = survival.apply_command(
+            CoreCommand::LoginStart {
+                connection_id: ConnectionId(3),
+                protocol_version: ProtocolVersion(5),
+                username: "lone".to_string(),
+                player_id: lone,
+            },
+            0,
+        );
+        let reject_events = survival.apply_command(
+            CoreCommand::PlaceBlock {
+                player_id: lone,
+                position: BlockPos::new(2, 3, 0),
+                face: Some(BlockFace::Top),
+                held_item: Some(ItemStack::new("minecraft:stone", 64, 0)),
+            },
+            0,
+        );
+        assert!(reject_events.iter().any(|event| matches!(
+            event,
+            TargetedEvent {
+                target: EventTarget::Player(id),
+                event: CoreEvent::BlockChanged {
+                    position: BlockPos { x: 2, y: 4, z: 0 },
+                    block,
+                },
+            } if *id == lone && block.is_air()
+        )));
+        assert!(reject_events.iter().any(|event| matches!(
+            event,
+            TargetedEvent {
+                target: EventTarget::Player(id),
+                event: CoreEvent::InventorySlotUpdated { slot: 36, .. },
+            } if *id == lone
+        )));
     }
 }
