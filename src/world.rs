@@ -20,18 +20,18 @@ pub enum BlockType {
 #[derive(Clone, Copy)]
 pub struct BlockData {
     pub(crate) kind: BlockType,
-    pub(crate) entity: Option<Entity>,
 }
 
 impl BlockData {
     pub(crate) const fn new(kind: BlockType) -> Self {
-        Self { kind, entity: None }
+        Self { kind }
     }
 }
 
 #[derive(Resource, Default)]
 pub struct VoxelWorld {
     pub(crate) blocks: HashMap<IVec3, BlockData>,
+    block_entities: HashMap<IVec3, Entity>,
 }
 
 #[derive(Resource, Clone)]
@@ -160,10 +160,10 @@ fn spawn_block_entity(
     materials: &BlockMaterials,
     coordinate: IVec3,
 ) {
-    let Some(block_data) = world.blocks.get_mut(&coordinate) else {
+    let Some(block_data) = world.blocks.get(&coordinate) else {
         return;
     };
-    if block_data.entity.is_some() {
+    if world.block_entities.contains_key(&coordinate) {
         return;
     }
 
@@ -176,7 +176,7 @@ fn spawn_block_entity(
         ))
         .id();
 
-    block_data.entity = Some(entity);
+    world.block_entities.insert(coordinate, entity);
 }
 
 fn is_exposed(blocks: &HashMap<IVec3, BlockData>, coord: IVec3) -> bool {
@@ -193,8 +193,8 @@ pub fn remove_block(
     mesh: &Handle<Mesh>,
     materials: &BlockMaterials,
 ) {
-    if let Some(block_data) = world.blocks.remove(coordinate) {
-        if let Some(entity) = block_data.entity {
+    if world.blocks.remove(coordinate).is_some() {
+        if let Some(entity) = world.block_entities.remove(coordinate) {
             commands.entity(entity).despawn();
         }
 
@@ -217,13 +217,17 @@ fn insert_block_data(world: &mut VoxelWorld, coordinate: IVec3, block_type: Bloc
     world.blocks.insert(coordinate, BlockData::new(block_type));
 }
 
-fn hidden_neighbor_coords(blocks: &HashMap<IVec3, BlockData>, coordinate: IVec3) -> Vec<IVec3> {
+fn hidden_neighbor_coords(
+    blocks: &HashMap<IVec3, BlockData>,
+    block_entities: &HashMap<IVec3, Entity>,
+    coordinate: IVec3,
+) -> Vec<IVec3> {
     let mut to_despawn = Vec::new();
 
     for offset in NEIGHBORS {
         let neighbor_coord = coordinate + offset;
-        if let Some(neighbor) = blocks.get(&neighbor_coord)
-            && neighbor.entity.is_some()
+        if blocks.contains_key(&neighbor_coord)
+            && block_entities.contains_key(&neighbor_coord)
             && !is_exposed(blocks, neighbor_coord)
         {
             to_despawn.push(neighbor_coord);
@@ -238,10 +242,8 @@ fn despawn_hidden_neighbor_entities(
     world: &mut VoxelWorld,
     coordinate: IVec3,
 ) {
-    for coord in hidden_neighbor_coords(&world.blocks, coordinate) {
-        if let Some(neighbor) = world.blocks.get_mut(&coord)
-            && let Some(entity) = neighbor.entity.take()
-        {
+    for coord in hidden_neighbor_coords(&world.blocks, &world.block_entities, coordinate) {
+        if let Some(entity) = world.block_entities.remove(&coord) {
             commands.entity(entity).despawn();
         }
     }
