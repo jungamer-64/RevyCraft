@@ -348,7 +348,7 @@ fn collides(world: &VoxelWorld, position: Vec3) -> bool {
         for y in min.y..=max.y {
             for z in min.z..=max.z {
                 let block_coord = IVec3::new(x, y, z);
-                if !world.blocks.contains_key(&block_coord) {
+                if !world.contains_block(block_coord) {
                     continue;
                 }
 

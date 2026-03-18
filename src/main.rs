@@ -24,7 +24,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "RevyCraft -- a Minecraft Compatible Client with Rust".into(),
+                title: "RevyCraft -- a Minecraft-like Client with Rust".into(),
                 resolution: WindowResolution::new(1280, 720),
                 ..Default::default()
             }),

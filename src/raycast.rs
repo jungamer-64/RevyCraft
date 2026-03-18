@@ -14,7 +14,7 @@ pub fn raycast_voxel(
     }
 
     let mut current = origin.floor().as_ivec3();
-    if world.blocks.contains_key(&current) {
+    if world.contains_block(current) {
         return Some((current, pick_normal(dir)));
     }
 
@@ -106,7 +106,7 @@ fn raycast_voxel_traverse(
         }
 
         let normal = advance_to_next_voxel(current, step, t_delta, t_max, axis);
-        if world.blocks.contains_key(current) {
+        if world.contains_block(*current) {
             return Some((*current, normal));
         }
     }
@@ -163,9 +163,7 @@ mod tests {
     #[test]
     fn raycast_hits_single_block_and_reports_face_normal() {
         let mut world = VoxelWorld::default();
-        world
-            .blocks
-            .insert(IVec3::new(1, 0, 0), BlockData::new(BlockType::Stone));
+        world.set_block(IVec3::new(1, 0, 0), BlockType::Stone);
 
         let hit = raycast_voxel(
             &world,

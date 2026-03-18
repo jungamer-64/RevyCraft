@@ -34,6 +34,63 @@ pub struct VoxelWorld {
     block_entities: HashMap<IVec3, Entity>,
 }
 
+impl VoxelWorld {
+    pub(crate) fn contains_block(&self, coordinate: IVec3) -> bool {
+        self.blocks.contains_key(&coordinate)
+    }
+
+    pub(crate) fn set_block(&mut self, coordinate: IVec3, block_type: BlockType) {
+        self.blocks.insert(coordinate, BlockData::new(block_type));
+    }
+
+    fn block_kind(&self, coordinate: IVec3) -> Option<BlockType> {
+        self.blocks.get(&coordinate).map(|block_data| block_data.kind)
+    }
+
+    fn remove_block_data(&mut self, coordinate: &IVec3) -> Option<BlockData> {
+        self.blocks.remove(coordinate)
+    }
+
+    fn is_exposed(&self, coordinate: IVec3) -> bool {
+        self.contains_block(coordinate)
+            && NEIGHBORS
+                .iter()
+                .any(|offset| !self.contains_block(coordinate + *offset))
+    }
+
+    fn all_block_coords(&self) -> Vec<IVec3> {
+        self.blocks.keys().copied().collect()
+    }
+
+    fn has_entity(&self, coordinate: IVec3) -> bool {
+        self.block_entities.contains_key(&coordinate)
+    }
+
+    fn insert_entity(&mut self, coordinate: IVec3, entity: Entity) {
+        self.block_entities.insert(coordinate, entity);
+    }
+
+    fn remove_entity(&mut self, coordinate: &IVec3) -> Option<Entity> {
+        self.block_entities.remove(coordinate)
+    }
+
+    fn hidden_neighbor_coords(&self, coordinate: IVec3) -> Vec<IVec3> {
+        let mut to_despawn = Vec::new();
+
+        for offset in NEIGHBORS {
+            let neighbor_coord = coordinate + offset;
+            if self.contains_block(neighbor_coord)
+                && self.has_entity(neighbor_coord)
+                && !self.is_exposed(neighbor_coord)
+            {
+                to_despawn.push(neighbor_coord);
+            }
+        }
+
+        to_despawn
+    }
+}
+
 #[derive(Resource, Clone)]
 pub struct BlockMaterials {
     pub(crate) grass: Handle<StandardMaterial>,
@@ -103,16 +160,15 @@ pub fn build_terrain(
                     BlockType::Stone
                 };
 
-                insert_block_data(voxel_world, IVec3::new(x, y, z), block_type);
+                voxel_world.set_block(IVec3::new(x, y, z), block_type);
             }
         }
     }
 
     // Terrain generation populates block data first, then spawns only exposed
     // faces in one pass so startup skips neighbor hide/reveal bookkeeping.
-    let coords: Vec<IVec3> = voxel_world.blocks.keys().copied().collect();
-    for coord in coords {
-        if is_exposed(&voxel_world.blocks, coord) {
+    for coord in voxel_world.all_block_coords() {
+        if voxel_world.is_exposed(coord) {
             spawn_block_entity(commands, voxel_world, cube_mesh, block_materials, coord);
         }
     }
@@ -140,13 +196,13 @@ pub fn spawn_block(
     coordinate: IVec3,
     block_type: BlockType,
 ) {
-    if world.blocks.contains_key(&coordinate) {
+    if world.contains_block(coordinate) {
         return;
     }
 
-    insert_block_data(world, coordinate, block_type);
+    world.set_block(coordinate, block_type);
 
-    if is_exposed(&world.blocks, coordinate) {
+    if world.is_exposed(coordinate) {
         spawn_block_entity(commands, world, mesh, materials, coordinate);
     }
 
@@ -160,14 +216,14 @@ fn spawn_block_entity(
     materials: &BlockMaterials,
     coordinate: IVec3,
 ) {
-    let Some(block_data) = world.blocks.get(&coordinate) else {
+    let Some(block_type) = world.block_kind(coordinate) else {
         return;
     };
-    if world.block_entities.contains_key(&coordinate) {
+    if world.has_entity(coordinate) {
         return;
     }
 
-    let material_handle = block_material_for_type(materials, block_data.kind);
+    let material_handle = block_material_for_type(materials, block_type);
     let entity = commands
         .spawn((
             Mesh3d(mesh.clone()),
@@ -176,14 +232,7 @@ fn spawn_block_entity(
         ))
         .id();
 
-    world.block_entities.insert(coordinate, entity);
-}
-
-fn is_exposed(blocks: &HashMap<IVec3, BlockData>, coord: IVec3) -> bool {
-    blocks.contains_key(&coord)
-        && NEIGHBORS
-            .iter()
-            .any(|offset| !blocks.contains_key(&(coord + *offset)))
+    world.insert_entity(coordinate, entity);
 }
 
 pub fn remove_block(
@@ -193,8 +242,8 @@ pub fn remove_block(
     mesh: &Handle<Mesh>,
     materials: &BlockMaterials,
 ) {
-    if world.blocks.remove(coordinate).is_some() {
-        if let Some(entity) = world.block_entities.remove(coordinate) {
+    if world.remove_block_data(coordinate).is_some() {
+        if let Some(entity) = world.remove_entity(coordinate) {
             commands.entity(entity).despawn();
         }
 
@@ -213,37 +262,13 @@ fn block_material_for_type(
     }
 }
 
-fn insert_block_data(world: &mut VoxelWorld, coordinate: IVec3, block_type: BlockType) {
-    world.blocks.insert(coordinate, BlockData::new(block_type));
-}
-
-fn hidden_neighbor_coords(
-    blocks: &HashMap<IVec3, BlockData>,
-    block_entities: &HashMap<IVec3, Entity>,
-    coordinate: IVec3,
-) -> Vec<IVec3> {
-    let mut to_despawn = Vec::new();
-
-    for offset in NEIGHBORS {
-        let neighbor_coord = coordinate + offset;
-        if blocks.contains_key(&neighbor_coord)
-            && block_entities.contains_key(&neighbor_coord)
-            && !is_exposed(blocks, neighbor_coord)
-        {
-            to_despawn.push(neighbor_coord);
-        }
-    }
-
-    to_despawn
-}
-
 fn despawn_hidden_neighbor_entities(
     commands: &mut Commands,
     world: &mut VoxelWorld,
     coordinate: IVec3,
 ) {
-    for coord in hidden_neighbor_coords(&world.blocks, &world.block_entities, coordinate) {
-        if let Some(entity) = world.block_entities.remove(&coord) {
+    for coord in world.hidden_neighbor_coords(coordinate) {
+        if let Some(entity) = world.remove_entity(&coord) {
             commands.entity(entity).despawn();
         }
     }
@@ -258,7 +283,7 @@ fn expose_neighbor_entities(
 ) {
     for offset in NEIGHBORS {
         let neighbor_coord = *coordinate + offset;
-        if is_exposed(&world.blocks, neighbor_coord) {
+        if world.is_exposed(neighbor_coord) {
             spawn_block_entity(commands, world, mesh, materials, neighbor_coord);
         }
     }
@@ -270,25 +295,25 @@ mod tests {
 
     #[test]
     fn block_is_exposed_when_any_face_touches_air() {
-        let mut blocks = HashMap::new();
-        blocks.insert(IVec3::ZERO, BlockData::new(BlockType::Stone));
+        let mut world = VoxelWorld::default();
+        world.set_block(IVec3::ZERO, BlockType::Stone);
 
-        assert!(is_exposed(&blocks, IVec3::ZERO));
+        assert!(world.is_exposed(IVec3::ZERO));
     }
 
     #[test]
     fn block_is_not_exposed_when_fully_enclosed() {
-        let mut blocks = HashMap::new();
-        blocks.insert(IVec3::ZERO, BlockData::new(BlockType::Stone));
+        let mut world = VoxelWorld::default();
+        world.set_block(IVec3::ZERO, BlockType::Stone);
         for offset in NEIGHBORS {
-            blocks.insert(offset, BlockData::new(BlockType::Stone));
+            world.set_block(offset, BlockType::Stone);
         }
 
-        assert!(!is_exposed(&blocks, IVec3::ZERO));
+        assert!(!world.is_exposed(IVec3::ZERO));
     }
 
     #[test]
     fn missing_block_is_not_exposed() {
-        assert!(!is_exposed(&HashMap::new(), IVec3::ZERO));
+        assert!(!VoxelWorld::default().is_exposed(IVec3::ZERO));
     }
 }
