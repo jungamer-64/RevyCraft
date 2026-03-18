@@ -1,5 +1,6 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const NEIGHBORS: [IVec3; 6] = [
     IVec3::new(1, 0, 0),
@@ -17,7 +18,7 @@ pub enum BlockType {
     Stone,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockData {
     pub(crate) kind: BlockType,
 }
@@ -31,7 +32,6 @@ impl BlockData {
 #[derive(Resource, Default)]
 pub struct VoxelWorld {
     pub(crate) blocks: HashMap<IVec3, BlockData>,
-    block_entities: HashMap<IVec3, Entity>,
 }
 
 impl VoxelWorld {
@@ -39,166 +39,159 @@ impl VoxelWorld {
         self.blocks.contains_key(&coordinate)
     }
 
-    pub(crate) fn set_block(&mut self, coordinate: IVec3, block_type: BlockType) {
-        self.blocks.insert(coordinate, BlockData::new(block_type));
-    }
-
-    fn block_kind(&self, coordinate: IVec3) -> Option<BlockType> {
+    pub(crate) fn block_kind(&self, coordinate: IVec3) -> Option<BlockType> {
         self.blocks
             .get(&coordinate)
             .map(|block_data| block_data.kind)
     }
 
-    fn remove_block_data(&mut self, coordinate: &IVec3) -> Option<BlockData> {
-        self.blocks.remove(coordinate)
+    pub(crate) fn set_block(&mut self, coordinate: IVec3, block_type: BlockType) -> bool {
+        if self.contains_block(coordinate) {
+            return false;
+        }
+
+        self.blocks.insert(coordinate, BlockData::new(block_type));
+        true
     }
 
-    fn is_exposed(&self, coordinate: IVec3) -> bool {
+    pub(crate) fn remove_block(&mut self, coordinate: IVec3) -> Option<BlockData> {
+        self.blocks.remove(&coordinate)
+    }
+
+    pub(crate) fn is_exposed(&self, coordinate: IVec3) -> bool {
         self.contains_block(coordinate)
             && NEIGHBORS
                 .iter()
                 .any(|offset| !self.contains_block(coordinate + *offset))
     }
 
-    fn all_block_coords(&self) -> Vec<IVec3> {
-        self.blocks.keys().copied().collect()
+    pub(crate) fn iter_block_coords(&self) -> impl Iterator<Item = IVec3> + '_ {
+        self.blocks.keys().copied()
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct BlockEntityIndex(HashMap<IVec3, Entity>);
+
+impl BlockEntityIndex {
+    fn insert(&mut self, coordinate: IVec3, entity: Entity) {
+        self.0.insert(coordinate, entity);
     }
 
-    fn has_entity(&self, coordinate: IVec3) -> bool {
-        self.block_entities.contains_key(&coordinate)
+    fn remove(&mut self, coordinate: IVec3) -> Option<Entity> {
+        self.0.remove(&coordinate)
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct RenderSyncQueue(HashSet<IVec3>);
+
+impl RenderSyncQueue {
+    pub(crate) fn mark(&mut self, coordinate: IVec3) {
+        self.0.insert(coordinate);
     }
 
-    fn insert_entity(&mut self, coordinate: IVec3, entity: Entity) {
-        self.block_entities.insert(coordinate, entity);
-    }
-
-    fn remove_entity(&mut self, coordinate: &IVec3) -> Option<Entity> {
-        self.block_entities.remove(coordinate)
-    }
-
-    fn hidden_neighbor_coords(&self, coordinate: IVec3) -> Vec<IVec3> {
-        let mut to_despawn = Vec::new();
-
+    pub(crate) fn mark_with_neighbors(&mut self, coordinate: IVec3) {
+        self.mark(coordinate);
         for offset in NEIGHBORS {
-            let neighbor_coord = coordinate + offset;
-            if self.contains_block(neighbor_coord)
-                && self.has_entity(neighbor_coord)
-                && !self.is_exposed(neighbor_coord)
-            {
-                to_despawn.push(neighbor_coord);
-            }
-        }
-
-        to_despawn
-    }
-
-    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-    fn build_demo_terrain(
-        &mut self,
-        commands: &mut Commands,
-        render_assets: &BlockRenderAssets,
-        terrain_settings: &TerrainSettings,
-    ) {
-        for x in -terrain_settings.chunk_half_size..terrain_settings.chunk_half_size {
-            for z in -terrain_settings.chunk_half_size..terrain_settings.chunk_half_size {
-                let height = terrain_settings.surface_height(x, z);
-
-                for y in 0..=height {
-                    let block_type = terrain_settings.block_type_at_height(y, height);
-                    self.set_block(IVec3::new(x, y, z), block_type);
-                }
-            }
-        }
-
-        // Terrain generation populates block data first, then spawns only exposed
-        // faces in one pass so startup skips neighbor hide/reveal bookkeeping.
-        for coord in self.all_block_coords() {
-            if self.is_exposed(coord) {
-                self.spawn_entity_for_block(commands, render_assets, coord);
-            }
+            self.mark(coordinate + offset);
         }
     }
 
-    fn place_block(
-        &mut self,
-        commands: &mut Commands,
-        render_assets: &BlockRenderAssets,
-        coordinate: IVec3,
-        block_type: BlockType,
-    ) {
-        if self.contains_block(coordinate) {
-            return;
-        }
-
-        self.set_block(coordinate, block_type);
-
-        if self.is_exposed(coordinate) {
-            self.spawn_entity_for_block(commands, render_assets, coordinate);
-        }
-
-        self.despawn_hidden_neighbor_entities(commands, coordinate);
+    pub(crate) fn mark_all_blocks(&mut self, world: &VoxelWorld) {
+        self.0.extend(world.iter_block_coords());
     }
 
-    fn remove_block(
-        &mut self,
-        commands: &mut Commands,
-        render_assets: &BlockRenderAssets,
-        coordinate: &IVec3,
-    ) {
-        if self.remove_block_data(coordinate).is_some() {
-            if let Some(entity) = self.remove_entity(coordinate) {
-                commands.entity(entity).despawn();
-            }
+    fn drain(&mut self) -> Vec<IVec3> {
+        self.0.drain().collect()
+    }
+}
 
-            self.expose_neighbor_entities(commands, render_assets, *coordinate);
-        }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RenderSyncState {
+    Missing,
+    Hidden,
+    Exposed(BlockType),
+}
+
+fn render_sync_state_at(world: &VoxelWorld, coordinate: IVec3) -> RenderSyncState {
+    match world.block_kind(coordinate) {
+        None => RenderSyncState::Missing,
+        Some(block_type) if world.is_exposed(coordinate) => RenderSyncState::Exposed(block_type),
+        Some(_) => RenderSyncState::Hidden,
+    }
+}
+
+fn spawn_block_entity(
+    commands: &mut Commands,
+    entity_index: &mut BlockEntityIndex,
+    mesh: &Handle<Mesh>,
+    materials: &BlockMaterials,
+    coordinate: IVec3,
+    block_type: BlockType,
+) {
+    let entity = commands
+        .spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(materials.material_for(block_type)),
+            Transform::from_translation(coordinate.as_vec3()),
+        ))
+        .id();
+
+    entity_index.insert(coordinate, entity);
+}
+
+fn sync_dirty_block(
+    commands: &mut Commands,
+    world: &VoxelWorld,
+    entity_index: &mut BlockEntityIndex,
+    mesh: &Handle<Mesh>,
+    materials: &BlockMaterials,
+    coordinate: IVec3,
+) {
+    if let Some(entity) = entity_index.remove(coordinate) {
+        commands.entity(entity).despawn();
     }
 
-    fn spawn_entity_for_block(
-        &mut self,
-        commands: &mut Commands,
-        render_assets: &BlockRenderAssets,
-        coordinate: IVec3,
-    ) {
-        let Some(block_type) = self.block_kind(coordinate) else {
-            return;
-        };
-        if self.has_entity(coordinate) {
-            return;
-        }
-
-        let entity = commands
-            .spawn((
-                Mesh3d(render_assets.mesh.clone()),
-                MeshMaterial3d(render_assets.material_for(block_type)),
-                Transform::from_translation(coordinate.as_vec3()),
-            ))
-            .id();
-
-        self.insert_entity(coordinate, entity);
+    if let RenderSyncState::Exposed(block_type) = render_sync_state_at(world, coordinate) {
+        spawn_block_entity(
+            commands,
+            entity_index,
+            mesh,
+            materials,
+            coordinate,
+            block_type,
+        );
     }
+}
 
-    fn despawn_hidden_neighbor_entities(&mut self, commands: &mut Commands, coordinate: IVec3) {
-        for coord in self.hidden_neighbor_coords(coordinate) {
-            if let Some(entity) = self.remove_entity(&coord) {
-                commands.entity(entity).despawn();
-            }
-        }
-    }
+#[derive(SystemParam)]
+pub struct RenderSyncResources<'w, 's> {
+    commands: Commands<'w, 's>,
+    voxel_world: Res<'w, VoxelWorld>,
+    block_entity_index: ResMut<'w, BlockEntityIndex>,
+    render_sync_queue: ResMut<'w, RenderSyncQueue>,
+    block_mesh: Res<'w, BlockMesh>,
+    block_materials: Res<'w, BlockMaterials>,
+}
 
-    fn expose_neighbor_entities(
-        &mut self,
-        commands: &mut Commands,
-        render_assets: &BlockRenderAssets,
-        coordinate: IVec3,
-    ) {
-        for offset in NEIGHBORS {
-            let neighbor_coord = coordinate + offset;
-            if self.is_exposed(neighbor_coord) {
-                self.spawn_entity_for_block(commands, render_assets, neighbor_coord);
-            }
+impl RenderSyncResources<'_, '_> {
+    fn run(mut self) {
+        for coordinate in self.render_sync_queue.drain() {
+            sync_dirty_block(
+                &mut self.commands,
+                &self.voxel_world,
+                &mut self.block_entity_index,
+                &self.block_mesh.0,
+                &self.block_materials,
+                coordinate,
+            );
         }
     }
+}
+
+pub fn sync_block_render_system(resources: RenderSyncResources) {
+    resources.run();
 }
 
 #[derive(Resource, Clone)]
@@ -207,6 +200,16 @@ pub struct BlockMaterials {
     pub(crate) dirt: Handle<StandardMaterial>,
     pub(crate) stone: Handle<StandardMaterial>,
     pub(crate) highlight: Handle<StandardMaterial>,
+}
+
+impl BlockMaterials {
+    fn material_for(&self, block_type: BlockType) -> Handle<StandardMaterial> {
+        match block_type {
+            BlockType::Grass => self.grass.clone(),
+            BlockType::Dirt => self.dirt.clone(),
+            BlockType::Stone => self.stone.clone(),
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -292,25 +295,6 @@ impl TerrainSettings {
     }
 }
 
-struct BlockRenderAssets<'a> {
-    mesh: &'a Handle<Mesh>,
-    materials: &'a BlockMaterials,
-}
-
-impl<'a> BlockRenderAssets<'a> {
-    const fn new(mesh: &'a Handle<Mesh>, materials: &'a BlockMaterials) -> Self {
-        Self { mesh, materials }
-    }
-
-    fn material_for(&self, block_type: BlockType) -> Handle<StandardMaterial> {
-        match block_type {
-            BlockType::Grass => self.materials.grass.clone(),
-            BlockType::Dirt => self.materials.dirt.clone(),
-            BlockType::Stone => self.materials.stone.clone(),
-        }
-    }
-}
-
 pub fn create_block_materials(materials: &mut ResMut<Assets<StandardMaterial>>) -> BlockMaterials {
     let grass = materials.add(StandardMaterial {
         base_color: Color::srgb(0.35, 0.7, 0.25),
@@ -347,18 +331,17 @@ pub fn create_cube_mesh(meshes: &mut ResMut<Assets<Mesh>>) -> Handle<Mesh> {
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-pub fn build_terrain(
-    commands: &mut Commands,
-    voxel_world: &mut VoxelWorld,
-    cube_mesh: &Handle<Mesh>,
-    block_materials: &BlockMaterials,
-    terrain_settings: &TerrainSettings,
-) {
-    voxel_world.build_demo_terrain(
-        commands,
-        &BlockRenderAssets::new(cube_mesh, block_materials),
-        terrain_settings,
-    );
+pub fn populate_terrain(voxel_world: &mut VoxelWorld, terrain_settings: &TerrainSettings) {
+    for x in -terrain_settings.chunk_half_size..terrain_settings.chunk_half_size {
+        for z in -terrain_settings.chunk_half_size..terrain_settings.chunk_half_size {
+            let height = terrain_settings.surface_height(x, z);
+
+            for y in 0..=height {
+                let block_type = terrain_settings.block_type_at_height(y, height);
+                let _ = voxel_world.set_block(IVec3::new(x, y, z), block_type);
+            }
+        }
+    }
 }
 
 pub fn spawn_directional_light(commands: &mut Commands) {
@@ -375,44 +358,23 @@ pub fn spawn_directional_light(commands: &mut Commands) {
     ));
 }
 
-pub fn spawn_block(
-    commands: &mut Commands,
-    world: &mut VoxelWorld,
-    mesh: &Handle<Mesh>,
-    materials: &BlockMaterials,
-    coordinate: IVec3,
-    block_type: BlockType,
-) {
-    world.place_block(
-        commands,
-        &BlockRenderAssets::new(mesh, materials),
-        coordinate,
-        block_type,
-    );
-}
-
-pub fn remove_block(
-    commands: &mut Commands,
-    world: &mut VoxelWorld,
-    coordinate: &IVec3,
-    mesh: &Handle<Mesh>,
-    materials: &BlockMaterials,
-) {
-    world.remove_block(
-        commands,
-        &BlockRenderAssets::new(mesh, materials),
-        coordinate,
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn test_block_materials() -> BlockMaterials {
+        BlockMaterials {
+            grass: Handle::default(),
+            dirt: Handle::default(),
+            stone: Handle::default(),
+            highlight: Handle::default(),
+        }
+    }
+
     #[test]
     fn block_is_exposed_when_any_face_touches_air() {
         let mut world = VoxelWorld::default();
-        world.set_block(IVec3::ZERO, BlockType::Stone);
+        let _ = world.set_block(IVec3::ZERO, BlockType::Stone);
 
         assert!(world.is_exposed(IVec3::ZERO));
     }
@@ -420,9 +382,9 @@ mod tests {
     #[test]
     fn block_is_not_exposed_when_fully_enclosed() {
         let mut world = VoxelWorld::default();
-        world.set_block(IVec3::ZERO, BlockType::Stone);
+        let _ = world.set_block(IVec3::ZERO, BlockType::Stone);
         for offset in NEIGHBORS {
-            world.set_block(offset, BlockType::Stone);
+            let _ = world.set_block(offset, BlockType::Stone);
         }
 
         assert!(!world.is_exposed(IVec3::ZERO));
@@ -431,6 +393,159 @@ mod tests {
     #[test]
     fn missing_block_is_not_exposed() {
         assert!(!VoxelWorld::default().is_exposed(IVec3::ZERO));
+    }
+
+    #[test]
+    fn render_sync_queue_marks_coordinate_and_neighbors_once() {
+        let mut queue = RenderSyncQueue::default();
+        queue.mark_with_neighbors(IVec3::ZERO);
+        queue.mark_with_neighbors(IVec3::ZERO);
+
+        assert_eq!(queue.0.len(), 7);
+        assert!(queue.0.contains(&IVec3::ZERO));
+        for offset in NEIGHBORS {
+            assert!(queue.0.contains(&offset));
+        }
+    }
+
+    #[test]
+    fn populate_terrain_only_updates_block_data() {
+        let mut world = VoxelWorld::default();
+        let entity_index = BlockEntityIndex::default();
+
+        populate_terrain(&mut world, &TerrainSettings::default());
+
+        assert!(!world.blocks.is_empty());
+        assert!(entity_index.0.is_empty());
+    }
+
+    #[test]
+    fn render_sync_state_reports_missing_hidden_and_exposed() {
+        let mut missing_world = VoxelWorld::default();
+        assert_eq!(
+            render_sync_state_at(&missing_world, IVec3::ZERO),
+            RenderSyncState::Missing
+        );
+
+        let _ = missing_world.set_block(IVec3::ZERO, BlockType::Grass);
+        assert_eq!(
+            render_sync_state_at(&missing_world, IVec3::ZERO),
+            RenderSyncState::Exposed(BlockType::Grass)
+        );
+
+        let mut hidden_world = VoxelWorld::default();
+        let _ = hidden_world.set_block(IVec3::ZERO, BlockType::Stone);
+        for offset in NEIGHBORS {
+            let _ = hidden_world.set_block(offset, BlockType::Stone);
+        }
+
+        assert_eq!(
+            render_sync_state_at(&hidden_world, IVec3::ZERO),
+            RenderSyncState::Hidden
+        );
+    }
+
+    #[test]
+    fn sync_system_spawns_entity_for_dirty_exposed_block() {
+        let mut app = App::new();
+        app.insert_resource(VoxelWorld::default());
+        app.insert_resource(BlockEntityIndex::default());
+        app.insert_resource(RenderSyncQueue::default());
+        app.insert_resource(BlockMesh(Handle::default()));
+        app.insert_resource(test_block_materials());
+        app.add_systems(Update, sync_block_render_system);
+
+        {
+            let mut world = app.world_mut().resource_mut::<VoxelWorld>();
+            let _ = world.set_block(IVec3::ZERO, BlockType::Stone);
+        }
+        app.world_mut()
+            .resource_mut::<RenderSyncQueue>()
+            .mark(IVec3::ZERO);
+
+        app.update();
+
+        assert_eq!(app.world().resource::<BlockEntityIndex>().0.len(), 1);
+    }
+
+    #[test]
+    fn sync_system_despawns_entity_for_dirty_hidden_block() {
+        let mut app = App::new();
+        app.insert_resource(VoxelWorld::default());
+        app.insert_resource(BlockEntityIndex::default());
+        app.insert_resource(RenderSyncQueue::default());
+        app.insert_resource(BlockMesh(Handle::default()));
+        app.insert_resource(test_block_materials());
+        app.add_systems(Update, sync_block_render_system);
+
+        {
+            let mut world = app.world_mut().resource_mut::<VoxelWorld>();
+            let _ = world.set_block(IVec3::ZERO, BlockType::Stone);
+        }
+        app.world_mut()
+            .resource_mut::<RenderSyncQueue>()
+            .mark(IVec3::ZERO);
+        app.update();
+
+        {
+            let mut world = app.world_mut().resource_mut::<VoxelWorld>();
+            for offset in NEIGHBORS {
+                let _ = world.set_block(offset, BlockType::Stone);
+            }
+        }
+        app.world_mut()
+            .resource_mut::<RenderSyncQueue>()
+            .mark(IVec3::ZERO);
+        app.update();
+
+        assert!(app.world().resource::<BlockEntityIndex>().0.is_empty());
+    }
+
+    #[test]
+    fn sync_system_reveals_neighbor_after_block_removal() {
+        let mut app = App::new();
+        app.insert_resource(VoxelWorld::default());
+        app.insert_resource(BlockEntityIndex::default());
+        app.insert_resource(RenderSyncQueue::default());
+        app.insert_resource(BlockMesh(Handle::default()));
+        app.insert_resource(test_block_materials());
+        app.add_systems(Update, sync_block_render_system);
+
+        let hidden_target = IVec3::X;
+        {
+            let mut world = app.world_mut().resource_mut::<VoxelWorld>();
+            let _ = world.set_block(hidden_target, BlockType::Stone);
+            for offset in NEIGHBORS {
+                let _ = world.set_block(hidden_target + offset, BlockType::Stone);
+            }
+        }
+        app.world_mut()
+            .resource_mut::<RenderSyncQueue>()
+            .mark(hidden_target);
+        app.update();
+
+        assert!(
+            !app.world()
+                .resource::<BlockEntityIndex>()
+                .0
+                .contains_key(&hidden_target)
+        );
+
+        {
+            let mut world = app.world_mut().resource_mut::<VoxelWorld>();
+            let _ = world.remove_block(IVec3::ZERO);
+        }
+        app.world_mut()
+            .resource_mut::<RenderSyncQueue>()
+            .mark_with_neighbors(IVec3::ZERO);
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<BlockEntityIndex>()
+                .0
+                .contains_key(&hidden_target)
+        );
     }
 
     #[test]

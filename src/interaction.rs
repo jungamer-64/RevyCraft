@@ -6,7 +6,7 @@ use bevy::window::{CursorOptions, PrimaryWindow};
 use crate::cursor::cursor_is_locked;
 use crate::player::{EYE_HEIGHT, MainCamera, player_blocks_block_placement};
 use crate::raycast::raycast_voxel;
-use crate::world::{BlockMaterials, BlockMesh, BlockType, VoxelWorld, remove_block, spawn_block};
+use crate::world::{BlockMaterials, BlockType, RenderSyncQueue, VoxelWorld};
 
 #[derive(Resource, Clone, Copy)]
 pub struct SelectedBlock(pub(crate) BlockType);
@@ -67,28 +67,24 @@ pub fn block_selection_system(resources: BlockSelectionResources) {
 
 #[derive(SystemParam)]
 pub struct BlockEditResources<'w, 's> {
-    commands: Commands<'w, 's>,
     mouse_button: Res<'w, ButtonInput<MouseButton>>,
     cursor_options: Query<'w, 's, &'static CursorOptions, With<PrimaryWindow>>,
     camera_query: Query<'w, 's, &'static Transform, With<MainCamera>>,
-    block_mesh: Res<'w, BlockMesh>,
-    block_materials: Res<'w, BlockMaterials>,
     selected_block: Res<'w, SelectedBlock>,
     voxel_world: ResMut<'w, VoxelWorld>,
+    render_sync_queue: ResMut<'w, RenderSyncQueue>,
     highlight_target: ResMut<'w, HighlightTarget>,
 }
 
 impl BlockEditResources<'_, '_> {
     fn run(self) {
         let Self {
-            mut commands,
             mouse_button,
             cursor_options,
             camera_query,
-            block_mesh,
-            block_materials,
             selected_block,
             mut voxel_world,
+            mut render_sync_queue,
             mut highlight_target,
         } = self;
 
@@ -106,16 +102,13 @@ impl BlockEditResources<'_, '_> {
         let ray_direction: Vec3 = transform.forward().into();
         let foot_position = ray_origin - Vec3::Y * EYE_HEIGHT;
         let mut current_raycast = raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
-        let block_mesh = &block_mesh.0;
         let selected_block = selected_block.0;
 
         match current_edit_action(&mouse_button) {
             Some(EditAction::Remove) => {
                 current_raycast = handle_block_removal(
-                    &mut commands,
                     &mut voxel_world,
-                    block_mesh,
-                    &block_materials,
+                    &mut render_sync_queue,
                     current_raycast,
                     ray_origin,
                     ray_direction,
@@ -123,10 +116,8 @@ impl BlockEditResources<'_, '_> {
             }
             Some(EditAction::Place) => {
                 if handle_block_placement(
-                    &mut commands,
                     &mut voxel_world,
-                    block_mesh,
-                    &block_materials,
+                    &mut render_sync_queue,
                     selected_block,
                     current_raycast,
                     foot_position,
@@ -138,10 +129,8 @@ impl BlockEditResources<'_, '_> {
                 // Left+right in the same frame is treated as "replace the hit
                 // block with the selected block on the newly exposed face".
                 if let Some(next_raycast) = handle_block_removal(
-                    &mut commands,
                     &mut voxel_world,
-                    block_mesh,
-                    &block_materials,
+                    &mut render_sync_queue,
                     current_raycast,
                     ray_origin,
                     ray_direction,
@@ -149,10 +138,8 @@ impl BlockEditResources<'_, '_> {
                     current_raycast = Some(next_raycast);
 
                     if handle_block_placement(
-                        &mut commands,
                         &mut voxel_world,
-                        block_mesh,
-                        &block_materials,
+                        &mut render_sync_queue,
                         selected_block,
                         current_raycast,
                         foot_position,
@@ -224,22 +211,15 @@ fn current_edit_action(mouse_button: &ButtonInput<MouseButton>) -> Option<EditAc
 }
 
 fn handle_block_removal(
-    commands: &mut Commands,
     voxel_world: &mut VoxelWorld,
-    block_mesh: &Handle<Mesh>,
-    block_materials: &BlockMaterials,
+    render_sync_queue: &mut RenderSyncQueue,
     current_raycast: Option<(IVec3, IVec3)>,
     ray_origin: Vec3,
     ray_direction: Vec3,
 ) -> Option<(IVec3, IVec3)> {
     if let Some((hit_block, _)) = current_raycast {
-        remove_block(
-            commands,
-            voxel_world,
-            &hit_block,
-            block_mesh,
-            block_materials,
-        );
+        let _ = voxel_world.remove_block(hit_block);
+        render_sync_queue.mark_with_neighbors(hit_block);
 
         raycast_voxel(voxel_world, ray_origin, ray_direction, 8.0)
     } else {
@@ -248,10 +228,8 @@ fn handle_block_removal(
 }
 
 fn handle_block_placement(
-    commands: &mut Commands,
     voxel_world: &mut VoxelWorld,
-    block_mesh: &Handle<Mesh>,
-    block_materials: &BlockMaterials,
+    render_sync_queue: &mut RenderSyncQueue,
     selected_block: BlockType,
     current_raycast: Option<(IVec3, IVec3)>,
     foot_position: Vec3,
@@ -265,14 +243,11 @@ fn handle_block_placement(
         return false;
     }
 
-    spawn_block(
-        commands,
-        voxel_world,
-        block_mesh,
-        block_materials,
-        place_pos,
-        selected_block,
-    );
+    if !voxel_world.set_block(place_pos, selected_block) {
+        return false;
+    }
+
+    render_sync_queue.mark_with_neighbors(place_pos);
 
     true
 }

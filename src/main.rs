@@ -16,8 +16,9 @@ use player::{
     camera_look_system, camera_movement_system, lock_cursor, spawn_camera, toggle_cursor_grab,
 };
 use world::{
-    BlockMesh, TerrainSettings, VoxelWorld, build_terrain, create_block_materials,
-    create_cube_mesh, spawn_directional_light,
+    BlockEntityIndex, BlockMesh, RenderSyncQueue, TerrainSettings, VoxelWorld,
+    create_block_materials, create_cube_mesh, populate_terrain, spawn_directional_light,
+    sync_block_render_system,
 };
 
 fn main() {
@@ -31,6 +32,8 @@ fn main() {
             ..default()
         }))
         .insert_resource(VoxelWorld::default())
+        .insert_resource(BlockEntityIndex::default())
+        .insert_resource(RenderSyncQueue::default())
         .insert_resource(HighlightTarget::default())
         .init_resource::<SelectedBlock>()
         .insert_resource(TerrainSettings::from_env())
@@ -41,6 +44,7 @@ fn main() {
                 camera_movement_system,
                 camera_look_system,
                 block_edit_system,
+                sync_block_render_system,
                 block_selection_system,
                 highlight_system,
                 toggle_cursor_grab,
@@ -56,6 +60,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut voxel_world: ResMut<VoxelWorld>,
+    mut render_sync_queue: ResMut<RenderSyncQueue>,
     terrain_settings: Res<TerrainSettings>,
 ) {
     lock_cursor(&mut cursor);
@@ -67,13 +72,8 @@ fn setup(
     let cube_mesh = create_cube_mesh(&mut meshes);
     commands.insert_resource(BlockMesh(cube_mesh.clone()));
 
-    build_terrain(
-        &mut commands,
-        &mut voxel_world,
-        &cube_mesh,
-        &block_materials,
-        terrain_settings,
-    );
+    populate_terrain(&mut voxel_world, terrain_settings);
+    render_sync_queue.mark_all_blocks(&voxel_world);
     spawn_directional_light(&mut commands);
     spawn_camera(&mut commands);
     spawn_block_highlighter(&mut commands, &block_materials, &cube_mesh);
