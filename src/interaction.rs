@@ -312,9 +312,10 @@ mod tests {
     use bevy::transform::TransformPlugin;
     use bevy::window::CursorGrabMode;
 
+    use crate::world::render::RenderOriginRoot;
     use crate::world::{
-        BlockEntityIndex, BlockMesh, RenderOriginRoot, RenderOriginRootEntity,
-        sync_block_render_system, sync_render_origin_root_system,
+        BlockEntityIndex, BlockMesh, RenderOriginRootEntity, sync_block_render_system,
+        sync_render_origin_root_system,
     };
 
     fn test_block_materials() -> BlockMaterials {
