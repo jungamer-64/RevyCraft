@@ -229,7 +229,7 @@ impl Default for TerrainSettings {
 
 impl TerrainSettings {
     pub fn from_env() -> Self {
-        match std::env::var("BEBY_TERRAIN_PRESET")
+        match std::env::var("BEVY_TERRAIN_PRESET")
             .ok()
             .as_deref()
             .map(str::trim)

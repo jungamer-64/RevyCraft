@@ -35,13 +35,13 @@ The startup terrain comes from `TerrainSettings::from_env()`. By default it uses
 To try a different preset for one run:
 
 ```bash
-BEBY_TERRAIN_PRESET=plains cargo run
+BEVY_TERRAIN_PRESET=plains cargo run
 ```
 
 or:
 
 ```bash
-BEBY_TERRAIN_PRESET=rugged cargo run
+BEVY_TERRAIN_PRESET=rugged cargo run
 ```
 
 Available presets:

@@ -24,6 +24,12 @@ const MOVEMENT_COLLISION_SAMPLE_Y: [f32; 3] =
 const MAX_Y_STEP: f32 = 0.4;
 const MAX_Y_SUBSTEPS: i32 = 20;
 
+#[derive(Clone, Copy)]
+enum CollisionBoundary {
+    Exclusive,
+    Inclusive,
+}
+
 #[derive(Component)]
 pub struct MainCamera;
 
@@ -137,14 +143,24 @@ pub fn camera_look_system(resources: CameraLookResources) {
 }
 
 pub fn player_collides_voxel(foot_position: Vec3, voxel: IVec3) -> bool {
-    player_overlaps_voxel_with_samples(foot_position, voxel, &MOVEMENT_COLLISION_SAMPLE_Y)
+    player_overlaps_voxel_with_samples(
+        foot_position,
+        voxel,
+        &MOVEMENT_COLLISION_SAMPLE_Y,
+        CollisionBoundary::Exclusive,
+    )
 }
 
 pub fn player_blocks_block_placement(foot_position: Vec3, voxel: IVec3) -> bool {
-    // Placement currently reuses the same capsule samples as movement so the
-    // "can place here" check matches the actual occupied player volume. This
-    // wrapper keeps placement semantics separate if we want to diverge later.
+    // Placement uses the same occupied volume as movement, but treats exact
+    // tangential contact as blocked so block placement stays conservative.
     player_collides_voxel(foot_position, voxel)
+        || player_overlaps_voxel_with_samples(
+            foot_position,
+            voxel,
+            &MOVEMENT_COLLISION_SAMPLE_Y,
+            CollisionBoundary::Inclusive,
+        )
 }
 
 #[derive(SystemParam)]
@@ -331,7 +347,7 @@ fn resolve_vertical_movement(
 }
 
 fn collides(world: &VoxelWorld, position: Vec3) -> bool {
-    let samples = [
+    let sample_points = [
         position + Vec3::Y * MOVEMENT_COLLISION_SAMPLE_Y[0],
         position + Vec3::Y * MOVEMENT_COLLISION_SAMPLE_Y[1],
         position + Vec3::Y * MOVEMENT_COLLISION_SAMPLE_Y[2],
@@ -352,13 +368,12 @@ fn collides(world: &VoxelWorld, position: Vec3) -> bool {
                     continue;
                 }
 
-                let block_min = block_coord.as_vec3();
-                let block_max = block_min + Vec3::ONE;
-
-                for sample in samples {
-                    if sphere_aabb_collides(sample, PLAYER_RADIUS, block_min, block_max) {
-                        return true;
-                    }
+                if sample_points_overlap_voxel(
+                    &sample_points,
+                    block_coord,
+                    CollisionBoundary::Exclusive,
+                ) {
+                    return true;
                 }
             }
         }
@@ -367,7 +382,13 @@ fn collides(world: &VoxelWorld, position: Vec3) -> bool {
     false
 }
 
-fn sphere_aabb_collides(center: Vec3, radius: f32, aabb_min: Vec3, aabb_max: Vec3) -> bool {
+fn sphere_aabb_collides(
+    center: Vec3,
+    radius: f32,
+    aabb_min: Vec3,
+    aabb_max: Vec3,
+    boundary: CollisionBoundary,
+) -> bool {
     let mut sq_dist = 0.0;
 
     for i in 0..3 {
@@ -382,20 +403,32 @@ fn sphere_aabb_collides(center: Vec3, radius: f32, aabb_min: Vec3, aabb_max: Vec
         }
     }
 
-    sq_dist < radius * radius
+    match boundary {
+        CollisionBoundary::Exclusive => sq_dist < radius * radius,
+        CollisionBoundary::Inclusive => sq_dist <= radius * radius,
+    }
 }
 
 fn player_overlaps_voxel_with_samples(
     foot_position: Vec3,
     voxel: IVec3,
-    sample_offsets_y: &[f32],
+    sample_offsets_y: &[f32; 3],
+    boundary: CollisionBoundary,
+) -> bool {
+    let sample_points = sample_offsets_y.map(|sample_y| foot_position + Vec3::Y * sample_y);
+    sample_points_overlap_voxel(&sample_points, voxel, boundary)
+}
+
+fn sample_points_overlap_voxel(
+    sample_points: &[Vec3],
+    voxel: IVec3,
+    boundary: CollisionBoundary,
 ) -> bool {
     let block_min = voxel.as_vec3();
     let block_max = block_min + Vec3::ONE;
 
-    for &sample_y in sample_offsets_y {
-        let sample_center = foot_position + Vec3::Y * sample_y;
-        if sphere_aabb_collides(sample_center, PLAYER_RADIUS, block_min, block_max) {
+    for &sample_point in sample_points {
+        if sphere_aabb_collides(sample_point, PLAYER_RADIUS, block_min, block_max, boundary) {
             return true;
         }
     }
@@ -425,6 +458,28 @@ mod tests {
         assert!(player_blocks_block_placement(
             Vec3::new(0.2, 0.0, 0.2),
             IVec3::ZERO
+        ));
+    }
+
+    #[test]
+    fn placement_blocks_exact_tangential_contact() {
+        let center = Vec3::new(2.0, 0.5, 0.5);
+        let aabb_min = Vec3::ZERO;
+        let aabb_max = Vec3::ONE;
+
+        assert!(!sphere_aabb_collides(
+            center,
+            1.0,
+            aabb_min,
+            aabb_max,
+            CollisionBoundary::Exclusive,
+        ));
+        assert!(sphere_aabb_collides(
+            center,
+            1.0,
+            aabb_min,
+            aabb_max,
+            CollisionBoundary::Inclusive,
         ));
     }
 }

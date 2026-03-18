@@ -137,7 +137,7 @@ impl BlockEditResources<'_, '_> {
             Some(EditAction::RemoveThenPlace) => {
                 // Left+right in the same frame is treated as "replace the hit
                 // block with the selected block on the newly exposed face".
-                current_raycast = handle_block_removal(
+                if let Some(next_raycast) = handle_block_removal(
                     &mut commands,
                     &mut voxel_world,
                     block_mesh,
@@ -145,18 +145,23 @@ impl BlockEditResources<'_, '_> {
                     current_raycast,
                     ray_origin,
                     ray_direction,
-                );
-
-                if handle_block_placement(
-                    &mut commands,
-                    &mut voxel_world,
-                    block_mesh,
-                    &block_materials,
-                    selected_block,
-                    current_raycast,
-                    foot_position,
                 ) {
-                    current_raycast = raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
+                    current_raycast = Some(next_raycast);
+
+                    if handle_block_placement(
+                        &mut commands,
+                        &mut voxel_world,
+                        block_mesh,
+                        &block_materials,
+                        selected_block,
+                        current_raycast,
+                        foot_position,
+                    ) {
+                        current_raycast =
+                            raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
+                    }
+                } else {
+                    current_raycast = None;
                 }
             }
             None => {}
