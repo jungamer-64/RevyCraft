@@ -14,27 +14,28 @@ pub const EYE_HEIGHT: f32 = 1.62;
 pub const INITIAL_CAMERA_EYE_POSITION: Vec3 = Vec3::new(0.0, 36.0, 0.0);
 
 const PLAYER_HEIGHT: f32 = 1.8;
-const PLAYER_RADIUS: f32 = 0.3;
+const PLAYER_HALF_WIDTH: f32 = 0.3;
 
 const GRAVITY: f32 = 9.81;
 const JUMP_SPEED: f32 = 5.0;
 const MOVE_SPEED: f32 = 10.0;
 const TERMINAL_VELOCITY: f32 = -50.0;
 
-const MOVEMENT_COLLISION_SAMPLE_Y: [f32; 3] = [
-    PLAYER_RADIUS,
-    PLAYER_HEIGHT * 0.5,
-    PLAYER_HEIGHT - PLAYER_RADIUS,
-];
 const MAX_AXIS_STEP: f32 = 0.4;
 const MAX_AXIS_SUBSTEPS: i32 = 32;
 const AXIS_SWEEP_REFINEMENT_STEPS: i32 = 10;
-const SUPPORT_CHECK_EPSILON: f32 = 0.002;
+const SUPPORT_CHECK_DISTANCE: f32 = 0.002;
 
 #[derive(Clone, Copy)]
 enum CollisionBoundary {
     Exclusive,
     Inclusive,
+}
+
+#[derive(Clone, Copy)]
+struct Aabb {
+    min: Vec3,
+    max: Vec3,
 }
 
 #[derive(Component)]
@@ -153,10 +154,9 @@ pub fn camera_look_system(resources: CameraLookResources) {
 
 #[cfg(test)]
 pub fn player_collides_voxel(foot_position: Vec3, voxel: IVec3) -> bool {
-    player_overlaps_voxel_with_samples(
-        foot_position,
-        voxel,
-        &MOVEMENT_COLLISION_SAMPLE_Y,
+    aabbs_overlap(
+        player_aabb(foot_position),
+        voxel_aabb(voxel),
         CollisionBoundary::Exclusive,
     )
 }
@@ -164,10 +164,9 @@ pub fn player_collides_voxel(foot_position: Vec3, voxel: IVec3) -> bool {
 pub fn player_blocks_block_placement(foot_position: Vec3, voxel: IVec3) -> bool {
     // Placement uses the same occupied volume as movement, but treats exact
     // tangential contact as blocked so block placement stays conservative.
-    player_overlaps_voxel_with_samples(
-        foot_position,
-        voxel,
-        &MOVEMENT_COLLISION_SAMPLE_Y,
+    aabbs_overlap(
+        player_aabb(foot_position),
+        voxel_aabb(voxel),
         CollisionBoundary::Inclusive,
     )
 }
@@ -400,28 +399,34 @@ fn move_to_axis_contact(
 }
 
 fn has_support_below(world: &VoxelWorld, foot_position: Vec3) -> bool {
-    let support_center = foot_position + Vec3::Y * (PLAYER_RADIUS - SUPPORT_CHECK_EPSILON);
-    sphere_collides_world(
-        world,
-        support_center,
-        PLAYER_RADIUS,
-        CollisionBoundary::Exclusive,
-    )
+    let mut support_aabb = player_aabb(foot_position);
+    support_aabb.min.y -= SUPPORT_CHECK_DISTANCE;
+    support_aabb.max.y -= SUPPORT_CHECK_DISTANCE;
+    aabb_collides_world(world, support_aabb, CollisionBoundary::Exclusive)
 }
 
 fn collides(world: &VoxelWorld, position: Vec3) -> bool {
-    let sample_points = [
-        position + Vec3::Y * MOVEMENT_COLLISION_SAMPLE_Y[0],
-        position + Vec3::Y * MOVEMENT_COLLISION_SAMPLE_Y[1],
-        position + Vec3::Y * MOVEMENT_COLLISION_SAMPLE_Y[2],
-    ];
+    aabb_collides_world(world, player_aabb(position), CollisionBoundary::Exclusive)
+}
 
-    let min = (position + Vec3::new(-PLAYER_RADIUS, 0.0, -PLAYER_RADIUS))
-        .floor()
-        .as_ivec3();
-    let max = (position + Vec3::new(PLAYER_RADIUS, PLAYER_HEIGHT, PLAYER_RADIUS))
-        .floor()
-        .as_ivec3();
+fn player_aabb(foot_position: Vec3) -> Aabb {
+    Aabb {
+        min: foot_position + Vec3::new(-PLAYER_HALF_WIDTH, 0.0, -PLAYER_HALF_WIDTH),
+        max: foot_position + Vec3::new(PLAYER_HALF_WIDTH, PLAYER_HEIGHT, PLAYER_HALF_WIDTH),
+    }
+}
+
+fn voxel_aabb(voxel: IVec3) -> Aabb {
+    let min = voxel.as_vec3();
+    Aabb {
+        min,
+        max: min + Vec3::ONE,
+    }
+}
+
+fn aabb_collides_world(world: &VoxelWorld, aabb: Aabb, boundary: CollisionBoundary) -> bool {
+    let min = aabb.min.floor().as_ivec3();
+    let max = aabb.max.floor().as_ivec3();
 
     for x in min.x..=max.x {
         for y in min.y..=max.y {
@@ -431,11 +436,7 @@ fn collides(world: &VoxelWorld, position: Vec3) -> bool {
                     continue;
                 }
 
-                if sample_points_overlap_voxel(
-                    &sample_points,
-                    block_coord,
-                    CollisionBoundary::Exclusive,
-                ) {
+                if aabbs_overlap(aabb, voxel_aabb(block_coord), boundary) {
                     return true;
                 }
             }
@@ -445,87 +446,25 @@ fn collides(world: &VoxelWorld, position: Vec3) -> bool {
     false
 }
 
-fn sphere_collides_world(
-    world: &VoxelWorld,
-    center: Vec3,
-    radius: f32,
-    boundary: CollisionBoundary,
-) -> bool {
-    let min = (center - Vec3::splat(radius)).floor().as_ivec3();
-    let max = (center + Vec3::splat(radius)).floor().as_ivec3();
-
-    for x in min.x..=max.x {
-        for y in min.y..=max.y {
-            for z in min.z..=max.z {
-                let block_coord = IVec3::new(x, y, z);
-                if !world.contains_block(block_coord) {
-                    continue;
-                }
-
-                let block_min = block_coord.as_vec3();
-                let block_max = block_min + Vec3::ONE;
-                if sphere_aabb_collides(center, radius, block_min, block_max, boundary) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    false
-}
-
-fn sphere_aabb_collides(
-    center: Vec3,
-    radius: f32,
-    aabb_min: Vec3,
-    aabb_max: Vec3,
-    boundary: CollisionBoundary,
-) -> bool {
-    let mut sq_dist = 0.0;
-
-    for i in 0..3 {
-        let c = center[i];
-        let min = aabb_min[i];
-        let max = aabb_max[i];
-
-        if c < min {
-            sq_dist += (min - c) * (min - c);
-        } else if c > max {
-            sq_dist += (c - max) * (c - max);
-        }
-    }
-
+fn aabbs_overlap(lhs: Aabb, rhs: Aabb, boundary: CollisionBoundary) -> bool {
     match boundary {
-        CollisionBoundary::Exclusive => sq_dist < radius * radius,
-        CollisionBoundary::Inclusive => sq_dist <= radius * radius,
-    }
-}
-
-fn player_overlaps_voxel_with_samples(
-    foot_position: Vec3,
-    voxel: IVec3,
-    sample_offsets_y: &[f32; 3],
-    boundary: CollisionBoundary,
-) -> bool {
-    let sample_points = sample_offsets_y.map(|sample_y| foot_position + Vec3::Y * sample_y);
-    sample_points_overlap_voxel(&sample_points, voxel, boundary)
-}
-
-fn sample_points_overlap_voxel(
-    sample_points: &[Vec3],
-    voxel: IVec3,
-    boundary: CollisionBoundary,
-) -> bool {
-    let block_min = voxel.as_vec3();
-    let block_max = block_min + Vec3::ONE;
-
-    for &sample_point in sample_points {
-        if sphere_aabb_collides(sample_point, PLAYER_RADIUS, block_min, block_max, boundary) {
-            return true;
+        CollisionBoundary::Exclusive => {
+            lhs.min.x < rhs.max.x
+                && lhs.max.x > rhs.min.x
+                && lhs.min.y < rhs.max.y
+                && lhs.max.y > rhs.min.y
+                && lhs.min.z < rhs.max.z
+                && lhs.max.z > rhs.min.z
+        }
+        CollisionBoundary::Inclusive => {
+            lhs.min.x <= rhs.max.x
+                && lhs.max.x >= rhs.min.x
+                && lhs.min.y <= rhs.max.y
+                && lhs.max.y >= rhs.min.y
+                && lhs.min.z <= rhs.max.z
+                && lhs.max.z >= rhs.min.z
         }
     }
-
-    false
 }
 
 #[cfg(test)]
@@ -534,7 +473,7 @@ mod tests {
     use crate::world::{BlockType, VoxelWorld, WorldLayout};
 
     #[test]
-    fn player_collides_when_capsule_overlaps_voxel() {
+    fn player_collides_when_aabb_overlaps_voxel() {
         assert!(player_collides_voxel(Vec3::new(0.2, 0.0, 0.2), IVec3::ZERO));
     }
 
@@ -547,6 +486,14 @@ mod tests {
     }
 
     #[test]
+    fn player_collides_on_diagonal_corner_overlap_like_minecraft() {
+        assert!(player_collides_voxel(
+            Vec3::new(1.29, 0.0, 1.29),
+            IVec3::ZERO,
+        ));
+    }
+
+    #[test]
     fn placement_collision_matches_player_volume() {
         assert!(player_blocks_block_placement(
             Vec3::new(0.2, 0.0, 0.2),
@@ -555,23 +502,20 @@ mod tests {
     }
 
     #[test]
-    fn placement_blocks_exact_tangential_contact() {
-        let center = Vec3::new(2.0, 0.5, 0.5);
-        let aabb_min = Vec3::ZERO;
-        let aabb_max = Vec3::ONE;
+    fn aabb_overlap_uses_exclusive_movement_and_inclusive_placement_boundaries() {
+        let player_box = Aabb {
+            min: Vec3::new(1.0, 0.0, 0.2),
+            max: Vec3::new(1.6, PLAYER_HEIGHT, 0.8),
+        };
 
-        assert!(!sphere_aabb_collides(
-            center,
-            1.0,
-            aabb_min,
-            aabb_max,
+        assert!(!aabbs_overlap(
+            player_box,
+            voxel_aabb(IVec3::ZERO),
             CollisionBoundary::Exclusive,
         ));
-        assert!(sphere_aabb_collides(
-            center,
-            1.0,
-            aabb_min,
-            aabb_max,
+        assert!(aabbs_overlap(
+            player_box,
+            voxel_aabb(IVec3::ZERO),
             CollisionBoundary::Inclusive,
         ));
     }
