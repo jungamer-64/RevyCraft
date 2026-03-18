@@ -8,9 +8,10 @@ mod save;
 #[path = "world/tests.rs"]
 mod tests;
 
-use bevy::math::DVec3;
+use bevy::math::{DVec3, I64Vec3};
 use bevy::prelude::*;
 use std::collections::HashMap;
+use std::ops::{Add, AddAssign, Sub};
 use std::path::{Path, PathBuf};
 
 pub use self::generation::{
@@ -23,18 +24,18 @@ pub use self::render::{
     sync_render_anchor_system, sync_render_origin_root_system,
 };
 
-const NEIGHBORS: [IVec3; 6] = [
-    IVec3::new(1, 0, 0),
-    IVec3::new(-1, 0, 0),
-    IVec3::new(0, 1, 0),
-    IVec3::new(0, -1, 0),
-    IVec3::new(0, 0, 1),
-    IVec3::new(0, 0, -1),
+const NEIGHBORS: [(i64, i64, i64); 6] = [
+    (1, 0, 0),
+    (-1, 0, 0),
+    (0, 1, 0),
+    (0, -1, 0),
+    (0, 0, 1),
+    (0, 0, -1),
 ];
 
-const DEFAULT_CHUNK_SIZE: i32 = 16;
-const DEFAULT_VERTICAL_MIN: i32 = -24;
-const DEFAULT_VERTICAL_MAX: i32 = 96;
+const DEFAULT_CHUNK_SIZE: i64 = 16;
+const DEFAULT_VERTICAL_MIN: i64 = -24;
+const DEFAULT_VERTICAL_MAX: i64 = 96;
 const DEFAULT_VIEW_RADIUS: i32 = 2;
 const DEFAULT_UNLOAD_RADIUS: i32 = 3;
 const DEFAULT_WORLD_SEED: u64 = 0x5EED_CAFE_1234_5678;
@@ -59,66 +60,145 @@ impl BlockData {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WorldBlockCoord(I64Vec3);
+
+impl WorldBlockCoord {
+    pub(crate) const fn new(x: i64, y: i64, z: i64) -> Self {
+        Self(I64Vec3::new(x, y, z))
+    }
+
+    pub(crate) fn checked_from_world_position(position: DVec3) -> Option<Self> {
+        let floored = position.floor();
+        if !component_fits_i64(floored.x)
+            || !component_fits_i64(floored.y)
+            || !component_fits_i64(floored.z)
+        {
+            return None;
+        }
+
+        Some(Self(floored.as_i64vec3()))
+    }
+
+    pub(crate) const fn x(self) -> i64 {
+        self.0.x
+    }
+
+    pub(crate) const fn y(self) -> i64 {
+        self.0.y
+    }
+
+    pub(crate) const fn z(self) -> i64 {
+        self.0.z
+    }
+
+    pub(crate) fn as_dvec3(self) -> DVec3 {
+        self.0.as_dvec3()
+    }
+}
+
+impl Add<I64Vec3> for WorldBlockCoord {
+    type Output = Self;
+
+    fn add(self, rhs: I64Vec3) -> Self::Output {
+        Self(self.0 + rhs)
+    }
+}
+
+impl AddAssign<I64Vec3> for WorldBlockCoord {
+    fn add_assign(&mut self, rhs: I64Vec3) {
+        self.0 += rhs;
+    }
+}
+
+impl Sub<I64Vec3> for WorldBlockCoord {
+    type Output = Self;
+
+    fn sub(self, rhs: I64Vec3) -> Self::Output {
+        Self(self.0 - rhs)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalBlockCoord(I64Vec3);
+
+impl LocalBlockCoord {
+    pub(crate) const fn new(x: i64, y: i64, z: i64) -> Self {
+        Self(I64Vec3::new(x, y, z))
+    }
+
+    pub(crate) const fn x(self) -> i64 {
+        self.0.x
+    }
+
+    pub(crate) const fn y(self) -> i64 {
+        self.0.y
+    }
+
+    pub(crate) const fn z(self) -> i64 {
+        self.0.z
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChunkCoord {
-    pub(crate) x: i32,
-    pub(crate) z: i32,
+    pub(crate) x: i64,
+    pub(crate) z: i64,
 }
 
 impl ChunkCoord {
-    pub(crate) const fn new(x: i32, z: i32) -> Self {
+    pub(crate) const fn new(x: i64, z: i64) -> Self {
         Self { x, z }
     }
 
-    pub(crate) const fn from_world_block(coordinate: IVec3, layout: WorldLayout) -> Self {
+    pub(crate) const fn from_world_block(coordinate: WorldBlockCoord, layout: WorldLayout) -> Self {
         Self {
-            x: coordinate.x.div_euclid(layout.chunk_size),
-            z: coordinate.z.div_euclid(layout.chunk_size),
+            x: coordinate.x().div_euclid(layout.chunk_size),
+            z: coordinate.z().div_euclid(layout.chunk_size),
         }
     }
 
-    pub(crate) fn from_world_position(position: DVec3, layout: WorldLayout) -> Self {
-        Self::from_world_block(world_block_from_position(position), layout)
+    pub(crate) fn from_world_position(position: DVec3, layout: WorldLayout) -> Option<Self> {
+        Some(Self::from_world_block(
+            world_block_from_position(position)?,
+            layout,
+        ))
     }
 
-    pub(crate) fn chebyshev_distance(self, other: Self) -> i32 {
+    pub(crate) fn chebyshev_distance(self, other: Self) -> i64 {
         (self.x - other.x).abs().max((self.z - other.z).abs())
     }
 
     pub(crate) fn world_origin(self, layout: WorldLayout) -> DVec3 {
         DVec3::new(
-            f64::from(self.x) * f64::from(layout.chunk_size),
+            i64_to_f64(self.x) * i64_to_f64(layout.chunk_size),
             0.0,
-            f64::from(self.z) * f64::from(layout.chunk_size),
+            i64_to_f64(self.z) * i64_to_f64(layout.chunk_size),
         )
     }
 }
 
 #[inline]
-pub fn world_block_from_position(position: DVec3) -> IVec3 {
-    position.floor().as_ivec3()
+pub fn world_block_from_position(position: DVec3) -> Option<WorldBlockCoord> {
+    WorldBlockCoord::checked_from_world_position(position)
 }
 
 #[inline]
-pub fn block_world_origin(coordinate: IVec3) -> DVec3 {
-    DVec3::new(
-        f64::from(coordinate.x),
-        f64::from(coordinate.y),
-        f64::from(coordinate.z),
-    )
+pub fn block_world_origin(coordinate: WorldBlockCoord) -> DVec3 {
+    coordinate.as_dvec3()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkSaveVersion;
 
 impl ChunkSaveVersion {
-    pub(crate) const CURRENT: u32 = 1;
+    pub(crate) const CURRENT: u32 = 2;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorldLayout {
-    chunk_size: i32,
-    vertical_min: i32,
-    vertical_max: i32,
+    chunk_size: i64,
+    vertical_min: i64,
+    vertical_max: i64,
 }
 
 impl Default for WorldLayout {
@@ -132,7 +212,7 @@ impl Default for WorldLayout {
 }
 
 impl WorldLayout {
-    pub(crate) const fn new(chunk_size: i32, vertical_min: i32, vertical_max: i32) -> Self {
+    pub(crate) const fn new(chunk_size: i64, vertical_min: i64, vertical_max: i64) -> Self {
         Self {
             chunk_size,
             vertical_min,
@@ -140,48 +220,55 @@ impl WorldLayout {
         }
     }
 
-    pub(crate) const fn chunk_size(self) -> i32 {
+    pub(crate) const fn chunk_size(self) -> i64 {
         self.chunk_size
     }
 
-    pub(crate) const fn vertical_min(self) -> i32 {
+    pub(crate) const fn vertical_min(self) -> i64 {
         self.vertical_min
     }
 
-    pub(crate) const fn vertical_max(self) -> i32 {
+    pub(crate) const fn vertical_max(self) -> i64 {
         self.vertical_max
     }
 
     #[cfg(test)]
-    pub(crate) const fn vertical_span(self) -> i32 {
+    pub(crate) const fn vertical_span(self) -> i64 {
         self.vertical_max - self.vertical_min + 1
     }
 
-    const fn contains_y(self, y: i32) -> bool {
+    const fn contains_y(self, y: i64) -> bool {
         y >= self.vertical_min && y <= self.vertical_max
     }
 
-    pub(crate) const fn local_from_world(self, coordinate: IVec3) -> Option<(ChunkCoord, IVec3)> {
-        if !self.contains_y(coordinate.y) {
+    pub(crate) const fn local_from_world(
+        self,
+        coordinate: WorldBlockCoord,
+    ) -> Option<(ChunkCoord, LocalBlockCoord)> {
+        if !self.contains_y(coordinate.y()) {
             return None;
         }
 
         let chunk_coord = ChunkCoord::from_world_block(coordinate, self);
         Some((
             chunk_coord,
-            IVec3::new(
-                coordinate.x.rem_euclid(self.chunk_size),
-                coordinate.y - self.vertical_min,
-                coordinate.z.rem_euclid(self.chunk_size),
+            LocalBlockCoord::new(
+                coordinate.x().rem_euclid(self.chunk_size),
+                coordinate.y() - self.vertical_min,
+                coordinate.z().rem_euclid(self.chunk_size),
             ),
         ))
     }
 
-    pub(crate) const fn world_from_local(self, chunk_coord: ChunkCoord, local: IVec3) -> IVec3 {
-        IVec3::new(
-            chunk_coord.x * self.chunk_size + local.x,
-            self.vertical_min + local.y,
-            chunk_coord.z * self.chunk_size + local.z,
+    pub(crate) const fn world_from_local(
+        self,
+        chunk_coord: ChunkCoord,
+        local: LocalBlockCoord,
+    ) -> WorldBlockCoord {
+        WorldBlockCoord::new(
+            chunk_coord.x * self.chunk_size + local.x(),
+            self.vertical_min + local.y(),
+            chunk_coord.z * self.chunk_size + local.z(),
         )
     }
 }
@@ -273,7 +360,7 @@ pub struct TerrainSettings {
     pub(crate) cave_frequency: f64,
     pub(crate) cave_vertical_frequency: f64,
     pub(crate) cave_threshold: f64,
-    pub(crate) cave_surface_buffer: i32,
+    pub(crate) cave_surface_buffer: i64,
     pub(crate) base_height: f64,
     pub(crate) continental_height_scale: f64,
     pub(crate) erosion_height_scale: f64,
@@ -355,7 +442,7 @@ impl TerrainSettings {
         }
     }
 
-    const fn subsurface_depth(biome: Biome) -> i32 {
+    const fn subsurface_depth(biome: Biome) -> i64 {
         match biome {
             Biome::Plains => 3,
             Biome::Hills => 4,
@@ -363,7 +450,7 @@ impl TerrainSettings {
         }
     }
 
-    const fn block_type_at_height(biome: Biome, y: i32, surface_height: i32) -> BlockType {
+    const fn block_type_at_height(biome: Biome, y: i64, surface_height: i64) -> BlockType {
         if y == surface_height {
             match biome {
                 Biome::DryStone => BlockType::Stone,
@@ -382,14 +469,14 @@ impl TerrainSettings {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChunkData {
-    pub(crate) blocks: HashMap<IVec3, BlockData>,
+    pub(crate) blocks: HashMap<LocalBlockCoord, BlockData>,
     pub(crate) dirty: bool,
     pub(crate) modified: bool,
     pub(crate) generated_from_seed: bool,
 }
 
 impl ChunkData {
-    pub(crate) const fn generated(blocks: HashMap<IVec3, BlockData>) -> Self {
+    pub(crate) const fn generated(blocks: HashMap<LocalBlockCoord, BlockData>) -> Self {
         Self {
             blocks,
             dirty: true,
@@ -399,7 +486,7 @@ impl ChunkData {
     }
 
     pub(crate) const fn loaded(
-        blocks: HashMap<IVec3, BlockData>,
+        blocks: HashMap<LocalBlockCoord, BlockData>,
         generated_from_seed: bool,
     ) -> Self {
         Self {
@@ -435,11 +522,11 @@ impl VoxelWorld {
         self.layout
     }
 
-    pub(crate) fn contains_block(&self, coordinate: IVec3) -> bool {
+    pub(crate) fn contains_block(&self, coordinate: WorldBlockCoord) -> bool {
         self.block_kind(coordinate).is_some()
     }
 
-    pub(crate) fn block_kind(&self, coordinate: IVec3) -> Option<BlockType> {
+    pub(crate) fn block_kind(&self, coordinate: WorldBlockCoord) -> Option<BlockType> {
         let (chunk_coord, local_coord) = self.layout.local_from_world(coordinate)?;
         self.chunks
             .get(&chunk_coord)
@@ -447,7 +534,11 @@ impl VoxelWorld {
             .map(|block_data| block_data.kind)
     }
 
-    pub(crate) fn try_insert_block(&mut self, coordinate: IVec3, block_type: BlockType) -> bool {
+    pub(crate) fn try_insert_block(
+        &mut self,
+        coordinate: WorldBlockCoord,
+        block_type: BlockType,
+    ) -> bool {
         let Some((chunk_coord, local_coord)) = self.layout.local_from_world(coordinate) else {
             return false;
         };
@@ -465,7 +556,7 @@ impl VoxelWorld {
         true
     }
 
-    pub(crate) fn remove_block(&mut self, coordinate: IVec3) -> Option<BlockData> {
+    pub(crate) fn remove_block(&mut self, coordinate: WorldBlockCoord) -> Option<BlockData> {
         let (chunk_coord, local_coord) = self.layout.local_from_world(coordinate)?;
         let chunk_data = self.chunks.get_mut(&chunk_coord)?;
         let removed = chunk_data.blocks.remove(&local_coord)?;
@@ -474,11 +565,11 @@ impl VoxelWorld {
         Some(removed)
     }
 
-    pub(crate) fn is_exposed(&self, coordinate: IVec3) -> bool {
+    pub(crate) fn is_exposed(&self, coordinate: WorldBlockCoord) -> bool {
         self.contains_block(coordinate)
             && NEIGHBORS
                 .iter()
-                .any(|offset| !self.contains_block(coordinate + *offset))
+                .any(|&(x, y, z)| !self.contains_block(coordinate + I64Vec3::new(x, y, z)))
     }
 
     pub(crate) fn has_loaded_chunk(&self, chunk_coord: ChunkCoord) -> bool {
@@ -502,7 +593,11 @@ impl VoxelWorld {
         self.chunks.keys().copied()
     }
 
-    pub(crate) const fn world_from_local(&self, chunk_coord: ChunkCoord, local: IVec3) -> IVec3 {
+    pub(crate) const fn world_from_local(
+        &self,
+        chunk_coord: ChunkCoord,
+        local: LocalBlockCoord,
+    ) -> WorldBlockCoord {
         self.layout.world_from_local(chunk_coord, local)
     }
 
@@ -519,4 +614,14 @@ impl VoxelWorld {
             }
         }
     }
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn component_fits_i64(value: f64) -> bool {
+    value.is_finite() && value >= i64::MIN as f64 && value <= i64::MAX as f64
+}
+
+#[allow(clippy::cast_precision_loss)]
+const fn i64_to_f64(value: i64) -> f64 {
+    value as f64
 }

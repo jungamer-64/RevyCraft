@@ -1,6 +1,6 @@
 use bevy::ecs::system::SystemParam;
 use bevy::input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton};
-use bevy::math::DVec3;
+use bevy::math::{DVec3, I64Vec3};
 use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
@@ -9,7 +9,8 @@ use crate::player::{EYE_HEIGHT, MainCamera, WorldPosition, player_blocks_block_p
 use crate::raycast::raycast_voxel;
 use crate::world::render::world_position_to_render_translation;
 use crate::world::{
-    BlockMaterials, BlockType, RenderAnchor, RenderSyncQueue, VoxelWorld, block_world_origin,
+    BlockMaterials, BlockType, RenderAnchor, RenderSyncQueue, VoxelWorld, WorldBlockCoord,
+    block_world_origin,
 };
 
 #[derive(Resource, Clone, Copy)]
@@ -22,7 +23,7 @@ impl Default for SelectedBlock {
 }
 
 #[derive(Resource, Default)]
-pub struct HighlightTarget(pub(crate) Option<(IVec3, IVec3)>);
+pub struct HighlightTarget(pub(crate) Option<(WorldBlockCoord, I64Vec3)>);
 
 #[derive(Component)]
 struct BlockHighlighter;
@@ -191,7 +192,7 @@ struct BlockEditContext {
     ray_origin: DVec3,
     ray_direction: DVec3,
     foot_position: DVec3,
-    current_raycast: Option<(IVec3, IVec3)>,
+    current_raycast: Option<(WorldBlockCoord, I64Vec3)>,
     selected_block: BlockType,
 }
 
@@ -209,7 +210,7 @@ fn current_edit_action(mouse_button: &ButtonInput<MouseButton>) -> Option<EditAc
 
 fn build_block_edit_context(
     camera_transform: Option<(&Transform, &WorldPosition)>,
-    current_raycast: Option<(IVec3, IVec3)>,
+    current_raycast: Option<(WorldBlockCoord, I64Vec3)>,
     selected_block: BlockType,
 ) -> Option<BlockEditContext> {
     let (transform, world_position) = camera_transform?;
@@ -269,7 +270,7 @@ fn compute_highlight_target(
     cursor_options: Option<&CursorOptions>,
     camera_transform: Option<(&Transform, &WorldPosition)>,
     voxel_world: &VoxelWorld,
-) -> Option<(IVec3, IVec3)> {
+) -> Option<(WorldBlockCoord, I64Vec3)> {
     if !cursor_is_locked(cursor_options) {
         return None;
     }
@@ -283,8 +284,8 @@ fn compute_highlight_target(
 fn remove_highlighted_block(
     voxel_world: &mut VoxelWorld,
     render_sync_queue: &mut RenderSyncQueue,
-    current_raycast: Option<(IVec3, IVec3)>,
-) -> Option<IVec3> {
+    current_raycast: Option<(WorldBlockCoord, I64Vec3)>,
+) -> Option<WorldBlockCoord> {
     let (hit_block, _) = current_raycast?;
     let _ = voxel_world.remove_block(hit_block)?;
     render_sync_queue.mark_with_neighbors(hit_block);
@@ -295,7 +296,7 @@ fn place_block_at_target(
     voxel_world: &mut VoxelWorld,
     render_sync_queue: &mut RenderSyncQueue,
     selected_block: BlockType,
-    current_raycast: Option<(IVec3, IVec3)>,
+    current_raycast: Option<(WorldBlockCoord, I64Vec3)>,
     foot_position: DVec3,
 ) -> bool {
     let Some((hit_block, hit_normal)) = current_raycast else {
@@ -327,6 +328,10 @@ mod tests {
         BlockEntityIndex, BlockMesh, ChunkCoord, RenderAnchor, RenderOriginRootEntity,
         sync_block_render_system, sync_render_origin_root_system,
     };
+
+    fn world_block(x: i64, y: i64, z: i64) -> WorldBlockCoord {
+        WorldBlockCoord::new(x, y, z)
+    }
 
     fn test_block_materials() -> BlockMaterials {
         BlockMaterials {
@@ -395,7 +400,7 @@ mod tests {
         let mut app = setup_interaction_app(CursorGrabMode::Locked);
         {
             let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-            let _ = world.try_insert_block(IVec3::new(3, 3, 0), BlockType::Stone);
+            let _ = world.try_insert_block(world_block(3, 3, 0), BlockType::Stone);
         }
         app.world_mut()
             .resource_mut::<ButtonInput<MouseButton>>()
@@ -405,12 +410,12 @@ mod tests {
 
         let world = app.world().resource::<VoxelWorld>();
         assert_eq!(
-            world.block_kind(IVec3::new(2, 3, 0)),
+            world.block_kind(world_block(2, 3, 0)),
             Some(BlockType::Grass)
         );
         assert_eq!(
             app.world().resource::<HighlightTarget>().0,
-            Some((IVec3::new(2, 3, 0), IVec3::new(-1, 0, 0)))
+            Some((world_block(2, 3, 0), I64Vec3::new(-1, 0, 0)))
         );
     }
 
@@ -419,8 +424,8 @@ mod tests {
         let mut app = setup_interaction_app(CursorGrabMode::Locked);
         {
             let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-            let _ = world.try_insert_block(IVec3::new(3, 3, 0), BlockType::Stone);
-            let _ = world.try_insert_block(IVec3::new(5, 3, 0), BlockType::Stone);
+            let _ = world.try_insert_block(world_block(3, 3, 0), BlockType::Stone);
+            let _ = world.try_insert_block(world_block(5, 3, 0), BlockType::Stone);
         }
         {
             let mut mouse_buttons = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
@@ -431,14 +436,14 @@ mod tests {
         app.update();
 
         let world = app.world().resource::<VoxelWorld>();
-        assert!(!world.contains_block(IVec3::new(3, 3, 0)));
+        assert!(!world.contains_block(world_block(3, 3, 0)));
         assert_eq!(
-            world.block_kind(IVec3::new(4, 3, 0)),
+            world.block_kind(world_block(4, 3, 0)),
             Some(BlockType::Grass)
         );
         assert_eq!(
             app.world().resource::<HighlightTarget>().0,
-            Some((IVec3::new(4, 3, 0), IVec3::new(-1, 0, 0)))
+            Some((world_block(4, 3, 0), I64Vec3::new(-1, 0, 0)))
         );
     }
 
@@ -447,11 +452,11 @@ mod tests {
         let mut app = setup_interaction_app(CursorGrabMode::None);
         {
             let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-            let _ = world.try_insert_block(IVec3::new(3, 3, 0), BlockType::Stone);
+            let _ = world.try_insert_block(world_block(3, 3, 0), BlockType::Stone);
         }
         app.world_mut().insert_resource(HighlightTarget(Some((
-            IVec3::new(99, 99, 99),
-            IVec3::new(1, 0, 0),
+            world_block(99, 99, 99),
+            I64Vec3::new(1, 0, 0),
         ))));
 
         app.update();
@@ -464,7 +469,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(TransformPlugin);
         app.insert_resource(VoxelWorld::default());
-        app.insert_resource(HighlightTarget(Some((IVec3::new(10, 0, 0), IVec3::X))));
+        app.insert_resource(HighlightTarget(Some((world_block(10, 0, 0), I64Vec3::X))));
         app.insert_resource(RenderAnchor {
             chunk: ChunkCoord::new(0, 0),
         });

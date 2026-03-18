@@ -1,20 +1,19 @@
-use bevy::math::DVec3;
-use bevy::prelude::*;
+use bevy::math::{DVec3, I64Vec3};
 
-use crate::world::{VoxelWorld, world_block_from_position};
+use crate::world::{VoxelWorld, WorldBlockCoord, world_block_from_position};
 
 pub fn raycast_voxel(
     world: &VoxelWorld,
     origin: DVec3,
     direction: DVec3,
     max_distance: f64,
-) -> Option<(IVec3, IVec3)> {
+) -> Option<(WorldBlockCoord, I64Vec3)> {
     let dir = direction.normalize_or_zero();
     if dir == DVec3::ZERO {
         return None;
     }
 
-    let mut current = world_block_from_position(origin);
+    let mut current = world_block_from_position(origin)?;
     if world.contains_block(current) {
         return Some((current, pick_normal(dir)));
     }
@@ -27,26 +26,26 @@ pub fn raycast_voxel(
     raycast_voxel_traverse(world, &mut current, step, t_delta, &mut t_max, max_distance)
 }
 
-fn pick_normal(dir: DVec3) -> IVec3 {
+fn pick_normal(dir: DVec3) -> I64Vec3 {
     // This is only used when the ray origin already starts inside a solid block.
     // We still return the most-opposed axis so placement code gets a stable
     // face normal instead of a sentinel value in that edge case.
     let abs = DVec3::new(dir.x.abs(), dir.y.abs(), dir.z.abs());
     let step = compute_step(dir);
     if abs.x >= abs.y && abs.x >= abs.z {
-        IVec3::new(-step.x, 0, 0)
+        I64Vec3::new(-step.x, 0, 0)
     } else if abs.y >= abs.x && abs.y >= abs.z {
-        IVec3::new(0, -step.y, 0)
+        I64Vec3::new(0, -step.y, 0)
     } else {
-        IVec3::new(0, 0, -step.z)
+        I64Vec3::new(0, 0, -step.z)
     }
 }
 
-fn compute_step(dir: DVec3) -> IVec3 {
-    IVec3::new(step_axis(dir.x), step_axis(dir.y), step_axis(dir.z))
+fn compute_step(dir: DVec3) -> I64Vec3 {
+    I64Vec3::new(step_axis(dir.x), step_axis(dir.y), step_axis(dir.z))
 }
 
-fn step_axis(component: f64) -> i32 {
+fn step_axis(component: f64) -> i64 {
     if component > 0.0 {
         1
     } else if component < 0.0 {
@@ -72,7 +71,7 @@ fn reciprocal_abs_or_infinity(component: f64) -> f64 {
     }
 }
 
-fn compute_t_max(step: IVec3, origin_frac: DVec3, t_delta: DVec3) -> DVec3 {
+fn compute_t_max(step: I64Vec3, origin_frac: DVec3, t_delta: DVec3) -> DVec3 {
     DVec3::new(
         first_boundary_distance(step.x, origin_frac.x, t_delta.x),
         first_boundary_distance(step.y, origin_frac.y, t_delta.y),
@@ -80,7 +79,7 @@ fn compute_t_max(step: IVec3, origin_frac: DVec3, t_delta: DVec3) -> DVec3 {
     )
 }
 
-fn first_boundary_distance(step: i32, origin_frac: f64, t_delta: f64) -> f64 {
+fn first_boundary_distance(step: i64, origin_frac: f64, t_delta: f64) -> f64 {
     if step == 0 {
         return f64::INFINITY;
     }
@@ -94,12 +93,12 @@ fn first_boundary_distance(step: i32, origin_frac: f64, t_delta: f64) -> f64 {
 
 fn raycast_voxel_traverse(
     world: &VoxelWorld,
-    current: &mut IVec3,
-    step: IVec3,
+    current: &mut WorldBlockCoord,
+    step: I64Vec3,
     t_delta: DVec3,
     t_max: &mut DVec3,
     max_distance: f64,
-) -> Option<(IVec3, IVec3)> {
+) -> Option<(WorldBlockCoord, I64Vec3)> {
     loop {
         let (t_next, axis) = next_step(*t_max);
         if t_next > max_distance {
@@ -130,27 +129,27 @@ fn next_step(t_max: DVec3) -> (f64, usize) {
 }
 
 fn advance_to_next_voxel(
-    current: &mut IVec3,
-    step: IVec3,
+    current: &mut WorldBlockCoord,
+    step: I64Vec3,
     t_delta: DVec3,
     t_max: &mut DVec3,
     axis: usize,
-) -> IVec3 {
+) -> I64Vec3 {
     match axis {
         0 => {
-            current.x += step.x;
+            *current += I64Vec3::X * step.x;
             t_max.x += t_delta.x;
-            IVec3::new(-step.x, 0, 0)
+            I64Vec3::new(-step.x, 0, 0)
         }
         1 => {
-            current.y += step.y;
+            *current += I64Vec3::Y * step.y;
             t_max.y += t_delta.y;
-            IVec3::new(0, -step.y, 0)
+            I64Vec3::new(0, -step.y, 0)
         }
         2 => {
-            current.z += step.z;
+            *current += I64Vec3::Z * step.z;
             t_max.z += t_delta.z;
-            IVec3::new(0, 0, -step.z)
+            I64Vec3::new(0, 0, -step.z)
         }
         _ => unreachable!("next_step only returns axis indices 0..=2"),
     }
@@ -164,7 +163,7 @@ mod tests {
     #[test]
     fn raycast_hits_single_block_and_reports_face_normal() {
         let mut world = VoxelWorld::default();
-        world.try_insert_block(IVec3::new(1, 0, 0), BlockType::Stone);
+        assert!(world.try_insert_block(WorldBlockCoord::new(1, 0, 0), BlockType::Stone));
 
         let hit = raycast_voxel(
             &world,
@@ -173,13 +172,16 @@ mod tests {
             8.0,
         );
 
-        assert_eq!(hit, Some((IVec3::new(1, 0, 0), IVec3::new(-1, 0, 0))));
+        assert_eq!(
+            hit,
+            Some((WorldBlockCoord::new(1, 0, 0), I64Vec3::new(-1, 0, 0)))
+        );
     }
 
     #[test]
     fn raycast_stays_precise_beyond_f32_integer_resolution() {
         let mut world = VoxelWorld::default();
-        world.try_insert_block(IVec3::new(16_777_218, 0, 0), BlockType::Stone);
+        assert!(world.try_insert_block(WorldBlockCoord::new(16_777_218, 0, 0), BlockType::Stone));
 
         let hit = raycast_voxel(
             &world,
@@ -190,7 +192,10 @@ mod tests {
 
         assert_eq!(
             hit,
-            Some((IVec3::new(16_777_218, 0, 0), IVec3::new(-1, 0, 0)))
+            Some((
+                WorldBlockCoord::new(16_777_218, 0, 0),
+                I64Vec3::new(-1, 0, 0),
+            ))
         );
     }
 }

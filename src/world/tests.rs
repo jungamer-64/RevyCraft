@@ -2,14 +2,17 @@ use super::generation::{
     TerrainNoise, classify_biome, generate_chunk, should_carve_cave, surface_height_at,
 };
 use super::render::world_position_to_render_translation;
-use super::render::{BlockWorldCoord, RenderOriginRoot, RenderSyncState, render_sync_state_at};
+use super::render::{
+    BlockWorldCoordComponent, RenderOriginRoot, RenderSyncState, render_sync_state_at,
+};
 use super::save::{chunk_path, load_chunk, save_chunk};
 use super::*;
 use crate::player::{MainCamera, WorldPosition};
-use bevy::math::DVec3;
+use bevy::math::{DVec3, I64Vec3};
 use bevy::transform::TransformPlugin;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn test_block_materials() -> BlockMaterials {
@@ -50,16 +53,24 @@ fn insert_render_origin_root(app: &mut App, translation: Vec3) -> Entity {
     render_origin_root
 }
 
+fn world_block(x: i64, y: i64, z: i64) -> WorldBlockCoord {
+    WorldBlockCoord::new(x, y, z)
+}
+
+fn local_block(x: i64, y: i64, z: i64) -> LocalBlockCoord {
+    LocalBlockCoord::new(x, y, z)
+}
+
 fn top_block_at(
     chunk_data: &ChunkData,
     layout: WorldLayout,
-    local_x: i32,
-    local_z: i32,
+    local_x: i64,
+    local_z: i64,
 ) -> Option<BlockType> {
     (0..layout.vertical_span()).rev().find_map(|local_y| {
         chunk_data
             .blocks
-            .get(&IVec3::new(local_x, local_y, local_z))
+            .get(&local_block(local_x, local_y, local_z))
             .map(|block_data| block_data.kind)
     })
 }
@@ -117,32 +128,34 @@ fn move_main_camera(app: &mut App, translation: DVec3) {
 #[test]
 fn block_is_exposed_when_any_face_touches_air() {
     let mut world = VoxelWorld::default();
-    let _ = world.try_insert_block(IVec3::ZERO, BlockType::Stone);
+    let _ = world.try_insert_block(world_block(0, 0, 0), BlockType::Stone);
 
-    assert!(world.is_exposed(IVec3::ZERO));
+    assert!(world.is_exposed(world_block(0, 0, 0)));
 }
 
 #[test]
 fn block_is_not_exposed_when_fully_enclosed() {
     let mut world = VoxelWorld::default();
-    let _ = world.try_insert_block(IVec3::ZERO, BlockType::Stone);
-    for offset in NEIGHBORS {
-        let _ = world.try_insert_block(offset, BlockType::Stone);
+    let origin = world_block(0, 0, 0);
+    let _ = world.try_insert_block(origin, BlockType::Stone);
+    for &(x, y, z) in &NEIGHBORS {
+        let _ = world.try_insert_block(origin + I64Vec3::new(x, y, z), BlockType::Stone);
     }
 
-    assert!(!world.is_exposed(IVec3::ZERO));
+    assert!(!world.is_exposed(origin));
 }
 
 #[test]
 fn render_sync_queue_marks_coordinate_and_neighbors_once() {
     let mut queue = RenderSyncQueue::default();
-    queue.mark_with_neighbors(IVec3::ZERO);
-    queue.mark_with_neighbors(IVec3::ZERO);
+    let origin = world_block(0, 0, 0);
+    queue.mark_with_neighbors(origin);
+    queue.mark_with_neighbors(origin);
 
     assert_eq!(queue.0.len(), 7);
-    assert!(queue.0.contains(&IVec3::ZERO));
-    for offset in NEIGHBORS {
-        assert!(queue.0.contains(&offset));
+    assert!(queue.0.contains(&origin));
+    for &(x, y, z) in &NEIGHBORS {
+        assert!(queue.0.contains(&(origin + I64Vec3::new(x, y, z))));
     }
 
     let drained_count = queue.drain().count();
@@ -154,24 +167,25 @@ fn render_sync_queue_marks_coordinate_and_neighbors_once() {
 fn render_sync_state_reports_missing_hidden_and_exposed() {
     let mut missing_world = VoxelWorld::default();
     assert_eq!(
-        render_sync_state_at(&missing_world, IVec3::ZERO),
+        render_sync_state_at(&missing_world, world_block(0, 0, 0)),
         RenderSyncState::Missing
     );
 
-    let _ = missing_world.try_insert_block(IVec3::ZERO, BlockType::Grass);
+    let _ = missing_world.try_insert_block(world_block(0, 0, 0), BlockType::Grass);
     assert_eq!(
-        render_sync_state_at(&missing_world, IVec3::ZERO),
+        render_sync_state_at(&missing_world, world_block(0, 0, 0)),
         RenderSyncState::Exposed(BlockType::Grass)
     );
 
     let mut hidden_world = VoxelWorld::default();
-    let _ = hidden_world.try_insert_block(IVec3::ZERO, BlockType::Stone);
-    for offset in NEIGHBORS {
-        let _ = hidden_world.try_insert_block(offset, BlockType::Stone);
+    let origin = world_block(0, 0, 0);
+    let _ = hidden_world.try_insert_block(origin, BlockType::Stone);
+    for &(x, y, z) in &NEIGHBORS {
+        let _ = hidden_world.try_insert_block(origin + I64Vec3::new(x, y, z), BlockType::Stone);
     }
 
     assert_eq!(
-        render_sync_state_at(&hidden_world, IVec3::ZERO),
+        render_sync_state_at(&hidden_world, origin),
         RenderSyncState::Hidden
     );
 }
@@ -196,11 +210,11 @@ fn generated_terrain_varies_by_biome_and_height_profile() {
     let layout = WorldLayout::default();
     let mut saw_grass_surface = false;
     let mut saw_stone_surface = false;
-    let mut min_height = i32::MAX;
-    let mut max_height = i32::MIN;
+    let mut min_height = i64::MAX;
+    let mut max_height = i64::MIN;
 
-    for world_x in (-96..=96).step_by(6_usize) {
-        for world_z in (-96..=96).step_by(6_usize) {
+    for world_x in (-96_i64..=96).step_by(6_usize) {
+        for world_z in (-96_i64..=96).step_by(6_usize) {
             let biome = classify_biome(&noise, &settings, world_x, world_z);
             let surface_height =
                 surface_height_at(&noise, &settings, layout, biome, world_x, world_z);
@@ -227,8 +241,8 @@ fn cave_generation_preserves_surface_buffer() {
     let settings = TerrainSettings::default();
     let noise = TerrainNoise::new(seed);
 
-    for world_x in -4..=4 {
-        for world_z in -4..=4 {
+    for world_x in -4_i64..=4 {
+        for world_z in -4_i64..=4 {
             let biome = classify_biome(&noise, &settings, world_x, world_z);
             let surface_height =
                 surface_height_at(&noise, &settings, layout, biome, world_x, world_z);
@@ -251,16 +265,16 @@ fn cave_generation_preserves_surface_buffer() {
 fn world_coordinate_mapping_crosses_chunk_boundaries_correctly() {
     let layout = WorldLayout::default();
 
-    let positive = layout.local_from_world(IVec3::new(16, 0, 16));
-    let negative = layout.local_from_world(IVec3::new(-1, 0, -1));
+    let positive = layout.local_from_world(world_block(16, 0, 16));
+    let negative = layout.local_from_world(world_block(-1, 0, -1));
 
     assert_eq!(
         positive,
-        Some((ChunkCoord::new(1, 1), IVec3::new(0, 24, 0)))
+        Some((ChunkCoord::new(1, 1), local_block(0, 24, 0)))
     );
     assert_eq!(
         negative,
-        Some((ChunkCoord::new(-1, -1), IVec3::new(15, 24, 15)))
+        Some((ChunkCoord::new(-1, -1), local_block(15, 24, 15)))
     );
 }
 
@@ -271,14 +285,14 @@ fn chunk_coord_from_far_world_position_preserves_precision() {
 
     let chunk_coord = ChunkCoord::from_world_position(position, layout);
 
-    assert_eq!(chunk_coord, ChunkCoord::new(1_048_576, -1_048_578));
+    assert_eq!(chunk_coord, Some(ChunkCoord::new(1_048_576, -1_048_578)));
 }
 
 #[test]
 fn try_insert_and_remove_work_across_chunk_boundaries() {
     let mut world = VoxelWorld::default();
-    let left = IVec3::new(-1, 0, -1);
-    let right = IVec3::new(16, 0, 16);
+    let left = world_block(-1, 0, -1);
+    let right = world_block(16, 0, 16);
 
     assert!(world.try_insert_block(left, BlockType::Grass));
     assert!(world.try_insert_block(right, BlockType::Stone));
@@ -299,10 +313,10 @@ fn save_and_load_round_trip_chunk_data() {
     let mut chunk_data = ChunkData::loaded(HashMap::new(), true);
     chunk_data
         .blocks
-        .insert(IVec3::new(0, 24, 0), BlockData::new(BlockType::Stone));
+        .insert(local_block(0, 24, 0), BlockData::new(BlockType::Stone));
     chunk_data
         .blocks
-        .insert(IVec3::new(5, 30, 7), BlockData::new(BlockType::Grass));
+        .insert(local_block(5, 30, 7), BlockData::new(BlockType::Grass));
 
     save_chunk(&root_dir, chunk_coord, &chunk_data, layout).unwrap_or_else(|error| {
         panic!("failed to save chunk for round-trip test: {error}");
@@ -312,6 +326,29 @@ fn save_and_load_round_trip_chunk_data() {
     });
 
     assert_eq!(loaded, Some(chunk_data));
+
+    let _ = fs::remove_dir_all(root_dir);
+}
+
+#[test]
+fn load_chunk_rejects_old_save_version() {
+    let root_dir = test_root_dir("save-load-old-version");
+    let chunk_coord = ChunkCoord::new(1, -2);
+    let path = chunk_path(&root_dir, chunk_coord);
+    fs::create_dir_all(path.parent().expect("chunk path should have a parent"))
+        .expect("test root directory should be creatable");
+
+    let mut file = std::fs::File::create(&path).expect("test chunk file should be creatable");
+    file.write_all(b"RVCW")
+        .expect("test chunk file should accept the magic header");
+    file.write_all(&1_u32.to_le_bytes())
+        .expect("test chunk file should accept the version field");
+    file.flush()
+        .expect("test chunk file should flush the old version payload");
+
+    let error = load_chunk(&root_dir, chunk_coord, WorldLayout::default())
+        .expect_err("version 1 chunk data should be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
 
     let _ = fs::remove_dir_all(root_dir);
 }
@@ -329,11 +366,11 @@ fn sync_system_spawns_entity_for_dirty_exposed_block() {
 
     {
         let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-        let _ = world.try_insert_block(IVec3::ZERO, BlockType::Stone);
+        let _ = world.try_insert_block(world_block(0, 0, 0), BlockType::Stone);
     }
     app.world_mut()
         .resource_mut::<RenderSyncQueue>()
-        .mark(IVec3::ZERO);
+        .mark(world_block(0, 0, 0));
 
     app.update();
 
@@ -353,22 +390,22 @@ fn sync_system_despawns_entity_for_dirty_hidden_block() {
 
     {
         let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-        let _ = world.try_insert_block(IVec3::ZERO, BlockType::Stone);
+        let _ = world.try_insert_block(world_block(0, 0, 0), BlockType::Stone);
     }
     app.world_mut()
         .resource_mut::<RenderSyncQueue>()
-        .mark(IVec3::ZERO);
+        .mark(world_block(0, 0, 0));
     app.update();
 
     {
         let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-        for offset in NEIGHBORS {
-            let _ = world.try_insert_block(offset, BlockType::Stone);
+        for &(x, y, z) in &NEIGHBORS {
+            let _ = world.try_insert_block(world_block(x, y, z), BlockType::Stone);
         }
     }
     app.world_mut()
         .resource_mut::<RenderSyncQueue>()
-        .mark(IVec3::ZERO);
+        .mark(world_block(0, 0, 0));
     app.update();
 
     assert!(app.world().resource::<BlockEntityIndex>().0.is_empty());
@@ -385,12 +422,12 @@ fn sync_system_reveals_neighbor_after_block_removal() {
     let _ = insert_render_origin_root(&mut app, Vec3::ZERO);
     app.add_systems(Update, sync_block_render_system);
 
-    let hidden_target = IVec3::X;
+    let hidden_target = world_block(1, 0, 0);
     {
         let mut world = app.world_mut().resource_mut::<VoxelWorld>();
         let _ = world.try_insert_block(hidden_target, BlockType::Stone);
-        for offset in NEIGHBORS {
-            let _ = world.try_insert_block(hidden_target + offset, BlockType::Stone);
+        for &(x, y, z) in &NEIGHBORS {
+            let _ = world.try_insert_block(hidden_target + I64Vec3::new(x, y, z), BlockType::Stone);
         }
     }
     app.world_mut()
@@ -407,11 +444,11 @@ fn sync_system_reveals_neighbor_after_block_removal() {
 
     {
         let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-        let _ = world.remove_block(IVec3::ZERO);
+        let _ = world.remove_block(world_block(0, 0, 0));
     }
     app.world_mut()
         .resource_mut::<RenderSyncQueue>()
-        .mark_with_neighbors(IVec3::ZERO);
+        .mark_with_neighbors(world_block(0, 0, 0));
     app.update();
 
     assert!(
@@ -430,7 +467,7 @@ fn chunk_streaming_saves_modified_chunks_and_reloads_them() {
     app.update();
     assert_eq!(app.world().resource::<VoxelWorld>().loaded_chunk_count(), 1);
 
-    let placed_block = IVec3::new(0, layout.vertical_max() - 1, 0);
+    let placed_block = world_block(0, layout.vertical_max() - 1, 0);
     {
         let mut world = app.world_mut().resource_mut::<VoxelWorld>();
         let _ = world.try_insert_block(placed_block, BlockType::Stone);
@@ -545,11 +582,11 @@ fn block_global_transform_becomes_camera_relative() {
 
     {
         let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-        let _ = world.try_insert_block(IVec3::new(26, 0, 0), BlockType::Stone);
+        let _ = world.try_insert_block(world_block(26, 0, 0), BlockType::Stone);
     }
     app.world_mut()
         .resource_mut::<RenderSyncQueue>()
-        .mark(IVec3::new(26, 0, 0));
+        .mark(world_block(26, 0, 0));
 
     app.update();
 
@@ -557,7 +594,7 @@ fn block_global_transform_becomes_camera_relative() {
         .world()
         .resource::<BlockEntityIndex>()
         .0
-        .get(&IVec3::new(26, 0, 0))
+        .get(&world_block(26, 0, 0))
         .expect("block entity should be indexed");
     let global_transform = app
         .world()
@@ -582,8 +619,10 @@ fn block_local_translation_rebases_when_render_anchor_changes() {
     app.insert_resource(RenderAnchor {
         chunk: ChunkCoord::new(0, 0),
     });
-    app.world_mut()
-        .spawn((BlockWorldCoord(IVec3::new(26, 0, 0)), Transform::default()));
+    app.world_mut().spawn((
+        BlockWorldCoordComponent(world_block(26, 0, 0)),
+        Transform::default(),
+    ));
     app.add_systems(Update, sync_block_world_transforms_system);
 
     app.world_mut().resource_mut::<RenderAnchor>().chunk = ChunkCoord::new(1, 0);
@@ -591,14 +630,14 @@ fn block_local_translation_rebases_when_render_anchor_changes() {
 
     let mut block_query = app
         .world_mut()
-        .query_filtered::<(&BlockWorldCoord, &Transform), Without<MainCamera>>();
+        .query_filtered::<(&BlockWorldCoordComponent, &Transform), Without<MainCamera>>();
     let (_, block_transform) = block_query
         .single(app.world_mut())
         .expect("block should exist");
     assert_eq!(
         block_transform.translation,
         world_position_to_render_translation(
-            block_world_origin(IVec3::new(26, 0, 0)),
+            block_world_origin(world_block(26, 0, 0)),
             RenderAnchor {
                 chunk: ChunkCoord::new(1, 0),
             },

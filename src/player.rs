@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::cursor::cursor_is_locked;
-use crate::world::VoxelWorld;
+use crate::world::{VoxelWorld, WorldBlockCoord, world_block_from_position};
 
 pub const EYE_HEIGHT: f64 = 1.62;
 pub const INITIAL_CAMERA_EYE_POSITION: DVec3 = DVec3::new(0.0, 36.0, 0.0);
@@ -171,7 +171,7 @@ pub fn camera_look_system(resources: CameraLookResources) {
 }
 
 #[cfg(test)]
-pub fn player_collides_voxel(foot_position: DVec3, voxel: IVec3) -> bool {
+pub fn player_collides_voxel(foot_position: DVec3, voxel: WorldBlockCoord) -> bool {
     aabbs_overlap(
         player_aabb(foot_position),
         voxel_aabb(voxel),
@@ -179,7 +179,7 @@ pub fn player_collides_voxel(foot_position: DVec3, voxel: IVec3) -> bool {
     )
 }
 
-pub fn player_blocks_block_placement(foot_position: DVec3, voxel: IVec3) -> bool {
+pub fn player_blocks_block_placement(foot_position: DVec3, voxel: WorldBlockCoord) -> bool {
     // Placement uses the same occupied volume as movement, but treats exact
     // tangential contact as blocked so block placement stays conservative.
     aabbs_overlap(
@@ -436,8 +436,8 @@ fn player_aabb(foot_position: DVec3) -> Aabb {
     }
 }
 
-fn voxel_aabb(voxel: IVec3) -> Aabb {
-    let min = DVec3::new(f64::from(voxel.x), f64::from(voxel.y), f64::from(voxel.z));
+fn voxel_aabb(voxel: WorldBlockCoord) -> Aabb {
+    let min = voxel.as_dvec3();
     Aabb {
         min,
         max: min + DVec3::ONE,
@@ -445,13 +445,17 @@ fn voxel_aabb(voxel: IVec3) -> Aabb {
 }
 
 fn aabb_collides_world(world: &VoxelWorld, aabb: Aabb, boundary: CollisionBoundary) -> bool {
-    let min = aabb.min.floor().as_ivec3();
-    let max = aabb.max.floor().as_ivec3();
+    let Some(min) = world_block_from_position(aabb.min) else {
+        return false;
+    };
+    let Some(max) = world_block_from_position(aabb.max) else {
+        return false;
+    };
 
-    for x in min.x..=max.x {
-        for y in min.y..=max.y {
-            for z in min.z..=max.z {
-                let block_coord = IVec3::new(x, y, z);
+    for x in min.x()..=max.x() {
+        for y in min.y()..=max.y() {
+            for z in min.z()..=max.z() {
+                let block_coord = WorldBlockCoord::new(x, y, z);
                 if !world.contains_block(block_coord) {
                     continue;
                 }
@@ -490,13 +494,17 @@ fn aabbs_overlap(lhs: Aabb, rhs: Aabb, boundary: CollisionBoundary) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{BlockType, VoxelWorld, WorldLayout};
+    use crate::world::{BlockType, VoxelWorld, WorldBlockCoord, WorldLayout};
+
+    fn world_block(x: i64, y: i64, z: i64) -> WorldBlockCoord {
+        WorldBlockCoord::new(x, y, z)
+    }
 
     #[test]
     fn player_collides_when_aabb_overlaps_voxel() {
         assert!(player_collides_voxel(
             DVec3::new(0.2, 0.0, 0.2),
-            IVec3::ZERO
+            world_block(0, 0, 0)
         ));
     }
 
@@ -504,7 +512,7 @@ mod tests {
     fn player_does_not_collide_when_clear_of_voxel() {
         assert!(!player_collides_voxel(
             DVec3::new(2.0, 0.0, 2.0),
-            IVec3::ZERO
+            world_block(0, 0, 0)
         ));
     }
 
@@ -512,7 +520,7 @@ mod tests {
     fn player_collides_on_diagonal_corner_overlap_like_minecraft() {
         assert!(player_collides_voxel(
             DVec3::new(1.29, 0.0, 1.29),
-            IVec3::ZERO,
+            world_block(0, 0, 0),
         ));
     }
 
@@ -520,7 +528,7 @@ mod tests {
     fn placement_collision_matches_player_volume() {
         assert!(player_blocks_block_placement(
             DVec3::new(0.2, 0.0, 0.2),
-            IVec3::ZERO
+            world_block(0, 0, 0)
         ));
     }
 
@@ -533,12 +541,12 @@ mod tests {
 
         assert!(!aabbs_overlap(
             player_box,
-            voxel_aabb(IVec3::ZERO),
+            voxel_aabb(world_block(0, 0, 0)),
             CollisionBoundary::Exclusive,
         ));
         assert!(aabbs_overlap(
             player_box,
-            voxel_aabb(IVec3::ZERO),
+            voxel_aabb(world_block(0, 0, 0)),
             CollisionBoundary::Inclusive,
         ));
     }
@@ -546,7 +554,7 @@ mod tests {
     #[test]
     fn support_check_requires_block_below_player() {
         let mut world = VoxelWorld::new(WorldLayout::default());
-        assert!(world.try_insert_block(IVec3::new(0, 1, 0), BlockType::Stone));
+        assert!(world.try_insert_block(world_block(0, 1, 0), BlockType::Stone));
 
         let foot_position = DVec3::new(1.35, 1.0, 0.5);
         assert!(!collides(&world, foot_position));
@@ -556,7 +564,7 @@ mod tests {
     #[test]
     fn vertical_resolution_stops_close_to_floor_contact() {
         let mut world = VoxelWorld::new(WorldLayout::default());
-        assert!(world.try_insert_block(IVec3::ZERO, BlockType::Stone));
+        assert!(world.try_insert_block(world_block(0, 0, 0), BlockType::Stone));
 
         let mut foot_position = DVec3::new(0.5, 1.2, 0.5);
         let mut player = PlayerPhysics {
@@ -574,7 +582,7 @@ mod tests {
     #[test]
     fn wall_resolution_stays_stable_at_large_world_coordinates() {
         let mut world = VoxelWorld::new(WorldLayout::default());
-        let wall_block = IVec3::new(16_777_217, 0, 0);
+        let wall_block = world_block(16_777_217, 0, 0);
         assert!(world.try_insert_block(wall_block, BlockType::Stone));
 
         let mut foot_position = DVec3::new(16_777_216.4, 0.0, 0.5);
@@ -591,7 +599,7 @@ mod tests {
             DVec3::X,
         );
 
-        assert!(foot_position.x < f64::from(wall_block.x));
+        assert!(foot_position.x < wall_block.as_dvec3().x);
         assert!(player.velocity.x.abs() < f64::EPSILON);
         assert!(!collides(&world, foot_position));
     }

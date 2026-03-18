@@ -1,5 +1,6 @@
-use super::{BlockData, BlockType, ChunkCoord, ChunkData, ChunkSaveVersion, WorldLayout};
-use bevy::prelude::IVec3;
+use super::{
+    BlockData, BlockType, ChunkCoord, ChunkData, ChunkSaveVersion, LocalBlockCoord, WorldLayout,
+};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -41,9 +42,9 @@ pub fn load_chunk(
         ));
     }
 
-    let stored_chunk_size = read_i32(&mut reader)?;
-    let stored_vertical_min = read_i32(&mut reader)?;
-    let stored_vertical_max = read_i32(&mut reader)?;
+    let stored_chunk_size = read_i64(&mut reader)?;
+    let stored_vertical_min = read_i64(&mut reader)?;
+    let stored_vertical_max = read_i64(&mut reader)?;
     let stored_layout =
         WorldLayout::new(stored_chunk_size, stored_vertical_min, stored_vertical_max);
     if stored_layout != layout {
@@ -58,10 +59,10 @@ pub fn load_chunk(
     let mut blocks = HashMap::new();
 
     for _ in 0..block_count {
-        let local_coord = IVec3::new(
-            read_i32(&mut reader)?,
-            read_i32(&mut reader)?,
-            read_i32(&mut reader)?,
+        let local_coord = LocalBlockCoord::new(
+            read_i64(&mut reader)?,
+            read_i64(&mut reader)?,
+            read_i64(&mut reader)?,
         );
         let block_type = block_type_from_byte(read_u8(&mut reader)?)?;
         blocks.insert(local_coord, BlockData::new(block_type));
@@ -82,13 +83,15 @@ pub fn save_chunk(
 
     writer.write_all(&MAGIC)?;
     write_u32(&mut writer, ChunkSaveVersion::CURRENT)?;
-    write_i32(&mut writer, layout.chunk_size())?;
-    write_i32(&mut writer, layout.vertical_min())?;
-    write_i32(&mut writer, layout.vertical_max())?;
+    write_i64(&mut writer, layout.chunk_size())?;
+    write_i64(&mut writer, layout.vertical_min())?;
+    write_i64(&mut writer, layout.vertical_max())?;
     write_bool(&mut writer, chunk_data.generated_from_seed)?;
 
     let mut entries: Vec<_> = chunk_data.blocks.iter().collect();
-    entries.sort_unstable_by_key(|(local_coord, _)| (local_coord.y, local_coord.z, local_coord.x));
+    entries.sort_unstable_by_key(|(local_coord, _)| {
+        (local_coord.y(), local_coord.z(), local_coord.x())
+    });
     write_u32(
         &mut writer,
         u32::try_from(entries.len()).map_err(|_| {
@@ -100,9 +103,9 @@ pub fn save_chunk(
     )?;
 
     for (&local_coord, block_data) in entries {
-        write_i32(&mut writer, local_coord.x)?;
-        write_i32(&mut writer, local_coord.y)?;
-        write_i32(&mut writer, local_coord.z)?;
+        write_i64(&mut writer, local_coord.x())?;
+        write_i64(&mut writer, local_coord.y())?;
+        write_i64(&mut writer, local_coord.z())?;
         write_u8(&mut writer, block_type_to_byte(block_data.kind))?;
     }
 
@@ -146,10 +149,10 @@ fn read_u32(reader: &mut impl Read) -> io::Result<u32> {
     Ok(u32::from_le_bytes(bytes))
 }
 
-fn read_i32(reader: &mut impl Read) -> io::Result<i32> {
-    let mut bytes = [0_u8; 4];
+fn read_i64(reader: &mut impl Read) -> io::Result<i64> {
+    let mut bytes = [0_u8; 8];
     reader.read_exact(&mut bytes)?;
-    Ok(i32::from_le_bytes(bytes))
+    Ok(i64::from_le_bytes(bytes))
 }
 
 fn write_u8(writer: &mut impl Write, value: u8) -> io::Result<()> {
@@ -164,6 +167,6 @@ fn write_u32(writer: &mut impl Write, value: u32) -> io::Result<()> {
     writer.write_all(&value.to_le_bytes())
 }
 
-fn write_i32(writer: &mut impl Write, value: i32) -> io::Result<()> {
+fn write_i64(writer: &mut impl Write, value: i64) -> io::Result<()> {
     writer.write_all(&value.to_le_bytes())
 }

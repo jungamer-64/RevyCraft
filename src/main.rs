@@ -93,7 +93,8 @@ fn main() {
     let render_anchor = RenderAnchor::from_world_position(
         INITIAL_CAMERA_EYE_POSITION,
         chunk_load_settings.layout(),
-    );
+    )
+    .expect("initial camera position should be within supported world coordinate range");
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {

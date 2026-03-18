@@ -9,8 +9,8 @@ use crate::player::{INITIAL_CAMERA_EYE_POSITION, MainCamera, WorldPosition};
 
 use super::render::RenderSyncQueue;
 use super::{
-    Biome, ChunkCoord, ChunkData, ChunkLoadSettings, TerrainSettings, VoxelWorld, WorldLayout,
-    WorldSaveDirectory, WorldSeed, save,
+    Biome, ChunkCoord, ChunkData, ChunkLoadSettings, LocalBlockCoord, TerrainSettings, VoxelWorld,
+    WorldLayout, WorldSaveDirectory, WorldSeed, save,
 };
 
 #[derive(SystemParam)]
@@ -120,7 +120,7 @@ pub fn generate_chunk(
                 }
 
                 blocks.insert(
-                    IVec3::new(local_x, world_y - layout.vertical_min(), local_z),
+                    LocalBlockCoord::new(local_x, world_y - layout.vertical_min(), local_z),
                     super::BlockData::new(TerrainSettings::block_type_at_height(
                         biome,
                         world_y,
@@ -143,7 +143,9 @@ fn sync_chunks_around_position(
     chunk_load_settings: &ChunkLoadSettings,
     world_save_directory: &WorldSaveDirectory,
 ) {
-    let center_chunk = ChunkCoord::from_world_position(position, voxel_world.layout());
+    let Some(center_chunk) = ChunkCoord::from_world_position(position, voxel_world.layout()) else {
+        return;
+    };
     load_visible_chunks(
         voxel_world,
         render_sync_queue,
@@ -173,7 +175,10 @@ fn load_visible_chunks(
 ) {
     for z_offset in -chunk_load_settings.view_radius..=chunk_load_settings.view_radius {
         for x_offset in -chunk_load_settings.view_radius..=chunk_load_settings.view_radius {
-            let chunk_coord = ChunkCoord::new(center_chunk.x + x_offset, center_chunk.z + z_offset);
+            let chunk_coord = ChunkCoord::new(
+                center_chunk.x + i64::from(x_offset),
+                center_chunk.z + i64::from(z_offset),
+            );
             if voxel_world.has_loaded_chunk(chunk_coord) {
                 continue;
             }
@@ -201,7 +206,7 @@ fn unload_distant_chunks(
     let loaded_chunk_coords: Vec<_> = voxel_world.loaded_chunk_coords().collect();
 
     for chunk_coord in loaded_chunk_coords {
-        if chunk_coord.chebyshev_distance(center_chunk) <= unload_radius {
+        if chunk_coord.chebyshev_distance(center_chunk) <= i64::from(unload_radius) {
             continue;
         }
 
@@ -283,11 +288,11 @@ const fn fold_seed(seed: u64, salt: u64) -> u32 {
 pub(super) fn classify_biome(
     noise: &TerrainNoise,
     terrain_settings: &TerrainSettings,
-    world_x: i32,
-    world_z: i32,
+    world_x: i64,
+    world_z: i64,
 ) -> Biome {
-    let x = f64::from(world_x);
-    let z = f64::from(world_z);
+    let x = i64_to_f64(world_x);
+    let z = i64_to_f64(world_z);
     let temperature = noise.temperature.get([
         x * terrain_settings.temperature_frequency,
         z * terrain_settings.temperature_frequency,
@@ -324,11 +329,11 @@ pub(super) fn surface_height_at(
     terrain_settings: &TerrainSettings,
     layout: WorldLayout,
     biome: Biome,
-    world_x: i32,
-    world_z: i32,
-) -> i32 {
-    let x = f64::from(world_x);
-    let z = f64::from(world_z);
+    world_x: i64,
+    world_z: i64,
+) -> i64 {
+    let x = i64_to_f64(world_x);
+    let z = i64_to_f64(world_z);
     let continentalness = noise.continental.get([
         x * terrain_settings.continental_frequency,
         z * terrain_settings.continental_frequency,
@@ -358,27 +363,27 @@ pub(super) fn surface_height_at(
             ),
         ),
     ) + biome_height_bias;
-    let min_height = f64::from(layout.vertical_min() + 4);
-    let max_height = f64::from(layout.vertical_max() - 2);
+    let min_height = i64_to_f64(layout.vertical_min() + 4);
+    let max_height = i64_to_f64(layout.vertical_max() - 2);
 
-    rounded_height_to_i32(height.clamp(min_height, max_height))
+    rounded_height_to_i64(height.clamp(min_height, max_height))
 }
 
 pub(super) fn should_carve_cave(
     noise: &TerrainNoise,
     terrain_settings: &TerrainSettings,
-    world_x: i32,
-    world_y: i32,
-    world_z: i32,
-    surface_height: i32,
+    world_x: i64,
+    world_y: i64,
+    world_z: i64,
+    surface_height: i64,
 ) -> bool {
     if world_y >= surface_height - terrain_settings.cave_surface_buffer {
         return false;
     }
 
-    let x = f64::from(world_x) * terrain_settings.cave_frequency;
-    let y = f64::from(world_y) * terrain_settings.cave_vertical_frequency;
-    let z = f64::from(world_z) * terrain_settings.cave_frequency;
+    let x = i64_to_f64(world_x) * terrain_settings.cave_frequency;
+    let y = i64_to_f64(world_y) * terrain_settings.cave_vertical_frequency;
+    let z = i64_to_f64(world_z) * terrain_settings.cave_frequency;
 
     let primary = noise.cave_primary.get([x, y, z]).abs();
     let secondary = noise.cave_secondary.get([x * 1.7, y * 1.3, z * 1.7]);
@@ -387,23 +392,28 @@ pub(super) fn should_carve_cave(
     density < terrain_settings.cave_threshold
 }
 
-pub(super) fn rounded_height_to_i32(height: f64) -> i32 {
+pub(super) fn rounded_height_to_i64(height: f64) -> i64 {
     let rounded = height.round();
     let mut quantized_height = 0;
 
     if rounded.is_sign_negative() {
         loop {
-            if f64::from(quantized_height) <= rounded {
+            if i64_to_f64(quantized_height) <= rounded {
                 break quantized_height;
             }
             quantized_height -= 1;
         }
     } else {
         loop {
-            if f64::from(quantized_height) >= rounded {
+            if i64_to_f64(quantized_height) >= rounded {
                 break quantized_height;
             }
             quantized_height += 1;
         }
     }
+}
+
+#[allow(clippy::cast_precision_loss)]
+const fn i64_to_f64(value: i64) -> f64 {
+    value as f64
 }

@@ -1,23 +1,24 @@
 use bevy::ecs::system::SystemParam;
-use bevy::math::DVec3;
+use bevy::math::{DVec3, I64Vec3};
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use crate::player::{MainCamera, WorldPosition};
 
 use super::{
-    BlockType, ChunkCoord, ChunkData, NEIGHBORS, VoxelWorld, WorldLayout, block_world_origin,
+    BlockType, ChunkCoord, ChunkData, NEIGHBORS, VoxelWorld, WorldBlockCoord, WorldLayout,
+    block_world_origin,
 };
 
 #[derive(Resource, Default)]
-pub struct BlockEntityIndex(pub(crate) HashMap<IVec3, Entity>);
+pub struct BlockEntityIndex(pub(crate) HashMap<WorldBlockCoord, Entity>);
 
 impl BlockEntityIndex {
-    fn insert(&mut self, coordinate: IVec3, entity: Entity) {
+    fn insert(&mut self, coordinate: WorldBlockCoord, entity: Entity) {
         self.0.insert(coordinate, entity);
     }
 
-    fn remove(&mut self, coordinate: IVec3) -> Option<Entity> {
+    fn remove(&mut self, coordinate: WorldBlockCoord) -> Option<Entity> {
         self.0.remove(&coordinate)
     }
 }
@@ -26,7 +27,7 @@ impl BlockEntityIndex {
 pub struct RenderOriginRoot;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BlockWorldCoord(pub(crate) IVec3);
+pub struct BlockWorldCoordComponent(pub(crate) WorldBlockCoord);
 
 #[derive(Resource, Clone, Copy)]
 pub struct RenderOriginRootEntity(pub(crate) Entity);
@@ -37,10 +38,10 @@ pub struct RenderAnchor {
 }
 
 impl RenderAnchor {
-    pub(crate) fn from_world_position(position: DVec3, layout: WorldLayout) -> Self {
-        Self {
-            chunk: ChunkCoord::from_world_position(position, layout),
-        }
+    pub(crate) fn from_world_position(position: DVec3, layout: WorldLayout) -> Option<Self> {
+        Some(Self {
+            chunk: ChunkCoord::from_world_position(position, layout)?,
+        })
     }
 
     pub(crate) fn origin(self, layout: WorldLayout) -> DVec3 {
@@ -49,17 +50,17 @@ impl RenderAnchor {
 }
 
 #[derive(Resource, Default)]
-pub struct RenderSyncQueue(pub(crate) HashSet<IVec3>);
+pub struct RenderSyncQueue(pub(crate) HashSet<WorldBlockCoord>);
 
 impl RenderSyncQueue {
-    pub(crate) fn mark(&mut self, coordinate: IVec3) {
+    pub(crate) fn mark(&mut self, coordinate: WorldBlockCoord) {
         self.0.insert(coordinate);
     }
 
-    pub(crate) fn mark_with_neighbors(&mut self, coordinate: IVec3) {
+    pub(crate) fn mark_with_neighbors(&mut self, coordinate: WorldBlockCoord) {
         self.mark(coordinate);
-        for offset in NEIGHBORS {
-            self.mark(coordinate + offset);
+        for &(x, y, z) in &NEIGHBORS {
+            self.mark(coordinate + I64Vec3::new(x, y, z));
         }
     }
 
@@ -74,7 +75,7 @@ impl RenderSyncQueue {
         }
     }
 
-    pub(super) fn drain(&mut self) -> std::collections::hash_set::Drain<'_, IVec3> {
+    pub(super) fn drain(&mut self) -> std::collections::hash_set::Drain<'_, WorldBlockCoord> {
         self.0.drain()
     }
 }
@@ -86,7 +87,10 @@ pub(super) enum RenderSyncState {
     Exposed(BlockType),
 }
 
-pub(super) fn render_sync_state_at(world: &VoxelWorld, coordinate: IVec3) -> RenderSyncState {
+pub(super) fn render_sync_state_at(
+    world: &VoxelWorld,
+    coordinate: WorldBlockCoord,
+) -> RenderSyncState {
     match world.block_kind(coordinate) {
         None => RenderSyncState::Missing,
         Some(block_type) if world.is_exposed(coordinate) => RenderSyncState::Exposed(block_type),
@@ -103,7 +107,7 @@ pub fn world_position_to_render_translation(
 }
 
 fn block_to_render_translation(
-    coordinate: IVec3,
+    coordinate: WorldBlockCoord,
     render_anchor: RenderAnchor,
     layout: WorldLayout,
 ) -> Vec3 {
@@ -116,7 +120,7 @@ fn spawn_block_entity(
     entity_index: &mut BlockEntityIndex,
     mesh: &Handle<Mesh>,
     material: Handle<StandardMaterial>,
-    coordinate: IVec3,
+    coordinate: WorldBlockCoord,
     translation: Vec3,
 ) {
     let mut spawned_entity = None;
@@ -129,7 +133,7 @@ fn spawn_block_entity(
                         Mesh3d(mesh.clone()),
                         MeshMaterial3d(material),
                         Transform::from_translation(translation),
-                        BlockWorldCoord(coordinate),
+                        BlockWorldCoordComponent(coordinate),
                     ))
                     .id(),
             );
@@ -223,8 +227,11 @@ impl RenderAnchorSyncResources<'_, '_> {
             return;
         };
 
-        let next_anchor =
-            RenderAnchor::from_world_position(world_position.0, self.voxel_world.layout());
+        let Some(next_anchor) =
+            RenderAnchor::from_world_position(world_position.0, self.voxel_world.layout())
+        else {
+            return;
+        };
         if *self.render_anchor != next_anchor {
             *self.render_anchor = next_anchor;
         }
@@ -239,7 +246,7 @@ pub fn sync_render_anchor_system(resources: RenderAnchorSyncResources) {
 pub struct BlockTransformSyncResources<'w, 's> {
     voxel_world: Res<'w, VoxelWorld>,
     render_anchor: Res<'w, RenderAnchor>,
-    block_query: Query<'w, 's, (&'static BlockWorldCoord, &'static mut Transform)>,
+    block_query: Query<'w, 's, (&'static BlockWorldCoordComponent, &'static mut Transform)>,
 }
 
 impl BlockTransformSyncResources<'_, '_> {
