@@ -1,7 +1,7 @@
 use bevy::app::AppExit;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::system::SystemParam;
-use bevy::math::DVec3;
+use bevy::math::{DVec3, I64Vec2, I64Vec3};
 use bevy::prelude::*;
 use noise::{NoiseFn, Perlin};
 
@@ -291,8 +291,9 @@ pub(super) fn classify_biome(
     world_x: i64,
     world_z: i64,
 ) -> Biome {
-    let x = i64_to_f64(world_x);
-    let z = i64_to_f64(world_z);
+    let sample = I64Vec2::new(world_x, world_z).as_dvec2();
+    let x = sample.x;
+    let z = sample.y;
     let temperature = noise.temperature.get([
         x * terrain_settings.temperature_frequency,
         z * terrain_settings.temperature_frequency,
@@ -332,8 +333,9 @@ pub(super) fn surface_height_at(
     world_x: i64,
     world_z: i64,
 ) -> i64 {
-    let x = i64_to_f64(world_x);
-    let z = i64_to_f64(world_z);
+    let sample = I64Vec2::new(world_x, world_z).as_dvec2();
+    let x = sample.x;
+    let z = sample.y;
     let continentalness = noise.continental.get([
         x * terrain_settings.continental_frequency,
         z * terrain_settings.continental_frequency,
@@ -363,8 +365,9 @@ pub(super) fn surface_height_at(
             ),
         ),
     ) + biome_height_bias;
-    let min_height = i64_to_f64(layout.vertical_min() + 4);
-    let max_height = i64_to_f64(layout.vertical_max() - 2);
+    let clamp_range = I64Vec2::new(layout.vertical_min() + 4, layout.vertical_max() - 2).as_dvec2();
+    let min_height = clamp_range.x;
+    let max_height = clamp_range.y;
 
     rounded_height_to_i64(height.clamp(min_height, max_height))
 }
@@ -381,9 +384,10 @@ pub(super) fn should_carve_cave(
         return false;
     }
 
-    let x = i64_to_f64(world_x) * terrain_settings.cave_frequency;
-    let y = i64_to_f64(world_y) * terrain_settings.cave_vertical_frequency;
-    let z = i64_to_f64(world_z) * terrain_settings.cave_frequency;
+    let sample = I64Vec3::new(world_x, world_y, world_z).as_dvec3();
+    let x = sample.x * terrain_settings.cave_frequency;
+    let y = sample.y * terrain_settings.cave_vertical_frequency;
+    let z = sample.z * terrain_settings.cave_frequency;
 
     let primary = noise.cave_primary.get([x, y, z]).abs();
     let secondary = noise.cave_secondary.get([x * 1.7, y * 1.3, z * 1.7]);
@@ -398,22 +402,17 @@ pub(super) fn rounded_height_to_i64(height: f64) -> i64 {
 
     if rounded.is_sign_negative() {
         loop {
-            if i64_to_f64(quantized_height) <= rounded {
+            if I64Vec2::new(quantized_height, 0).as_dvec2().x <= rounded {
                 break quantized_height;
             }
             quantized_height -= 1;
         }
     } else {
         loop {
-            if i64_to_f64(quantized_height) >= rounded {
+            if I64Vec2::new(quantized_height, 0).as_dvec2().x >= rounded {
                 break quantized_height;
             }
             quantized_height += 1;
         }
     }
-}
-
-#[allow(clippy::cast_precision_loss)]
-const fn i64_to_f64(value: i64) -> f64 {
-    value as f64
 }

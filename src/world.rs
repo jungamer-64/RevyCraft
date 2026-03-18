@@ -40,6 +40,8 @@ const DEFAULT_VIEW_RADIUS: i32 = 2;
 const DEFAULT_UNLOAD_RADIUS: i32 = 3;
 const DEFAULT_WORLD_SEED: u64 = 0x5EED_CAFE_1234_5678;
 const WORLD_SAVE_ROOT: &str = "worlds";
+const I64_MIN_F64: f64 = -9_223_372_036_854_775_808.0;
+const I64_UPPER_BOUND_F64: f64 = 9_223_372_036_854_775_808.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BlockType {
@@ -169,11 +171,12 @@ impl ChunkCoord {
     }
 
     pub(crate) fn world_origin(self, layout: WorldLayout) -> DVec3 {
-        DVec3::new(
-            i64_to_f64(self.x) * i64_to_f64(layout.chunk_size),
-            0.0,
-            i64_to_f64(self.z) * i64_to_f64(layout.chunk_size),
+        I64Vec3::new(
+            self.x * layout.chunk_size(),
+            0,
+            self.z * layout.chunk_size(),
         )
+        .as_dvec3()
     }
 }
 
@@ -616,12 +619,6 @@ impl VoxelWorld {
     }
 }
 
-#[allow(clippy::cast_precision_loss)]
 fn component_fits_i64(value: f64) -> bool {
-    value.is_finite() && value >= i64::MIN as f64 && value <= i64::MAX as f64
-}
-
-#[allow(clippy::cast_precision_loss)]
-const fn i64_to_f64(value: i64) -> f64 {
-    value as f64
+    (I64_MIN_F64..I64_UPPER_BOUND_F64).contains(&value)
 }

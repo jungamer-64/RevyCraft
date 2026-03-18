@@ -1,5 +1,3 @@
-#![allow(clippy::multiple_crate_versions)]
-
 pub(crate) mod cursor;
 pub(crate) mod interaction;
 pub(crate) mod player;
