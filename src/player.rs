@@ -19,7 +19,7 @@ const JUMP_SPEED: f32 = 5.0;
 const MOVE_SPEED: f32 = 10.0;
 const TERMINAL_VELOCITY: f32 = -50.0;
 
-const PLAYER_COLLISION_SAMPLE_Y: [f32; 3] =
+const MOVEMENT_COLLISION_SAMPLE_Y: [f32; 3] =
     [PLAYER_RADIUS, PLAYER_HEIGHT * 0.5, PLAYER_HEIGHT - 0.1];
 const MAX_Y_STEP: f32 = 0.4;
 const MAX_Y_SUBSTEPS: i32 = 20;
@@ -137,19 +137,14 @@ pub fn camera_look_system(resources: CameraLookResources) {
 }
 
 pub fn player_collides_voxel(foot_position: Vec3, voxel: IVec3) -> bool {
-    let block_min = voxel.as_vec3();
-    let block_max = block_min + Vec3::ONE;
+    player_overlaps_voxel_with_samples(foot_position, voxel, &MOVEMENT_COLLISION_SAMPLE_Y)
+}
 
+pub fn player_blocks_block_placement(foot_position: Vec3, voxel: IVec3) -> bool {
     // Placement currently reuses the same capsule samples as movement so the
-    // "can place here" check matches the actual occupied player volume.
-    for &sample_y in &PLAYER_COLLISION_SAMPLE_Y {
-        let sample_center = foot_position + Vec3::Y * sample_y;
-        if sphere_aabb_collides(sample_center, PLAYER_RADIUS, block_min, block_max) {
-            return true;
-        }
-    }
-
-    false
+    // "can place here" check matches the actual occupied player volume. This
+    // wrapper keeps placement semantics separate if we want to diverge later.
+    player_collides_voxel(foot_position, voxel)
 }
 
 #[derive(SystemParam)]
@@ -337,9 +332,9 @@ fn resolve_vertical_movement(
 
 fn collides(world: &VoxelWorld, position: Vec3) -> bool {
     let samples = [
-        position + Vec3::Y * PLAYER_COLLISION_SAMPLE_Y[0],
-        position + Vec3::Y * PLAYER_COLLISION_SAMPLE_Y[1],
-        position + Vec3::Y * PLAYER_COLLISION_SAMPLE_Y[2],
+        position + Vec3::Y * MOVEMENT_COLLISION_SAMPLE_Y[0],
+        position + Vec3::Y * MOVEMENT_COLLISION_SAMPLE_Y[1],
+        position + Vec3::Y * MOVEMENT_COLLISION_SAMPLE_Y[2],
     ];
 
     let min = (position + Vec3::new(-PLAYER_RADIUS, 0.0, -PLAYER_RADIUS))
@@ -390,6 +385,24 @@ fn sphere_aabb_collides(center: Vec3, radius: f32, aabb_min: Vec3, aabb_max: Vec
     sq_dist < radius * radius
 }
 
+fn player_overlaps_voxel_with_samples(
+    foot_position: Vec3,
+    voxel: IVec3,
+    sample_offsets_y: &[f32],
+) -> bool {
+    let block_min = voxel.as_vec3();
+    let block_max = block_min + Vec3::ONE;
+
+    for &sample_y in sample_offsets_y {
+        let sample_center = foot_position + Vec3::Y * sample_y;
+        if sphere_aabb_collides(sample_center, PLAYER_RADIUS, block_min, block_max) {
+            return true;
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +416,14 @@ mod tests {
     fn player_does_not_collide_when_clear_of_voxel() {
         assert!(!player_collides_voxel(
             Vec3::new(2.0, 0.0, 2.0),
+            IVec3::ZERO
+        ));
+    }
+
+    #[test]
+    fn placement_collision_matches_player_volume() {
+        assert!(player_blocks_block_placement(
+            Vec3::new(0.2, 0.0, 0.2),
             IVec3::ZERO
         ));
     }

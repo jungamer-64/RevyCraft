@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use crate::cursor::cursor_is_locked;
-use crate::player::{EYE_HEIGHT, MainCamera, player_collides_voxel};
+use crate::player::{EYE_HEIGHT, MainCamera, player_blocks_block_placement};
 use crate::raycast::raycast_voxel;
 use crate::world::{BlockMaterials, BlockMesh, BlockType, VoxelWorld, remove_block, spawn_block};
 
@@ -109,10 +109,8 @@ impl BlockEditResources<'_, '_> {
         let block_mesh = &block_mesh.0;
         let selected_block = selected_block.0;
 
-        if let Some(edit_action) = current_edit_action(&mouse_button) {
-            if edit_action.remove {
-                // Intentionally resolve removal first so a same-frame
-                // left+right click places against the newly exposed face.
+        match current_edit_action(&mouse_button) {
+            Some(EditAction::Remove) => {
                 current_raycast = handle_block_removal(
                     &mut commands,
                     &mut voxel_world,
@@ -123,9 +121,8 @@ impl BlockEditResources<'_, '_> {
                     ray_direction,
                 );
             }
-
-            if edit_action.place
-                && handle_block_placement(
+            Some(EditAction::Place) => {
+                if handle_block_placement(
                     &mut commands,
                     &mut voxel_world,
                     block_mesh,
@@ -133,10 +130,36 @@ impl BlockEditResources<'_, '_> {
                     selected_block,
                     current_raycast,
                     foot_position,
-                )
-            {
-                current_raycast = raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
+                ) {
+                    current_raycast = raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
+                }
             }
+            Some(EditAction::RemoveThenPlace) => {
+                // Left+right in the same frame is treated as "replace the hit
+                // block with the selected block on the newly exposed face".
+                current_raycast = handle_block_removal(
+                    &mut commands,
+                    &mut voxel_world,
+                    block_mesh,
+                    &block_materials,
+                    current_raycast,
+                    ray_origin,
+                    ray_direction,
+                );
+
+                if handle_block_placement(
+                    &mut commands,
+                    &mut voxel_world,
+                    block_mesh,
+                    &block_materials,
+                    selected_block,
+                    current_raycast,
+                    foot_position,
+                ) {
+                    current_raycast = raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
+                }
+            }
+            None => {}
         }
 
         *highlight_target = HighlightTarget(current_raycast);
@@ -177,19 +200,21 @@ pub fn highlight_system(resources: HighlightResources) {
 }
 
 #[derive(Clone, Copy)]
-struct EditAction {
-    remove: bool,
-    place: bool,
+enum EditAction {
+    Remove,
+    Place,
+    RemoveThenPlace,
 }
 
 fn current_edit_action(mouse_button: &ButtonInput<MouseButton>) -> Option<EditAction> {
     let remove = mouse_button.just_pressed(MouseButton::Left);
     let place = mouse_button.just_pressed(MouseButton::Right);
 
-    if remove || place {
-        Some(EditAction { remove, place })
-    } else {
-        None
+    match (remove, place) {
+        (true, true) => Some(EditAction::RemoveThenPlace),
+        (true, false) => Some(EditAction::Remove),
+        (false, true) => Some(EditAction::Place),
+        (false, false) => None,
     }
 }
 
@@ -231,7 +256,7 @@ fn handle_block_placement(
     };
 
     let place_pos = hit_block + hit_normal;
-    if player_collides_voxel(foot_position, place_pos) {
+    if player_blocks_block_placement(foot_position, place_pos) {
         return false;
     }
 
