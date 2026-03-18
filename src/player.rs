@@ -80,7 +80,7 @@ pub struct CameraMovementResources<'w, 's> {
 
 impl CameraMovementResources<'_, '_> {
     fn run(mut self) {
-        if !cursor_is_locked(&self.cursor_options) {
+        if !cursor_is_locked(self.cursor_options.single().ok()) {
             return;
         }
 
@@ -114,7 +114,7 @@ pub struct CameraLookResources<'w, 's> {
 
 impl CameraLookResources<'_, '_> {
     fn run(mut self) {
-        if !cursor_is_locked(&self.cursor_options) {
+        if !cursor_is_locked(self.cursor_options.single().ok()) {
             return;
         }
 
@@ -142,6 +142,7 @@ pub fn camera_look_system(resources: CameraLookResources) {
     resources.run();
 }
 
+#[cfg(test)]
 pub fn player_collides_voxel(foot_position: Vec3, voxel: IVec3) -> bool {
     player_overlaps_voxel_with_samples(
         foot_position,
@@ -154,13 +155,12 @@ pub fn player_collides_voxel(foot_position: Vec3, voxel: IVec3) -> bool {
 pub fn player_blocks_block_placement(foot_position: Vec3, voxel: IVec3) -> bool {
     // Placement uses the same occupied volume as movement, but treats exact
     // tangential contact as blocked so block placement stays conservative.
-    player_collides_voxel(foot_position, voxel)
-        || player_overlaps_voxel_with_samples(
-            foot_position,
-            voxel,
-            &MOVEMENT_COLLISION_SAMPLE_Y,
-            CollisionBoundary::Inclusive,
-        )
+    player_overlaps_voxel_with_samples(
+        foot_position,
+        voxel,
+        &MOVEMENT_COLLISION_SAMPLE_Y,
+        CollisionBoundary::Inclusive,
+    )
 }
 
 #[derive(SystemParam)]
@@ -285,6 +285,8 @@ fn resolve_horizontal_movement(
     player: &mut PlayerPhysics,
     delta: Vec3,
 ) {
+    // Resolve each horizontal axis independently so movement can slide along
+    // walls instead of stopping completely on corner contact.
     resolve_horizontal_axis(
         world,
         foot_position,

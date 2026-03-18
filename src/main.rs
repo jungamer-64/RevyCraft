@@ -10,7 +10,8 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow, Window, WindowPlugin, WindowResolution};
 use interaction::{
     HighlightTarget, SelectedBlock, block_edit_system, block_selection_system, highlight_system,
-    spawn_block_highlighter,
+    spawn_block_highlighter, update_highlight_target_post_edit_system,
+    update_highlight_target_pre_edit_system,
 };
 use player::{
     camera_look_system, camera_movement_system, lock_cursor, spawn_camera, toggle_cursor_grab,
@@ -43,8 +44,10 @@ fn main() {
             (
                 camera_movement_system,
                 camera_look_system,
+                update_highlight_target_pre_edit_system,
                 block_edit_system,
                 sync_block_render_system,
+                update_highlight_target_post_edit_system,
                 block_selection_system,
                 highlight_system,
                 toggle_cursor_grab,

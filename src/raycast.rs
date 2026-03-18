@@ -28,8 +28,8 @@ pub fn raycast_voxel(
 
 fn pick_normal(dir: Vec3) -> IVec3 {
     // This is only used when the ray origin already starts inside a solid block.
-    // We still return the most-opposed axis so callers get a stable face normal
-    // instead of a sentinel value in that edge case.
+    // We still return the most-opposed axis so placement code gets a stable
+    // face normal instead of a sentinel value in that edge case.
     let abs = Vec3::new(dir.x.abs(), dir.y.abs(), dir.z.abs());
     let step = compute_step(dir);
     if abs.x >= abs.y && abs.x >= abs.z {
@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn raycast_hits_single_block_and_reports_face_normal() {
         let mut world = VoxelWorld::default();
-        world.set_block(IVec3::new(1, 0, 0), BlockType::Stone);
+        world.try_insert_block(IVec3::new(1, 0, 0), BlockType::Stone);
 
         let hit = raycast_voxel(
             &world,

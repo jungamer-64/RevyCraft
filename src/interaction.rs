@@ -66,95 +66,70 @@ pub fn block_selection_system(resources: BlockSelectionResources) {
 }
 
 #[derive(SystemParam)]
-pub struct BlockEditResources<'w, 's> {
-    mouse_button: Res<'w, ButtonInput<MouseButton>>,
+pub struct HighlightTargetUpdateResources<'w, 's> {
     cursor_options: Query<'w, 's, &'static CursorOptions, With<PrimaryWindow>>,
     camera_query: Query<'w, 's, &'static Transform, With<MainCamera>>,
+    voxel_world: Res<'w, VoxelWorld>,
+    highlight_target: ResMut<'w, HighlightTarget>,
+}
+
+impl HighlightTargetUpdateResources<'_, '_> {
+    fn run(mut self) {
+        self.highlight_target.0 = compute_highlight_target(
+            self.cursor_options.single().ok(),
+            self.camera_query.single().ok(),
+            &self.voxel_world,
+        );
+    }
+}
+
+pub fn update_highlight_target_pre_edit_system(resources: HighlightTargetUpdateResources) {
+    resources.run();
+}
+
+pub fn update_highlight_target_post_edit_system(resources: HighlightTargetUpdateResources) {
+    resources.run();
+}
+
+#[derive(SystemParam)]
+pub struct BlockEditResources<'w, 's> {
+    mouse_button: Res<'w, ButtonInput<MouseButton>>,
+    camera_query: Query<'w, 's, &'static Transform, With<MainCamera>>,
     selected_block: Res<'w, SelectedBlock>,
+    highlight_target: Res<'w, HighlightTarget>,
     voxel_world: ResMut<'w, VoxelWorld>,
     render_sync_queue: ResMut<'w, RenderSyncQueue>,
-    highlight_target: ResMut<'w, HighlightTarget>,
 }
 
 impl BlockEditResources<'_, '_> {
     fn run(self) {
         let Self {
             mouse_button,
-            cursor_options,
             camera_query,
             selected_block,
+            highlight_target,
             mut voxel_world,
             mut render_sync_queue,
-            mut highlight_target,
         } = self;
 
-        if !cursor_is_locked(&cursor_options) {
-            *highlight_target = HighlightTarget(None);
-            return;
-        }
-
-        let Ok(transform) = camera_query.single() else {
-            *highlight_target = HighlightTarget(None);
+        let Some(edit_action) = current_edit_action(&mouse_button) else {
             return;
         };
 
-        let ray_origin = transform.translation;
-        let ray_direction: Vec3 = transform.forward().into();
-        let foot_position = ray_origin - Vec3::Y * EYE_HEIGHT;
-        let mut current_raycast = raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
-        let selected_block = selected_block.0;
+        let Some(edit_context) = build_block_edit_context(
+            camera_query.single().ok(),
+            highlight_target.0,
+            selected_block.0,
+        ) else {
+            return;
+        };
 
-        match current_edit_action(&mouse_button) {
-            Some(EditAction::Remove) => {
-                current_raycast = handle_block_removal(
-                    &mut voxel_world,
-                    &mut render_sync_queue,
-                    current_raycast,
-                    ray_origin,
-                    ray_direction,
-                );
-            }
-            Some(EditAction::Place) => {
-                if handle_block_placement(
-                    &mut voxel_world,
-                    &mut render_sync_queue,
-                    selected_block,
-                    current_raycast,
-                    foot_position,
-                ) {
-                    current_raycast = raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
-                }
-            }
-            Some(EditAction::RemoveThenPlace) => {
-                // Left+right in the same frame is treated as "replace the hit
-                // block with the selected block on the newly exposed face".
-                if let Some(next_raycast) = handle_block_removal(
-                    &mut voxel_world,
-                    &mut render_sync_queue,
-                    current_raycast,
-                    ray_origin,
-                    ray_direction,
-                ) {
-                    current_raycast = Some(next_raycast);
-
-                    if handle_block_placement(
-                        &mut voxel_world,
-                        &mut render_sync_queue,
-                        selected_block,
-                        current_raycast,
-                        foot_position,
-                    ) {
-                        current_raycast =
-                            raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
-                    }
-                } else {
-                    current_raycast = None;
-                }
-            }
-            None => {}
-        }
-
-        *highlight_target = HighlightTarget(current_raycast);
+        apply_edit_action(
+            edit_action,
+            edit_context,
+            &mut voxel_world,
+            &mut render_sync_queue,
+        );
     }
 }
 
@@ -198,6 +173,15 @@ enum EditAction {
     RemoveThenPlace,
 }
 
+#[derive(Clone, Copy)]
+struct BlockEditContext {
+    ray_origin: Vec3,
+    ray_direction: Vec3,
+    foot_position: Vec3,
+    current_raycast: Option<(IVec3, IVec3)>,
+    selected_block: BlockType,
+}
+
 fn current_edit_action(mouse_button: &ButtonInput<MouseButton>) -> Option<EditAction> {
     let remove = mouse_button.just_pressed(MouseButton::Left);
     let place = mouse_button.just_pressed(MouseButton::Right);
@@ -210,24 +194,91 @@ fn current_edit_action(mouse_button: &ButtonInput<MouseButton>) -> Option<EditAc
     }
 }
 
-fn handle_block_removal(
+fn build_block_edit_context(
+    camera_transform: Option<&Transform>,
+    current_raycast: Option<(IVec3, IVec3)>,
+    selected_block: BlockType,
+) -> Option<BlockEditContext> {
+    let transform = camera_transform?;
+    let ray_origin = transform.translation;
+    let ray_direction: Vec3 = transform.forward().into();
+
+    Some(BlockEditContext {
+        ray_origin,
+        ray_direction,
+        foot_position: ray_origin - Vec3::Y * EYE_HEIGHT,
+        current_raycast,
+        selected_block,
+    })
+}
+
+fn apply_edit_action(
+    edit_action: EditAction,
+    context: BlockEditContext,
     voxel_world: &mut VoxelWorld,
     render_sync_queue: &mut RenderSyncQueue,
-    current_raycast: Option<(IVec3, IVec3)>,
-    ray_origin: Vec3,
-    ray_direction: Vec3,
-) -> Option<(IVec3, IVec3)> {
-    if let Some((hit_block, _)) = current_raycast {
-        let _ = voxel_world.remove_block(hit_block);
-        render_sync_queue.mark_with_neighbors(hit_block);
-
-        raycast_voxel(voxel_world, ray_origin, ray_direction, 8.0)
-    } else {
-        None
+) {
+    match edit_action {
+        EditAction::Remove => {
+            let _ =
+                remove_highlighted_block(voxel_world, render_sync_queue, context.current_raycast);
+        }
+        EditAction::Place => {
+            let _ = place_block_at_target(
+                voxel_world,
+                render_sync_queue,
+                context.selected_block,
+                context.current_raycast,
+                context.foot_position,
+            );
+        }
+        EditAction::RemoveThenPlace => {
+            // Left+right in the same frame is treated as "replace the hit
+            // block with the selected block on the newly exposed face".
+            if remove_highlighted_block(voxel_world, render_sync_queue, context.current_raycast)
+                .is_some()
+            {
+                let replacement_target =
+                    raycast_voxel(voxel_world, context.ray_origin, context.ray_direction, 8.0);
+                let _ = place_block_at_target(
+                    voxel_world,
+                    render_sync_queue,
+                    context.selected_block,
+                    replacement_target,
+                    context.foot_position,
+                );
+            }
+        }
     }
 }
 
-fn handle_block_placement(
+fn compute_highlight_target(
+    cursor_options: Option<&CursorOptions>,
+    camera_transform: Option<&Transform>,
+    voxel_world: &VoxelWorld,
+) -> Option<(IVec3, IVec3)> {
+    if !cursor_is_locked(cursor_options) {
+        return None;
+    }
+
+    let transform = camera_transform?;
+    let ray_origin = transform.translation;
+    let ray_direction: Vec3 = transform.forward().into();
+    raycast_voxel(voxel_world, ray_origin, ray_direction, 8.0)
+}
+
+fn remove_highlighted_block(
+    voxel_world: &mut VoxelWorld,
+    render_sync_queue: &mut RenderSyncQueue,
+    current_raycast: Option<(IVec3, IVec3)>,
+) -> Option<IVec3> {
+    let (hit_block, _) = current_raycast?;
+    let _ = voxel_world.remove_block(hit_block)?;
+    render_sync_queue.mark_with_neighbors(hit_block);
+    Some(hit_block)
+}
+
+fn place_block_at_target(
     voxel_world: &mut VoxelWorld,
     render_sync_queue: &mut RenderSyncQueue,
     selected_block: BlockType,
@@ -243,11 +294,134 @@ fn handle_block_placement(
         return false;
     }
 
-    if !voxel_world.set_block(place_pos, selected_block) {
+    if !voxel_world.try_insert_block(place_pos, selected_block) {
         return false;
     }
 
     render_sync_queue.mark_with_neighbors(place_pos);
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::window::CursorGrabMode;
+
+    use crate::world::{BlockEntityIndex, BlockMesh, sync_block_render_system};
+
+    fn test_block_materials() -> BlockMaterials {
+        BlockMaterials {
+            grass: Handle::default(),
+            dirt: Handle::default(),
+            stone: Handle::default(),
+            highlight: Handle::default(),
+        }
+    }
+
+    fn setup_interaction_app(cursor_grab_mode: CursorGrabMode) -> App {
+        let mut app = App::new();
+        app.insert_resource(ButtonInput::<MouseButton>::default());
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.insert_resource(VoxelWorld::default());
+        app.insert_resource(RenderSyncQueue::default());
+        app.insert_resource(BlockEntityIndex::default());
+        app.insert_resource(BlockMesh(Handle::default()));
+        app.insert_resource(test_block_materials());
+        app.insert_resource(HighlightTarget::default());
+        app.init_resource::<SelectedBlock>();
+        app.add_systems(
+            Update,
+            (
+                update_highlight_target_pre_edit_system,
+                block_edit_system,
+                sync_block_render_system,
+                update_highlight_target_post_edit_system,
+            )
+                .chain(),
+        );
+
+        app.world_mut().spawn((
+            PrimaryWindow,
+            CursorOptions {
+                grab_mode: cursor_grab_mode,
+                ..Default::default()
+            },
+        ));
+        app.world_mut().spawn((
+            MainCamera,
+            Transform::from_xyz(1.25, 3.62, 0.5).looking_to(Vec3::X, Vec3::Y),
+        ));
+
+        app
+    }
+
+    #[test]
+    fn post_edit_highlight_tracks_newly_placed_block() {
+        let mut app = setup_interaction_app(CursorGrabMode::Locked);
+        {
+            let mut world = app.world_mut().resource_mut::<VoxelWorld>();
+            let _ = world.try_insert_block(IVec3::new(3, 3, 0), BlockType::Stone);
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+
+        app.update();
+
+        let world = app.world().resource::<VoxelWorld>();
+        assert_eq!(
+            world.block_kind(IVec3::new(2, 3, 0)),
+            Some(BlockType::Grass)
+        );
+        assert_eq!(
+            app.world().resource::<HighlightTarget>().0,
+            Some((IVec3::new(2, 3, 0), IVec3::new(-1, 0, 0)))
+        );
+    }
+
+    #[test]
+    fn remove_then_place_updates_highlight_same_frame() {
+        let mut app = setup_interaction_app(CursorGrabMode::Locked);
+        {
+            let mut world = app.world_mut().resource_mut::<VoxelWorld>();
+            let _ = world.try_insert_block(IVec3::new(3, 3, 0), BlockType::Stone);
+            let _ = world.try_insert_block(IVec3::new(5, 3, 0), BlockType::Stone);
+        }
+        {
+            let mut mouse_buttons = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse_buttons.press(MouseButton::Left);
+            mouse_buttons.press(MouseButton::Right);
+        }
+
+        app.update();
+
+        let world = app.world().resource::<VoxelWorld>();
+        assert!(!world.contains_block(IVec3::new(3, 3, 0)));
+        assert_eq!(
+            world.block_kind(IVec3::new(4, 3, 0)),
+            Some(BlockType::Grass)
+        );
+        assert_eq!(
+            app.world().resource::<HighlightTarget>().0,
+            Some((IVec3::new(4, 3, 0), IVec3::new(-1, 0, 0)))
+        );
+    }
+
+    #[test]
+    fn unlocked_cursor_keeps_highlight_target_none() {
+        let mut app = setup_interaction_app(CursorGrabMode::None);
+        {
+            let mut world = app.world_mut().resource_mut::<VoxelWorld>();
+            let _ = world.try_insert_block(IVec3::new(3, 3, 0), BlockType::Stone);
+        }
+        app.world_mut().insert_resource(HighlightTarget(Some((
+            IVec3::new(99, 99, 99),
+            IVec3::new(1, 0, 0),
+        ))));
+
+        app.update();
+
+        assert_eq!(app.world().resource::<HighlightTarget>().0, None);
+    }
 }

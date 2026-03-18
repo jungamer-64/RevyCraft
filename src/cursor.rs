@@ -1,9 +1,8 @@
-use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy::window::{CursorGrabMode, CursorOptions};
 
-pub fn cursor_is_locked(cursor_options: &Query<&CursorOptions, With<PrimaryWindow>>) -> bool {
+pub fn cursor_is_locked(cursor_options: Option<&CursorOptions>) -> bool {
     matches!(
-        cursor_options.single(),
-        Ok(opts) if opts.grab_mode == CursorGrabMode::Locked
+        cursor_options,
+        Some(opts) if opts.grab_mode == CursorGrabMode::Locked
     )
 }

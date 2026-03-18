@@ -45,7 +45,9 @@ impl VoxelWorld {
             .map(|block_data| block_data.kind)
     }
 
-    pub(crate) fn set_block(&mut self, coordinate: IVec3, block_type: BlockType) -> bool {
+    // This is intentionally insert-only so placement can reject overwriting
+    // existing solids without mutating the current block.
+    pub(crate) fn try_insert_block(&mut self, coordinate: IVec3, block_type: BlockType) -> bool {
         if self.contains_block(coordinate) {
             return false;
         }
@@ -102,8 +104,8 @@ impl RenderSyncQueue {
         self.0.extend(world.iter_block_coords());
     }
 
-    fn drain(&mut self) -> Vec<IVec3> {
-        self.0.drain().collect()
+    fn drain(&mut self) -> std::collections::hash_set::Drain<'_, IVec3> {
+        self.0.drain()
     }
 }
 
@@ -275,6 +277,8 @@ impl TerrainSettings {
         }
     }
 
+    // Terrain height is intentionally quantized to integer block levels after
+    // applying the float noise profile.
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     fn surface_height(&self, x: i32, z: i32) -> i32 {
         let noise = (x as f32 * self.horizontal_frequency).sin()
@@ -338,7 +342,7 @@ pub fn populate_terrain(voxel_world: &mut VoxelWorld, terrain_settings: &Terrain
 
             for y in 0..=height {
                 let block_type = terrain_settings.block_type_at_height(y, height);
-                let _ = voxel_world.set_block(IVec3::new(x, y, z), block_type);
+                let _ = voxel_world.try_insert_block(IVec3::new(x, y, z), block_type);
             }
         }
     }
@@ -374,7 +378,7 @@ mod tests {
     #[test]
     fn block_is_exposed_when_any_face_touches_air() {
         let mut world = VoxelWorld::default();
-        let _ = world.set_block(IVec3::ZERO, BlockType::Stone);
+        let _ = world.try_insert_block(IVec3::ZERO, BlockType::Stone);
 
         assert!(world.is_exposed(IVec3::ZERO));
     }
@@ -382,9 +386,9 @@ mod tests {
     #[test]
     fn block_is_not_exposed_when_fully_enclosed() {
         let mut world = VoxelWorld::default();
-        let _ = world.set_block(IVec3::ZERO, BlockType::Stone);
+        let _ = world.try_insert_block(IVec3::ZERO, BlockType::Stone);
         for offset in NEIGHBORS {
-            let _ = world.set_block(offset, BlockType::Stone);
+            let _ = world.try_insert_block(offset, BlockType::Stone);
         }
 
         assert!(!world.is_exposed(IVec3::ZERO));
@@ -406,6 +410,10 @@ mod tests {
         for offset in NEIGHBORS {
             assert!(queue.0.contains(&offset));
         }
+
+        let drained_count = queue.drain().count();
+        assert_eq!(drained_count, 7);
+        assert!(queue.0.is_empty());
     }
 
     #[test]
@@ -427,16 +435,16 @@ mod tests {
             RenderSyncState::Missing
         );
 
-        let _ = missing_world.set_block(IVec3::ZERO, BlockType::Grass);
+        let _ = missing_world.try_insert_block(IVec3::ZERO, BlockType::Grass);
         assert_eq!(
             render_sync_state_at(&missing_world, IVec3::ZERO),
             RenderSyncState::Exposed(BlockType::Grass)
         );
 
         let mut hidden_world = VoxelWorld::default();
-        let _ = hidden_world.set_block(IVec3::ZERO, BlockType::Stone);
+        let _ = hidden_world.try_insert_block(IVec3::ZERO, BlockType::Stone);
         for offset in NEIGHBORS {
-            let _ = hidden_world.set_block(offset, BlockType::Stone);
+            let _ = hidden_world.try_insert_block(offset, BlockType::Stone);
         }
 
         assert_eq!(
@@ -457,7 +465,7 @@ mod tests {
 
         {
             let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-            let _ = world.set_block(IVec3::ZERO, BlockType::Stone);
+            let _ = world.try_insert_block(IVec3::ZERO, BlockType::Stone);
         }
         app.world_mut()
             .resource_mut::<RenderSyncQueue>()
@@ -480,7 +488,7 @@ mod tests {
 
         {
             let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-            let _ = world.set_block(IVec3::ZERO, BlockType::Stone);
+            let _ = world.try_insert_block(IVec3::ZERO, BlockType::Stone);
         }
         app.world_mut()
             .resource_mut::<RenderSyncQueue>()
@@ -490,7 +498,7 @@ mod tests {
         {
             let mut world = app.world_mut().resource_mut::<VoxelWorld>();
             for offset in NEIGHBORS {
-                let _ = world.set_block(offset, BlockType::Stone);
+                let _ = world.try_insert_block(offset, BlockType::Stone);
             }
         }
         app.world_mut()
@@ -514,9 +522,9 @@ mod tests {
         let hidden_target = IVec3::X;
         {
             let mut world = app.world_mut().resource_mut::<VoxelWorld>();
-            let _ = world.set_block(hidden_target, BlockType::Stone);
+            let _ = world.try_insert_block(hidden_target, BlockType::Stone);
             for offset in NEIGHBORS {
-                let _ = world.set_block(hidden_target + offset, BlockType::Stone);
+                let _ = world.try_insert_block(hidden_target + offset, BlockType::Stone);
             }
         }
         app.world_mut()
@@ -581,5 +589,14 @@ mod tests {
         let rugged = TerrainSettings::rugged();
 
         assert!(rugged.surface_height(4, 0) > plains.surface_height(4, 0));
+    }
+
+    #[test]
+    fn try_insert_block_rejects_existing_block() {
+        let mut world = VoxelWorld::default();
+
+        assert!(world.try_insert_block(IVec3::ZERO, BlockType::Grass));
+        assert!(!world.try_insert_block(IVec3::ZERO, BlockType::Stone));
+        assert_eq!(world.block_kind(IVec3::ZERO), Some(BlockType::Grass));
     }
 }
