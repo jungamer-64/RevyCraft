@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 description = "A small Bevy-based voxel demo with first-person camera controls."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/your-org/beby_3d"
+repository = "https://github.com/jungamer-64/beby_3d"
 readme = "README.md"
 keywords = ["bevy", "voxel", "game", "demo"]
 categories = ["game", "simulation"]
 
 [dependencies]
-bevy = "0.18"
+bevy = { version = "0.18", features = ["bevy_ui", "bevy_text", "debug"] }
