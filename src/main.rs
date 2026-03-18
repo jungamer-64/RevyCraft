@@ -1,5 +1,6 @@
 #![allow(clippy::multiple_crate_versions)]
 
+pub(crate) mod cursor;
 pub(crate) mod interaction;
 pub(crate) mod player;
 pub(crate) mod raycast;
@@ -9,13 +10,13 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow, Window, WindowPlugin, WindowResolution};
 use interaction::{
     HighlightTarget, SelectedBlock, block_edit_system, block_selection_system, highlight_system,
-    spawn_block_highlighter, update_raycast_system,
+    spawn_block_highlighter,
 };
 use player::{
     camera_look_system, camera_movement_system, lock_cursor, spawn_camera, toggle_cursor_grab,
 };
 use world::{
-    BlockMesh, BlockType, VoxelWorld, build_terrain, create_block_materials, create_cube_mesh,
+    BlockMesh, VoxelWorld, build_terrain, create_block_materials, create_cube_mesh,
     spawn_directional_light,
 };
 
@@ -31,6 +32,7 @@ fn main() {
         }))
         .insert_resource(VoxelWorld::default())
         .insert_resource(HighlightTarget::default())
+        .init_resource::<SelectedBlock>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -38,7 +40,6 @@ fn main() {
                 camera_movement_system,
                 camera_look_system,
                 block_edit_system,
-                update_raycast_system,
                 block_selection_system,
                 highlight_system,
                 toggle_cursor_grab,
@@ -62,8 +63,6 @@ fn setup(
 
     let cube_mesh = create_cube_mesh(&mut meshes);
     commands.insert_resource(BlockMesh(cube_mesh.clone()));
-
-    commands.insert_resource(SelectedBlock(BlockType::Grass));
 
     build_terrain(
         &mut commands,

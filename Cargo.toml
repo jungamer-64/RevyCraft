@@ -11,3 +11,12 @@ categories = ["game", "simulation"]
 
 [dependencies]
 bevy = { version = "0.18", features = ["bevy_ui", "bevy_text", "debug"] }
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+cargo = "deny"
+nursery = "deny"

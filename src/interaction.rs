@@ -1,14 +1,21 @@
 use bevy::ecs::system::SystemParam;
 use bevy::input::{ButtonInput, keyboard::KeyCode, mouse::MouseButton};
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy::window::{CursorOptions, PrimaryWindow};
 
+use crate::cursor::cursor_is_locked;
 use crate::player::{EYE_HEIGHT, MainCamera, player_collides_voxel};
 use crate::raycast::raycast_voxel;
 use crate::world::{BlockMaterials, BlockMesh, BlockType, VoxelWorld, remove_block, spawn_block};
 
 #[derive(Resource, Clone, Copy)]
 pub struct SelectedBlock(pub(crate) BlockType);
+
+impl Default for SelectedBlock {
+    fn default() -> Self {
+        Self(BlockType::Grass)
+    }
+}
 
 #[derive(Resource, Default)]
 pub struct HighlightTarget(pub(crate) Option<(IVec3, IVec3)>);
@@ -32,40 +39,6 @@ pub fn spawn_block_highlighter(
             BlockHighlighter,
         ))
         .insert(Name::new("BlockHighlighter"));
-}
-
-#[derive(SystemParam)]
-pub struct UpdateRaycastResources<'w, 's> {
-    cursor_options: Query<'w, 's, &'static CursorOptions, With<PrimaryWindow>>,
-    camera_query: Query<'w, 's, &'static Transform, With<MainCamera>>,
-    voxel_world: Res<'w, VoxelWorld>,
-    highlight_target: ResMut<'w, HighlightTarget>,
-}
-
-impl UpdateRaycastResources<'_, '_> {
-    fn run(mut self) {
-        if !cursor_is_locked(&self.cursor_options) {
-            *self.highlight_target = HighlightTarget(None);
-            return;
-        }
-
-        let Ok(camera_transform) = self.camera_query.single() else {
-            return;
-        };
-
-        let ray_origin = camera_transform.translation;
-        let ray_direction: Vec3 = camera_transform.forward().into();
-        *self.highlight_target = HighlightTarget(raycast_voxel(
-            &self.voxel_world,
-            ray_origin,
-            ray_direction,
-            8.0,
-        ));
-    }
-}
-
-pub fn update_raycast_system(resources: UpdateRaycastResources) {
-    resources.run();
 }
 
 #[derive(SystemParam)]
@@ -102,19 +75,18 @@ pub struct BlockEditResources<'w, 's> {
     block_materials: Res<'w, BlockMaterials>,
     selected_block: Res<'w, SelectedBlock>,
     voxel_world: ResMut<'w, VoxelWorld>,
+    highlight_target: ResMut<'w, HighlightTarget>,
 }
 
 impl BlockEditResources<'_, '_> {
     fn run(mut self) {
         if !cursor_is_locked(&self.cursor_options) {
+            *self.highlight_target = HighlightTarget(None);
             return;
         }
 
         let Ok(transform) = self.camera_query.single() else {
-            return;
-        };
-
-        let Some(edit_action) = current_edit_action(&self.mouse_button) else {
+            *self.highlight_target = HighlightTarget(None);
             return;
         };
 
@@ -123,13 +95,22 @@ impl BlockEditResources<'_, '_> {
         let foot_position = ray_origin - Vec3::Y * EYE_HEIGHT;
         let mut current_raycast = raycast_voxel(&self.voxel_world, ray_origin, ray_direction, 8.0);
 
-        if edit_action.remove {
-            current_raycast =
-                handle_block_removal(&mut self, current_raycast, ray_origin, ray_direction);
+        if let Some(edit_action) = current_edit_action(&self.mouse_button) {
+            if edit_action.remove {
+                // Refresh the hit immediately after removal so a same-frame
+                // left+right click can place against the updated world state.
+                current_raycast =
+                    handle_block_removal(&mut self, current_raycast, ray_origin, ray_direction);
+            }
+
+            if edit_action.place
+                && handle_block_placement(&mut self, current_raycast, foot_position)
+            {
+                current_raycast = raycast_voxel(&self.voxel_world, ray_origin, ray_direction, 8.0);
+            }
         }
-        if edit_action.place {
-            handle_block_placement(&mut self, current_raycast, foot_position);
-        }
+
+        *self.highlight_target = HighlightTarget(current_raycast);
     }
 }
 
@@ -172,13 +153,6 @@ struct EditAction {
     place: bool,
 }
 
-fn cursor_is_locked(cursor_options: &Query<&CursorOptions, With<PrimaryWindow>>) -> bool {
-    matches!(
-        cursor_options.single(),
-        Ok(cursor_options) if cursor_options.grab_mode == CursorGrabMode::Locked
-    )
-}
-
 fn current_edit_action(mouse_button: &ButtonInput<MouseButton>) -> Option<EditAction> {
     let remove = mouse_button.just_pressed(MouseButton::Left);
     let place = mouse_button.just_pressed(MouseButton::Right);
@@ -215,14 +189,14 @@ fn handle_block_placement(
     resources: &mut BlockEditResources,
     current_raycast: Option<(IVec3, IVec3)>,
     foot_position: Vec3,
-) {
+) -> bool {
     let Some((hit_block, hit_normal)) = current_raycast else {
-        return;
+        return false;
     };
 
     let place_pos = hit_block + hit_normal;
     if player_collides_voxel(foot_position, place_pos) {
-        return;
+        return false;
     }
 
     spawn_block(
@@ -233,4 +207,6 @@ fn handle_block_placement(
         place_pos,
         resources.selected_block.0,
     );
+
+    true
 }

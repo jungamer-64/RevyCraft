@@ -7,6 +7,7 @@ use bevy::input::{
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
+use crate::cursor::cursor_is_locked;
 use crate::world::VoxelWorld;
 
 pub const EYE_HEIGHT: f32 = 1.62;
@@ -16,6 +17,7 @@ const PLAYER_RADIUS: f32 = 0.3;
 const GRAVITY: f32 = 9.81;
 const JUMP_SPEED: f32 = 5.0;
 const MOVE_SPEED: f32 = 10.0;
+const TERMINAL_VELOCITY: f32 = -50.0;
 
 const PLAYER_COLLISION_SAMPLE_Y: [f32; 3] =
     [PLAYER_RADIUS, PLAYER_HEIGHT * 0.5, PLAYER_HEIGHT - 0.1];
@@ -26,9 +28,13 @@ const MAX_Y_SUBSTEPS: i32 = 20;
 pub struct MainCamera;
 
 #[derive(Component)]
-struct PlayerCamera {
+struct CameraOrientation {
     yaw: f32,
     pitch: f32,
+}
+
+#[derive(Component)]
+struct PlayerPhysics {
     velocity: Vec3,
     grounded: bool,
 }
@@ -44,9 +50,8 @@ pub fn spawn_camera(commands: &mut Commands) {
             Transform::from_xyz(0.0, 8.0, 15.0).with_rotation(rotation),
         ))
         .insert(MainCamera)
-        .insert(PlayerCamera {
-            yaw,
-            pitch,
+        .insert(CameraOrientation { yaw, pitch })
+        .insert(PlayerPhysics {
             velocity: Vec3::ZERO,
             grounded: false,
         });
@@ -63,7 +68,7 @@ pub struct CameraMovementResources<'w, 's> {
     time: Res<'w, Time>,
     keyboard: Res<'w, ButtonInput<KeyCode>>,
     cursor_options: Query<'w, 's, &'static CursorOptions, With<PrimaryWindow>>,
-    query: Query<'w, 's, (&'static mut Transform, &'static mut PlayerCamera), With<MainCamera>>,
+    query: Query<'w, 's, (&'static mut Transform, &'static mut PlayerPhysics), With<MainCamera>>,
     voxel_world: Res<'w, VoxelWorld>,
 }
 
@@ -97,7 +102,8 @@ pub fn camera_movement_system(resources: CameraMovementResources) {
 pub struct CameraLookResources<'w, 's> {
     accumulated_mouse_motion: Res<'w, AccumulatedMouseMotion>,
     cursor_options: Query<'w, 's, &'static CursorOptions, With<PrimaryWindow>>,
-    query: Query<'w, 's, (&'static mut Transform, &'static mut PlayerCamera), With<MainCamera>>,
+    query:
+        Query<'w, 's, (&'static mut Transform, &'static mut CameraOrientation), With<MainCamera>>,
 }
 
 impl CameraLookResources<'_, '_> {
@@ -171,13 +177,6 @@ pub fn toggle_cursor_grab(resources: CursorGrabResources) {
     resources.run();
 }
 
-fn cursor_is_locked(cursor_options: &Query<&CursorOptions, With<PrimaryWindow>>) -> bool {
-    matches!(
-        cursor_options.single(),
-        Ok(cursor_options) if cursor_options.grab_mode == CursorGrabMode::Locked
-    )
-}
-
 const fn apply_cursor_lock(cursor: &mut CursorOptions) {
     cursor.visible = false;
     cursor.grab_mode = CursorGrabMode::Locked;
@@ -203,7 +202,7 @@ const fn foot_to_eye_position(foot_position: Vec3) -> Vec3 {
 fn apply_horizontal_input(
     keyboard: &ButtonInput<KeyCode>,
     transform: &Transform,
-    player: &mut PlayerCamera,
+    player: &mut PlayerPhysics,
 ) {
     let desired_velocity = desired_horizontal_velocity(transform, keyboard);
     player.velocity.x = desired_velocity.x;
@@ -247,20 +246,26 @@ fn movement_basis(transform: &Transform) -> (Vec3, Vec3) {
 fn integrate_vertical_velocity(
     time: &Time,
     keyboard: &ButtonInput<KeyCode>,
-    player: &mut PlayerCamera,
+    player: &mut PlayerPhysics,
 ) {
-    if player.grounded && keyboard.just_pressed(KeyCode::Space) {
-        player.velocity.y = JUMP_SPEED;
-        player.grounded = false;
+    if player.grounded {
+        player.velocity.y = 0.0;
+        if keyboard.just_pressed(KeyCode::Space) {
+            player.velocity.y = JUMP_SPEED;
+            player.grounded = false;
+        }
+        return;
     }
 
-    player.velocity.y -= GRAVITY * time.delta_secs();
+    player.velocity.y = GRAVITY
+        .mul_add(-time.delta_secs(), player.velocity.y)
+        .max(TERMINAL_VELOCITY);
 }
 
 fn resolve_horizontal_movement(
     world: &VoxelWorld,
     foot_position: &mut Vec3,
-    player: &mut PlayerCamera,
+    player: &mut PlayerPhysics,
     delta: Vec3,
 ) {
     resolve_horizontal_axis(
@@ -296,7 +301,7 @@ fn resolve_horizontal_axis(
 fn resolve_vertical_movement(
     world: &VoxelWorld,
     foot_position: &mut Vec3,
-    player: &mut PlayerCamera,
+    player: &mut PlayerPhysics,
     delta_y: f32,
 ) -> bool {
     let mut grounded = false;
