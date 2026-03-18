@@ -1,0 +1,11 @@
+# Minecraft-like server properties for the Rust runtime
+server-ip=
+server-port=25565
+motd=Multi-version Rust server
+max-players=20
+online-mode=false
+level-name=world
+level-type=FLAT
+gamemode=0
+difficulty=1
+view-distance=2

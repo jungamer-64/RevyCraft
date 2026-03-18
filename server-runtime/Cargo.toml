@@ -1,0 +1,22 @@
+[package]
+name = "server-runtime"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bytes.workspace = true
+mc-core = { path = "../mc-core" }
+mc-proto-common = { path = "../mc-proto-common" }
+mc-proto-je-1_7_10 = { path = "../mc-proto-je-1_7_10" }
+md5.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
