@@ -16,8 +16,8 @@ use player::{
     camera_look_system, camera_movement_system, lock_cursor, spawn_camera, toggle_cursor_grab,
 };
 use world::{
-    BlockMesh, VoxelWorld, build_terrain, create_block_materials, create_cube_mesh,
-    spawn_directional_light,
+    BlockMesh, TerrainSettings, VoxelWorld, build_terrain, create_block_materials,
+    create_cube_mesh, spawn_directional_light,
 };
 
 fn main() {
@@ -33,6 +33,7 @@ fn main() {
         .insert_resource(VoxelWorld::default())
         .insert_resource(HighlightTarget::default())
         .init_resource::<SelectedBlock>()
+        .insert_resource(TerrainSettings::from_env())
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -55,8 +56,10 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut voxel_world: ResMut<VoxelWorld>,
+    terrain_settings: Res<TerrainSettings>,
 ) {
     lock_cursor(&mut cursor);
+    let terrain_settings = terrain_settings.into_inner();
 
     let block_materials = create_block_materials(&mut materials);
     commands.insert_resource(block_materials.clone());
@@ -69,6 +72,7 @@ fn setup(
         &mut voxel_world,
         &cube_mesh,
         &block_materials,
+        terrain_settings,
     );
     spawn_directional_light(&mut commands);
     spawn_camera(&mut commands);

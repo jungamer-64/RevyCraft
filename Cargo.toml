@@ -1,10 +1,10 @@
 [package]
-name = "beby_3d"
+name = "RevyCraft"
 version = "0.1.0"
 edition = "2024"
 description = "A small Bevy-based voxel demo with first-person camera controls."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/jungamer-64/beby_3d"
+repository = "https://github.com/jungamer-64/revycraft"
 readme = "README.md"
 keywords = ["bevy", "voxel", "game", "demo"]
 categories = ["game", "simulation"]

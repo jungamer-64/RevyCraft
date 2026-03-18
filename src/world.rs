@@ -97,22 +97,14 @@ impl VoxelWorld {
         &mut self,
         commands: &mut Commands,
         render_assets: &BlockRenderAssets,
-        chunk_size: i32,
+        terrain_settings: &TerrainSettings,
     ) {
-        for x in -chunk_size..chunk_size {
-            for z in -chunk_size..chunk_size {
-                let height = ((x as f32 * 0.3).sin() + (z as f32 * 0.3).cos()).mul_add(2.5, 4.0);
-                let height = height.round() as i32;
+        for x in -terrain_settings.chunk_half_size..terrain_settings.chunk_half_size {
+            for z in -terrain_settings.chunk_half_size..terrain_settings.chunk_half_size {
+                let height = terrain_settings.surface_height(x, z);
 
                 for y in 0..=height {
-                    let block_type = if y == height {
-                        BlockType::Grass
-                    } else if y >= height - 3 {
-                        BlockType::Dirt
-                    } else {
-                        BlockType::Stone
-                    };
-
+                    let block_type = terrain_settings.block_type_at_height(y, height);
                     self.set_block(IVec3::new(x, y, z), block_type);
                 }
             }
@@ -220,6 +212,86 @@ pub struct BlockMaterials {
 #[derive(Resource)]
 pub struct BlockMesh(pub(crate) Handle<Mesh>);
 
+#[derive(Resource, Clone)]
+pub struct TerrainSettings {
+    pub(crate) chunk_half_size: i32,
+    horizontal_frequency: f32,
+    height_amplitude: f32,
+    base_height: f32,
+    surface_depth: i32,
+}
+
+impl Default for TerrainSettings {
+    fn default() -> Self {
+        Self::rolling_hills()
+    }
+}
+
+impl TerrainSettings {
+    pub fn from_env() -> Self {
+        match std::env::var("BEBY_TERRAIN_PRESET")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("plains") => Self::plains(),
+            Some("rugged") => Self::rugged(),
+            _ => Self::rolling_hills(),
+        }
+    }
+
+    pub const fn rolling_hills() -> Self {
+        Self {
+            chunk_half_size: 16,
+            horizontal_frequency: 0.3,
+            height_amplitude: 2.5,
+            base_height: 4.0,
+            surface_depth: 3,
+        }
+    }
+
+    pub const fn plains() -> Self {
+        Self {
+            chunk_half_size: 16,
+            horizontal_frequency: 0.18,
+            height_amplitude: 1.25,
+            base_height: 3.0,
+            surface_depth: 2,
+        }
+    }
+
+    pub const fn rugged() -> Self {
+        Self {
+            chunk_half_size: 16,
+            horizontal_frequency: 0.42,
+            height_amplitude: 4.0,
+            base_height: 5.0,
+            surface_depth: 4,
+        }
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    fn surface_height(&self, x: i32, z: i32) -> i32 {
+        let noise = (x as f32 * self.horizontal_frequency).sin()
+            + (z as f32 * self.horizontal_frequency).cos();
+        noise
+            .mul_add(self.height_amplitude, self.base_height)
+            .round() as i32
+    }
+
+    const fn block_type_at_height(&self, y: i32, surface_height: i32) -> BlockType {
+        if y == surface_height {
+            BlockType::Grass
+        } else if y >= surface_height - self.surface_depth {
+            BlockType::Dirt
+        } else {
+            BlockType::Stone
+        }
+    }
+}
+
 struct BlockRenderAssets<'a> {
     mesh: &'a Handle<Mesh>,
     materials: &'a BlockMaterials,
@@ -280,11 +352,12 @@ pub fn build_terrain(
     voxel_world: &mut VoxelWorld,
     cube_mesh: &Handle<Mesh>,
     block_materials: &BlockMaterials,
+    terrain_settings: &TerrainSettings,
 ) {
     voxel_world.build_demo_terrain(
         commands,
         &BlockRenderAssets::new(cube_mesh, block_materials),
-        16,
+        terrain_settings,
     );
 }
 
@@ -358,5 +431,40 @@ mod tests {
     #[test]
     fn missing_block_is_not_exposed() {
         assert!(!VoxelWorld::default().is_exposed(IVec3::ZERO));
+    }
+
+    #[test]
+    fn terrain_surface_height_matches_default_profile() {
+        let settings = TerrainSettings::default();
+
+        assert_eq!(settings.surface_height(0, 0), 7);
+        assert_eq!(settings.surface_height(10, 0), 7);
+    }
+
+    #[test]
+    fn terrain_layers_use_expected_block_types() {
+        let settings = TerrainSettings::default();
+        let surface_height = 7;
+
+        assert_eq!(
+            settings.block_type_at_height(surface_height, surface_height),
+            BlockType::Grass
+        );
+        assert_eq!(
+            settings.block_type_at_height(surface_height - 2, surface_height),
+            BlockType::Dirt
+        );
+        assert_eq!(
+            settings.block_type_at_height(surface_height - 4, surface_height),
+            BlockType::Stone
+        );
+    }
+
+    #[test]
+    fn terrain_presets_change_height_profile() {
+        let plains = TerrainSettings::plains();
+        let rugged = TerrainSettings::rugged();
+
+        assert!(rugged.surface_height(4, 0) > plains.surface_height(4, 0));
     }
 }
