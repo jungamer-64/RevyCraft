@@ -27,6 +27,9 @@ pub fn raycast_voxel(
 }
 
 fn pick_normal(dir: Vec3) -> IVec3 {
+    // This is only used when the ray origin already starts inside a solid block.
+    // We still return the most-opposed axis so callers get a stable face normal
+    // instead of a sentinel value in that edge case.
     let abs = Vec3::new(dir.x.abs(), dir.y.abs(), dir.z.abs());
     let step = compute_step(dir);
     if abs.x >= abs.y && abs.x >= abs.z {

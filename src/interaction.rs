@@ -79,38 +79,67 @@ pub struct BlockEditResources<'w, 's> {
 }
 
 impl BlockEditResources<'_, '_> {
-    fn run(mut self) {
-        if !cursor_is_locked(&self.cursor_options) {
-            *self.highlight_target = HighlightTarget(None);
+    fn run(self) {
+        let Self {
+            mut commands,
+            mouse_button,
+            cursor_options,
+            camera_query,
+            block_mesh,
+            block_materials,
+            selected_block,
+            mut voxel_world,
+            mut highlight_target,
+        } = self;
+
+        if !cursor_is_locked(&cursor_options) {
+            *highlight_target = HighlightTarget(None);
             return;
         }
 
-        let Ok(transform) = self.camera_query.single() else {
-            *self.highlight_target = HighlightTarget(None);
+        let Ok(transform) = camera_query.single() else {
+            *highlight_target = HighlightTarget(None);
             return;
         };
 
         let ray_origin = transform.translation;
         let ray_direction: Vec3 = transform.forward().into();
         let foot_position = ray_origin - Vec3::Y * EYE_HEIGHT;
-        let mut current_raycast = raycast_voxel(&self.voxel_world, ray_origin, ray_direction, 8.0);
+        let mut current_raycast = raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
+        let block_mesh = &block_mesh.0;
+        let selected_block = selected_block.0;
 
-        if let Some(edit_action) = current_edit_action(&self.mouse_button) {
+        if let Some(edit_action) = current_edit_action(&mouse_button) {
             if edit_action.remove {
-                // Refresh the hit immediately after removal so a same-frame
-                // left+right click can place against the updated world state.
-                current_raycast =
-                    handle_block_removal(&mut self, current_raycast, ray_origin, ray_direction);
+                // Intentionally resolve removal first so a same-frame
+                // left+right click places against the newly exposed face.
+                current_raycast = handle_block_removal(
+                    &mut commands,
+                    &mut voxel_world,
+                    block_mesh,
+                    &block_materials,
+                    current_raycast,
+                    ray_origin,
+                    ray_direction,
+                );
             }
 
             if edit_action.place
-                && handle_block_placement(&mut self, current_raycast, foot_position)
+                && handle_block_placement(
+                    &mut commands,
+                    &mut voxel_world,
+                    block_mesh,
+                    &block_materials,
+                    selected_block,
+                    current_raycast,
+                    foot_position,
+                )
             {
-                current_raycast = raycast_voxel(&self.voxel_world, ray_origin, ray_direction, 8.0);
+                current_raycast = raycast_voxel(&voxel_world, ray_origin, ray_direction, 8.0);
             }
         }
 
-        *self.highlight_target = HighlightTarget(current_raycast);
+        *highlight_target = HighlightTarget(current_raycast);
     }
 }
 
@@ -165,28 +194,35 @@ fn current_edit_action(mouse_button: &ButtonInput<MouseButton>) -> Option<EditAc
 }
 
 fn handle_block_removal(
-    resources: &mut BlockEditResources,
+    commands: &mut Commands,
+    voxel_world: &mut VoxelWorld,
+    block_mesh: &Handle<Mesh>,
+    block_materials: &BlockMaterials,
     current_raycast: Option<(IVec3, IVec3)>,
     ray_origin: Vec3,
     ray_direction: Vec3,
 ) -> Option<(IVec3, IVec3)> {
     if let Some((hit_block, _)) = current_raycast {
         remove_block(
-            &mut resources.commands,
-            &mut resources.voxel_world,
+            commands,
+            voxel_world,
             &hit_block,
-            &resources.block_mesh.0,
-            &resources.block_materials,
+            block_mesh,
+            block_materials,
         );
 
-        raycast_voxel(&resources.voxel_world, ray_origin, ray_direction, 8.0)
+        raycast_voxel(voxel_world, ray_origin, ray_direction, 8.0)
     } else {
         None
     }
 }
 
 fn handle_block_placement(
-    resources: &mut BlockEditResources,
+    commands: &mut Commands,
+    voxel_world: &mut VoxelWorld,
+    block_mesh: &Handle<Mesh>,
+    block_materials: &BlockMaterials,
+    selected_block: BlockType,
     current_raycast: Option<(IVec3, IVec3)>,
     foot_position: Vec3,
 ) -> bool {
@@ -200,12 +236,12 @@ fn handle_block_placement(
     }
 
     spawn_block(
-        &mut resources.commands,
-        &mut resources.voxel_world,
-        &resources.block_mesh.0,
-        &resources.block_materials,
+        commands,
+        voxel_world,
+        block_mesh,
+        block_materials,
         place_pos,
-        resources.selected_block.0,
+        selected_block,
     );
 
     true

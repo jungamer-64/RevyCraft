@@ -108,6 +108,8 @@ pub fn build_terrain(
         }
     }
 
+    // Terrain generation populates block data first, then spawns only exposed
+    // faces in one pass so startup skips neighbor hide/reveal bookkeeping.
     let coords: Vec<IVec3> = voxel_world.blocks.keys().copied().collect();
     for coord in coords {
         if is_exposed(&voxel_world.blocks, coord) {
@@ -178,9 +180,10 @@ fn spawn_block_entity(
 }
 
 fn is_exposed(blocks: &HashMap<IVec3, BlockData>, coord: IVec3) -> bool {
-    NEIGHBORS
-        .iter()
-        .any(|offset| !blocks.contains_key(&(coord + *offset)))
+    blocks.contains_key(&coord)
+        && NEIGHBORS
+            .iter()
+            .any(|offset| !blocks.contains_key(&(coord + *offset)))
 }
 
 pub fn remove_block(
@@ -253,7 +256,7 @@ fn expose_neighbor_entities(
 ) {
     for offset in NEIGHBORS {
         let neighbor_coord = *coordinate + offset;
-        if world.blocks.contains_key(&neighbor_coord) && is_exposed(&world.blocks, neighbor_coord) {
+        if is_exposed(&world.blocks, neighbor_coord) {
             spawn_block_entity(commands, world, mesh, materials, neighbor_coord);
         }
     }
@@ -280,5 +283,10 @@ mod tests {
         }
 
         assert!(!is_exposed(&blocks, IVec3::ZERO));
+    }
+
+    #[test]
+    fn missing_block_is_not_exposed() {
+        assert!(!is_exposed(&HashMap::new(), IVec3::ZERO));
     }
 }

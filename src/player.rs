@@ -140,6 +140,8 @@ pub fn player_collides_voxel(foot_position: Vec3, voxel: IVec3) -> bool {
     let block_min = voxel.as_vec3();
     let block_max = block_min + Vec3::ONE;
 
+    // Placement currently reuses the same capsule samples as movement so the
+    // "can place here" check matches the actual occupied player volume.
     for &sample_y in &PLAYER_COLLISION_SAMPLE_Y {
         let sample_center = foot_position + Vec3::Y * sample_y;
         if sphere_aabb_collides(sample_center, PLAYER_RADIUS, block_min, block_max) {
@@ -177,20 +179,24 @@ pub fn toggle_cursor_grab(resources: CursorGrabResources) {
     resources.run();
 }
 
+#[inline]
 const fn apply_cursor_lock(cursor: &mut CursorOptions) {
     cursor.visible = false;
     cursor.grab_mode = CursorGrabMode::Locked;
 }
 
+#[inline]
 const fn release_cursor(cursor: &mut CursorOptions) {
     cursor.visible = true;
     cursor.grab_mode = CursorGrabMode::None;
 }
 
+#[inline]
 const fn eye_to_foot_position(eye_position: Vec3) -> Vec3 {
     Vec3::new(eye_position.x, eye_position.y - EYE_HEIGHT, eye_position.z)
 }
 
+#[inline]
 const fn foot_to_eye_position(foot_position: Vec3) -> Vec3 {
     Vec3::new(
         foot_position.x,
