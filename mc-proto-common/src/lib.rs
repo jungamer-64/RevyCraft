@@ -1,11 +1,3 @@
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::missing_errors_doc,
-    clippy::module_name_repetitions
-)]
-
 use bytes::BytesMut;
 use mc_core::{
     ConnectionId, CoreCommand, CoreEvent, EntityId, PlayerId, ProtocolVersion, WorldSnapshot,
@@ -47,7 +39,7 @@ pub enum LoginRequest {
     EncryptionResponse,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerListStatus {
     pub version_name: String,
     pub protocol: ProtocolVersion,
@@ -91,12 +83,30 @@ pub enum StorageError {
 }
 
 pub trait WireCodec: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the payload cannot be framed for the
+    /// target wire format.
     fn encode_frame(&self, payload: &[u8]) -> Result<Vec<u8>, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the buffered bytes are malformed for the
+    /// wire format. Returns `Ok(None)` when a full frame is not available yet.
     fn try_decode_frame(&self, buffer: &mut BytesMut) -> Result<Option<Vec<u8>>, ProtocolError>;
 }
 
 pub trait StorageAdapter: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] when the snapshot backend cannot be read or
+    /// when persisted data is invalid.
     fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError>;
+
+    /// # Errors
+    ///
+    /// Returns [`StorageError`] when the snapshot cannot be serialized or
+    /// written to the backing store.
     fn save_snapshot(&self, world_dir: &Path, snapshot: &WorldSnapshot)
     -> Result<(), StorageError>;
 }
@@ -106,21 +116,61 @@ pub trait ProtocolAdapter: Send + Sync {
     fn version_name(&self) -> &'static str;
     fn wire_codec(&self) -> &dyn WireCodec;
     fn storage_adapter(&self) -> &dyn StorageAdapter;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the frame is malformed or unsupported for
+    /// the adapter's handshake phase.
     fn decode_handshake(&self, frame: &[u8]) -> Result<HandshakeIntent, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the frame is malformed or unsupported for
+    /// the adapter's status phase.
     fn decode_status(&self, frame: &[u8]) -> Result<StatusRequest, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the frame is malformed or unsupported for
+    /// the adapter's login phase.
     fn decode_login(&self, frame: &[u8]) -> Result<LoginRequest, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the frame is malformed or unsupported for
+    /// the adapter's play phase.
     fn decode_play(
         &self,
         player_id: PlayerId,
         frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the status response cannot be encoded for
+    /// the adapter's protocol version.
     fn encode_status_response(&self, status: &ServerListStatus) -> Result<Vec<u8>, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the pong packet cannot be encoded for the
+    /// adapter's protocol version.
     fn encode_status_pong(&self, payload: i64) -> Result<Vec<u8>, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the disconnect payload cannot be encoded
+    /// for the given connection phase.
     fn encode_disconnect(
         &self,
         phase: ConnectionPhase,
         reason: &str,
     ) -> Result<Vec<u8>, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the core event cannot be represented in
+    /// the target protocol for the provided session context.
     fn encode_event(
         &self,
         event: &CoreEvent,
@@ -203,6 +253,11 @@ impl PacketWriter {
         self.buffer.extend_from_slice(&value.to_be_bytes());
     }
 
+    /// # Panics
+    ///
+    /// Panics if the final single-byte branch of the varint encoder contains a
+    /// value that does not fit into `u8`. The preceding bitmask check makes
+    /// that unreachable for valid `u32` state.
     pub fn write_varint(&mut self, value: i32) {
         let mut value = u32::from_ne_bytes(value.to_ne_bytes());
         loop {
@@ -210,12 +265,16 @@ impl PacketWriter {
                 self.write_u8(u8::try_from(value).expect("single varint byte should fit"));
                 break;
             }
-            let lower = u8::try_from(value & 0x7f).expect("varint lower bits should fit");
+            let lower = (value & 0x7f) as u8;
             self.write_u8(lower | 0x80);
             value >>= 7;
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::StringTooLong`] when the UTF-8 byte length does
+    /// not fit into a protocol string length prefix.
     pub fn write_string(&mut self, value: &str) -> Result<(), ProtocolError> {
         let bytes = value.as_bytes();
         let length =
@@ -241,6 +300,10 @@ impl<'a> PacketReader<'a> {
         Self { payload, cursor: 0 }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when the payload ends before
+    /// the next byte is available.
     pub fn read_u8(&mut self) -> Result<u8, ProtocolError> {
         let byte = *self
             .payload
@@ -250,38 +313,75 @@ impl<'a> PacketReader<'a> {
         Ok(byte)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when the payload ends before
+    /// the next byte is available.
     pub fn read_i8(&mut self) -> Result<i8, ProtocolError> {
         Ok(i8::from_be_bytes([self.read_u8()?]))
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when the payload ends before
+    /// the boolean byte is available.
     pub fn read_bool(&mut self) -> Result<bool, ProtocolError> {
         Ok(self.read_u8()? != 0)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when fewer than two bytes
+    /// remain in the payload.
     pub fn read_i16(&mut self) -> Result<i16, ProtocolError> {
         Ok(i16::from_be_bytes(self.read_exact::<2>()?))
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when fewer than two bytes
+    /// remain in the payload.
     pub fn read_u16(&mut self) -> Result<u16, ProtocolError> {
         Ok(u16::from_be_bytes(self.read_exact::<2>()?))
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when fewer than four bytes
+    /// remain in the payload.
     pub fn read_i32(&mut self) -> Result<i32, ProtocolError> {
         Ok(i32::from_be_bytes(self.read_exact::<4>()?))
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when fewer than eight bytes
+    /// remain in the payload.
     pub fn read_i64(&mut self) -> Result<i64, ProtocolError> {
         Ok(i64::from_be_bytes(self.read_exact::<8>()?))
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when fewer than four bytes
+    /// remain in the payload.
     pub fn read_f32(&mut self) -> Result<f32, ProtocolError> {
         Ok(f32::from_be_bytes(self.read_exact::<4>()?))
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when fewer than eight bytes
+    /// remain in the payload.
     pub fn read_f64(&mut self) -> Result<f64, ProtocolError> {
         Ok(f64::from_be_bytes(self.read_exact::<8>()?))
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when the varint is incomplete,
+    /// or [`ProtocolError::InvalidVarInt`] when it exceeds the protocol's
+    /// 5-byte representation.
     pub fn read_varint(&mut self) -> Result<i32, ProtocolError> {
         let mut num_read = 0;
         let mut result = 0_u32;
@@ -300,6 +400,11 @@ impl<'a> PacketReader<'a> {
         Ok(i32::from_ne_bytes(result.to_ne_bytes()))
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the length prefix is invalid, the payload
+    /// ends before the string bytes are available, the bytes are not UTF-8, or
+    /// the decoded string exceeds `max_len`.
     pub fn read_string(&mut self, max_len: usize) -> Result<String, ProtocolError> {
         let length = usize::try_from(self.read_varint()?)
             .map_err(|_| ProtocolError::InvalidPacket("negative string length"))?;
@@ -314,6 +419,10 @@ impl<'a> PacketReader<'a> {
         Ok(value.to_string())
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnexpectedEof`] when fewer than `length` bytes
+    /// remain in the payload.
     pub fn read_bytes(&mut self, length: usize) -> Result<&'a [u8], ProtocolError> {
         let end = self.cursor.saturating_add(length);
         let slice = self
@@ -324,7 +433,8 @@ impl<'a> PacketReader<'a> {
         Ok(slice)
     }
 
-    pub fn is_exhausted(&self) -> bool {
+    #[must_use]
+    pub const fn is_exhausted(&self) -> bool {
         self.cursor == self.payload.len()
     }
 
@@ -386,7 +496,7 @@ mod tests {
             reader.read_string(16).expect("string should decode"),
             "hello"
         );
-        assert_eq!(reader.read_f64().expect("double should decode"), 12.5);
+        assert!((reader.read_f64().expect("double should decode") - 12.5).abs() < f64::EPSILON);
         assert!(reader.is_exhausted());
     }
 }

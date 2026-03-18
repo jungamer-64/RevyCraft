@@ -1,10 +1,3 @@
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::missing_errors_doc,
-    clippy::module_name_repetitions
-)]
-
 use bytes::BytesMut;
 use mc_core::{
     ConnectionId, CoreCommand, CoreConfig, CoreEvent, EventTarget, PlayerId, PlayerSummary,
@@ -47,6 +40,10 @@ pub enum RuntimeError {
 }
 
 pub trait Authenticator: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the username cannot be authenticated under
+    /// the current authentication mode.
     fn authenticate(&self, username: &str) -> Result<PlayerId, RuntimeError>;
 }
 
@@ -128,6 +125,10 @@ impl Default for ServerConfig {
 }
 
 impl ServerConfig {
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when `server.properties` cannot be read or
+    /// parsed, or when it contains unsupported configuration values.
     pub fn from_properties(path: &Path) -> Result<Self, RuntimeError> {
         let mut config = Self::default();
         if path.exists() {
@@ -185,7 +186,7 @@ impl ServerConfig {
                         })?;
                     }
                     unknown => {
-                        eprintln!("warning: ignoring unknown server.properties key `{unknown}`")
+                        eprintln!("warning: ignoring unknown server.properties key `{unknown}`");
                     }
                 }
             }
@@ -231,6 +232,7 @@ impl VersionRegistry {
         registry
     }
 
+    #[must_use]
     pub fn resolve(&self, version: ProtocolVersion) -> Option<Arc<dyn ProtocolAdapter>> {
         self.adapters.get(&version.0).cloned()
     }
@@ -256,6 +258,9 @@ impl RunningServer {
         self.local_addr
     }
 
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the server task fails while shutting down.
     pub async fn shutdown(mut self) -> Result<(), RuntimeError> {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
@@ -273,6 +278,13 @@ struct SessionHandle {
 #[derive(Clone, Debug)]
 enum SessionMessage {
     Event(CoreEvent),
+}
+
+struct SessionState {
+    phase: ConnectionPhase,
+    adapter: Option<Arc<dyn ProtocolAdapter>>,
+    player_id: Option<PlayerId>,
+    entity_id: Option<mc_core::EntityId>,
 }
 
 struct RuntimeState {
@@ -324,44 +336,44 @@ impl RuntimeServer {
     ) -> Result<(), RuntimeError> {
         let (mut reader, mut writer) = stream.into_split();
         let default_codec = MinecraftWireCodec;
-        let mut phase = ConnectionPhase::Handshaking;
-        let mut adapter: Option<Arc<dyn ProtocolAdapter>> = None;
         let mut read_buffer = BytesMut::with_capacity(8192);
-        let mut player_id = None;
-        let mut entity_id = None;
+        let mut session = SessionState {
+            phase: ConnectionPhase::Handshaking,
+            adapter: None,
+            player_id: None,
+            entity_id: None,
+        };
 
         loop {
             tokio::select! {
-                read = reader.read_buf(&mut read_buffer) => {
-                    let bytes_read = read?;
-                    if bytes_read == 0 {
+            read = reader.read_buf(&mut read_buffer) => {
+                let bytes_read = read?;
+                if bytes_read == 0 {
+                    break;
+                }
+                loop {
+                    let codec: &dyn WireCodec = session
+                        .adapter
+                        .as_ref()
+                        .map_or(&default_codec, |current| current.wire_codec());
+                    let Some(frame) = codec.try_decode_frame(&mut read_buffer)? else {
                         break;
-                    }
-                    loop {
-                        let codec: &dyn WireCodec = adapter
-                            .as_ref()
-                            .map_or(&default_codec, |current| current.wire_codec());
-                        let Some(frame) = codec.try_decode_frame(&mut read_buffer)? else {
-                            break;
-                        };
-                        let should_close = self
-                            .handle_incoming_frame(
-                                connection_id,
-                                &mut writer,
-                                &mut phase,
-                                &mut adapter,
-                                &mut player_id,
-                                &mut entity_id,
-                                frame,
-                            )
-                            .await?;
-                        if should_close {
-                            self.unregister_session(connection_id, player_id).await?;
-                            return Ok(());
-                        }
+                    };
+                    let should_close = self
+                        .handle_incoming_frame(
+                            connection_id,
+                            &mut writer,
+                            &mut session,
+                            frame,
+                        )
+                        .await?;
+                    if should_close {
+                        self.unregister_session(connection_id, session.player_id).await?;
+                        return Ok(());
                     }
                 }
-                maybe_message = rx.recv() => {
+            }
+            maybe_message = rx.recv() => {
                     let Some(message) = maybe_message else {
                         break;
                     };
@@ -369,22 +381,20 @@ impl RuntimeServer {
                         .handle_outgoing_message(
                             connection_id,
                             &mut writer,
-                            &mut phase,
-                            &mut adapter,
-                            &mut player_id,
-                            &mut entity_id,
+                            &mut session,
                             message,
                         )
                         .await?;
                     if should_close {
-                        self.unregister_session(connection_id, player_id).await?;
+                        self.unregister_session(connection_id, session.player_id).await?;
                         return Ok(());
                     }
                 }
             }
         }
 
-        self.unregister_session(connection_id, player_id).await?;
+        self.unregister_session(connection_id, session.player_id)
+            .await?;
         Ok(())
     }
 
@@ -392,132 +402,161 @@ impl RuntimeServer {
         &self,
         connection_id: ConnectionId,
         writer: &mut tokio::net::tcp::OwnedWriteHalf,
-        phase: &mut ConnectionPhase,
-        adapter: &mut Option<Arc<dyn ProtocolAdapter>>,
-        player_id: &mut Option<PlayerId>,
-        _entity_id: &mut Option<mc_core::EntityId>,
+        session: &mut SessionState,
         frame: Vec<u8>,
     ) -> Result<bool, RuntimeError> {
-        match phase {
+        match session.phase {
             ConnectionPhase::Handshaking => {
-                let intent = handshake_adapter().decode_handshake(&frame)?;
-                let next_phase = match intent.next_state {
-                    HandshakeNextState::Status => ConnectionPhase::Status,
-                    HandshakeNextState::Login => ConnectionPhase::Login,
-                };
-                if let Some(next_adapter) = self.registry.resolve(intent.protocol_version) {
-                    *adapter = Some(next_adapter);
-                    *phase = next_phase;
-                    return Ok(false);
-                }
-
-                let fallback = self.registry.primary_adapter()?;
-                match next_phase {
-                    ConnectionPhase::Status => {
-                        *adapter = Some(fallback);
-                        *phase = ConnectionPhase::Status;
-                        Ok(false)
-                    }
-                    ConnectionPhase::Login => {
-                        let disconnect = fallback.encode_disconnect(
-                            ConnectionPhase::Login,
-                            &format!(
-                                "Unsupported protocol {}. This server supports {} (protocol {}).",
-                                intent.protocol_version.0,
-                                fallback.version_name(),
-                                fallback.protocol_version().0
-                            ),
-                        )?;
-                        write_payload(writer, fallback.wire_codec(), &disconnect).await?;
-                        Ok(true)
-                    }
-                    _ => Ok(true),
-                }
+                self.handle_handshake_frame(writer, session, &frame).await
             }
+            ConnectionPhase::Status => self.handle_status_frame(writer, session, &frame).await,
+            ConnectionPhase::Login => {
+                self.handle_login_frame(connection_id, writer, session, &frame)
+                    .await
+            }
+            ConnectionPhase::Play => self.handle_play_frame(session, &frame).await,
+        }
+    }
+
+    async fn handle_handshake_frame(
+        &self,
+        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        session: &mut SessionState,
+        frame: &[u8],
+    ) -> Result<bool, RuntimeError> {
+        let intent = handshake_adapter().decode_handshake(frame)?;
+        let next_phase = match intent.next_state {
+            HandshakeNextState::Status => ConnectionPhase::Status,
+            HandshakeNextState::Login => ConnectionPhase::Login,
+        };
+        if let Some(next_adapter) = self.registry.resolve(intent.protocol_version) {
+            session.adapter = Some(next_adapter);
+            session.phase = next_phase;
+            return Ok(false);
+        }
+
+        let fallback = self.registry.primary_adapter()?;
+        match next_phase {
             ConnectionPhase::Status => {
-                let current = adapter
-                    .as_ref()
-                    .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
-                match current.decode_status(&frame)? {
-                    StatusRequest::Query => {
-                        let summary = self.player_summary().await;
-                        let response = current.encode_status_response(&ServerListStatus {
-                            version_name: current.version_name().to_string(),
-                            protocol: current.protocol_version(),
-                            players_online: summary.online_players,
-                            max_players: usize::from(summary.max_players),
-                            description: self.config.motd.clone(),
-                        })?;
-                        write_payload(writer, current.wire_codec(), &response).await?;
-                    }
-                    StatusRequest::Ping { payload } => {
-                        let response = current.encode_status_pong(payload)?;
-                        write_payload(writer, current.wire_codec(), &response).await?;
-                        return Ok(true);
-                    }
-                }
+                session.adapter = Some(fallback);
+                session.phase = ConnectionPhase::Status;
                 Ok(false)
             }
             ConnectionPhase::Login => {
-                let current = adapter
-                    .as_ref()
-                    .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
-                match current.decode_login(&frame)? {
-                    LoginRequest::LoginStart { username } => {
-                        let authenticated = self.authenticator.authenticate(&username)?;
-                        self.apply_command(CoreCommand::LoginStart {
-                            connection_id,
-                            protocol_version: current.protocol_version(),
-                            username,
-                            player_id: authenticated,
-                        })
-                        .await?;
-                    }
-                    LoginRequest::EncryptionResponse => {
-                        let disconnect = current.encode_disconnect(
-                            ConnectionPhase::Login,
-                            "online-mode is not implemented",
-                        )?;
-                        write_payload(writer, current.wire_codec(), &disconnect).await?;
-                        return Ok(true);
-                    }
-                }
+                let disconnect = fallback.encode_disconnect(
+                    ConnectionPhase::Login,
+                    &format!(
+                        "Unsupported protocol {}. This server supports {} (protocol {}).",
+                        intent.protocol_version.0,
+                        fallback.version_name(),
+                        fallback.protocol_version().0
+                    ),
+                )?;
+                write_payload(writer, fallback.wire_codec(), &disconnect).await?;
+                Ok(true)
+            }
+            _ => Ok(true),
+        }
+    }
+
+    async fn handle_status_frame(
+        &self,
+        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        session: &SessionState,
+        frame: &[u8],
+    ) -> Result<bool, RuntimeError> {
+        let current = session
+            .adapter
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
+        match current.decode_status(frame)? {
+            StatusRequest::Query => {
+                let summary = self.player_summary().await;
+                let response = current.encode_status_response(&ServerListStatus {
+                    version_name: current.version_name().to_string(),
+                    protocol: current.protocol_version(),
+                    players_online: summary.online_players,
+                    max_players: usize::from(summary.max_players),
+                    description: self.config.motd.clone(),
+                })?;
+                write_payload(writer, current.wire_codec(), &response).await?;
                 Ok(false)
             }
-            ConnectionPhase::Play => {
-                let current = adapter
-                    .as_ref()
-                    .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
-                let Some(current_player_id) = player_id else {
-                    return Ok(true);
-                };
-                if let Some(command) = current.decode_play(*current_player_id, &frame)? {
-                    self.apply_command(command).await?;
-                }
-                Ok(false)
+            StatusRequest::Ping { payload } => {
+                let response = current.encode_status_pong(payload)?;
+                write_payload(writer, current.wire_codec(), &response).await?;
+                Ok(true)
             }
         }
+    }
+
+    async fn handle_login_frame(
+        &self,
+        connection_id: ConnectionId,
+        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        session: &SessionState,
+        frame: &[u8],
+    ) -> Result<bool, RuntimeError> {
+        let current = session
+            .adapter
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
+        match current.decode_login(frame)? {
+            LoginRequest::LoginStart { username } => {
+                let authenticated = self.authenticator.authenticate(&username)?;
+                self.apply_command(CoreCommand::LoginStart {
+                    connection_id,
+                    protocol_version: current.protocol_version(),
+                    username,
+                    player_id: authenticated,
+                })
+                .await?;
+                Ok(false)
+            }
+            LoginRequest::EncryptionResponse => {
+                let disconnect = current
+                    .encode_disconnect(ConnectionPhase::Login, "online-mode is not implemented")?;
+                write_payload(writer, current.wire_codec(), &disconnect).await?;
+                Ok(true)
+            }
+        }
+    }
+
+    async fn handle_play_frame(
+        &self,
+        session: &SessionState,
+        frame: &[u8],
+    ) -> Result<bool, RuntimeError> {
+        let current = session
+            .adapter
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
+        let Some(current_player_id) = session.player_id else {
+            return Ok(true);
+        };
+        if let Some(command) = current.decode_play(current_player_id, frame)? {
+            self.apply_command(command).await?;
+        }
+        Ok(false)
     }
 
     async fn handle_outgoing_message(
         &self,
         connection_id: ConnectionId,
         writer: &mut tokio::net::tcp::OwnedWriteHalf,
-        phase: &mut ConnectionPhase,
-        adapter: &mut Option<Arc<dyn ProtocolAdapter>>,
-        player_id: &mut Option<PlayerId>,
-        entity_id: &mut Option<mc_core::EntityId>,
+        session: &mut SessionState,
         message: SessionMessage,
     ) -> Result<bool, RuntimeError> {
         let SessionMessage::Event(event) = message;
-        let current = adapter
+        let current = session
+            .adapter
             .as_ref()
             .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
         let context = SessionEncodingContext {
             connection_id,
-            phase: *phase,
-            player_id: *player_id,
-            entity_id: *entity_id,
+            phase: session.phase,
+            player_id: session.player_id,
+            entity_id: session.entity_id,
         };
         let packets = current.encode_event(&event, &context)?;
         for packet in packets {
@@ -530,9 +569,9 @@ impl RuntimeServer {
                 entity_id: accepted_entity_id,
                 ..
             } => {
-                *player_id = Some(accepted_player_id);
-                *entity_id = Some(accepted_entity_id);
-                *phase = ConnectionPhase::Play;
+                session.player_id = Some(accepted_player_id);
+                session.entity_id = Some(accepted_entity_id);
+                session.phase = ConnectionPhase::Play;
             }
             CoreEvent::Disconnect { .. } => return Ok(true),
             _ => {}
@@ -650,6 +689,11 @@ fn handshake_adapter() -> impl ProtocolAdapter {
     Je1710Adapter::new()
 }
 
+/// # Errors
+///
+/// Returns [`RuntimeError`] when the server cannot bind, load its persisted
+/// world state, or starts with unsupported configuration such as
+/// `online-mode=true`.
 pub async fn spawn_server(
     config: ServerConfig,
     registry: VersionRegistry,
@@ -675,7 +719,7 @@ pub async fn spawn_server(
         ..CoreConfig::default()
     };
     let core = match snapshot {
-        Some(snapshot) => ServerCore::from_snapshot(core_config.clone(), snapshot),
+        Some(snapshot) => ServerCore::from_snapshot(core_config, snapshot),
         None => ServerCore::new(core_config),
     };
 
@@ -732,12 +776,18 @@ async fn write_payload(
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .expect("current unix time in milliseconds should fit into u64")
 }
 
+/// # Errors
+///
+/// Returns [`RuntimeError`] when the handshake payload cannot be encoded.
 pub fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8>, RuntimeError> {
     let mut writer = PacketWriter::default();
     writer.write_varint(0x00);
@@ -748,6 +798,9 @@ pub fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8
     Ok(writer.into_inner())
 }
 
+/// # Errors
+///
+/// Returns [`RuntimeError`] when the TCP connection cannot be established.
 pub async fn connect(addr: SocketAddr) -> Result<TcpStream, RuntimeError> {
     Ok(TcpStream::connect(addr).await?)
 }
@@ -925,10 +978,8 @@ mod tests {
             writer.write_i16(item_id);
             writer.write_u8(count);
             writer.write_i16(damage);
-            writer.write_i16(-1);
-        } else {
-            writer.write_i16(-1);
         }
+        writer.write_i16(-1);
         writer.write_u8(8);
         writer.write_u8(8);
         writer.write_u8(8);
@@ -1167,9 +1218,8 @@ mod tests {
             VersionRegistry::with_je_1_7_10(),
         )
         .await;
-        let error = match result {
-            Ok(_) => panic!("online-mode should fail fast"),
-            Err(error) => error,
+        let Err(error) = result else {
+            panic!("online-mode should fail fast");
         };
         assert!(
             matches!(error, RuntimeError::Unsupported(message) if message.contains("online-mode=true"))

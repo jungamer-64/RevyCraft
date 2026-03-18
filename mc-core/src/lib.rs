@@ -1,11 +1,4 @@
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::missing_errors_doc,
-    clippy::module_name_repetitions
-)]
-
+use num_traits::ToPrimitive;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -15,6 +8,7 @@ const SECTION_HEIGHT: i32 = 16;
 const DEFAULT_KEEPALIVE_INTERVAL_MS: u64 = 10_000;
 const DEFAULT_KEEPALIVE_TIMEOUT_MS: u64 = 30_000;
 const PLAYER_INVENTORY_SLOT_COUNT: usize = 45;
+const PLAYER_INVENTORY_SLOT_COUNT_U8: u8 = 45;
 const HOTBAR_START_SLOT: u8 = 36;
 const HOTBAR_SLOT_COUNT: u8 = 9;
 const PLAYER_WIDTH: f64 = 0.6;
@@ -209,9 +203,9 @@ impl PlayerInventory {
     #[must_use]
     pub fn creative_starter() -> Self {
         let mut inventory = Self::new_empty();
-        for (index, key) in starter_hotbar_item_keys().into_iter().enumerate() {
-            let slot = HOTBAR_START_SLOT
-                + u8::try_from(index).expect("starter hotbar index should fit into u8");
+        for (slot, key) in (HOTBAR_START_SLOT..HOTBAR_START_SLOT + HOTBAR_SLOT_COUNT)
+            .zip(starter_hotbar_item_keys())
+        {
             let _ = inventory.set(slot, Some(ItemStack::new(key, 64, 0)));
         }
         inventory
@@ -253,7 +247,7 @@ pub enum BlockFace {
 
 impl BlockFace {
     #[must_use]
-    pub fn from_protocol_byte(value: u8) -> Option<Self> {
+    pub const fn from_protocol_byte(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::Bottom),
             1 => Some(Self::Top),
@@ -292,7 +286,7 @@ impl BlockPos {
     }
 
     #[must_use]
-    pub fn chunk_pos(self) -> ChunkPos {
+    pub const fn chunk_pos(self) -> ChunkPos {
         ChunkPos::new(
             self.x.div_euclid(CHUNK_WIDTH),
             self.z.div_euclid(CHUNK_WIDTH),
@@ -300,7 +294,7 @@ impl BlockPos {
     }
 
     #[must_use]
-    pub fn offset(self, face: BlockFace) -> Self {
+    pub const fn offset(self, face: BlockFace) -> Self {
         let (dx, dy, dz) = face.offset();
         Self::new(self.x + dx, self.y + dy, self.z + dz)
     }
@@ -383,8 +377,8 @@ impl ChunkPos {
 
     #[must_use]
     pub fn from_world_position(x: f64, z: f64) -> Self {
-        let block_x = x.floor() as i32;
-        let block_z = z.floor() as i32;
+        let block_x = floor_to_i32(x);
+        let block_z = floor_to_i32(z);
         Self {
             x: block_x.div_euclid(CHUNK_WIDTH),
             z: block_z.div_euclid(CHUNK_WIDTH),
@@ -465,7 +459,7 @@ impl ChunkColumn {
     #[must_use]
     pub fn get_block(&self, x: u8, y: i32, z: u8) -> BlockState {
         let section_y = y.div_euclid(SECTION_HEIGHT);
-        let local_y = y.rem_euclid(SECTION_HEIGHT) as u8;
+        let local_y = section_local_y(y);
         self.sections
             .get(&section_y)
             .and_then(|section| section.get_block(x, local_y, z))
@@ -475,7 +469,7 @@ impl ChunkColumn {
 
     pub fn set_block(&mut self, x: u8, y: i32, z: u8, state: BlockState) {
         let section_y = y.div_euclid(SECTION_HEIGHT);
-        let local_y = y.rem_euclid(SECTION_HEIGHT) as u8;
+        let local_y = section_local_y(y);
         let section = self
             .sections
             .entry(section_y)
@@ -787,7 +781,7 @@ impl ServerCore {
     }
 
     #[must_use]
-    pub fn world_meta(&self) -> &WorldMeta {
+    pub const fn world_meta(&self) -> &WorldMeta {
         &self.world_meta
     }
 
@@ -843,7 +837,7 @@ impl ServerCore {
                 position,
                 face,
                 held_item,
-            } => self.apply_place(player_id, position, face, held_item),
+            } => self.apply_place(player_id, position, face, held_item.as_ref()),
             CoreCommand::Disconnect { player_id } => self.disconnect_player(player_id),
         }
     }
@@ -1129,7 +1123,7 @@ impl ServerCore {
                 },
             ];
         };
-        if !(9..PLAYER_INVENTORY_SLOT_COUNT as u8).contains(&slot) {
+        if !(9..PLAYER_INVENTORY_SLOT_COUNT_U8).contains(&slot) {
             return reject_inventory_slot_events(player_id, i16::from(slot), player);
         }
 
@@ -1192,7 +1186,7 @@ impl ServerCore {
         player_id: PlayerId,
         position: BlockPos,
         face: Option<BlockFace>,
-        held_item: Option<ItemStack>,
+        held_item: Option<&ItemStack>,
     ) -> Vec<TargetedEvent> {
         let Some(face) = face else {
             return Vec::new();
@@ -1210,7 +1204,7 @@ impl ServerCore {
             return self.place_rejection_events(player_id, place_pos, &player.snapshot);
         };
 
-        if held_item.as_ref() != Some(&selected_stack) {
+        if held_item != Some(&selected_stack) {
             return self.place_rejection_events(player_id, place_pos, &player.snapshot);
         }
 
@@ -1231,7 +1225,6 @@ impl ServerCore {
     }
 
     fn place_inventory_correction(
-        &self,
         player_id: PlayerId,
         player: &PlayerSnapshot,
     ) -> Vec<TargetedEvent> {
@@ -1266,7 +1259,7 @@ impl ServerCore {
                 block: self.block_at(place_pos),
             },
         }];
-        events.extend(self.place_inventory_correction(player_id, player));
+        events.extend(Self::place_inventory_correction(player_id, player));
         events
     }
 
@@ -1372,7 +1365,7 @@ fn default_player(player_id: PlayerId, username: String, spawn: BlockPos) -> Pla
     }
 }
 
-fn starter_hotbar_item_keys() -> [&'static str; 9] {
+const fn starter_hotbar_item_keys() -> [&'static str; 9] {
     [
         "minecraft:stone",
         "minecraft:dirt",
@@ -1412,6 +1405,17 @@ fn distance_squared_to_block_center(position: Vec3, block: BlockPos) -> f64 {
     let dy = eye_y - center_y;
     let dz = eye_z - center_z;
     dx * dx + dy * dy + dz * dz
+}
+
+fn floor_to_i32(value: f64) -> i32 {
+    value
+        .floor()
+        .to_i32()
+        .expect("world coordinate should fit into i32")
+}
+
+fn section_local_y(y: i32) -> u8 {
+    u8::try_from(y.rem_euclid(SECTION_HEIGHT)).expect("section-local y should fit into u8")
 }
 
 fn block_intersects_player(block: BlockPos, player: &PlayerSnapshot) -> bool {
@@ -1502,16 +1506,11 @@ fn flatten_block_index(x: u8, y: u8, z: u8) -> u16 {
 }
 
 #[must_use]
-pub fn expand_block_index(index: u16) -> (u8, u8, u8) {
-    let y = index / 256;
-    let remaining = index % 256;
-    let z = remaining / 16;
-    let x = remaining % 16;
-    (
-        u8::try_from(x).expect("x nibble should fit into u8"),
-        u8::try_from(y).expect("y nibble should fit into u8"),
-        u8::try_from(z).expect("z nibble should fit into u8"),
-    )
+pub const fn expand_block_index(index: u16) -> (u8, u8, u8) {
+    let [y, lower] = index.to_be_bytes();
+    let z = lower >> 4;
+    let x = lower & 0x0F;
+    (x, y, z)
 }
 
 #[cfg(test)]
@@ -1793,7 +1792,7 @@ mod tests {
     }
 
     #[test]
-    fn creative_place_break_and_reject_emit_authoritative_corrections() {
+    fn creative_place_and_break_emit_authoritative_corrections() {
         let mut creative = ServerCore::new(CoreConfig {
             game_mode: 1,
             ..CoreConfig::default()
@@ -1864,7 +1863,10 @@ mod tests {
                 .count()
                 >= 2
         );
+    }
 
+    #[test]
+    fn survival_place_rejection_emits_authoritative_corrections() {
         let mut survival = ServerCore::new(CoreConfig::default());
         let lone = player_id("lone");
         let _ = survival.apply_command(

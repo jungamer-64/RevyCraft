@@ -1,12 +1,3 @@
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::missing_errors_doc,
-    clippy::module_name_repetitions
-)]
-
 mod storage;
 
 use flate2::Compression;
@@ -20,6 +11,7 @@ use mc_proto_common::{
     PacketReader, PacketWriter, ProtocolAdapter, ProtocolError, ServerListStatus,
     SessionEncodingContext, StatusRequest, StorageAdapter, WireCodec,
 };
+use num_traits::ToPrimitive;
 use serde_json::json;
 use std::io::Write;
 
@@ -167,20 +159,7 @@ impl ProtocolAdapter for Je1710Adapter {
                 pitch: None,
                 on_ground: reader.read_bool()?,
             })),
-            PACKET_SB_POSITION => {
-                let x = reader.read_f64()?;
-                let _stance = reader.read_f64()?;
-                let y = reader.read_f64()?;
-                let z = reader.read_f64()?;
-                let on_ground = reader.read_bool()?;
-                Ok(Some(CoreCommand::MoveIntent {
-                    player_id,
-                    position: Some(Vec3::new(x, y, z)),
-                    yaw: None,
-                    pitch: None,
-                    on_ground,
-                }))
-            }
+            PACKET_SB_POSITION => Ok(Some(decode_position_packet(player_id, &mut reader)?)),
             PACKET_SB_LOOK => Ok(Some(CoreCommand::MoveIntent {
                 player_id,
                 position: None,
@@ -189,52 +168,10 @@ impl ProtocolAdapter for Je1710Adapter {
                 on_ground: reader.read_bool()?,
             })),
             PACKET_SB_POSITION_LOOK => {
-                let x = reader.read_f64()?;
-                let _stance = reader.read_f64()?;
-                let y = reader.read_f64()?;
-                let z = reader.read_f64()?;
-                let yaw = reader.read_f32()?;
-                let pitch = reader.read_f32()?;
-                let on_ground = reader.read_bool()?;
-                Ok(Some(CoreCommand::MoveIntent {
-                    player_id,
-                    position: Some(Vec3::new(x, y, z)),
-                    yaw: Some(yaw),
-                    pitch: Some(pitch),
-                    on_ground,
-                }))
+                Ok(Some(decode_position_look_packet(player_id, &mut reader)?))
             }
-            PACKET_SB_PLAYER_DIGGING => Ok(Some(CoreCommand::DigBlock {
-                player_id,
-                status: reader.read_u8()?,
-                position: BlockPos::new(
-                    reader.read_i32()?,
-                    i32::from(reader.read_u8()?),
-                    reader.read_i32()?,
-                ),
-                face: BlockFace::from_protocol_byte(reader.read_u8()?),
-            })),
-            PACKET_SB_PLAYER_BLOCK_PLACEMENT => {
-                let position = BlockPos::new(
-                    reader.read_i32()?,
-                    i32::from(reader.read_u8()?),
-                    reader.read_i32()?,
-                );
-                let direction = reader.read_u8()?;
-                let held_item = read_slot(&mut reader)?;
-                let _cursor_x = reader.read_u8()?;
-                let _cursor_y = reader.read_u8()?;
-                let _cursor_z = reader.read_u8()?;
-                if position.x == -1 && position.z == -1 && position.y == 255 && direction == 255 {
-                    return Ok(None);
-                }
-                Ok(Some(CoreCommand::PlaceBlock {
-                    player_id,
-                    position,
-                    face: BlockFace::from_protocol_byte(direction),
-                    held_item,
-                }))
-            }
+            PACKET_SB_PLAYER_DIGGING => Ok(Some(decode_digging_packet(player_id, &mut reader)?)),
+            PACKET_SB_PLAYER_BLOCK_PLACEMENT => decode_place_block_packet(player_id, &mut reader),
             PACKET_SB_HELD_ITEM_CHANGE => Ok(Some(CoreCommand::SetHeldSlot {
                 player_id,
                 slot: reader.read_i16()?,
@@ -244,23 +181,7 @@ impl ProtocolAdapter for Je1710Adapter {
                 slot: reader.read_i16()?,
                 stack: read_slot(&mut reader)?,
             })),
-            PACKET_SB_SETTINGS => {
-                let locale = reader.read_string(16)?;
-                let view_distance = i8_to_u8(reader.read_i8()?);
-                let chat_flags = reader.read_i8()?;
-                let chat_colors = reader.read_bool()?;
-                let difficulty = reader.read_u8()?;
-                let show_cape = reader.read_bool()?;
-                Ok(Some(CoreCommand::ClientSettings {
-                    player_id,
-                    locale,
-                    view_distance: view_distance.max(1),
-                    chat_flags,
-                    chat_colors,
-                    difficulty,
-                    show_cape,
-                }))
-            }
+            PACKET_SB_SETTINGS => Ok(Some(decode_client_settings_packet(player_id, &mut reader)?)),
             PACKET_SB_CLIENT_COMMAND => Ok(Some(CoreCommand::ClientStatus {
                 player_id,
                 action_id: reader.read_i8()?,
@@ -380,7 +301,6 @@ impl ProtocolAdapter for Je1710Adapter {
 
 pub(crate) fn legacy_block(state: &BlockState) -> (u16, u8) {
     match state.key.as_str() {
-        "minecraft:air" => (0, 0),
         "minecraft:stone" => (1, 0),
         "minecraft:grass_block" => (2, 0),
         "minecraft:dirt" => (3, 0),
@@ -397,7 +317,6 @@ pub(crate) fn legacy_block(state: &BlockState) -> (u16, u8) {
 
 pub(crate) fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
     match block_id {
-        0 => BlockState::air(),
         1 => BlockState::stone(),
         2 => BlockState::grass_block(),
         3 => BlockState::dirt(),
@@ -703,7 +622,7 @@ fn build_chunk_data(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>)
 
 fn set_nibble(target: &mut [u8], index: usize, value: u8) {
     let byte_index = index / 2;
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         target[byte_index] = (target[byte_index] & 0xf0) | (value & 0x0f);
     } else {
         target[byte_index] = (target[byte_index] & 0x0f) | ((value & 0x0f) << 4);
@@ -712,7 +631,7 @@ fn set_nibble(target: &mut [u8], index: usize, value: u8) {
 
 pub(crate) fn get_nibble(source: &[u8], index: usize) -> u8 {
     let byte = source[index / 2];
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         byte & 0x0f
     } else {
         (byte >> 4) & 0x0f
@@ -729,26 +648,144 @@ fn zlib_compress(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
         .map_err(|_| ProtocolError::InvalidPacket("failed to finalize compressed payload"))
 }
 
-fn dimension_to_i8(dimension: DimensionId) -> i8 {
+const fn dimension_to_i8(dimension: DimensionId) -> i8 {
     match dimension {
         DimensionId::Overworld => 0,
     }
 }
 
-fn i8_to_u8(value: i8) -> u8 {
-    if value.is_negative() { 0 } else { value as u8 }
+const fn i8_to_u8(value: i8) -> u8 {
+    if value.is_negative() {
+        0
+    } else {
+        value.cast_unsigned()
+    }
 }
 
 fn to_fixed_point(value: f64) -> i32 {
-    (value * 32.0).round() as i32
+    rounded_f64_to_i32(value * 32.0)
 }
 
 fn to_angle_byte(value: f32) -> i8 {
     let wrapped = value.rem_euclid(360.0);
-    let scaled = (wrapped * 256.0 / 360.0).round() as i32;
+    let scaled = rounded_f32_to_i32(wrapped * 256.0 / 360.0);
     let narrowed =
         u8::try_from(scaled.rem_euclid(256)).expect("wrapped angle should fit into byte");
     i8::from_be_bytes([narrowed])
+}
+
+fn rounded_f64_to_i32(value: f64) -> i32 {
+    value
+        .round()
+        .to_i32()
+        .expect("fixed-point value should fit into i32")
+}
+
+fn rounded_f32_to_i32(value: f32) -> i32 {
+    value
+        .round()
+        .to_i32()
+        .expect("angle byte intermediate should fit into i32")
+}
+
+fn decode_position_packet(
+    player_id: PlayerId,
+    reader: &mut PacketReader<'_>,
+) -> Result<CoreCommand, ProtocolError> {
+    let x = reader.read_f64()?;
+    let _stance = reader.read_f64()?;
+    let y = reader.read_f64()?;
+    let z = reader.read_f64()?;
+    let on_ground = reader.read_bool()?;
+    Ok(CoreCommand::MoveIntent {
+        player_id,
+        position: Some(Vec3::new(x, y, z)),
+        yaw: None,
+        pitch: None,
+        on_ground,
+    })
+}
+
+fn decode_position_look_packet(
+    player_id: PlayerId,
+    reader: &mut PacketReader<'_>,
+) -> Result<CoreCommand, ProtocolError> {
+    let x = reader.read_f64()?;
+    let _stance = reader.read_f64()?;
+    let y = reader.read_f64()?;
+    let z = reader.read_f64()?;
+    let yaw = reader.read_f32()?;
+    let pitch = reader.read_f32()?;
+    let on_ground = reader.read_bool()?;
+    Ok(CoreCommand::MoveIntent {
+        player_id,
+        position: Some(Vec3::new(x, y, z)),
+        yaw: Some(yaw),
+        pitch: Some(pitch),
+        on_ground,
+    })
+}
+
+fn decode_digging_packet(
+    player_id: PlayerId,
+    reader: &mut PacketReader<'_>,
+) -> Result<CoreCommand, ProtocolError> {
+    Ok(CoreCommand::DigBlock {
+        player_id,
+        status: reader.read_u8()?,
+        position: BlockPos::new(
+            reader.read_i32()?,
+            i32::from(reader.read_u8()?),
+            reader.read_i32()?,
+        ),
+        face: BlockFace::from_protocol_byte(reader.read_u8()?),
+    })
+}
+
+fn decode_place_block_packet(
+    player_id: PlayerId,
+    reader: &mut PacketReader<'_>,
+) -> Result<Option<CoreCommand>, ProtocolError> {
+    let position = BlockPos::new(
+        reader.read_i32()?,
+        i32::from(reader.read_u8()?),
+        reader.read_i32()?,
+    );
+    let direction = reader.read_u8()?;
+    let held_item = read_slot(reader)?;
+    let _cursor_x = reader.read_u8()?;
+    let _cursor_y = reader.read_u8()?;
+    let _cursor_z = reader.read_u8()?;
+    if position.x == -1 && position.z == -1 && position.y == 255 && direction == 255 {
+        return Ok(None);
+    }
+    Ok(Some(CoreCommand::PlaceBlock {
+        player_id,
+        position,
+        face: BlockFace::from_protocol_byte(direction),
+        held_item,
+    }))
+}
+
+fn decode_client_settings_packet(
+    player_id: PlayerId,
+    reader: &mut PacketReader<'_>,
+) -> Result<CoreCommand, ProtocolError> {
+    let locale = reader.read_string(16)?;
+    let view_distance = i8_to_u8(reader.read_i8()?);
+    let chat_flags = reader.read_i8()?;
+    let chat_colors = reader.read_bool()?;
+    let difficulty = reader.read_u8()?;
+    let show_cape = reader.read_bool()?;
+    Ok(CoreCommand::ClientSettings {
+        player_id,
+        locale,
+        view_distance: view_distance.max(1),
+        chat_flags,
+        chat_colors,
+        difficulty,
+        show_cape,
+    })
 }
 
 fn read_slot(reader: &mut PacketReader<'_>) -> Result<Option<ItemStack>, ProtocolError> {
@@ -870,7 +907,7 @@ mod tests {
                 &CoreEvent::LoginAccepted {
                     player_id: player.id,
                     entity_id: mc_core::EntityId(1),
-                    player: player.clone(),
+                    player,
                 },
                 &SessionEncodingContext {
                     connection_id: ConnectionId(1),
@@ -1025,9 +1062,7 @@ mod tests {
         let inventory = PlayerInventory::creative_starter();
         let packets = adapter
             .encode_event(
-                &CoreEvent::InventorySnapshot {
-                    inventory: inventory.clone(),
-                },
+                &CoreEvent::InventorySnapshot { inventory },
                 &SessionEncodingContext {
                     connection_id: ConnectionId(1),
                     phase: ConnectionPhase::Play,

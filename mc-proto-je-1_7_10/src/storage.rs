@@ -1,11 +1,3 @@
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::missing_errors_doc,
-    clippy::module_name_repetitions
-)]
-
 use crate::{get_nibble, legacy_block, semantic_block};
 use flate2::Compression;
 use flate2::read::{GzDecoder, ZlibDecoder};
@@ -70,8 +62,8 @@ enum NbtTag {
     Double(f64),
     ByteArray(Vec<u8>),
     String(String),
-    List(u8, Vec<NbtTag>),
-    Compound(BTreeMap<String, NbtTag>),
+    List(u8, Vec<Self>),
+    Compound(BTreeMap<String, Self>),
     IntArray(Vec<i32>),
 }
 
@@ -89,7 +81,10 @@ fn write_level_dat(path: &Path, meta: &WorldMeta) -> Result<(), StorageError> {
     data.insert("SpawnX".to_string(), NbtTag::Int(meta.spawn.x));
     data.insert("SpawnY".to_string(), NbtTag::Int(meta.spawn.y));
     data.insert("SpawnZ".to_string(), NbtTag::Int(meta.spawn.z));
-    data.insert("RandomSeed".to_string(), NbtTag::Long(meta.seed as i64));
+    data.insert(
+        "RandomSeed".to_string(),
+        NbtTag::Long(meta.seed.cast_signed()),
+    );
     data.insert("Time".to_string(), NbtTag::Long(meta.time));
     data.insert(
         "GameType".to_string(),
@@ -112,7 +107,7 @@ fn read_level_dat(path: &Path) -> Result<WorldMeta, StorageError> {
     let data = compound_field(as_compound(&root)?, "Data")?;
     Ok(WorldMeta {
         level_name: string_field(data, "LevelName").unwrap_or_else(|_| "world".to_string()),
-        seed: long_field(data, "RandomSeed").unwrap_or(0) as u64,
+        seed: long_field(data, "RandomSeed").unwrap_or(0).cast_unsigned(),
         spawn: BlockPos::new(
             int_field(data, "SpawnX").unwrap_or(0),
             int_field(data, "SpawnY").unwrap_or(4),
@@ -275,13 +270,10 @@ fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
 
 fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
     let mut inventory = PlayerInventory::new_empty();
-    let entries = match tag {
-        NbtTag::List(_, entries) => entries,
-        _ => {
-            return Err(StorageError::InvalidData(
-                "expected inventory list".to_string(),
-            ));
-        }
+    let NbtTag::List(_, entries) = tag else {
+        return Err(StorageError::InvalidData(
+            "expected inventory list".to_string(),
+        ));
     };
     for entry in entries {
         let compound = as_compound(entry)?;
@@ -295,7 +287,7 @@ fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
         }
         let item_id = short_field(compound, "id")?;
         let damage = u16::from_be_bytes(short_field(compound, "Damage").unwrap_or(0).to_be_bytes());
-        let stack = crate::semantic_item(item_id, damage, count as u8);
+        let stack = crate::semantic_item(item_id, damage, count.cast_unsigned());
         if stack.key.as_str() == "minecraft:unsupported" {
             continue;
         }
@@ -690,7 +682,7 @@ fn read_tag_payload(reader: &mut impl Read, tag_type: u8) -> Result<NbtTag, Stor
     }
 }
 
-fn tag_type(tag: &NbtTag) -> u8 {
+const fn tag_type(tag: &NbtTag) -> u8 {
     match tag {
         NbtTag::Byte(_) => 1,
         NbtTag::Short(_) => 2,
@@ -913,7 +905,7 @@ fn write_string_u16(writer: &mut impl Write, value: &str) -> Result<(), StorageE
 
 fn set_nibble(target: &mut [u8], index: usize, value: u8) {
     let byte_index = index / 2;
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         target[byte_index] = (target[byte_index] & 0xf0) | (value & 0x0f);
     } else {
         target[byte_index] = (target[byte_index] & 0x0f) | ((value & 0x0f) << 4);
