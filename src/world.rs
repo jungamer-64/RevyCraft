@@ -301,7 +301,7 @@ impl ChunkLoadSettings {
             .unwrap_or(DEFAULT_VIEW_RADIUS)
             .max(0);
 
-        let unload_radius = (view_radius + 1).max(DEFAULT_UNLOAD_RADIUS);
+        let unload_radius = view_radius.saturating_add(1).max(DEFAULT_UNLOAD_RADIUS);
 
         Self {
             view_radius,
@@ -594,14 +594,6 @@ impl VoxelWorld {
 
     pub(crate) fn loaded_chunk_coords(&self) -> impl Iterator<Item = ChunkCoord> + '_ {
         self.chunks.keys().copied()
-    }
-
-    pub(crate) const fn world_from_local(
-        &self,
-        chunk_coord: ChunkCoord,
-        local: LocalBlockCoord,
-    ) -> WorldBlockCoord {
-        self.layout.world_from_local(chunk_coord, local)
     }
 
     pub(crate) fn save_modified_chunks(&self, save_directory: &WorldSaveDirectory) {

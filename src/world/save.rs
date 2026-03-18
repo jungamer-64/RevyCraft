@@ -89,18 +89,16 @@ pub fn save_chunk(
     write_bool(&mut writer, chunk_data.generated_from_seed)?;
 
     let mut entries: Vec<_> = chunk_data.blocks.iter().collect();
+    let block_count = u32::try_from(entries.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "chunk contains too many blocks to save",
+        )
+    })?;
     entries.sort_unstable_by_key(|(local_coord, _)| {
         (local_coord.y(), local_coord.z(), local_coord.x())
     });
-    write_u32(
-        &mut writer,
-        u32::try_from(entries.len()).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "chunk contains too many blocks to save",
-            )
-        })?,
-    )?;
+    write_u32(&mut writer, block_count)?;
 
     for (&local_coord, block_data) in entries {
         write_i64(&mut writer, local_coord.x())?;

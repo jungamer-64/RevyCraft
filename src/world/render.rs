@@ -66,12 +66,12 @@ impl RenderSyncQueue {
 
     pub(crate) fn mark_chunk(
         &mut self,
-        world: &VoxelWorld,
+        layout: WorldLayout,
         chunk_coord: ChunkCoord,
         chunk_data: &ChunkData,
     ) {
         for &local_coord in chunk_data.blocks.keys() {
-            self.mark_with_neighbors(world.world_from_local(chunk_coord, local_coord));
+            self.mark_with_neighbors(layout.world_from_local(chunk_coord, local_coord));
         }
     }
 

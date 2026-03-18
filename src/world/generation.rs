@@ -190,7 +190,7 @@ fn load_visible_chunks(
                 voxel_world.layout(),
                 world_save_directory,
             );
-            render_sync_queue.mark_chunk(voxel_world, chunk_coord, &chunk_data);
+            render_sync_queue.mark_chunk(voxel_world.layout(), chunk_coord, &chunk_data);
             voxel_world.insert_chunk(chunk_coord, chunk_data);
         }
     }
@@ -222,7 +222,9 @@ fn unload_distant_chunks(
                 bevy::log::warn!("failed to save chunk {chunk_coord:?}: {error}");
             }
 
-            render_sync_queue.mark_chunk(voxel_world, chunk_coord, &chunk_data);
+            // Mark after removal so the next render sync resolves these blocks as Missing.
+            // Coordinate conversion only depends on the static world layout.
+            render_sync_queue.mark_chunk(voxel_world.layout(), chunk_coord, &chunk_data);
         }
     }
 }
@@ -396,23 +398,7 @@ pub(super) fn should_carve_cave(
     density < terrain_settings.cave_threshold
 }
 
-pub(super) fn rounded_height_to_i64(height: f64) -> i64 {
-    let rounded = height.round();
-    let mut quantized_height = 0;
-
-    if rounded.is_sign_negative() {
-        loop {
-            if I64Vec2::new(quantized_height, 0).as_dvec2().x <= rounded {
-                break quantized_height;
-            }
-            quantized_height -= 1;
-        }
-    } else {
-        loop {
-            if I64Vec2::new(quantized_height, 0).as_dvec2().x >= rounded {
-                break quantized_height;
-            }
-            quantized_height += 1;
-        }
-    }
+#[allow(clippy::cast_possible_truncation)]
+pub(super) const fn rounded_height_to_i64(height: f64) -> i64 {
+    height.round() as i64
 }

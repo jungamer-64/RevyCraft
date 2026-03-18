@@ -206,6 +206,7 @@ impl CursorGrabResources<'_, '_> {
 
         if self.mouse_button.just_pressed(MouseButton::Left)
             && let Ok(mut cursor) = self.cursor.single_mut()
+            && cursor.grab_mode != CursorGrabMode::Locked
         {
             apply_cursor_lock(&mut cursor);
         }

@@ -102,6 +102,7 @@ pub fn update_highlight_target_post_edit_system(resources: HighlightTargetUpdate
 #[derive(SystemParam)]
 pub struct BlockEditResources<'w, 's> {
     mouse_button: Res<'w, ButtonInput<MouseButton>>,
+    cursor_options: Query<'w, 's, &'static CursorOptions, With<PrimaryWindow>>,
     camera_query: Query<'w, 's, (&'static Transform, &'static WorldPosition), With<MainCamera>>,
     selected_block: Res<'w, SelectedBlock>,
     highlight_target: Res<'w, HighlightTarget>,
@@ -113,6 +114,7 @@ impl BlockEditResources<'_, '_> {
     fn run(self) {
         let Self {
             mouse_button,
+            cursor_options,
             camera_query,
             selected_block,
             highlight_target,
@@ -123,6 +125,10 @@ impl BlockEditResources<'_, '_> {
         let Some(edit_action) = current_edit_action(&mouse_button) else {
             return;
         };
+
+        if !cursor_is_locked(cursor_options.single().ok()) {
+            return;
+        }
 
         let Some(edit_context) = build_block_edit_context(
             camera_query.single().ok(),
@@ -462,6 +468,45 @@ mod tests {
         app.update();
 
         assert_eq!(app.world().resource::<HighlightTarget>().0, None);
+    }
+
+    #[test]
+    fn unlocked_cursor_blocks_edits_even_with_stale_highlight() {
+        let mut app = App::new();
+        app.insert_resource(ButtonInput::<MouseButton>::default());
+        app.insert_resource(VoxelWorld::default());
+        app.insert_resource(RenderSyncQueue::default());
+        app.insert_resource(HighlightTarget(Some((world_block(3, 3, 0), I64Vec3::X))));
+        app.insert_resource(SelectedBlock(BlockType::Grass));
+        app.add_systems(Update, block_edit_system);
+
+        app.world_mut().spawn((
+            PrimaryWindow,
+            CursorOptions {
+                grab_mode: CursorGrabMode::None,
+                ..Default::default()
+            },
+        ));
+        app.world_mut().spawn((
+            MainCamera,
+            Transform::from_xyz(1.25, 3.62, 0.5).looking_to(Vec3::X, Vec3::Y),
+            WorldPosition(DVec3::new(1.25, 3.62, 0.5)),
+        ));
+        app.world_mut()
+            .resource_mut::<VoxelWorld>()
+            .try_insert_block(world_block(3, 3, 0), BlockType::Stone);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<VoxelWorld>()
+                .block_kind(world_block(3, 3, 0)),
+            Some(BlockType::Stone)
+        );
     }
 
     #[test]
