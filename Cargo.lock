@@ -3201,6 +3201,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-auth-offline"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "md-5",
+ "uuid",
+]
+
+[[package]]
 name = "mc-plugin-gameplay-canonical"
 version = "0.1.0"
 dependencies = [
@@ -3269,6 +3280,17 @@ dependencies = [
  "mc-core",
  "mc-plugin-api",
  "mc-proto-common",
+]
+
+[[package]]
+name = "mc-plugin-storage-je-anvil-1_7_10"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-proto-common",
+ "mc-proto-je-1_7_10",
 ]
 
 [[package]]
@@ -4564,7 +4586,6 @@ dependencies = [
 name = "server-bootstrap"
 version = "0.1.0"
 dependencies = [
- "mc-proto-je-1_7_10",
  "server-runtime",
  "tokio",
 ]
@@ -4577,12 +4598,14 @@ dependencies = [
  "libloading 0.9.0",
  "mc-core",
  "mc-plugin-api",
+ "mc-plugin-auth-offline",
  "mc-plugin-gameplay-canonical",
  "mc-plugin-gameplay-readonly",
  "mc-plugin-proto-be-placeholder",
  "mc-plugin-proto-je-1_12_2",
  "mc-plugin-proto-je-1_7_10",
  "mc-plugin-proto-je-1_8_x",
+ "mc-plugin-storage-je-anvil-1_7_10",
  "mc-proto-be-placeholder",
  "mc-proto-common",
  "mc-proto-je-1_12_2",

@@ -7,10 +7,9 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Standalone server bootstrap that wires built-in storage and plugin host for RevyCraft."
+description = "Standalone server bootstrap that wires the plugin host for RevyCraft."
 
 [dependencies]
-mc-proto-je-1_7_10 = { path = "../mc-proto-je-1_7_10" }
 server-runtime = { path = "../server-runtime" }
 tokio.workspace = true
 

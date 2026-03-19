@@ -1,14 +1,17 @@
 use mc_core::{
     CapabilitySet, CoreCommand, GameplayEffect, GameplayJoinEffect, PlayerId, PlayerSnapshot,
-    WorldMeta,
+    WorldMeta, WorldSnapshot,
 };
 use mc_plugin_api::{
-    ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, GameplayDescriptor, GameplayPluginApiV1,
-    GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HostApiTableV1, OwnedBuffer,
-    PluginAbiVersion, PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest,
-    ProtocolResponse, ProtocolSessionSnapshot, Utf8Slice,
+    AuthDescriptor, AuthPluginApiV1, AuthRequest, AuthResponse, ByteSlice, CURRENT_PLUGIN_ABI,
+    CapabilityDescriptorV1, GameplayDescriptor, GameplayPluginApiV1, GameplayRequest,
+    GameplayResponse, GameplaySessionSnapshot, HostApiTableV1, OwnedBuffer, PluginAbiVersion,
+    PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
+    ProtocolSessionSnapshot, StorageDescriptor, StoragePluginApiV1, StorageRequest,
+    StorageResponse, Utf8Slice,
 };
-use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError};
+use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError, StorageError};
+use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 pub struct StaticPluginManifest {
@@ -51,6 +54,40 @@ impl StaticPluginManifest {
             capabilities,
         }
     }
+
+    #[must_use]
+    pub const fn storage(
+        plugin_id: &'static str,
+        display_name: &'static str,
+        capabilities: &'static [&'static str],
+    ) -> Self {
+        Self {
+            plugin_id,
+            display_name,
+            plugin_kind: PluginKind::Storage,
+            plugin_abi: CURRENT_PLUGIN_ABI,
+            min_host_abi: CURRENT_PLUGIN_ABI,
+            max_host_abi: CURRENT_PLUGIN_ABI,
+            capabilities,
+        }
+    }
+
+    #[must_use]
+    pub const fn auth(
+        plugin_id: &'static str,
+        display_name: &'static str,
+        capabilities: &'static [&'static str],
+    ) -> Self {
+        Self {
+            plugin_id,
+            display_name,
+            plugin_kind: PluginKind::Auth,
+            plugin_abi: CURRENT_PLUGIN_ABI,
+            min_host_abi: CURRENT_PLUGIN_ABI,
+            max_host_abi: CURRENT_PLUGIN_ABI,
+            capabilities,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -63,6 +100,18 @@ pub struct InProcessProtocolEntrypoints {
 pub struct InProcessGameplayEntrypoints {
     pub manifest: &'static PluginManifestV1,
     pub api: &'static GameplayPluginApiV1,
+}
+
+#[derive(Clone, Copy)]
+pub struct InProcessStorageEntrypoints {
+    pub manifest: &'static PluginManifestV1,
+    pub api: &'static StoragePluginApiV1,
+}
+
+#[derive(Clone, Copy)]
+pub struct InProcessAuthEntrypoints {
+    pub manifest: &'static PluginManifestV1,
+    pub api: &'static AuthPluginApiV1,
 }
 
 pub trait RustProtocolPlugin: HandshakeProbe + ProtocolAdapter + Send + Sync + 'static {
@@ -83,6 +132,44 @@ pub trait RustProtocolPlugin: HandshakeProbe + ProtocolAdapter + Send + Sync + '
 }
 
 impl<T> RustProtocolPlugin for T where T: HandshakeProbe + ProtocolAdapter + Send + Sync + 'static {}
+
+pub trait RustStoragePlugin: Send + Sync + 'static {
+    fn descriptor(&self) -> StorageDescriptor;
+
+    fn capability_set(&self) -> CapabilitySet {
+        CapabilitySet::new()
+    }
+
+    fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError>;
+
+    fn save_snapshot(&self, world_dir: &Path, snapshot: &WorldSnapshot)
+    -> Result<(), StorageError>;
+
+    fn export_runtime_state(
+        &self,
+        world_dir: &Path,
+    ) -> Result<Option<WorldSnapshot>, StorageError> {
+        self.load_snapshot(world_dir)
+    }
+
+    fn import_runtime_state(
+        &self,
+        world_dir: &Path,
+        snapshot: &WorldSnapshot,
+    ) -> Result<(), StorageError> {
+        self.save_snapshot(world_dir, snapshot)
+    }
+}
+
+pub trait RustAuthPlugin: Send + Sync + 'static {
+    fn descriptor(&self) -> AuthDescriptor;
+
+    fn capability_set(&self) -> CapabilitySet {
+        CapabilitySet::new()
+    }
+
+    fn authenticate_offline(&self, username: &str) -> Result<PlayerId, String>;
+}
 
 pub trait GameplayHost {
     fn log(&self, level: u32, message: &str) -> Result<(), String>;
@@ -289,6 +376,55 @@ pub fn handle_protocol_request<P: RustProtocolPlugin>(
             .import_session_state(&session, &blob)
             .map(|()| ProtocolResponse::Empty)
             .map_err(|error| error.to_string()),
+    }
+}
+
+#[doc(hidden)]
+pub fn handle_storage_request<P: RustStoragePlugin>(
+    plugin: &P,
+    request: StorageRequest,
+) -> Result<StorageResponse, String> {
+    match request {
+        StorageRequest::Describe => Ok(StorageResponse::Descriptor(plugin.descriptor())),
+        StorageRequest::CapabilitySet => {
+            Ok(StorageResponse::CapabilitySet(plugin.capability_set()))
+        }
+        StorageRequest::LoadSnapshot { world_dir } => plugin
+            .load_snapshot(Path::new(&world_dir))
+            .map(StorageResponse::Snapshot)
+            .map_err(|error| error.to_string()),
+        StorageRequest::SaveSnapshot {
+            world_dir,
+            snapshot,
+        } => plugin
+            .save_snapshot(Path::new(&world_dir), &snapshot)
+            .map(|()| StorageResponse::Empty)
+            .map_err(|error| error.to_string()),
+        StorageRequest::ExportRuntimeState { world_dir } => plugin
+            .export_runtime_state(Path::new(&world_dir))
+            .map(StorageResponse::Snapshot)
+            .map_err(|error| error.to_string()),
+        StorageRequest::ImportRuntimeState {
+            world_dir,
+            snapshot,
+        } => plugin
+            .import_runtime_state(Path::new(&world_dir), &snapshot)
+            .map(|()| StorageResponse::Empty)
+            .map_err(|error| error.to_string()),
+    }
+}
+
+#[doc(hidden)]
+pub fn handle_auth_request<P: RustAuthPlugin>(
+    plugin: &P,
+    request: AuthRequest,
+) -> Result<AuthResponse, String> {
+    match request {
+        AuthRequest::Describe => Ok(AuthResponse::Descriptor(plugin.descriptor())),
+        AuthRequest::CapabilitySet => Ok(AuthResponse::CapabilitySet(plugin.capability_set())),
+        AuthRequest::AuthenticateOffline { username } => plugin
+            .authenticate_offline(&username)
+            .map(AuthResponse::AuthenticatedPlayer),
     }
 }
 
@@ -702,6 +838,198 @@ macro_rules! export_gameplay_plugin {
             $crate::InProcessGameplayEntrypoints {
                 manifest: unsafe { &*mc_plugin_manifest_v1() },
                 api: unsafe { &*mc_plugin_gameplay_api_v1() },
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! export_storage_plugin {
+    ($plugin_ty:ty, $manifest:expr) => {
+        static MC_STORAGE_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
+            std::sync::OnceLock::new();
+        static MC_STORAGE_PLUGIN_MANIFEST: std::sync::OnceLock<mc_plugin_api::PluginManifestV1> =
+            std::sync::OnceLock::new();
+        static MC_STORAGE_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::StoragePluginApiV1> =
+            std::sync::OnceLock::new();
+
+        fn mc_storage_plugin_instance() -> &'static $plugin_ty {
+            MC_STORAGE_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
+        }
+
+        unsafe extern "C" fn mc_storage_plugin_invoke(
+            request: mc_plugin_api::ByteSlice,
+            output: *mut mc_plugin_api::OwnedBuffer,
+            error_out: *mut mc_plugin_api::OwnedBuffer,
+        ) -> mc_plugin_api::PluginErrorCode {
+            let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let request_bytes = unsafe { $crate::byte_slice_as_bytes(request) };
+                mc_plugin_api::decode_storage_request(request_bytes)
+            })) {
+                Ok(Ok(request)) => request,
+                Ok(Err(error)) => {
+                    $crate::write_error_buffer(error_out, error.to_string());
+                    return mc_plugin_api::PluginErrorCode::InvalidInput;
+                }
+                Err(_) => {
+                    $crate::write_error_buffer(
+                        error_out,
+                        "storage plugin panicked while decoding request".to_string(),
+                    );
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+            };
+
+            let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                $crate::handle_storage_request(mc_storage_plugin_instance(), request.clone())
+            })) {
+                Ok(Ok(response)) => response,
+                Ok(Err(message)) => {
+                    $crate::write_error_buffer(error_out, message);
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+                Err(_) => {
+                    $crate::write_error_buffer(
+                        error_out,
+                        "storage plugin panicked while handling request".to_string(),
+                    );
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+            };
+
+            match mc_plugin_api::encode_storage_response(&request, &response) {
+                Ok(bytes) => {
+                    $crate::write_output_buffer(output, bytes);
+                    mc_plugin_api::PluginErrorCode::Ok
+                }
+                Err(message) => {
+                    $crate::write_error_buffer(error_out, message.to_string());
+                    mc_plugin_api::PluginErrorCode::Internal
+                }
+            }
+        }
+
+        unsafe extern "C" fn mc_storage_plugin_free_buffer(buffer: mc_plugin_api::OwnedBuffer) {
+            unsafe {
+                $crate::free_owned_buffer(buffer);
+            }
+        }
+
+        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
+            MC_STORAGE_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest))
+                as *const mc_plugin_api::PluginManifestV1
+        }
+
+        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        pub extern "C" fn mc_plugin_storage_api_v1() -> *const mc_plugin_api::StoragePluginApiV1 {
+            MC_STORAGE_PLUGIN_API.get_or_init(|| mc_plugin_api::StoragePluginApiV1 {
+                invoke: mc_storage_plugin_invoke,
+                free_buffer: mc_storage_plugin_free_buffer,
+            }) as *const mc_plugin_api::StoragePluginApiV1
+        }
+
+        #[must_use]
+        pub fn in_process_storage_entrypoints() -> $crate::InProcessStorageEntrypoints {
+            $crate::InProcessStorageEntrypoints {
+                manifest: unsafe { &*mc_plugin_manifest_v1() },
+                api: unsafe { &*mc_plugin_storage_api_v1() },
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! export_auth_plugin {
+    ($plugin_ty:ty, $manifest:expr) => {
+        static MC_AUTH_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
+            std::sync::OnceLock::new();
+        static MC_AUTH_PLUGIN_MANIFEST: std::sync::OnceLock<mc_plugin_api::PluginManifestV1> =
+            std::sync::OnceLock::new();
+        static MC_AUTH_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::AuthPluginApiV1> =
+            std::sync::OnceLock::new();
+
+        fn mc_auth_plugin_instance() -> &'static $plugin_ty {
+            MC_AUTH_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
+        }
+
+        unsafe extern "C" fn mc_auth_plugin_invoke(
+            request: mc_plugin_api::ByteSlice,
+            output: *mut mc_plugin_api::OwnedBuffer,
+            error_out: *mut mc_plugin_api::OwnedBuffer,
+        ) -> mc_plugin_api::PluginErrorCode {
+            let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let request_bytes = unsafe { $crate::byte_slice_as_bytes(request) };
+                mc_plugin_api::decode_auth_request(request_bytes)
+            })) {
+                Ok(Ok(request)) => request,
+                Ok(Err(error)) => {
+                    $crate::write_error_buffer(error_out, error.to_string());
+                    return mc_plugin_api::PluginErrorCode::InvalidInput;
+                }
+                Err(_) => {
+                    $crate::write_error_buffer(
+                        error_out,
+                        "auth plugin panicked while decoding request".to_string(),
+                    );
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+            };
+
+            let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                $crate::handle_auth_request(mc_auth_plugin_instance(), request.clone())
+            })) {
+                Ok(Ok(response)) => response,
+                Ok(Err(message)) => {
+                    $crate::write_error_buffer(error_out, message);
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+                Err(_) => {
+                    $crate::write_error_buffer(
+                        error_out,
+                        "auth plugin panicked while handling request".to_string(),
+                    );
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+            };
+
+            match mc_plugin_api::encode_auth_response(&request, &response) {
+                Ok(bytes) => {
+                    $crate::write_output_buffer(output, bytes);
+                    mc_plugin_api::PluginErrorCode::Ok
+                }
+                Err(message) => {
+                    $crate::write_error_buffer(error_out, message.to_string());
+                    mc_plugin_api::PluginErrorCode::Internal
+                }
+            }
+        }
+
+        unsafe extern "C" fn mc_auth_plugin_free_buffer(buffer: mc_plugin_api::OwnedBuffer) {
+            unsafe {
+                $crate::free_owned_buffer(buffer);
+            }
+        }
+
+        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
+            MC_AUTH_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest))
+                as *const mc_plugin_api::PluginManifestV1
+        }
+
+        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        pub extern "C" fn mc_plugin_auth_api_v1() -> *const mc_plugin_api::AuthPluginApiV1 {
+            MC_AUTH_PLUGIN_API.get_or_init(|| mc_plugin_api::AuthPluginApiV1 {
+                invoke: mc_auth_plugin_invoke,
+                free_buffer: mc_auth_plugin_free_buffer,
+            }) as *const mc_plugin_api::AuthPluginApiV1
+        }
+
+        #[must_use]
+        pub fn in_process_auth_entrypoints() -> $crate::InProcessAuthEntrypoints {
+            $crate::InProcessAuthEntrypoints {
+                manifest: unsafe { &*mc_plugin_manifest_v1() },
+                api: unsafe { &*mc_plugin_auth_api_v1() },
             }
         }
     };

@@ -1,9 +1,15 @@
+mod auth_codec;
 mod gameplay_codec;
 mod protocol_codec;
+mod storage_codec;
 
 use std::ffi::c_void;
 use std::fmt;
 
+pub use auth_codec::{
+    AuthDescriptor, AuthMode, AuthRequest, AuthResponse, decode_auth_request, decode_auth_response,
+    encode_auth_request, encode_auth_response,
+};
 pub use gameplay_codec::{
     GameplayDescriptor, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
     decode_gameplay_request, decode_gameplay_response, decode_host_block_pos_blob,
@@ -17,6 +23,10 @@ pub use protocol_codec::{
     PLUGIN_ENVELOPE_HEADER_LEN, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, ProtocolOpCode,
     ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, decode_protocol_request,
     decode_protocol_response, encode_protocol_request, encode_protocol_response,
+};
+pub use storage_codec::{
+    StorageDescriptor, StorageRequest, StorageResponse, decode_storage_request,
+    decode_storage_response, encode_storage_request, encode_storage_response,
 };
 
 pub const PLUGIN_MANIFEST_SYMBOL_V1: &[u8] = b"mc_plugin_manifest_v1\0";
@@ -226,24 +236,4 @@ pub struct GameplayPluginApiV1 {
     pub set_host_api: GameplaySetHostApiFn,
     pub invoke: PluginInvokeFn,
     pub free_buffer: PluginFreeBufferFn,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StorageRequest {
-    Describe,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StorageResponse {
-    Empty,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AuthRequest {
-    Describe,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AuthResponse {
-    Empty,
 }

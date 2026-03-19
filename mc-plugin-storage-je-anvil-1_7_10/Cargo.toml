@@ -1,0 +1,26 @@
+[package]
+name = "mc-plugin-storage-je-anvil-1_7_10"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "JE 1.7.10 Anvil storage plugin for the RevyCraft runtime host."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+disable-exported-symbols = []
+
+[dependencies]
+mc-core = { path = "../mc-core" }
+mc-plugin-api = { path = "../mc-plugin-api" }
+mc-plugin-sdk-rust = { path = "../mc-plugin-sdk-rust" }
+mc-proto-common = { path = "../mc-proto-common" }
+mc-proto-je-1_7_10 = { path = "../mc-proto-je-1_7_10" }
+
+[lints]
+workspace = true

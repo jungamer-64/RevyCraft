@@ -103,6 +103,8 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("invalid data: {0}")]
     InvalidData(String),
+    #[error("plugin error: {0}")]
+    Plugin(String),
 }
 
 pub trait WireCodec: Send + Sync {

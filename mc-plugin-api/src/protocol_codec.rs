@@ -3,7 +3,7 @@ use mc_core::{
     BlockFace, BlockPos, BlockState, CapabilitySet, ChunkColumn, ChunkSection, ConnectionId,
     CoreCommand, CoreEvent, DimensionId, EntityId, InteractionHand, InventoryContainer,
     InventorySlot, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3, WorldMeta,
-    expand_block_index,
+    WorldSnapshot, expand_block_index,
 };
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, LoginRequest,
@@ -1226,7 +1226,7 @@ fn decode_chunk_section(decoder: &mut Decoder<'_>) -> Result<ChunkSection, Proto
     Ok(section)
 }
 
-fn encode_chunk_column(
+pub(crate) fn encode_chunk_column(
     encoder: &mut Encoder,
     chunk: &ChunkColumn,
 ) -> Result<(), ProtocolCodecError> {
@@ -1240,7 +1240,9 @@ fn encode_chunk_column(
     Ok(())
 }
 
-fn decode_chunk_column(decoder: &mut Decoder<'_>) -> Result<ChunkColumn, ProtocolCodecError> {
+pub(crate) fn decode_chunk_column(
+    decoder: &mut Decoder<'_>,
+) -> Result<ChunkColumn, ProtocolCodecError> {
     let chunk_pos = mc_core::ChunkPos::new(decoder.read_i32()?, decoder.read_i32()?);
     let section_len = decoder.read_len()?;
     let mut sections = BTreeMap::new();
@@ -1286,6 +1288,45 @@ pub(crate) fn decode_world_meta(
         game_mode: decoder.read_u8()?,
         difficulty: decoder.read_u8()?,
         max_players: decoder.read_u8()?,
+    })
+}
+
+pub(crate) fn encode_world_snapshot(
+    encoder: &mut Encoder,
+    snapshot: &WorldSnapshot,
+) -> Result<(), ProtocolCodecError> {
+    encode_world_meta(encoder, &snapshot.meta)?;
+    encoder.write_len(snapshot.chunks.len())?;
+    for chunk in snapshot.chunks.values() {
+        encode_chunk_column(encoder, chunk)?;
+    }
+    encoder.write_len(snapshot.players.len())?;
+    for player in snapshot.players.values() {
+        encode_player_snapshot(encoder, player)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn decode_world_snapshot(
+    decoder: &mut Decoder<'_>,
+) -> Result<WorldSnapshot, ProtocolCodecError> {
+    let meta = decode_world_meta(decoder)?;
+    let chunk_len = decoder.read_len()?;
+    let mut chunks = BTreeMap::new();
+    for _ in 0..chunk_len {
+        let chunk = decode_chunk_column(decoder)?;
+        chunks.insert(chunk.pos, chunk);
+    }
+    let player_len = decoder.read_len()?;
+    let mut players = BTreeMap::new();
+    for _ in 0..player_len {
+        let player = decode_player_snapshot(decoder)?;
+        players.insert(player.id, player);
+    }
+    Ok(WorldSnapshot {
+        meta,
+        chunks,
+        players,
     })
 }
 

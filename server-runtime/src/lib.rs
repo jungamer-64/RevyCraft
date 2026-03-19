@@ -12,11 +12,13 @@ use mc_proto_common::{
     PacketWriter, PlayEncodingContext, ProtocolAdapter, ProtocolError, ServerListStatus,
     StatusRequest, StorageAdapter, TransportKind, WireCodec,
 };
-use md5::{Digest, Md5};
-use plugin_host::HotSwappableGameplayProfile;
+use plugin_host::{
+    HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableStorageProfile,
+};
 pub use plugin_host::{
-    InProcessGameplayPlugin, InProcessProtocolPlugin, PluginAbiRange, PluginCatalog,
-    PluginFailurePolicy, PluginHost, plugin_host_from_config, plugin_reload_poll_interval_ms,
+    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost, plugin_host_from_config,
+    plugin_reload_poll_interval_ms,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -29,7 +31,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
-use uuid::Uuid;
 
 const BE_PLACEHOLDER_ADAPTER_ID: &str = "be-placeholder";
 
@@ -43,46 +44,14 @@ pub enum RuntimeError {
     Protocol(#[from] ProtocolError),
     #[error("storage error: {0}")]
     Storage(#[from] mc_proto_common::StorageError),
+    #[error("auth error: {0}")]
+    Auth(String),
     #[error("unsupported configuration: {0}")]
     Unsupported(String),
     #[error("configuration error: {0}")]
     Config(String),
     #[error("task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
-}
-
-pub trait Authenticator: Send + Sync {
-    /// # Errors
-    ///
-    /// Returns [`RuntimeError`] when the username cannot be authenticated under
-    /// the current authentication mode.
-    fn authenticate(&self, username: &str) -> Result<PlayerId, RuntimeError>;
-}
-
-#[derive(Default)]
-pub struct OfflineAuthenticator;
-
-impl Authenticator for OfflineAuthenticator {
-    fn authenticate(&self, username: &str) -> Result<PlayerId, RuntimeError> {
-        let mut hasher = Md5::new();
-        hasher.update(format!("OfflinePlayer:{username}").as_bytes());
-        let digest = hasher.finalize();
-        let mut bytes = [0_u8; 16];
-        bytes.copy_from_slice(&digest);
-        bytes[6] = (bytes[6] & 0x0f) | 0x30;
-        bytes[8] = (bytes[8] & 0x3f) | 0x80;
-        Ok(PlayerId(Uuid::from_bytes(bytes)))
-    }
-}
-
-pub struct OnlineAuthenticator;
-
-impl Authenticator for OnlineAuthenticator {
-    fn authenticate(&self, _username: &str) -> Result<PlayerId, RuntimeError> {
-        Err(RuntimeError::Unsupported(
-            "online-mode is not implemented yet".to_string(),
-        ))
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,6 +87,7 @@ pub struct ServerConfig {
     pub default_adapter: String,
     pub enabled_adapters: Option<Vec<String>>,
     pub storage_profile: String,
+    pub auth_profile: String,
     pub default_gameplay_profile: String,
     pub gameplay_profile_map: HashMap<String, String>,
     pub plugins_dir: PathBuf,
@@ -147,6 +117,7 @@ impl Default for ServerConfig {
             default_adapter: "je-1_7_10".to_string(),
             enabled_adapters: None,
             storage_profile: "je-anvil-1_7_10".to_string(),
+            auth_profile: "offline-v1".to_string(),
             default_gameplay_profile: "canonical".to_string(),
             gameplay_profile_map: HashMap::new(),
             plugins_dir: cwd.join("dist").join("plugins"),
@@ -232,6 +203,9 @@ impl ServerConfig {
                     }
                     "storage-profile" => {
                         config.storage_profile = value.to_string();
+                    }
+                    "auth-profile" => {
+                        config.auth_profile = value.to_string();
                     }
                     "default-gameplay-profile" => {
                         config.default_gameplay_profile = value.to_string();
@@ -663,8 +637,8 @@ struct RuntimeServer {
     protocol_registry: ProtocolRegistry,
     plugin_host: Option<Arc<PluginHost>>,
     default_adapter: Arc<dyn ProtocolAdapter>,
-    authenticator: Arc<dyn Authenticator>,
-    storage_adapter: Arc<dyn StorageAdapter>,
+    auth_profile: Arc<HotSwappableAuthProfile>,
+    storage_profile: Arc<HotSwappableStorageProfile>,
     state: Mutex<RuntimeState>,
     sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
     next_connection_id: Mutex<u64>,
@@ -977,7 +951,7 @@ impl RuntimeServer {
             .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
         match current.decode_login(frame)? {
             LoginRequest::LoginStart { username } => {
-                let authenticated = self.authenticator.authenticate(&username)?;
+                let authenticated = self.auth_profile.authenticate_offline(&username)?;
                 self.apply_command(
                     CoreCommand::LoginStart {
                         connection_id,
@@ -1166,7 +1140,7 @@ impl RuntimeServer {
             state.dirty = false;
             state.core.snapshot()
         };
-        self.storage_adapter
+        self.storage_profile
             .save_snapshot(&self.config.world_dir, &snapshot)?;
         Ok(())
     }
@@ -1308,7 +1282,12 @@ pub async fn spawn_server(
     config: ServerConfig,
     registries: RuntimeRegistries,
 ) -> Result<RunningServer, RuntimeError> {
-    let plugin_host = registries.plugin_host();
+    let plugin_host = registries.plugin_host().ok_or_else(|| {
+        RuntimeError::Config(format!(
+            "no plugins discovered under `{}`",
+            config.plugins_dir.display()
+        ))
+    })?;
     if config.online_mode {
         return Err(RuntimeError::Unsupported(
             "online-mode=true is not implemented".to_string(),
@@ -1347,9 +1326,9 @@ pub async fn spawn_server(
     let active_protocols = registries
         .protocols()
         .filter_enabled(&enabled_adapter_ids)?;
-    if let Some(plugin_host) = &plugin_host {
-        plugin_host.activate_gameplay_profiles(&config)?;
-    }
+    plugin_host.activate_gameplay_profiles(&config)?;
+    plugin_host.activate_storage_profile(&config.storage_profile)?;
+    plugin_host.activate_auth_profile(&config.auth_profile)?;
     if !config.be_enabled
         && !active_protocols
             .adapter_ids_for_transport(TransportKind::Udp)
@@ -1368,16 +1347,20 @@ pub async fn spawn_server(
                 config.default_adapter
             ))
         })?;
-    let storage_adapter = registries
-        .storage()
-        .resolve(&config.storage_profile)
+    let storage_profile = plugin_host
+        .resolve_storage_profile(&config.storage_profile)
         .ok_or_else(|| {
             RuntimeError::Config(format!(
                 "unknown storage-profile `{}`",
                 config.storage_profile
             ))
         })?;
-    let snapshot = storage_adapter.load_snapshot(&config.world_dir)?;
+    let auth_profile = plugin_host
+        .resolve_auth_profile(&config.auth_profile)
+        .ok_or_else(|| {
+            RuntimeError::Config(format!("unknown auth-profile `{}`", config.auth_profile))
+        })?;
+    let snapshot = storage_profile.load_snapshot(&config.world_dir)?;
     let core_config = CoreConfig {
         level_name: config.level_name.clone(),
         seed: 0,
@@ -1426,10 +1409,10 @@ pub async fn spawn_server(
     let server = Arc::new(RuntimeServer {
         config,
         protocol_registry: active_protocols,
-        plugin_host: plugin_host.clone(),
+        plugin_host: Some(plugin_host.clone()),
         default_adapter,
-        authenticator: Arc::new(OfflineAuthenticator),
-        storage_adapter,
+        auth_profile,
+        storage_profile,
         state: Mutex::new(RuntimeState { core, dirty: false }),
         sessions: Mutex::new(HashMap::new()),
         next_connection_id: Mutex::new(1),
@@ -1503,7 +1486,7 @@ pub async fn spawn_server(
 
     Ok(RunningServer {
         listener_bindings,
-        plugin_host,
+        plugin_host: Some(plugin_host),
         runtime: server,
         shutdown_tx: Some(shutdown_tx),
         join_handle,
@@ -1546,20 +1529,17 @@ pub fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8
 #[cfg(test)]
 mod tests {
     use super::{
-        LevelType, RuntimeError, RuntimeRegistries, ServerConfig, StorageRegistry,
-        UdpDatagramAction, build_listener_plans, classify_udp_datagram, encode_handshake,
-        plugin_host_from_config, spawn_server,
+        LevelType, RuntimeError, RuntimeRegistries, ServerConfig, UdpDatagramAction,
+        build_listener_plans, classify_udp_datagram, encode_handshake, plugin_host_from_config,
+        spawn_server,
     };
     use bytes::BytesMut;
-    use mc_core::WorldSnapshot;
+    use mc_plugin_auth_offline::OFFLINE_AUTH_PROFILE_ID;
     use mc_proto_be_placeholder::BE_PLACEHOLDER_ADAPTER_ID;
     use mc_proto_common::{
-        Edition, MinecraftWireCodec, PacketReader, PacketWriter, StorageAdapter, TransportKind,
-        WireCodec,
+        Edition, MinecraftWireCodec, PacketReader, PacketWriter, TransportKind, WireCodec,
     };
-    use mc_proto_je_1_7_10::{
-        JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID, Je1710StorageAdapter,
-    };
+    use mc_proto_je_1_7_10::{JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID};
     use mc_proto_je_1_8_x::JE_1_8_X_ADAPTER_ID;
     use mc_proto_je_1_12_2::JE_1_12_2_ADAPTER_ID;
     use std::collections::HashMap;
@@ -1569,7 +1549,6 @@ mod tests {
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::sync::Arc;
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -1582,12 +1561,6 @@ mod tests {
         0x78,
     ];
 
-    #[derive(Default)]
-    struct RecordingStorageAdapter {
-        load_calls: AtomicUsize,
-        save_calls: AtomicUsize,
-    }
-
     const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
         JE_1_7_10_ADAPTER_ID,
         JE_1_8_X_ADAPTER_ID,
@@ -1596,6 +1569,7 @@ mod tests {
     ];
     const TCP_ONLY_PROTOCOL_PLUGIN_IDS: &[&str] = &[JE_1_7_10_ADAPTER_ID];
     const GAMEPLAY_PLUGIN_IDS: &[&str] = &["gameplay-canonical", "gameplay-readonly"];
+    const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &["storage-je-anvil-1_7_10", "auth-offline"];
     static PLUGIN_TEST_HARNESS_BUILDS: AtomicUsize = AtomicUsize::new(0);
     static PLUGIN_TEST_HARNESS: OnceLock<Result<PluginTestHarness, String>> = OnceLock::new();
 
@@ -1645,6 +1619,11 @@ mod tests {
                 .iter()
                 .map(|plugin_id| (*plugin_id).to_string()),
         );
+        plugin_allowlist.extend(
+            STORAGE_AND_AUTH_PLUGIN_IDS
+                .iter()
+                .map(|plugin_id| (*plugin_id).to_string()),
+        );
         plugin_allowlist
     }
 
@@ -1661,8 +1640,6 @@ mod tests {
             RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
         })?;
         let mut registries = RuntimeRegistries::new();
-        registries
-            .register_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID, Arc::new(Je1710StorageAdapter));
         plugin_host.load_into_registries(&mut registries)?;
         Ok(registries)
     }
@@ -1800,25 +1777,6 @@ mod tests {
         }
     }
 
-    impl StorageAdapter for RecordingStorageAdapter {
-        fn load_snapshot(
-            &self,
-            _world_dir: &Path,
-        ) -> Result<Option<WorldSnapshot>, mc_proto_common::StorageError> {
-            self.load_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(None)
-        }
-
-        fn save_snapshot(
-            &self,
-            _world_dir: &Path,
-            _snapshot: &WorldSnapshot,
-        ) -> Result<(), mc_proto_common::StorageError> {
-            self.save_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
     async fn write_packet(
         stream: &mut tokio::net::TcpStream,
         codec: &MinecraftWireCodec,
@@ -1949,16 +1907,6 @@ mod tests {
     }
 
     #[test]
-    fn storage_registry_resolves_registered_profile() {
-        let mut registry = StorageRegistry::new();
-        let storage = Arc::new(RecordingStorageAdapter::default());
-        registry.register_profile("recording", storage);
-
-        assert!(registry.resolve("recording").is_some());
-        assert!(registry.resolve("missing").is_none());
-    }
-
-    #[test]
     fn handshake_probe_transport_kind_filters_routing() -> Result<(), RuntimeError> {
         let registry = plugin_test_registries_all()?;
         let tcp_route = registry
@@ -2083,7 +2031,7 @@ mod tests {
         let path = temp_dir.path().join("server.properties");
         fs::write(
             &path,
-            "level-name=flatland\nlevel-type=FLAT\nbe-enabled=true\nonline-mode=false\ndefault-adapter=je-1_7_10\nstorage-profile=je-anvil-1_7_10\n",
+            "level-name=flatland\nlevel-type=FLAT\nbe-enabled=true\nonline-mode=false\ndefault-adapter=je-1_7_10\nstorage-profile=je-anvil-1_7_10\nauth-profile=offline-v1\n",
         )?;
 
         let config = ServerConfig::from_properties(&path)?;
@@ -2093,6 +2041,7 @@ mod tests {
         assert!(config.be_enabled);
         assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
         assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
+        assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
         assert_eq!(config.world_dir, temp_dir.path().join("flatland"));
         Ok(())
     }
@@ -2108,6 +2057,7 @@ mod tests {
         assert!(!config.be_enabled);
         assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
         assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
+        assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
         Ok(())
     }
 
@@ -2147,6 +2097,17 @@ mod tests {
                 (JE_1_12_2_ADAPTER_ID, "canonical"),
             ])
         );
+        Ok(())
+    }
+
+    #[test]
+    fn server_properties_parse_auth_profile() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(&path, "auth-profile=offline-v1\n")?;
+
+        let config = ServerConfig::from_properties(&path)?;
+        assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
         Ok(())
     }
 
@@ -2796,7 +2757,28 @@ mod tests {
             panic!("unknown storage profile should fail fast");
         };
         assert!(
-            matches!(error, RuntimeError::Config(message) if message.contains("unknown storage-profile"))
+            matches!(error, RuntimeError::Config(message) if message.contains("unknown storage profile"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unknown_auth_profile_fails_fast() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                auth_profile: "missing".to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("unknown auth profile should fail fast");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("unknown auth profile"))
         );
         Ok(())
     }
@@ -3343,6 +3325,263 @@ mod tests {
         server.shutdown().await
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn storage_reload_updates_generation_and_preserves_persistence()
+    -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("dist").join("plugins");
+        let target_dir = temp_dir.path().join("target");
+        let world_dir = temp_dir.path().join("world");
+        run_xtask_package_plugins(&dist_dir, &target_dir, "storage-reload-v1")?;
+        let registries = plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                plugins_dir: dist_dir.clone(),
+                world_dir: world_dir.clone(),
+                ..ServerConfig::default()
+            },
+            registries,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let storage_before = plugin_host
+            .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
+            .expect("storage profile should resolve");
+        let before_generation = storage_before
+            .plugin_generation_id()
+            .expect("storage profile should report generation");
+        assert!(
+            storage_before
+                .capability_set()
+                .contains("build-tag:storage-reload-v1")
+        );
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+        write_packet(
+            &mut stream,
+            &codec,
+            &creative_inventory_action(36, 20, 64, 0),
+        )
+        .await?;
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_plugin(
+            "mc-plugin-storage-je-anvil-1_7_10",
+            "storage-je-anvil-1_7_10",
+            "storage",
+            &dist_dir,
+            &target_dir,
+            "storage-reload-v2",
+        )?;
+
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == "storage-je-anvil-1_7_10"),
+            "storage reload should report generation swap"
+        );
+
+        let storage_after = plugin_host
+            .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
+            .expect("storage profile should still resolve");
+        assert_ne!(
+            storage_after.plugin_generation_id(),
+            Some(before_generation)
+        );
+        assert!(
+            storage_after
+                .capability_set()
+                .contains("build-tag:storage-reload-v2")
+        );
+
+        server.shutdown().await?;
+
+        let restarted = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                plugins_dir: dist_dir.clone(),
+                world_dir: world_dir.clone(),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_from_dist(dist_dir, &[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await?;
+        let addr = listener_addr(&restarted);
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let window_items = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+        assert_eq!(window_items_slot(&window_items, 36)?, Some((20, 64, 0)));
+
+        restarted.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn storage_reload_failure_keeps_existing_generation() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("dist").join("plugins");
+        let target_dir = temp_dir.path().join("target");
+        run_xtask_package_plugins(&dist_dir, &target_dir, "storage-reload-ok")?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let storage_before = plugin_host
+            .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
+            .expect("storage profile should resolve");
+        let before_generation = storage_before
+            .plugin_generation_id()
+            .expect("storage profile should report generation");
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_plugin(
+            "mc-plugin-storage-je-anvil-1_7_10",
+            "storage-je-anvil-1_7_10",
+            "storage",
+            &dist_dir,
+            &target_dir,
+            "storage-reload-fail",
+        )?;
+
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            !reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == "storage-je-anvil-1_7_10"),
+            "failed storage migration should not swap the storage generation"
+        );
+
+        let storage_after = plugin_host
+            .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
+            .expect("storage profile should still resolve");
+        assert_eq!(
+            storage_after.plugin_generation_id(),
+            Some(before_generation)
+        );
+        assert!(
+            storage_after
+                .capability_set()
+                .contains("build-tag:storage-reload-ok")
+        );
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("dist").join("plugins");
+        let target_dir = temp_dir.path().join("target");
+        run_xtask_package_plugins(&dist_dir, &target_dir, "auth-reload-v1")?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let auth_before = plugin_host
+            .resolve_auth_profile(OFFLINE_AUTH_PROFILE_ID)
+            .expect("auth profile should resolve");
+        let before_generation = auth_before
+            .plugin_generation_id()
+            .expect("auth profile should report generation");
+        assert!(
+            auth_before
+                .capability_set()
+                .contains("build-tag:auth-reload-v1")
+        );
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut alpha = connect_tcp(addr).await?;
+        write_packet(&mut alpha, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut alpha, &codec, &login_start("alpha")).await?;
+        let mut alpha_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x30, 12).await?;
+        let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_plugin(
+            "mc-plugin-auth-offline",
+            "auth-offline",
+            "auth",
+            &dist_dir,
+            &target_dir,
+            "auth-reload-v2",
+        )?;
+
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            reloaded.iter().any(|plugin_id| plugin_id == "auth-offline"),
+            "auth reload should report generation swap"
+        );
+
+        let auth_after = plugin_host
+            .resolve_auth_profile(OFFLINE_AUTH_PROFILE_ID)
+            .expect("auth profile should still resolve");
+        assert_ne!(auth_after.plugin_generation_id(), Some(before_generation));
+        assert!(
+            auth_after
+                .capability_set()
+                .contains("build-tag:auth-reload-v2")
+        );
+
+        write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
+        let held_item = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
+        assert_eq!(held_item_from_packet(&held_item)?, 4);
+
+        let mut beta = connect_tcp(addr).await?;
+        write_packet(&mut beta, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut beta, &codec, &login_start("beta")).await?;
+        let mut beta_buffer = BytesMut::new();
+        let login_success =
+            read_until_packet_id(&mut beta, &codec, &mut beta_buffer, 0x02, 8).await?;
+        assert_eq!(packet_id(&login_success), 0x02);
+
+        server.shutdown().await
+    }
+
     #[tokio::test]
     async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
@@ -3546,26 +3785,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn storage_profile_is_selected_independently_from_default_adapter()
-    -> Result<(), RuntimeError> {
+    async fn plugin_backed_storage_and_auth_profiles_boot_and_persist() -> Result<(), RuntimeError>
+    {
         let temp_dir = tempdir()?;
         let codec = MinecraftWireCodec;
-        let storage = Arc::new(RecordingStorageAdapter::default());
-        let mut registries = plugin_test_registries_tcp_only()?;
-        registries.register_storage_profile("recording", storage.clone());
+        let world_dir = temp_dir.path().join("world");
 
         let server = spawn_server(
             ServerConfig {
                 server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
                 server_port: 0,
-                storage_profile: "recording".to_string(),
-                world_dir: temp_dir.path().join("world"),
+                storage_profile: JE_1_7_10_STORAGE_PROFILE_ID.to_string(),
+                auth_profile: OFFLINE_AUTH_PROFILE_ID.to_string(),
+                world_dir: world_dir.clone(),
                 ..ServerConfig::default()
             },
-            registries,
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
-        assert_eq!(storage.load_calls.load(Ordering::SeqCst), 1);
 
         let addr = listener_addr(&server);
         let mut stream = connect_tcp(addr).await?;
@@ -3576,7 +3813,8 @@ mod tests {
 
         server.shutdown().await?;
 
-        assert!(storage.save_calls.load(Ordering::SeqCst) >= 1);
+        assert!(world_dir.join("level.dat").exists());
+        assert!(fs::read_dir(world_dir.join("playerdata"))?.next().is_some());
         Ok(())
     }
 

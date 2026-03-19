@@ -41,6 +41,16 @@ const PLUGINS: &[PluginSpec] = &[
         plugin_id: "gameplay-readonly",
         plugin_kind: "gameplay",
     },
+    PluginSpec {
+        cargo_package: "mc-plugin-storage-je-anvil-1_7_10",
+        plugin_id: "storage-je-anvil-1_7_10",
+        plugin_kind: "storage",
+    },
+    PluginSpec {
+        cargo_package: "mc-plugin-auth-offline",
+        plugin_id: "auth-offline",
+        plugin_kind: "auth",
+    },
 ];
 
 fn main() -> Result<(), String> {

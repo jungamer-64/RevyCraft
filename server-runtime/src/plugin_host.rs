@@ -2,20 +2,23 @@ use crate::{RuntimeError, RuntimeRegistries, RuntimeServer, ServerConfig};
 use libloading::Library;
 use mc_core::{
     CapabilitySet, GameplayEffect, GameplayJoinEffect, GameplayPolicyResolver, GameplayProfileId,
-    GameplayQuery, PlayerSnapshot, PluginGenerationId, SessionCapabilitySet,
+    GameplayQuery, PlayerId, PlayerSnapshot, PluginGenerationId, SessionCapabilitySet,
+    WorldSnapshot,
 };
 use mc_plugin_api::{
-    CURRENT_PLUGIN_ABI, GameplayPluginApiV1, GameplayRequest, GameplayResponse,
-    GameplaySessionSnapshot, HostApiTableV1, OwnedBuffer, PLUGIN_GAMEPLAY_API_SYMBOL_V1,
-    PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1, PluginAbiVersion, PluginErrorCode,
+    AuthMode, AuthPluginApiV1, AuthRequest, AuthResponse, CURRENT_PLUGIN_ABI, GameplayPluginApiV1,
+    GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HostApiTableV1, OwnedBuffer,
+    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1, PLUGIN_MANIFEST_SYMBOL_V1,
+    PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1, PluginAbiVersion, PluginErrorCode,
     PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
-    decode_gameplay_response, decode_protocol_response, encode_gameplay_request,
-    encode_protocol_request,
+    StoragePluginApiV1, StorageRequest, StorageResponse, decode_auth_response,
+    decode_gameplay_response, decode_protocol_response, decode_storage_response,
+    encode_auth_request, encode_gameplay_request, encode_protocol_request, encode_storage_request,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
     PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus,
-    StatusRequest, TransportKind, WireCodec,
+    StatusRequest, StorageError, TransportKind, WireCodec,
 };
 use serde::Deserialize;
 use std::cell::RefCell;
@@ -96,6 +99,20 @@ pub struct InProcessGameplayPlugin {
 }
 
 #[derive(Clone, Debug)]
+pub struct InProcessStoragePlugin {
+    pub plugin_id: String,
+    pub manifest: &'static PluginManifestV1,
+    pub api: &'static StoragePluginApiV1,
+}
+
+#[derive(Clone, Debug)]
+pub struct InProcessAuthPlugin {
+    pub plugin_id: String,
+    pub manifest: &'static PluginManifestV1,
+    pub api: &'static AuthPluginApiV1,
+}
+
+#[derive(Clone, Debug)]
 enum PluginSource {
     DynamicLibrary {
         manifest_path: PathBuf,
@@ -103,6 +120,8 @@ enum PluginSource {
     },
     InProcessProtocol(InProcessProtocolPlugin),
     InProcessGameplay(InProcessGameplayPlugin),
+    InProcessStorage(InProcessStoragePlugin),
+    InProcessAuth(InProcessAuthPlugin),
 }
 
 #[derive(Clone, Debug)]
@@ -121,9 +140,10 @@ impl PluginPackage {
             } => Ok(fs::metadata(manifest_path)?
                 .modified()?
                 .max(fs::metadata(library_path)?.modified()?)),
-            PluginSource::InProcessProtocol(_) | PluginSource::InProcessGameplay(_) => {
-                Ok(SystemTime::UNIX_EPOCH)
-            }
+            PluginSource::InProcessProtocol(_)
+            | PluginSource::InProcessGameplay(_)
+            | PluginSource::InProcessStorage(_)
+            | PluginSource::InProcessAuth(_) => Ok(SystemTime::UNIX_EPOCH),
         }
     }
 
@@ -253,6 +273,28 @@ impl PluginCatalog {
                 plugin_id: plugin.plugin_id.clone(),
                 plugin_kind: PluginKind::Gameplay,
                 source: PluginSource::InProcessGameplay(plugin),
+            },
+        );
+    }
+
+    pub fn register_in_process_storage_plugin(&mut self, plugin: InProcessStoragePlugin) {
+        self.packages.insert(
+            plugin.plugin_id.clone(),
+            PluginPackage {
+                plugin_id: plugin.plugin_id.clone(),
+                plugin_kind: PluginKind::Storage,
+                source: PluginSource::InProcessStorage(plugin),
+            },
+        );
+    }
+
+    pub fn register_in_process_auth_plugin(&mut self, plugin: InProcessAuthPlugin) {
+        self.packages.insert(
+            plugin.plugin_id.clone(),
+            PluginPackage {
+                plugin_id: plugin.plugin_id.clone(),
+                plugin_kind: PluginKind::Auth,
+                source: PluginSource::InProcessAuth(plugin),
             },
         );
     }
@@ -609,6 +651,96 @@ impl GameplayGeneration {
     }
 }
 
+#[derive(Clone)]
+struct StorageGeneration {
+    #[allow(dead_code)]
+    generation_id: PluginGenerationId,
+    plugin_id: String,
+    profile_id: String,
+    #[allow(dead_code)]
+    capabilities: CapabilitySet,
+    invoke: mc_plugin_api::PluginInvokeFn,
+    free_buffer: mc_plugin_api::PluginFreeBufferFn,
+    _library_guard: Option<Arc<Mutex<Library>>>,
+}
+
+impl StorageGeneration {
+    fn invoke(&self, request: StorageRequest) -> Result<StorageResponse, StorageError> {
+        let request_bytes = encode_storage_request(&request)
+            .map_err(|error| StorageError::Plugin(error.to_string()))?;
+        let mut output = OwnedBuffer::empty();
+        let mut error = OwnedBuffer::empty();
+        let status = unsafe {
+            (self.invoke)(
+                mc_plugin_api::ByteSlice {
+                    ptr: request_bytes.as_ptr(),
+                    len: request_bytes.len(),
+                },
+                &mut output,
+                &mut error,
+            )
+        };
+        if status != PluginErrorCode::Ok {
+            return Err(StorageError::Plugin(decode_plugin_error(
+                &self.plugin_id,
+                status,
+                self.free_buffer,
+                error,
+            )));
+        }
+        let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
+        unsafe {
+            (self.free_buffer)(output);
+        }
+        decode_storage_response(&request, &response_bytes)
+            .map_err(|error| StorageError::Plugin(error.to_string()))
+    }
+}
+
+#[derive(Clone)]
+struct AuthGeneration {
+    #[allow(dead_code)]
+    generation_id: PluginGenerationId,
+    plugin_id: String,
+    profile_id: String,
+    #[allow(dead_code)]
+    capabilities: CapabilitySet,
+    invoke: mc_plugin_api::PluginInvokeFn,
+    free_buffer: mc_plugin_api::PluginFreeBufferFn,
+    _library_guard: Option<Arc<Mutex<Library>>>,
+}
+
+impl AuthGeneration {
+    fn invoke(&self, request: AuthRequest) -> Result<AuthResponse, String> {
+        let request_bytes = encode_auth_request(&request).map_err(|error| error.to_string())?;
+        let mut output = OwnedBuffer::empty();
+        let mut error = OwnedBuffer::empty();
+        let status = unsafe {
+            (self.invoke)(
+                mc_plugin_api::ByteSlice {
+                    ptr: request_bytes.as_ptr(),
+                    len: request_bytes.len(),
+                },
+                &mut output,
+                &mut error,
+            )
+        };
+        if status != PluginErrorCode::Ok {
+            return Err(decode_plugin_error(
+                &self.plugin_id,
+                status,
+                self.free_buffer,
+                error,
+            ));
+        }
+        let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
+        unsafe {
+            (self.free_buffer)(output);
+        }
+        decode_auth_response(&request, &response_bytes).map_err(|error| error.to_string())
+    }
+}
+
 pub struct PluginLoader {
     abi_range: PluginAbiRange,
 }
@@ -631,7 +763,9 @@ impl PluginLoader {
             PluginSource::InProcessProtocol(plugin) => {
                 (None, decode_manifest(plugin.manifest)?, *plugin.api)
             }
-            PluginSource::InProcessGameplay(_) => {
+            PluginSource::InProcessGameplay(_)
+            | PluginSource::InProcessStorage(_)
+            | PluginSource::InProcessAuth(_) => {
                 return Err(RuntimeError::Config(format!(
                     "plugin `{}` is not a protocol plugin",
                     package.plugin_id
@@ -687,7 +821,9 @@ impl PluginLoader {
                 }
                 (None, decode_manifest(plugin.manifest)?, *plugin.api)
             }
-            PluginSource::InProcessProtocol(_) => {
+            PluginSource::InProcessProtocol(_)
+            | PluginSource::InProcessStorage(_)
+            | PluginSource::InProcessAuth(_) => {
                 return Err(RuntimeError::Config(format!(
                     "plugin `{}` is not a gameplay plugin",
                     package.plugin_id
@@ -745,6 +881,170 @@ impl PluginLoader {
                 }
             };
         Ok(GameplayGeneration {
+            generation_id,
+            plugin_id: package.plugin_id.clone(),
+            profile_id,
+            capabilities,
+            invoke: api.invoke,
+            free_buffer: api.free_buffer,
+            _library_guard: guard,
+        })
+    }
+
+    fn load_storage_generation(
+        &self,
+        package: &PluginPackage,
+        generation_id: PluginGenerationId,
+    ) -> Result<StorageGeneration, RuntimeError> {
+        let (guard, manifest, api) = match &package.source {
+            PluginSource::DynamicLibrary { library_path, .. } => unsafe {
+                self.load_dynamic_storage(library_path)?
+            },
+            PluginSource::InProcessStorage(plugin) => {
+                (None, decode_manifest(plugin.manifest)?, *plugin.api)
+            }
+            PluginSource::InProcessProtocol(_)
+            | PluginSource::InProcessGameplay(_)
+            | PluginSource::InProcessAuth(_) => {
+                return Err(RuntimeError::Config(format!(
+                    "plugin `{}` is not a storage plugin",
+                    package.plugin_id
+                )));
+            }
+        };
+        self.validate_manifest(package, &manifest)?;
+        let profile_id = manifest
+            .capabilities
+            .iter()
+            .find_map(|capability| capability.strip_prefix("storage.profile:"))
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "storage plugin `{}` is missing storage.profile:<id> manifest capability",
+                    package.plugin_id
+                ))
+            })?;
+        if !manifest
+            .capabilities
+            .iter()
+            .any(|capability| capability == "runtime.reload.storage")
+        {
+            return Err(RuntimeError::Config(format!(
+                "storage plugin `{}` is missing runtime.reload.storage capability",
+                package.plugin_id
+            )));
+        }
+        let descriptor = match invoke_storage(&package.plugin_id, &api, StorageRequest::Describe)? {
+            StorageResponse::Descriptor(descriptor) => descriptor,
+            other => {
+                return Err(RuntimeError::Config(format!(
+                    "plugin `{}` returned unexpected storage describe payload: {other:?}",
+                    package.plugin_id
+                )));
+            }
+        };
+        if descriptor.storage_profile != profile_id {
+            return Err(RuntimeError::Config(format!(
+                "storage plugin `{}` describe profile `{}` did not match manifest profile `{}`",
+                package.plugin_id, descriptor.storage_profile, profile_id
+            )));
+        }
+        let capabilities =
+            match invoke_storage(&package.plugin_id, &api, StorageRequest::CapabilitySet)? {
+                StorageResponse::CapabilitySet(capabilities) => capabilities,
+                other => {
+                    return Err(RuntimeError::Config(format!(
+                        "plugin `{}` returned unexpected storage capability payload: {other:?}",
+                        package.plugin_id
+                    )));
+                }
+            };
+        Ok(StorageGeneration {
+            generation_id,
+            plugin_id: package.plugin_id.clone(),
+            profile_id,
+            capabilities,
+            invoke: api.invoke,
+            free_buffer: api.free_buffer,
+            _library_guard: guard,
+        })
+    }
+
+    fn load_auth_generation(
+        &self,
+        package: &PluginPackage,
+        generation_id: PluginGenerationId,
+    ) -> Result<AuthGeneration, RuntimeError> {
+        let (guard, manifest, api) = match &package.source {
+            PluginSource::DynamicLibrary { library_path, .. } => unsafe {
+                self.load_dynamic_auth(library_path)?
+            },
+            PluginSource::InProcessAuth(plugin) => {
+                (None, decode_manifest(plugin.manifest)?, *plugin.api)
+            }
+            PluginSource::InProcessProtocol(_)
+            | PluginSource::InProcessGameplay(_)
+            | PluginSource::InProcessStorage(_) => {
+                return Err(RuntimeError::Config(format!(
+                    "plugin `{}` is not an auth plugin",
+                    package.plugin_id
+                )));
+            }
+        };
+        self.validate_manifest(package, &manifest)?;
+        let profile_id = manifest
+            .capabilities
+            .iter()
+            .find_map(|capability| capability.strip_prefix("auth.profile:"))
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "auth plugin `{}` is missing auth.profile:<id> manifest capability",
+                    package.plugin_id
+                ))
+            })?;
+        if !manifest
+            .capabilities
+            .iter()
+            .any(|capability| capability == "runtime.reload.auth")
+        {
+            return Err(RuntimeError::Config(format!(
+                "auth plugin `{}` is missing runtime.reload.auth capability",
+                package.plugin_id
+            )));
+        }
+        let descriptor = match invoke_auth(&package.plugin_id, &api, AuthRequest::Describe)? {
+            AuthResponse::Descriptor(descriptor) => descriptor,
+            other => {
+                return Err(RuntimeError::Config(format!(
+                    "plugin `{}` returned unexpected auth describe payload: {other:?}",
+                    package.plugin_id
+                )));
+            }
+        };
+        if descriptor.auth_profile != profile_id {
+            return Err(RuntimeError::Config(format!(
+                "auth plugin `{}` describe profile `{}` did not match manifest profile `{}`",
+                package.plugin_id, descriptor.auth_profile, profile_id
+            )));
+        }
+        if descriptor.mode != AuthMode::Offline {
+            return Err(RuntimeError::Unsupported(format!(
+                "auth plugin `{}` mode {:?} is not supported yet",
+                package.plugin_id, descriptor.mode
+            )));
+        }
+        let capabilities = match invoke_auth(&package.plugin_id, &api, AuthRequest::CapabilitySet)?
+        {
+            AuthResponse::CapabilitySet(capabilities) => capabilities,
+            other => {
+                return Err(RuntimeError::Config(format!(
+                    "plugin `{}` returned unexpected auth capability payload: {other:?}",
+                    package.plugin_id
+                )));
+            }
+        };
+        Ok(AuthGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
             profile_id,
@@ -841,6 +1141,88 @@ impl PluginLoader {
                 library_path.display()
             )));
         }
+        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+    }
+
+    unsafe fn load_dynamic_storage(
+        &self,
+        library_path: &Path,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            StoragePluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
+        let manifest_ptr = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve plugin manifest symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { manifest_fn() }
+        };
+        let api = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const StoragePluginApiV1> =
+                unsafe { library.get(PLUGIN_STORAGE_API_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve storage api symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { *api_fn() }
+        };
+        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+    }
+
+    unsafe fn load_dynamic_auth(
+        &self,
+        library_path: &Path,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            AuthPluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
+        let manifest_ptr = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve plugin manifest symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { manifest_fn() }
+        };
+        let api = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const AuthPluginApiV1> =
+                unsafe { library.get(PLUGIN_AUTH_API_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve auth api symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { *api_fn() }
+        };
         Ok((Some(library), decode_manifest(manifest_ptr)?, api))
     }
 
@@ -996,6 +1378,78 @@ fn invoke_gameplay(
         (api.free_buffer)(output);
     }
     decode_gameplay_response(&request, &response_bytes)
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn invoke_storage(
+    plugin_id: &str,
+    api: &StoragePluginApiV1,
+    request: StorageRequest,
+) -> Result<StorageResponse, RuntimeError> {
+    let request_bytes = encode_storage_request(&request)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let mut output = OwnedBuffer::empty();
+    let mut error = OwnedBuffer::empty();
+    let status = unsafe {
+        (api.invoke)(
+            mc_plugin_api::ByteSlice {
+                ptr: request_bytes.as_ptr(),
+                len: request_bytes.len(),
+            },
+            &mut output,
+            &mut error,
+        )
+    };
+    if status != PluginErrorCode::Ok {
+        return Err(RuntimeError::Config(decode_plugin_error(
+            plugin_id,
+            status,
+            api.free_buffer,
+            error,
+        )));
+    }
+
+    let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
+    unsafe {
+        (api.free_buffer)(output);
+    }
+    decode_storage_response(&request, &response_bytes)
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn invoke_auth(
+    plugin_id: &str,
+    api: &AuthPluginApiV1,
+    request: AuthRequest,
+) -> Result<AuthResponse, RuntimeError> {
+    let request_bytes =
+        encode_auth_request(&request).map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let mut output = OwnedBuffer::empty();
+    let mut error = OwnedBuffer::empty();
+    let status = unsafe {
+        (api.invoke)(
+            mc_plugin_api::ByteSlice {
+                ptr: request_bytes.as_ptr(),
+                len: request_bytes.len(),
+            },
+            &mut output,
+            &mut error,
+        )
+    };
+    if status != PluginErrorCode::Ok {
+        return Err(RuntimeError::Config(decode_plugin_error(
+            plugin_id,
+            status,
+            api.free_buffer,
+            error,
+        )));
+    }
+
+    let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
+    unsafe {
+        (api.free_buffer)(output);
+    }
+    decode_auth_response(&request, &response_bytes)
         .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
@@ -1455,6 +1909,220 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
     }
 }
 
+pub(crate) struct HotSwappableStorageProfile {
+    plugin_id: String,
+    #[allow(dead_code)]
+    profile_id: String,
+    generation: RwLock<Arc<StorageGeneration>>,
+    quarantine: Arc<QuarantineManager>,
+    reload_gate: RwLock<()>,
+}
+
+impl HotSwappableStorageProfile {
+    fn new(
+        plugin_id: String,
+        profile_id: String,
+        generation: Arc<StorageGeneration>,
+        quarantine: Arc<QuarantineManager>,
+    ) -> Self {
+        Self {
+            plugin_id,
+            profile_id,
+            generation: RwLock::new(generation),
+            quarantine,
+            reload_gate: RwLock::new(()),
+        }
+    }
+
+    fn current_generation(&self) -> Result<Arc<StorageGeneration>, StorageError> {
+        if self.quarantine.is_quarantined(&self.plugin_id) {
+            return Err(StorageError::Plugin(
+                self.quarantine
+                    .reason(&self.plugin_id)
+                    .unwrap_or_else(|| "plugin quarantined".to_string()),
+            ));
+        }
+        Ok(self
+            .generation
+            .read()
+            .expect("storage generation lock should not be poisoned")
+            .clone())
+    }
+
+    fn swap_generation(&self, generation: Arc<StorageGeneration>) {
+        *self
+            .generation
+            .write()
+            .expect("storage generation lock should not be poisoned") = generation;
+    }
+
+    #[expect(
+        dead_code,
+        reason = "phase 4 tests introspect the active storage profile"
+    )]
+    pub(crate) fn profile_id(&self) -> &str {
+        &self.profile_id
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn capability_set(&self) -> CapabilitySet {
+        self.current_generation()
+            .map(|generation| generation.capabilities.clone())
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+        self.current_generation()
+            .ok()
+            .map(|generation| generation.generation_id)
+    }
+
+    pub(crate) fn load_snapshot(
+        &self,
+        world_dir: &Path,
+    ) -> Result<Option<WorldSnapshot>, StorageError> {
+        let _guard = self
+            .reload_gate
+            .read()
+            .expect("storage reload gate should not be poisoned");
+        let generation = self.current_generation()?;
+        match generation.invoke(StorageRequest::LoadSnapshot {
+            world_dir: world_dir.display().to_string(),
+        })? {
+            StorageResponse::Snapshot(snapshot) => Ok(snapshot),
+            other => Err(StorageError::Plugin(format!(
+                "unexpected storage load_snapshot payload: {other:?}"
+            ))),
+        }
+    }
+
+    pub(crate) fn save_snapshot(
+        &self,
+        world_dir: &Path,
+        snapshot: &WorldSnapshot,
+    ) -> Result<(), StorageError> {
+        let _guard = self
+            .reload_gate
+            .read()
+            .expect("storage reload gate should not be poisoned");
+        let generation = self.current_generation()?;
+        match generation.invoke(StorageRequest::SaveSnapshot {
+            world_dir: world_dir.display().to_string(),
+            snapshot: snapshot.clone(),
+        })? {
+            StorageResponse::Empty => Ok(()),
+            other => Err(StorageError::Plugin(format!(
+                "unexpected storage save_snapshot payload: {other:?}"
+            ))),
+        }
+    }
+
+    #[expect(
+        dead_code,
+        reason = "host reload imports into a candidate generation before swap"
+    )]
+    pub(crate) fn import_runtime_state(
+        &self,
+        world_dir: &Path,
+        snapshot: &WorldSnapshot,
+    ) -> Result<(), StorageError> {
+        let _guard = self
+            .reload_gate
+            .read()
+            .expect("storage reload gate should not be poisoned");
+        let generation = self.current_generation()?;
+        match generation.invoke(StorageRequest::ImportRuntimeState {
+            world_dir: world_dir.display().to_string(),
+            snapshot: snapshot.clone(),
+        })? {
+            StorageResponse::Empty => Ok(()),
+            other => Err(StorageError::Plugin(format!(
+                "unexpected storage import_runtime_state payload: {other:?}"
+            ))),
+        }
+    }
+}
+
+pub(crate) struct HotSwappableAuthProfile {
+    plugin_id: String,
+    #[allow(dead_code)]
+    profile_id: String,
+    generation: RwLock<Arc<AuthGeneration>>,
+    quarantine: Arc<QuarantineManager>,
+}
+
+impl HotSwappableAuthProfile {
+    fn new(
+        plugin_id: String,
+        profile_id: String,
+        generation: Arc<AuthGeneration>,
+        quarantine: Arc<QuarantineManager>,
+    ) -> Self {
+        Self {
+            plugin_id,
+            profile_id,
+            generation: RwLock::new(generation),
+            quarantine,
+        }
+    }
+
+    fn current_generation(&self) -> Result<Arc<AuthGeneration>, String> {
+        if self.quarantine.is_quarantined(&self.plugin_id) {
+            return Err(self
+                .quarantine
+                .reason(&self.plugin_id)
+                .unwrap_or_else(|| "plugin quarantined".to_string()));
+        }
+        Ok(self
+            .generation
+            .read()
+            .expect("auth generation lock should not be poisoned")
+            .clone())
+    }
+
+    fn swap_generation(&self, generation: Arc<AuthGeneration>) {
+        *self
+            .generation
+            .write()
+            .expect("auth generation lock should not be poisoned") = generation;
+    }
+
+    #[expect(dead_code, reason = "phase 4 tests introspect the active auth profile")]
+    pub(crate) fn profile_id(&self) -> &str {
+        &self.profile_id
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn capability_set(&self) -> CapabilitySet {
+        self.current_generation()
+            .map(|generation| generation.capabilities.clone())
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+        self.current_generation()
+            .ok()
+            .map(|generation| generation.generation_id)
+    }
+
+    pub(crate) fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
+        let generation = self.current_generation().map_err(RuntimeError::Config)?;
+        match generation
+            .invoke(AuthRequest::AuthenticateOffline {
+                username: username.to_string(),
+            })
+            .map_err(RuntimeError::Config)?
+        {
+            AuthResponse::AuthenticatedPlayer(player_id) => Ok(player_id),
+            other => Err(RuntimeError::Config(format!(
+                "unexpected auth authenticate_offline payload: {other:?}"
+            ))),
+        }
+    }
+}
+
 struct ManagedProtocolPlugin {
     package: PluginPackage,
     adapter: Arc<HotSwappableProtocolAdapter>,
@@ -1468,6 +2136,20 @@ struct ManagedGameplayPlugin {
     loaded_at: SystemTime,
 }
 
+struct ManagedStoragePlugin {
+    package: PluginPackage,
+    profile_id: String,
+    profile: Arc<HotSwappableStorageProfile>,
+    loaded_at: SystemTime,
+}
+
+struct ManagedAuthPlugin {
+    package: PluginPackage,
+    profile_id: String,
+    profile: Arc<HotSwappableAuthProfile>,
+    loaded_at: SystemTime,
+}
+
 pub struct PluginHost {
     catalog: PluginCatalog,
     loader: PluginLoader,
@@ -1476,6 +2158,8 @@ pub struct PluginHost {
     _failure_policy: PluginFailurePolicy,
     protocols: Mutex<HashMap<String, ManagedProtocolPlugin>>,
     gameplay: Mutex<HashMap<String, ManagedGameplayPlugin>>,
+    storage: Mutex<HashMap<String, ManagedStoragePlugin>>,
+    auth: Mutex<HashMap<String, ManagedAuthPlugin>>,
 }
 
 impl PluginHost {
@@ -1493,6 +2177,8 @@ impl PluginHost {
             _failure_policy: failure_policy,
             protocols: Mutex::new(HashMap::new()),
             gameplay: Mutex::new(HashMap::new()),
+            storage: Mutex::new(HashMap::new()),
+            auth: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1528,20 +2214,7 @@ impl PluginHost {
                         );
                 }
                 PluginKind::Gameplay => {}
-                PluginKind::Storage | PluginKind::Auth => {
-                    self.quarantine.quarantine(
-                        &package.plugin_id,
-                        format!(
-                            "{} plugin loading is registered but activation is deferred to a later phase",
-                            match package.plugin_kind {
-                                PluginKind::Storage => "storage",
-                                PluginKind::Auth => "auth",
-                                PluginKind::Gameplay => "gameplay",
-                                PluginKind::Protocol => "protocol",
-                            }
-                        ),
-                    );
-                }
+                PluginKind::Storage | PluginKind::Auth => {}
             }
         }
         registries.attach_plugin_host(Arc::clone(self));
@@ -1603,11 +2276,129 @@ impl PluginHost {
         Ok(())
     }
 
+    pub fn activate_storage_profile(&self, storage_profile: &str) -> Result<(), RuntimeError> {
+        let mut storage = self
+            .storage
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        storage.clear();
+
+        for package in self.catalog.packages() {
+            if package.plugin_kind != PluginKind::Storage {
+                continue;
+            }
+            let generation = Arc::new(
+                self.loader
+                    .load_storage_generation(package, self.generations.next_generation_id())?,
+            );
+            if generation.profile_id != storage_profile {
+                continue;
+            }
+            if storage.contains_key(storage_profile) {
+                return Err(RuntimeError::Config(format!(
+                    "duplicate storage profile `{storage_profile}` discovered"
+                )));
+            }
+            storage.insert(
+                storage_profile.to_string(),
+                ManagedStoragePlugin {
+                    package: package.clone(),
+                    profile_id: storage_profile.to_string(),
+                    profile: Arc::new(HotSwappableStorageProfile::new(
+                        package.plugin_id.clone(),
+                        storage_profile.to_string(),
+                        generation,
+                        Arc::clone(&self.quarantine),
+                    )),
+                    loaded_at: package.modified_at()?,
+                },
+            );
+        }
+
+        if !storage.contains_key(storage_profile) {
+            return Err(RuntimeError::Config(format!(
+                "unknown storage profile `{storage_profile}`"
+            )));
+        }
+
+        Ok(())
+    }
+
+    pub fn activate_auth_profile(&self, auth_profile: &str) -> Result<(), RuntimeError> {
+        let mut auth = self
+            .auth
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        auth.clear();
+
+        for package in self.catalog.packages() {
+            if package.plugin_kind != PluginKind::Auth {
+                continue;
+            }
+            let generation = Arc::new(
+                self.loader
+                    .load_auth_generation(package, self.generations.next_generation_id())?,
+            );
+            if generation.profile_id != auth_profile {
+                continue;
+            }
+            if auth.contains_key(auth_profile) {
+                return Err(RuntimeError::Config(format!(
+                    "duplicate auth profile `{auth_profile}` discovered"
+                )));
+            }
+            auth.insert(
+                auth_profile.to_string(),
+                ManagedAuthPlugin {
+                    package: package.clone(),
+                    profile_id: auth_profile.to_string(),
+                    profile: Arc::new(HotSwappableAuthProfile::new(
+                        package.plugin_id.clone(),
+                        auth_profile.to_string(),
+                        generation,
+                        Arc::clone(&self.quarantine),
+                    )),
+                    loaded_at: package.modified_at()?,
+                },
+            );
+        }
+
+        if !auth.contains_key(auth_profile) {
+            return Err(RuntimeError::Config(format!(
+                "unknown auth profile `{auth_profile}`"
+            )));
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn resolve_gameplay_profile(
         &self,
         profile_id: &str,
     ) -> Option<Arc<HotSwappableGameplayProfile>> {
         self.gameplay
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .get(profile_id)
+            .map(|managed| Arc::clone(&managed.profile))
+    }
+
+    pub(crate) fn resolve_storage_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<HotSwappableStorageProfile>> {
+        self.storage
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .get(profile_id)
+            .map(|managed| Arc::clone(&managed.profile))
+    }
+
+    pub(crate) fn resolve_auth_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<HotSwappableAuthProfile>> {
+        self.auth
             .lock()
             .expect("plugin host mutex should not be poisoned")
             .get(profile_id)
@@ -1654,11 +2445,119 @@ impl PluginHost {
                 .cloned()
                 .collect::<Vec<_>>()
         };
-        let mut gameplay = self
-            .gameplay
+        {
+            let mut gameplay = self
+                .gameplay
+                .lock()
+                .expect("plugin host mutex should not be poisoned");
+            for managed in gameplay.values_mut() {
+                managed.package.refresh_dynamic_manifest()?;
+                let modified_at = managed.package.modified_at()?;
+                if modified_at <= managed.loaded_at {
+                    continue;
+                }
+                let generation = match self.loader.load_gameplay_generation(
+                    &managed.package,
+                    self.generations.next_generation_id(),
+                ) {
+                    Ok(generation) => Arc::new(generation),
+                    Err(error) => {
+                        eprintln!(
+                            "gameplay reload load failed for `{}`: {error}",
+                            managed.package.plugin_id
+                        );
+                        managed.loaded_at = modified_at;
+                        continue;
+                    }
+                };
+                if generation.profile_id != managed.profile_id {
+                    eprintln!(
+                        "gameplay plugin `{}` changed profile from `{}` to `{}` during reload",
+                        managed.package.plugin_id,
+                        managed.profile_id.as_str(),
+                        generation.profile_id.as_str()
+                    );
+                    managed.loaded_at = modified_at;
+                    continue;
+                }
+                let _reload_guard = managed
+                    .profile
+                    .reload_gate
+                    .write()
+                    .expect("gameplay reload gate should not be poisoned");
+                let current_generation = managed
+                    .profile
+                    .current_generation()
+                    .map_err(RuntimeError::Config)?;
+                let relevant_sessions = session_snapshots
+                    .iter()
+                    .filter_map(|handle| {
+                        gameplay_session_snapshot_from_handle(handle, &managed.profile_id)
+                    })
+                    .collect::<Vec<_>>();
+                let mut migration_failed = false;
+                for session in &relevant_sessions {
+                    let blob = match current_generation.invoke(
+                        GameplayRequest::ExportSessionState {
+                            session: session.clone(),
+                        },
+                    ) {
+                        Ok(GameplayResponse::SessionTransferBlob(blob)) => blob,
+                        Ok(other) => {
+                            eprintln!(
+                                "gameplay reload export returned unexpected payload for `{}`: {other:?}",
+                                managed.package.plugin_id
+                            );
+                            migration_failed = true;
+                            break;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "gameplay reload export failed for `{}`: {error}",
+                                managed.package.plugin_id
+                            );
+                            migration_failed = true;
+                            break;
+                        }
+                    };
+                    match generation.invoke(GameplayRequest::ImportSessionState {
+                        session: session.clone(),
+                        blob,
+                    }) {
+                        Ok(GameplayResponse::Empty) => {}
+                        Ok(other) => {
+                            eprintln!(
+                                "gameplay reload import returned unexpected payload for `{}`: {other:?}",
+                                managed.package.plugin_id
+                            );
+                            migration_failed = true;
+                            break;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "gameplay reload import failed for `{}`: {error}",
+                                managed.package.plugin_id
+                            );
+                            migration_failed = true;
+                            break;
+                        }
+                    }
+                }
+                managed.loaded_at = modified_at;
+                if migration_failed {
+                    continue;
+                }
+                managed.profile.swap_generation(generation);
+                reloaded.push(managed.package.plugin_id.clone());
+            }
+        }
+
+        let runtime_snapshot = { runtime.state.lock().await.core.snapshot() };
+        let mut storage = self
+            .storage
             .lock()
             .expect("plugin host mutex should not be poisoned");
-        for managed in gameplay.values_mut() {
+        for managed in storage.values_mut() {
             managed.package.refresh_dynamic_manifest()?;
             let modified_at = managed.package.modified_at()?;
             if modified_at <= managed.loaded_at {
@@ -1666,88 +2565,92 @@ impl PluginHost {
             }
             let generation = match self
                 .loader
-                .load_gameplay_generation(&managed.package, self.generations.next_generation_id())
+                .load_storage_generation(&managed.package, self.generations.next_generation_id())
             {
                 Ok(generation) => Arc::new(generation),
-                Err(_) => {
+                Err(error) => {
+                    eprintln!(
+                        "storage reload load failed for `{}`: {error}",
+                        managed.package.plugin_id
+                    );
                     managed.loaded_at = modified_at;
                     continue;
                 }
             };
             if generation.profile_id != managed.profile_id {
-                return Err(RuntimeError::Config(format!(
-                    "gameplay plugin `{}` changed profile from `{}` to `{}` during reload",
-                    managed.package.plugin_id,
-                    managed.profile_id.as_str(),
-                    generation.profile_id.as_str()
-                )));
+                eprintln!(
+                    "storage plugin `{}` changed profile from `{}` to `{}` during reload",
+                    managed.package.plugin_id, managed.profile_id, generation.profile_id
+                );
+                managed.loaded_at = modified_at;
+                continue;
             }
             let _reload_guard = managed
                 .profile
                 .reload_gate
                 .write()
-                .expect("gameplay reload gate should not be poisoned");
-            let current_generation = managed
-                .profile
-                .current_generation()
-                .map_err(RuntimeError::Config)?;
-            let relevant_sessions = session_snapshots
-                .iter()
-                .filter_map(|handle| {
-                    gameplay_session_snapshot_from_handle(handle, &managed.profile_id)
-                })
-                .collect::<Vec<_>>();
-            let mut migration_failed = false;
-            for session in &relevant_sessions {
-                let blob = match current_generation.invoke(GameplayRequest::ExportSessionState {
-                    session: session.clone(),
-                }) {
-                    Ok(GameplayResponse::SessionTransferBlob(blob)) => blob,
-                    Ok(other) => {
-                        eprintln!(
-                            "gameplay reload export returned unexpected payload for `{}`: {other:?}",
-                            managed.package.plugin_id
-                        );
-                        migration_failed = true;
-                        break;
-                    }
-                    Err(error) => {
-                        eprintln!(
-                            "gameplay reload export failed for `{}`: {error}",
-                            managed.package.plugin_id
-                        );
-                        migration_failed = true;
-                        break;
-                    }
-                };
-                match generation.invoke(GameplayRequest::ImportSessionState {
-                    session: session.clone(),
-                    blob,
-                }) {
-                    Ok(GameplayResponse::Empty) => {}
-                    Ok(other) => {
-                        eprintln!(
-                            "gameplay reload import returned unexpected payload for `{}`: {other:?}",
-                            managed.package.plugin_id
-                        );
-                        migration_failed = true;
-                        break;
-                    }
-                    Err(error) => {
-                        eprintln!(
-                            "gameplay reload import failed for `{}`: {error}",
-                            managed.package.plugin_id
-                        );
-                        migration_failed = true;
-                        break;
-                    }
+                .expect("storage reload gate should not be poisoned");
+            match generation.invoke(StorageRequest::ImportRuntimeState {
+                world_dir: runtime.config.world_dir.display().to_string(),
+                snapshot: runtime_snapshot.clone(),
+            }) {
+                Ok(StorageResponse::Empty) => {
+                    managed.profile.swap_generation(generation);
+                    managed.loaded_at = modified_at;
+                    reloaded.push(managed.package.plugin_id.clone());
+                }
+                Ok(other) => {
+                    eprintln!(
+                        "storage reload import returned unexpected payload for `{}`: {other:?}",
+                        managed.package.plugin_id
+                    );
+                    managed.loaded_at = modified_at;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "storage reload import failed for `{}`: {error}",
+                        managed.package.plugin_id
+                    );
+                    managed.loaded_at = modified_at;
                 }
             }
-            managed.loaded_at = modified_at;
-            if migration_failed {
+        }
+        drop(storage);
+
+        let mut auth = self
+            .auth
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        for managed in auth.values_mut() {
+            managed.package.refresh_dynamic_manifest()?;
+            let modified_at = managed.package.modified_at()?;
+            if modified_at <= managed.loaded_at {
+                continue;
+            }
+            let generation = match self
+                .loader
+                .load_auth_generation(&managed.package, self.generations.next_generation_id())
+            {
+                Ok(generation) => Arc::new(generation),
+                Err(error) => {
+                    eprintln!(
+                        "auth reload load failed for `{}`: {error}",
+                        managed.package.plugin_id
+                    );
+                    managed.loaded_at = modified_at;
+                    continue;
+                }
+            };
+            if generation.profile_id != managed.profile_id {
+                eprintln!(
+                    "auth plugin `{}` changed profile from `{}` to `{}` during reload",
+                    managed.package.plugin_id, managed.profile_id, generation.profile_id
+                );
+                managed.loaded_at = modified_at;
                 continue;
             }
             managed.profile.swap_generation(generation);
+            managed.loaded_at = modified_at;
             reloaded.push(managed.package.plugin_id.clone());
         }
         Ok(reloaded)
@@ -1826,19 +2729,21 @@ fn gameplay_session_snapshot_from_handle(
 #[cfg(test)]
 mod tests {
     use super::{
-        InProcessGameplayPlugin, InProcessProtocolPlugin, PluginAbiRange, PluginCatalog,
-        PluginFailurePolicy, PluginHost, PluginPackage, PluginSource,
+        InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
+        InProcessStoragePlugin, PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost,
     };
     use crate::{RuntimeRegistries, ServerConfig, plugin_host_from_config};
     use mc_plugin_api::{
         CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind, PluginManifestV1, Utf8Slice,
     };
+    use mc_plugin_auth_offline::in_process_auth_entrypoints as offline_auth_entrypoints;
     use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
     use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
     use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
     use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints;
     use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entrypoints;
     use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
+    use mc_plugin_storage_je_anvil_1_7_10::in_process_storage_entrypoints as storage_entrypoints;
     use mc_proto_common::{Edition, PacketWriter, TransportKind};
     use std::env;
     use std::ffi::OsString;
@@ -1983,19 +2888,20 @@ mod tests {
     }
 
     #[test]
-    fn non_protocol_plugins_are_quarantined_until_later_phase() {
+    fn storage_and_auth_plugins_are_managed_without_quarantine() {
         let mut catalog = PluginCatalog::default();
-        catalog.packages.insert(
-            "future-storage".to_string(),
-            PluginPackage {
-                plugin_id: "future-storage".to_string(),
-                plugin_kind: PluginKind::Storage,
-                source: PluginSource::DynamicLibrary {
-                    manifest_path: "dummy.toml".into(),
-                    library_path: "dummy.so".into(),
-                },
-            },
-        );
+        let storage = storage_entrypoints();
+        catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
+            plugin_id: "storage-je-anvil-1_7_10".to_string(),
+            manifest: storage.manifest,
+            api: storage.api,
+        });
+        let auth = offline_auth_entrypoints();
+        catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
+            plugin_id: "auth-offline".to_string(),
+            manifest: auth.manifest,
+            api: auth.api,
+        });
         let host = Arc::new(PluginHost::new(
             catalog,
             PluginAbiRange::default(),
@@ -2003,12 +2909,10 @@ mod tests {
         ));
         let mut registries = RuntimeRegistries::new();
         host.load_into_registries(&mut registries)
-            .expect("phase-gated plugin kinds should not hard fail");
+            .expect("storage/auth plugin kinds should register with the host");
 
-        let reason = host
-            .quarantine_reason("future-storage")
-            .expect("phase-gated plugin should be quarantined");
-        assert!(reason.contains("deferred"));
+        assert!(host.quarantine_reason("storage-je-anvil-1_7_10").is_none());
+        assert!(host.quarantine_reason("auth-offline").is_none());
     }
 
     #[test]
@@ -2069,6 +2973,60 @@ mod tests {
         assert!(matches!(
             error,
             crate::RuntimeError::Config(message) if message.contains("unknown gameplay profile")
+        ));
+    }
+
+    #[test]
+    fn storage_and_auth_profiles_activate_and_resolve() {
+        let mut catalog = PluginCatalog::default();
+        let storage = storage_entrypoints();
+        catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
+            plugin_id: "storage-je-anvil-1_7_10".to_string(),
+            manifest: storage.manifest,
+            api: storage.api,
+        });
+        let auth = offline_auth_entrypoints();
+        catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
+            plugin_id: "auth-offline".to_string(),
+            manifest: auth.manifest,
+            api: auth.api,
+        });
+
+        let host = Arc::new(PluginHost::new(
+            catalog,
+            PluginAbiRange::default(),
+            PluginFailurePolicy::Quarantine,
+        ));
+        host.activate_storage_profile("je-anvil-1_7_10")
+            .expect("known storage profile should activate");
+        host.activate_auth_profile("offline-v1")
+            .expect("known auth profile should activate");
+
+        assert!(host.resolve_storage_profile("je-anvil-1_7_10").is_some());
+        assert!(host.resolve_auth_profile("offline-v1").is_some());
+    }
+
+    #[test]
+    fn unknown_storage_and_auth_profiles_fail_activation() {
+        let host = Arc::new(PluginHost::new(
+            PluginCatalog::default(),
+            PluginAbiRange::default(),
+            PluginFailurePolicy::Quarantine,
+        ));
+        let storage = host
+            .activate_storage_profile("missing")
+            .expect_err("unknown storage profile should fail fast");
+        assert!(matches!(
+            storage,
+            crate::RuntimeError::Config(message) if message.contains("unknown storage profile")
+        ));
+
+        let auth = host
+            .activate_auth_profile("missing")
+            .expect_err("unknown auth profile should fail fast");
+        assert!(matches!(
+            auth,
+            crate::RuntimeError::Config(message) if message.contains("unknown auth profile")
         ));
     }
 
