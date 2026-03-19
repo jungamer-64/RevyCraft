@@ -32,6 +32,11 @@ const PLUGINS: &[PluginSpec] = &[
         plugin_kind: "protocol",
     },
     PluginSpec {
+        cargo_package: "mc-plugin-proto-be-26_3",
+        plugin_id: "be-26_3",
+        plugin_kind: "protocol",
+    },
+    PluginSpec {
         cargo_package: "mc-plugin-gameplay-canonical",
         plugin_id: "gameplay-canonical",
         plugin_kind: "gameplay",
@@ -54,6 +59,16 @@ const PLUGINS: &[PluginSpec] = &[
     PluginSpec {
         cargo_package: "mc-plugin-auth-mojang-online",
         plugin_id: "auth-mojang-online",
+        plugin_kind: "auth",
+    },
+    PluginSpec {
+        cargo_package: "mc-plugin-auth-bedrock-offline",
+        plugin_id: "auth-bedrock-offline",
+        plugin_kind: "auth",
+    },
+    PluginSpec {
+        cargo_package: "mc-plugin-auth-bedrock-xbl",
+        plugin_id: "auth-bedrock-xbl",
         plugin_kind: "auth",
     },
 ];

@@ -3,12 +3,12 @@ use mc_core::{
     WorldMeta, WorldSnapshot,
 };
 use mc_plugin_api::{
-    AuthDescriptor, AuthPluginApiV1, AuthRequest, AuthResponse, ByteSlice, CURRENT_PLUGIN_ABI,
-    CapabilityDescriptorV1, GameplayDescriptor, GameplayPluginApiV1, GameplayRequest,
-    GameplayResponse, GameplaySessionSnapshot, HostApiTableV1, OwnedBuffer, PluginAbiVersion,
-    PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
-    ProtocolSessionSnapshot, StorageDescriptor, StoragePluginApiV1, StorageRequest,
-    StorageResponse, Utf8Slice,
+    AuthDescriptor, AuthPluginApiV1, AuthRequest, AuthResponse, BedrockAuthResult, ByteSlice,
+    CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, GameplayDescriptor, GameplayPluginApiV1,
+    GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HostApiTableV1, OwnedBuffer,
+    PluginAbiVersion, PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest,
+    ProtocolResponse, ProtocolSessionSnapshot, StorageDescriptor, StoragePluginApiV1,
+    StorageRequest, StorageResponse, Utf8Slice,
 };
 use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError, StorageError};
 use std::path::Path;
@@ -172,6 +172,21 @@ pub trait RustAuthPlugin: Send + Sync + 'static {
 
     fn authenticate_online(&self, _username: &str, _server_hash: &str) -> Result<PlayerId, String> {
         Err("online auth is not implemented for this plugin".to_string())
+    }
+
+    fn authenticate_bedrock_offline(
+        &self,
+        _display_name: &str,
+    ) -> Result<BedrockAuthResult, String> {
+        Err("bedrock offline auth is not implemented for this plugin".to_string())
+    }
+
+    fn authenticate_bedrock_xbl(
+        &self,
+        _chain_jwts: &[String],
+        _client_data_jwt: &str,
+    ) -> Result<BedrockAuthResult, String> {
+        Err("bedrock xbl auth is not implemented for this plugin".to_string())
     }
 }
 
@@ -368,6 +383,12 @@ pub fn handle_protocol_request<P: RustProtocolPlugin>(
             .encode_encryption_request(&server_id, &public_key_der, &verify_token)
             .map(ProtocolResponse::Frame)
             .map_err(|error| error.to_string()),
+        ProtocolRequest::EncodeNetworkSettings {
+            compression_threshold,
+        } => plugin
+            .encode_network_settings(compression_threshold)
+            .map(ProtocolResponse::Frame)
+            .map_err(|error| error.to_string()),
         ProtocolRequest::EncodeLoginSuccess { player } => plugin
             .encode_login_success(&player)
             .map(ProtocolResponse::Frame)
@@ -443,6 +464,15 @@ pub fn handle_auth_request<P: RustAuthPlugin>(
         } => plugin
             .authenticate_online(&username, &server_hash)
             .map(AuthResponse::AuthenticatedPlayer),
+        AuthRequest::AuthenticateBedrockOffline { display_name } => plugin
+            .authenticate_bedrock_offline(&display_name)
+            .map(AuthResponse::AuthenticatedBedrockPlayer),
+        AuthRequest::AuthenticateBedrockXbl {
+            chain_jwts,
+            client_data_jwt,
+        } => plugin
+            .authenticate_bedrock_xbl(&chain_jwts, &client_data_jwt)
+            .map(AuthResponse::AuthenticatedBedrockPlayer),
     }
 }
 

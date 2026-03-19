@@ -6,15 +6,20 @@ members = [
     "mc-plugin-gameplay-canonical",
     "mc-plugin-gameplay-readonly",
     "mc-plugin-auth-offline",
+    "mc-plugin-auth-bedrock-offline",
+    "mc-plugin-auth-bedrock-xbl",
     "mc-plugin-auth-mojang-online",
     "mc-plugin-auth-online-stub",
     "mc-plugin-sdk-rust",
     "mc-plugin-storage-je-anvil-1_7_10",
+    "mc-plugin-proto-be-26_3",
     "mc-plugin-proto-be-placeholder",
     "mc-plugin-proto-je-1_12_2",
     "mc-plugin-proto-je-1_7_10",
     "mc-plugin-proto-je-1_8_x",
     "mc-proto-common",
+    "mc-proto-be-common",
+    "mc-proto-be-26_3",
     "mc-proto-be-placeholder",
     "mc-proto-je-common",
     "mc-proto-je-1_7_10",
@@ -36,13 +41,22 @@ categories = ["game-development", "network-programming"]
 
 [workspace.dependencies]
 aes = "0.8"
+base64 = "0.22"
+bedrock-jwt = "0.1"
+bedrockrs_network = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_network", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
+bedrockrs_proto = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_proto", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
+bedrockrs_proto_core = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_proto_core", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
+bedrockrs_shared = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_shared", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
 bevy = { version = "0.18", features = ["bevy_ui", "bevy_text", "debug"] }
 bytes = "1.10"
 flate2 = "1.1"
+jsonwebtoken = "10.1"
 md5 = { package = "md-5", version = "0.10" }
+nbtx = "2.0"
 noise = "0.9"
 num-bigint = "0.4"
 num-traits = "0.2"
+p384 = { version = "0.13", features = ["pkcs8"] }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rsa = "0.9"
@@ -54,6 +68,7 @@ thiserror = "2.0"
 toml = "1.0"
 tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "sync", "time", "io-util", "signal"] }
 uuid = { version = "1.18", features = ["v3", "serde"] }
+vek = "0.17"
 libloading = "0.9"
 
 [workspace.lints.rust]

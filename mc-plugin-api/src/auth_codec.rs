@@ -12,6 +12,8 @@ pub enum AuthOpCode {
     CapabilitySet = 2,
     AuthenticateOffline = 3,
     AuthenticateOnline = 4,
+    AuthenticateBedrockOffline = 5,
+    AuthenticateBedrockXbl = 6,
 }
 
 impl TryFrom<u8> for AuthOpCode {
@@ -23,6 +25,8 @@ impl TryFrom<u8> for AuthOpCode {
             2 => Ok(Self::CapabilitySet),
             3 => Ok(Self::AuthenticateOffline),
             4 => Ok(Self::AuthenticateOnline),
+            5 => Ok(Self::AuthenticateBedrockOffline),
+            6 => Ok(Self::AuthenticateBedrockXbl),
             _ => Err(ProtocolCodecError::InvalidValue("invalid auth op code")),
         }
     }
@@ -32,12 +36,23 @@ impl TryFrom<u8> for AuthOpCode {
 pub enum AuthMode {
     Offline,
     Online,
+    BedrockOffline,
+    BedrockXbl,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthDescriptor {
     pub auth_profile: String,
     pub mode: AuthMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BedrockAuthResult {
+    pub player_id: PlayerId,
+    pub display_name: String,
+    pub xuid: Option<String>,
+    pub identity_uuid: Option<String>,
+    pub skin_claims_blob: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +66,13 @@ pub enum AuthRequest {
         username: String,
         server_hash: String,
     },
+    AuthenticateBedrockOffline {
+        display_name: String,
+    },
+    AuthenticateBedrockXbl {
+        chain_jwts: Vec<String>,
+        client_data_jwt: String,
+    },
 }
 
 impl AuthRequest {
@@ -61,6 +83,8 @@ impl AuthRequest {
             Self::CapabilitySet => AuthOpCode::CapabilitySet,
             Self::AuthenticateOffline { .. } => AuthOpCode::AuthenticateOffline,
             Self::AuthenticateOnline { .. } => AuthOpCode::AuthenticateOnline,
+            Self::AuthenticateBedrockOffline { .. } => AuthOpCode::AuthenticateBedrockOffline,
+            Self::AuthenticateBedrockXbl { .. } => AuthOpCode::AuthenticateBedrockXbl,
         }
     }
 }
@@ -70,6 +94,7 @@ pub enum AuthResponse {
     Descriptor(AuthDescriptor),
     CapabilitySet(CapabilitySet),
     AuthenticatedPlayer(PlayerId),
+    AuthenticatedBedrockPlayer(BedrockAuthResult),
 }
 
 pub fn encode_auth_request(request: &AuthRequest) -> Result<Vec<u8>, ProtocolCodecError> {
@@ -167,6 +192,19 @@ fn encode_auth_request_payload(
             encoder.write_string(username)?;
             encoder.write_string(server_hash)
         }
+        AuthRequest::AuthenticateBedrockOffline { display_name } => {
+            encoder.write_string(display_name)
+        }
+        AuthRequest::AuthenticateBedrockXbl {
+            chain_jwts,
+            client_data_jwt,
+        } => {
+            encoder.write_len(chain_jwts.len())?;
+            for jwt in chain_jwts {
+                encoder.write_string(jwt)?;
+            }
+            encoder.write_string(client_data_jwt)
+        }
     }
 }
 
@@ -184,6 +222,20 @@ fn decode_auth_request_payload(
             username: decoder.read_string()?,
             server_hash: decoder.read_string()?,
         }),
+        AuthOpCode::AuthenticateBedrockOffline => Ok(AuthRequest::AuthenticateBedrockOffline {
+            display_name: decoder.read_string()?,
+        }),
+        AuthOpCode::AuthenticateBedrockXbl => {
+            let chain_len = decoder.read_len()?;
+            let mut chain_jwts = Vec::with_capacity(chain_len);
+            for _ in 0..chain_len {
+                chain_jwts.push(decoder.read_string()?);
+            }
+            Ok(AuthRequest::AuthenticateBedrockXbl {
+                chain_jwts,
+                client_data_jwt: decoder.read_string()?,
+            })
+        }
     }
 }
 
@@ -201,14 +253,15 @@ fn encode_auth_response_payload(
         (AuthOpCode::CapabilitySet, AuthResponse::CapabilitySet(capabilities)) => {
             encode_capability_set(encoder, capabilities)
         }
-        (AuthOpCode::AuthenticateOffline, AuthResponse::AuthenticatedPlayer(player_id)) => {
+        (AuthOpCode::AuthenticateOffline, AuthResponse::AuthenticatedPlayer(player_id))
+        | (AuthOpCode::AuthenticateOnline, AuthResponse::AuthenticatedPlayer(player_id)) => {
             encode_player_id(encoder, *player_id);
             Ok(())
         }
-        (AuthOpCode::AuthenticateOnline, AuthResponse::AuthenticatedPlayer(player_id)) => {
-            encode_player_id(encoder, *player_id);
-            Ok(())
-        }
+        (
+            AuthOpCode::AuthenticateBedrockOffline | AuthOpCode::AuthenticateBedrockXbl,
+            AuthResponse::AuthenticatedBedrockPlayer(result),
+        ) => encode_bedrock_auth_result(encoder, result),
         _ => Err(ProtocolCodecError::InvalidValue(
             "auth response did not match opcode",
         )),
@@ -227,12 +280,12 @@ fn decode_auth_response_payload(
         AuthOpCode::CapabilitySet => {
             Ok(AuthResponse::CapabilitySet(decode_capability_set(decoder)?))
         }
-        AuthOpCode::AuthenticateOffline => Ok(AuthResponse::AuthenticatedPlayer(decode_player_id(
-            decoder,
-        )?)),
-        AuthOpCode::AuthenticateOnline => Ok(AuthResponse::AuthenticatedPlayer(decode_player_id(
-            decoder,
-        )?)),
+        AuthOpCode::AuthenticateOffline | AuthOpCode::AuthenticateOnline => Ok(
+            AuthResponse::AuthenticatedPlayer(decode_player_id(decoder)?),
+        ),
+        AuthOpCode::AuthenticateBedrockOffline | AuthOpCode::AuthenticateBedrockXbl => Ok(
+            AuthResponse::AuthenticatedBedrockPlayer(decode_bedrock_auth_result(decoder)?),
+        ),
     }
 }
 
@@ -240,6 +293,8 @@ fn encode_auth_mode(encoder: &mut Encoder, mode: AuthMode) {
     encoder.write_u8(match mode {
         AuthMode::Offline => 1,
         AuthMode::Online => 2,
+        AuthMode::BedrockOffline => 3,
+        AuthMode::BedrockXbl => 4,
     });
 }
 
@@ -247,72 +302,145 @@ fn decode_auth_mode(decoder: &mut Decoder<'_>) -> Result<AuthMode, ProtocolCodec
     match decoder.read_u8()? {
         1 => Ok(AuthMode::Offline),
         2 => Ok(AuthMode::Online),
+        3 => Ok(AuthMode::BedrockOffline),
+        4 => Ok(AuthMode::BedrockXbl),
         _ => Err(ProtocolCodecError::InvalidValue("invalid auth mode")),
+    }
+}
+
+fn encode_bedrock_auth_result(
+    encoder: &mut Encoder,
+    result: &BedrockAuthResult,
+) -> Result<(), ProtocolCodecError> {
+    encode_player_id(encoder, result.player_id);
+    encoder.write_string(&result.display_name)?;
+    encode_optional_string(encoder, result.xuid.as_deref())?;
+    encode_optional_string(encoder, result.identity_uuid.as_deref())?;
+    encoder.write_bytes(&result.skin_claims_blob)
+}
+
+fn decode_bedrock_auth_result(
+    decoder: &mut Decoder<'_>,
+) -> Result<BedrockAuthResult, ProtocolCodecError> {
+    Ok(BedrockAuthResult {
+        player_id: decode_player_id(decoder)?,
+        display_name: decoder.read_string()?,
+        xuid: decode_optional_string(decoder)?,
+        identity_uuid: decode_optional_string(decoder)?,
+        skin_claims_blob: decoder.read_bytes()?,
+    })
+}
+
+fn encode_optional_string(
+    encoder: &mut Encoder,
+    value: Option<&str>,
+) -> Result<(), ProtocolCodecError> {
+    match value {
+        Some(value) => {
+            encoder.write_bool(true);
+            encoder.write_string(value)
+        }
+        None => {
+            encoder.write_bool(false);
+            Ok(())
+        }
+    }
+}
+
+fn decode_optional_string(decoder: &mut Decoder<'_>) -> Result<Option<String>, ProtocolCodecError> {
+    if decoder.read_bool()? {
+        Ok(Some(decoder.read_string()?))
+    } else {
+        Ok(None)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthDescriptor, AuthMode, AuthRequest, AuthResponse, decode_auth_request,
-        decode_auth_response, encode_auth_request, encode_auth_response,
+        AuthDescriptor, AuthMode, AuthRequest, AuthResponse, BedrockAuthResult,
+        decode_auth_request, decode_auth_response, encode_auth_request, encode_auth_response,
     };
     use mc_core::{CapabilitySet, PlayerId};
     use uuid::Uuid;
 
     #[test]
-    fn auth_request_roundtrip() {
-        let request = AuthRequest::AuthenticateOffline {
-            username: "alice".to_string(),
-        };
-        let encoded = encode_auth_request(&request).expect("request should encode");
-        let decoded = decode_auth_request(&encoded).expect("request should decode");
-        assert_eq!(decoded, request);
-    }
-
-    #[test]
-    fn auth_response_roundtrip() {
+    fn auth_descriptor_roundtrip_preserves_mode() {
         let request = AuthRequest::Describe;
         let response = AuthResponse::Descriptor(AuthDescriptor {
-            auth_profile: "mojang-online-v1".to_string(),
-            mode: AuthMode::Online,
+            auth_profile: "bedrock-xbl-v1".to_string(),
+            mode: AuthMode::BedrockXbl,
         });
-        let encoded = encode_auth_response(&request, &response).expect("response should encode");
-        let decoded = decode_auth_response(&request, &encoded).expect("response should decode");
+        let bytes = encode_auth_response(&request, &response).expect("descriptor should encode");
+        let decoded = decode_auth_response(&request, &bytes).expect("descriptor should decode");
         assert_eq!(decoded, response);
     }
 
     #[test]
-    fn auth_capability_roundtrip() {
+    fn auth_capability_set_roundtrip() {
+        let mut capabilities = CapabilitySet::new();
+        let _ = capabilities.insert("auth.bedrock");
         let request = AuthRequest::CapabilitySet;
-        let mut capability_set = CapabilitySet::new();
-        let _ = capability_set.insert("auth.offline");
-        let response = AuthResponse::CapabilitySet(capability_set);
-        let encoded = encode_auth_response(&request, &response).expect("response should encode");
-        let decoded = decode_auth_response(&request, &encoded).expect("response should decode");
+        let response = AuthResponse::CapabilitySet(capabilities);
+        let bytes =
+            encode_auth_response(&request, &response).expect("capability set should encode");
+        let decoded = decode_auth_response(&request, &bytes).expect("capability set should decode");
         assert_eq!(decoded, response);
     }
 
     #[test]
-    fn auth_player_roundtrip() {
+    fn online_auth_request_roundtrip() {
         let request = AuthRequest::AuthenticateOnline {
-            username: "alice".to_string(),
-            server_hash: "abc123".to_string(),
-        };
-        let response = AuthResponse::AuthenticatedPlayer(PlayerId(Uuid::from_u128(99)));
-        let encoded = encode_auth_response(&request, &response).expect("response should encode");
-        let decoded = decode_auth_response(&request, &encoded).expect("response should decode");
-        assert_eq!(decoded, response);
-    }
-
-    #[test]
-    fn auth_online_request_roundtrip() {
-        let request = AuthRequest::AuthenticateOnline {
-            username: "alice".to_string(),
-            server_hash: "-deadbeef".to_string(),
+            username: "alex".to_string(),
+            server_hash: "hash".to_string(),
         };
         let encoded = encode_auth_request(&request).expect("request should encode");
         let decoded = decode_auth_request(&encoded).expect("request should decode");
         assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn bedrock_xbl_request_and_response_roundtrip() {
+        let request = AuthRequest::AuthenticateBedrockXbl {
+            chain_jwts: vec!["a".to_string(), "b".to_string()],
+            client_data_jwt: "c".to_string(),
+        };
+        let encoded = encode_auth_request(&request).expect("request should encode");
+        let decoded = decode_auth_request(&encoded).expect("request should decode");
+        assert_eq!(decoded, request);
+
+        let response = AuthResponse::AuthenticatedBedrockPlayer(BedrockAuthResult {
+            player_id: PlayerId(Uuid::from_u128(42)),
+            display_name: "Steve".to_string(),
+            xuid: Some("123".to_string()),
+            identity_uuid: Some(Uuid::from_u128(7).to_string()),
+            skin_claims_blob: vec![1, 2, 3],
+        });
+        let encoded =
+            encode_auth_response(&request, &response).expect("bedrock auth response should encode");
+        let decoded =
+            decode_auth_response(&request, &encoded).expect("bedrock auth response should decode");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn malformed_auth_response_is_rejected() {
+        let request = AuthRequest::AuthenticateBedrockOffline {
+            display_name: "Builder".to_string(),
+        };
+        let bytes = encode_auth_response(
+            &request,
+            &AuthResponse::AuthenticatedBedrockPlayer(BedrockAuthResult {
+                player_id: PlayerId(Uuid::from_u128(9)),
+                display_name: "Builder".to_string(),
+                xuid: None,
+                identity_uuid: None,
+                skin_claims_blob: vec![],
+            }),
+        )
+        .expect("response should encode");
+        let mut truncated = bytes;
+        let _ = truncated.pop();
+        assert!(decode_auth_response(&request, &truncated).is_err());
     }
 }

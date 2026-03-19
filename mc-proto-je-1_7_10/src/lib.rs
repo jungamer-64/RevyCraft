@@ -212,6 +212,15 @@ impl SessionAdapter for Je1710Adapter {
         Ok(writer.into_inner())
     }
 
+    fn encode_network_settings(
+        &self,
+        _compression_threshold: u16,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        Err(ProtocolError::InvalidPacket(
+            "java edition adapters do not support bedrock network settings",
+        ))
+    }
+
     fn encode_login_success(&self, player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
         encode_login_success(player)
     }

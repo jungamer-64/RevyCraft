@@ -1,16 +1,16 @@
 use mc_plugin_sdk_rust::{StaticPluginManifest, export_protocol_plugin};
+use mc_proto_be_26_3::Bedrock263Adapter;
 use mc_proto_common::{
     HandshakeProbe, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor,
     ProtocolError, SessionAdapter, StatusRequest, WireCodec,
 };
-use mc_proto_je_1_8_x::Je18xAdapter;
 
 #[derive(Default)]
-pub struct Je18xProtocolPlugin {
-    adapter: Je18xAdapter,
+pub struct Bedrock263ProtocolPlugin {
+    adapter: Bedrock263Adapter,
 }
 
-impl HandshakeProbe for Je18xProtocolPlugin {
+impl HandshakeProbe for Bedrock263ProtocolPlugin {
     fn transport_kind(&self) -> mc_proto_common::TransportKind {
         self.adapter.transport_kind()
     }
@@ -27,7 +27,7 @@ impl HandshakeProbe for Je18xProtocolPlugin {
     }
 }
 
-impl SessionAdapter for Je18xProtocolPlugin {
+impl SessionAdapter for Bedrock263ProtocolPlugin {
     fn wire_codec(&self) -> &dyn WireCodec {
         self.adapter.wire_codec()
     }
@@ -84,7 +84,7 @@ impl SessionAdapter for Je18xProtocolPlugin {
     }
 }
 
-impl PlaySyncAdapter for Je18xProtocolPlugin {
+impl PlaySyncAdapter for Bedrock263ProtocolPlugin {
     fn decode_play(
         &self,
         player_id: mc_core::PlayerId,
@@ -102,15 +102,15 @@ impl PlaySyncAdapter for Je18xProtocolPlugin {
     }
 }
 
-impl ProtocolAdapter for Je18xProtocolPlugin {
+impl ProtocolAdapter for Bedrock263ProtocolPlugin {
     fn descriptor(&self) -> ProtocolDescriptor {
         self.adapter.descriptor()
     }
 
     fn capability_set(&self) -> mc_core::CapabilitySet {
         let mut capabilities = mc_core::CapabilitySet::new();
-        let _ = capabilities.insert("protocol.je");
-        let _ = capabilities.insert("protocol.je.1_8_x");
+        let _ = capabilities.insert("protocol.bedrock");
+        let _ = capabilities.insert("protocol.bedrock.26_3");
         let _ = capabilities.insert("runtime.reload.protocol");
         if let Some(build_tag) = option_env!("REVY_PLUGIN_BUILD_TAG") {
             let _ = capabilities.insert(format!("build-tag:{build_tag}"));
@@ -120,6 +120,6 @@ impl ProtocolAdapter for Je18xProtocolPlugin {
 }
 
 const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::protocol("je-1_8_x", "JE 1.8.x Protocol Plugin");
+    StaticPluginManifest::protocol("be-26_3", "Bedrock 26.3 Protocol Plugin");
 
-export_protocol_plugin!(Je18xProtocolPlugin, MANIFEST);
+export_protocol_plugin!(Bedrock263ProtocolPlugin, MANIFEST);

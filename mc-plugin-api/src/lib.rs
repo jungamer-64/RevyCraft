@@ -7,8 +7,8 @@ use std::ffi::c_void;
 use std::fmt;
 
 pub use auth_codec::{
-    AuthDescriptor, AuthMode, AuthRequest, AuthResponse, decode_auth_request, decode_auth_response,
-    encode_auth_request, encode_auth_response,
+    AuthDescriptor, AuthMode, AuthRequest, AuthResponse, BedrockAuthResult, decode_auth_request,
+    decode_auth_response, encode_auth_request, encode_auth_response,
 };
 pub use gameplay_codec::{
     GameplayDescriptor, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,

@@ -6,14 +6,15 @@ use mc_core::{
     WorldSnapshot,
 };
 use mc_plugin_api::{
-    AuthMode, AuthPluginApiV1, AuthRequest, AuthResponse, CURRENT_PLUGIN_ABI, GameplayPluginApiV1,
-    GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HostApiTableV1, OwnedBuffer,
-    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1, PLUGIN_MANIFEST_SYMBOL_V1,
-    PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1, PluginAbiVersion, PluginErrorCode,
-    PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
-    StoragePluginApiV1, StorageRequest, StorageResponse, decode_auth_response,
-    decode_gameplay_response, decode_protocol_response, decode_storage_response,
-    encode_auth_request, encode_gameplay_request, encode_protocol_request, encode_storage_request,
+    AuthMode, AuthPluginApiV1, AuthRequest, AuthResponse, BedrockAuthResult, CURRENT_PLUGIN_ABI,
+    GameplayPluginApiV1, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
+    HostApiTableV1, OwnedBuffer, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1,
+    PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1,
+    PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1, ProtocolPluginApiV1,
+    ProtocolRequest, ProtocolResponse, StoragePluginApiV1, StorageRequest, StorageResponse,
+    decode_auth_response, decode_gameplay_response, decode_protocol_response,
+    decode_storage_response, encode_auth_request, encode_gameplay_request,
+    encode_protocol_request, encode_storage_request,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
@@ -773,6 +774,42 @@ impl AuthGeneration {
             AuthResponse::AuthenticatedPlayer(player_id) => Ok(player_id),
             other => Err(RuntimeError::Config(format!(
                 "unexpected auth authenticate_online payload: {other:?}"
+            ))),
+        }
+    }
+
+    pub(crate) fn authenticate_bedrock_offline(
+        &self,
+        display_name: &str,
+    ) -> Result<BedrockAuthResult, RuntimeError> {
+        match self
+            .invoke(AuthRequest::AuthenticateBedrockOffline {
+                display_name: display_name.to_string(),
+            })
+            .map_err(RuntimeError::Config)?
+        {
+            AuthResponse::AuthenticatedBedrockPlayer(result) => Ok(result),
+            other => Err(RuntimeError::Config(format!(
+                "unexpected auth authenticate_bedrock_offline payload: {other:?}"
+            ))),
+        }
+    }
+
+    pub(crate) fn authenticate_bedrock_xbl(
+        &self,
+        chain_jwts: &[String],
+        client_data_jwt: &str,
+    ) -> Result<BedrockAuthResult, RuntimeError> {
+        match self
+            .invoke(AuthRequest::AuthenticateBedrockXbl {
+                chain_jwts: chain_jwts.to_vec(),
+                client_data_jwt: client_data_jwt.to_string(),
+            })
+            .map_err(RuntimeError::Config)?
+        {
+            AuthResponse::AuthenticatedBedrockPlayer(result) => Ok(result),
+            other => Err(RuntimeError::Config(format!(
+                "unexpected auth authenticate_bedrock_xbl payload: {other:?}"
             ))),
         }
     }
@@ -1656,6 +1693,23 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
         )
     }
 
+    fn encode_network_settings(
+        &self,
+        compression_threshold: u16,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        let generation = self.current_generation()?;
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::EncodeNetworkSettings {
+                compression_threshold,
+            })? {
+                ProtocolResponse::Frame(frame) => Ok(frame),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected encode_network_settings payload: {other:?}"
+                ))),
+            },
+        )
+    }
+
     fn encode_login_success(
         &self,
         player: &mc_core::PlayerSnapshot,
@@ -2173,6 +2227,32 @@ impl HotSwappableAuthProfile {
     pub(crate) fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
         self.capture_generation()?.authenticate_offline(username)
     }
+
+    pub(crate) fn authenticate_online(
+        &self,
+        username: &str,
+        server_hash: &str,
+    ) -> Result<PlayerId, RuntimeError> {
+        self.capture_generation()?
+            .authenticate_online(username, server_hash)
+    }
+
+    pub(crate) fn authenticate_bedrock_offline(
+        &self,
+        display_name: &str,
+    ) -> Result<BedrockAuthResult, RuntimeError> {
+        self.capture_generation()?
+            .authenticate_bedrock_offline(display_name)
+    }
+
+    pub(crate) fn authenticate_bedrock_xbl(
+        &self,
+        chain_jwts: &[String],
+        client_data_jwt: &str,
+    ) -> Result<BedrockAuthResult, RuntimeError> {
+        self.capture_generation()?
+            .authenticate_bedrock_xbl(chain_jwts, client_data_jwt)
+    }
 }
 
 struct ManagedProtocolPlugin {
@@ -2376,12 +2456,22 @@ impl PluginHost {
         Ok(())
     }
 
-    pub fn activate_auth_profile(&self, auth_profile: &str) -> Result<(), RuntimeError> {
+    pub fn activate_auth_profiles(&self, auth_profiles: &[String]) -> Result<(), RuntimeError> {
         let mut auth = self
             .auth
             .lock()
             .expect("plugin host mutex should not be poisoned");
         auth.clear();
+        let requested = auth_profiles
+            .iter()
+            .filter(|profile_id| !profile_id.is_empty())
+            .cloned()
+            .collect::<HashSet<_>>();
+        if requested.is_empty() {
+            return Err(RuntimeError::Config(
+                "at least one auth profile must be activated".to_string(),
+            ));
+        }
 
         for package in self.catalog.packages() {
             if package.plugin_kind != PluginKind::Auth {
@@ -2391,22 +2481,24 @@ impl PluginHost {
                 self.loader
                     .load_auth_generation(package, self.generations.next_generation_id())?,
             );
-            if generation.profile_id != auth_profile {
+            if !requested.contains(&generation.profile_id) {
                 continue;
             }
-            if auth.contains_key(auth_profile) {
+            if auth.contains_key(&generation.profile_id) {
                 return Err(RuntimeError::Config(format!(
-                    "duplicate auth profile `{auth_profile}` discovered"
+                    "duplicate auth profile `{}` discovered",
+                    generation.profile_id
                 )));
             }
+            let profile_id = generation.profile_id.clone();
             auth.insert(
-                auth_profile.to_string(),
+                profile_id.clone(),
                 ManagedAuthPlugin {
                     package: package.clone(),
-                    profile_id: auth_profile.to_string(),
+                    profile_id: profile_id.clone(),
                     profile: Arc::new(HotSwappableAuthProfile::new(
                         package.plugin_id.clone(),
-                        auth_profile.to_string(),
+                        profile_id,
                         generation,
                         Arc::clone(&self.quarantine),
                     )),
@@ -2415,13 +2507,19 @@ impl PluginHost {
             );
         }
 
-        if !auth.contains_key(auth_profile) {
-            return Err(RuntimeError::Config(format!(
-                "unknown auth profile `{auth_profile}`"
-            )));
+        for profile_id in &requested {
+            if !auth.contains_key(profile_id) {
+                return Err(RuntimeError::Config(format!(
+                    "unknown auth profile `{profile_id}`"
+                )));
+            }
         }
 
         Ok(())
+    }
+
+    pub fn activate_auth_profile(&self, auth_profile: &str) -> Result<(), RuntimeError> {
+        self.activate_auth_profiles(&[auth_profile.to_string()])
     }
 
     pub(crate) fn resolve_gameplay_profile(

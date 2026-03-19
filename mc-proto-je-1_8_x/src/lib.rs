@@ -207,6 +207,15 @@ impl SessionAdapter for Je18xAdapter {
         Ok(writer.into_inner())
     }
 
+    fn encode_network_settings(
+        &self,
+        _compression_threshold: u16,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        Err(ProtocolError::InvalidPacket(
+            "java edition adapters do not support bedrock network settings",
+        ))
+    }
+
     fn encode_login_success(&self, player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
         let mut writer = PacketWriter::default();
         writer.write_varint(PACKET_CB_LOGIN_SUCCESS);

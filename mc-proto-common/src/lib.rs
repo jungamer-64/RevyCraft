@@ -66,6 +66,15 @@ pub enum LoginRequest {
         shared_secret_encrypted: Vec<u8>,
         verify_token_encrypted: Vec<u8>,
     },
+    BedrockNetworkSettingsRequest {
+        protocol_number: i32,
+    },
+    BedrockLogin {
+        protocol_number: i32,
+        display_name: String,
+        chain_jwts: Vec<String>,
+        client_data_jwt: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,6 +214,13 @@ pub trait SessionAdapter: Send + Sync {
         public_key_der: &[u8],
         verify_token: &[u8],
     ) -> Result<Vec<u8>, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the network settings payload cannot be
+    /// encoded for the adapter's protocol version.
+    fn encode_network_settings(&self, compression_threshold: u16)
+    -> Result<Vec<u8>, ProtocolError>;
 
     /// # Errors
     ///

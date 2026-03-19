@@ -2,12 +2,17 @@ mod plugin_host;
 
 use aes::Aes128;
 use aes::cipher::{BlockEncrypt, KeyInit};
+use bedrockrs_network::connection::Connection as BedrockConnection;
+use bedrockrs_network::listener::Listener as BedrockListener;
+use bedrockrs_proto::ProtoVersion;
+use bedrockrs_proto::V924;
+use bedrockrs_proto::compression::Compression as BedrockCompression;
 use bytes::BytesMut;
 use mc_core::{
     ConnectionId, CoreCommand, CoreConfig, CoreEvent, EventTarget, PlayerId, PlayerSummary,
     ServerCore, SessionCapabilitySet, TargetedEvent,
 };
-use mc_plugin_api::{AuthMode, GameplaySessionSnapshot, PluginAbiVersion};
+use mc_plugin_api::{AuthMode, BedrockAuthResult, GameplaySessionSnapshot, PluginAbiVersion};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeNextState, HandshakeProbe, LoginRequest, MinecraftWireCodec,
     PacketWriter, PlayEncodingContext, ProtocolAdapter, ProtocolError, ServerListStatus,
@@ -35,11 +40,12 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
-const BE_PLACEHOLDER_ADAPTER_ID: &str = "be-placeholder";
+const BEDROCK_BASELINE_ADAPTER_ID: &str = "be-26_3";
+const BEDROCK_OFFLINE_AUTH_PROFILE_ID: &str = "bedrock-offline-v1";
 const LOGIN_SERVER_ID: &str = "";
 const LOGIN_VERIFY_TOKEN_LEN: usize = 4;
 
@@ -114,8 +120,11 @@ pub struct ServerConfig {
     pub view_distance: u8,
     pub default_adapter: String,
     pub enabled_adapters: Option<Vec<String>>,
+    pub default_bedrock_adapter: String,
+    pub enabled_bedrock_adapters: Option<Vec<String>>,
     pub storage_profile: String,
     pub auth_profile: String,
+    pub bedrock_auth_profile: String,
     pub default_gameplay_profile: String,
     pub gameplay_profile_map: HashMap<String, String>,
     pub plugins_dir: PathBuf,
@@ -144,8 +153,11 @@ impl Default for ServerConfig {
             view_distance: 2,
             default_adapter: "je-1_7_10".to_string(),
             enabled_adapters: None,
+            default_bedrock_adapter: BEDROCK_BASELINE_ADAPTER_ID.to_string(),
+            enabled_bedrock_adapters: None,
             storage_profile: "je-anvil-1_7_10".to_string(),
             auth_profile: "offline-v1".to_string(),
+            bedrock_auth_profile: BEDROCK_OFFLINE_AUTH_PROFILE_ID.to_string(),
             default_gameplay_profile: "canonical".to_string(),
             gameplay_profile_map: HashMap::new(),
             plugins_dir: cwd.join("dist").join("plugins"),
@@ -229,11 +241,20 @@ impl ServerConfig {
                     "enabled-adapters" => {
                         config.enabled_adapters = parse_enabled_adapters(value)?;
                     }
+                    "default-bedrock-adapter" => {
+                        config.default_bedrock_adapter = value.to_string();
+                    }
+                    "enabled-bedrock-adapters" => {
+                        config.enabled_bedrock_adapters = parse_enabled_adapters(value)?;
+                    }
                     "storage-profile" => {
                         config.storage_profile = value.to_string();
                     }
                     "auth-profile" => {
                         config.auth_profile = value.to_string();
+                    }
+                    "bedrock-auth-profile" => {
+                        config.bedrock_auth_profile = value.to_string();
                     }
                     "default-gameplay-profile" => {
                         config.default_gameplay_profile = value.to_string();
@@ -285,6 +306,13 @@ impl ServerConfig {
         match &self.enabled_adapters {
             Some(enabled_adapters) => enabled_adapters.clone(),
             None => vec![self.default_adapter.clone()],
+        }
+    }
+
+    fn effective_enabled_bedrock_adapters(&self) -> Vec<String> {
+        match &self.enabled_bedrock_adapters {
+            Some(enabled_adapters) => enabled_adapters.clone(),
+            None => vec![self.default_bedrock_adapter.clone()],
         }
     }
 }
@@ -583,6 +611,10 @@ enum TransportSessionIo {
         stream: TcpStream,
         encryption: Option<TransportEncryptionState>,
     },
+    Bedrock {
+        connection: BedrockConnection,
+        compression: Option<BedrockCompression>,
+    },
 }
 
 impl TransportSessionIo {
@@ -601,6 +633,20 @@ impl TransportSessionIo {
                 buffer.extend_from_slice(bytes);
                 Ok(bytes_read)
             }
+            Self::Bedrock {
+                connection,
+                compression,
+            } => {
+                let mut packet_stream = connection.recv_raw().await.map_err(std::io::Error::other)?;
+                if let Some(compression) = compression.as_ref() {
+                    packet_stream = compression
+                        .decompress(packet_stream)
+                        .map_err(std::io::Error::other)?;
+                }
+                let bytes_read = packet_stream.len();
+                buffer.extend_from_slice(&packet_stream);
+                Ok(bytes_read)
+            }
         }
     }
 
@@ -613,6 +659,22 @@ impl TransportSessionIo {
                 }
                 stream.write_all(&encrypted).await
             }
+            Self::Bedrock {
+                connection,
+                compression,
+            } => {
+                let packet_stream = if let Some(compression) = compression.as_ref() {
+                    compression
+                        .compress(bytes.to_vec())
+                        .map_err(std::io::Error::other)?
+                } else {
+                    bytes.to_vec()
+                };
+                connection
+                    .send_raw(&packet_stream)
+                    .await
+                    .map_err(std::io::Error::other)
+            }
         }
     }
 
@@ -621,6 +683,16 @@ impl TransportSessionIo {
             Self::Tcp { encryption, .. } => {
                 *encryption = Some(TransportEncryptionState::new(shared_secret));
             }
+            Self::Bedrock { .. } => {}
+        }
+    }
+
+    fn enable_bedrock_compression(&mut self, compression_threshold: u16) {
+        if let Self::Bedrock { compression, .. } = self {
+            *compression = Some(BedrockCompression::Zlib {
+                threshold: compression_threshold,
+                compression_level: 6,
+            });
         }
     }
 }
@@ -630,14 +702,15 @@ enum BoundTransportListener {
         listener: TcpListener,
         adapter_ids: Vec<String>,
     },
-    Udp {
-        socket: UdpSocket,
+    Bedrock {
+        listener: BedrockListener,
         adapter_ids: Vec<String>,
+        bind_addr: SocketAddr,
     },
 }
 
 impl BoundTransportListener {
-    fn listener_binding(&self) -> Result<ListenerBinding, std::io::Error> {
+    fn listener_binding(&self) -> Result<ListenerBinding, RuntimeError> {
         match self {
             Self::Tcp {
                 listener,
@@ -647,12 +720,13 @@ impl BoundTransportListener {
                 local_addr: listener.local_addr()?,
                 adapter_ids: adapter_ids.clone(),
             }),
-            Self::Udp {
-                socket,
+            Self::Bedrock {
                 adapter_ids,
+                bind_addr,
+                ..
             } => Ok(ListenerBinding {
                 transport: TransportKind::Udp,
-                local_addr: socket.local_addr()?,
+                local_addr: *bind_addr,
                 adapter_ids: adapter_ids.clone(),
             }),
         }
@@ -695,7 +769,9 @@ struct RuntimeServer {
     protocol_registry: ProtocolRegistry,
     plugin_host: Option<Arc<PluginHost>>,
     default_adapter: Arc<dyn ProtocolAdapter>,
+    default_bedrock_adapter: Option<Arc<dyn ProtocolAdapter>>,
     auth_profile: Arc<HotSwappableAuthProfile>,
+    bedrock_auth_profile: Option<Arc<HotSwappableAuthProfile>>,
     online_auth_keys: Option<Arc<OnlineAuthKeys>>,
     storage_profile: Arc<HotSwappableStorageProfile>,
     state: Mutex<RuntimeState>,
@@ -816,12 +892,14 @@ fn minecraft_server_hash(
     BigInt::from_signed_bytes_be(&digest).to_str_radix(16)
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UdpDatagramAction {
     Ignore,
     UnsupportedBedrock,
 }
 
+#[cfg(test)]
 fn classify_udp_datagram(
     protocol_registry: &ProtocolRegistry,
     datagram: &[u8],
@@ -874,6 +952,12 @@ impl RuntimeServer {
             })
     }
 
+    fn resolve_bedrock_auth_profile(&self) -> Result<Arc<HotSwappableAuthProfile>, RuntimeError> {
+        self.bedrock_auth_profile.clone().ok_or_else(|| {
+            RuntimeError::Config("bedrock auth profile is not active".to_string())
+        })
+    }
+
     async fn sync_session_handle(&self, connection_id: ConnectionId, session: &SessionState) {
         if let Some(handle) = self.sessions.lock().await.get_mut(&connection_id) {
             handle.phase = session.phase;
@@ -888,6 +972,60 @@ impl RuntimeServer {
     }
 
     async fn spawn_session(self: &Arc<Self>, transport_session: AcceptedTransportSession) {
+        let session = SessionState {
+            transport: transport_session.transport,
+            phase: ConnectionPhase::Handshaking,
+            adapter: None,
+            gameplay: None,
+            login_challenge: None,
+            player_id: None,
+            entity_id: None,
+            session_capabilities: None,
+        };
+        self.spawn_session_with_state(transport_session, session).await;
+    }
+
+    async fn spawn_bedrock_session(self: &Arc<Self>, connection: BedrockConnection) {
+        let Some(adapter) = self.default_bedrock_adapter.clone() else {
+            eprintln!("dropping bedrock session because no default bedrock adapter is active");
+            return;
+        };
+        let gameplay = match self.resolve_gameplay_for_adapter(&adapter.descriptor().adapter_id) {
+            Ok(gameplay) => gameplay,
+            Err(error) => {
+                eprintln!("dropping bedrock session because gameplay profile could not resolve: {error}");
+                return;
+            }
+        };
+        let mut session = SessionState {
+            transport: TransportKind::Udp,
+            phase: ConnectionPhase::Login,
+            adapter: Some(adapter),
+            gameplay: Some(gameplay),
+            login_challenge: None,
+            player_id: None,
+            entity_id: None,
+            session_capabilities: None,
+        };
+        Self::refresh_session_capabilities(&mut session);
+        self.spawn_session_with_state(
+            AcceptedTransportSession {
+                transport: TransportKind::Udp,
+                io: TransportSessionIo::Bedrock {
+                    connection,
+                    compression: None,
+                },
+            },
+            session,
+        )
+        .await;
+    }
+
+    async fn spawn_session_with_state(
+        self: &Arc<Self>,
+        transport_session: AcceptedTransportSession,
+        session: SessionState,
+    ) {
         let connection_id = {
             let mut next_connection_id = self.next_connection_id.lock().await;
             let connection_id = ConnectionId(*next_connection_id);
@@ -900,23 +1038,21 @@ impl RuntimeServer {
             connection_id,
             SessionHandle {
                 tx,
-                phase: ConnectionPhase::Handshaking,
-                player_id: None,
-                entity_id: None,
-                gameplay_profile: None,
-                session_capabilities: None,
+                phase: session.phase,
+                player_id: session.player_id,
+                entity_id: session.entity_id,
+                gameplay_profile: session
+                    .session_capabilities
+                    .as_ref()
+                    .map(|capabilities| capabilities.gameplay_profile.clone()),
+                session_capabilities: session.session_capabilities.clone(),
             },
         );
 
         let server = Arc::clone(self);
         tokio::spawn(async move {
             if let Err(error) = server
-                .run_session(
-                    connection_id,
-                    transport_session.io,
-                    transport_session.transport,
-                    rx,
-                )
+                .run_session(connection_id, transport_session.io, session, rx)
                 .await
             {
                 eprintln!("session {connection_id:?} ended with error: {error}");
@@ -928,20 +1064,10 @@ impl RuntimeServer {
         self: Arc<Self>,
         connection_id: ConnectionId,
         mut transport_io: TransportSessionIo,
-        transport: TransportKind,
+        mut session: SessionState,
         mut rx: mpsc::UnboundedReceiver<SessionMessage>,
     ) -> Result<(), RuntimeError> {
         let mut read_buffer = BytesMut::with_capacity(8192);
-        let mut session = SessionState {
-            transport,
-            phase: ConnectionPhase::Handshaking,
-            adapter: None,
-            gameplay: None,
-            login_challenge: None,
-            player_id: None,
-            entity_id: None,
-            session_capabilities: None,
-        };
 
         loop {
             tokio::select! {
@@ -1118,11 +1244,86 @@ impl RuntimeServer {
         session: &mut SessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let current = session
+        let current = Arc::clone(
+            session
             .adapter
             .as_ref()
-            .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
+            .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?,
+        );
         match current.decode_login(frame)? {
+            LoginRequest::BedrockNetworkSettingsRequest { protocol_number } => {
+                let Some(next_adapter) = self.protocol_registry.resolve_route(
+                    TransportKind::Udp,
+                    Edition::Be,
+                    protocol_number,
+                ) else {
+                    let disconnect = current.encode_disconnect(
+                        ConnectionPhase::Login,
+                        &format!("Unsupported Bedrock protocol {protocol_number}"),
+                    )?;
+                    write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                    return Ok(true);
+                };
+                let gameplay =
+                    self.resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)?;
+                session.adapter = Some(next_adapter.clone());
+                session.gameplay = Some(gameplay);
+                Self::refresh_session_capabilities(session);
+                self.sync_session_handle(connection_id, session).await;
+
+                let response = next_adapter.encode_network_settings(1)?;
+                write_payload(transport_io, next_adapter.wire_codec(), &response).await?;
+                transport_io.enable_bedrock_compression(1);
+                Ok(false)
+            }
+            LoginRequest::BedrockLogin {
+                protocol_number,
+                display_name,
+                chain_jwts,
+                client_data_jwt,
+            } => {
+                let next_adapter = if current.descriptor().edition == Edition::Be
+                    && current.descriptor().protocol_number == protocol_number
+                {
+                    Arc::clone(&current)
+                } else {
+                    self.protocol_registry
+                        .resolve_route(TransportKind::Udp, Edition::Be, protocol_number)
+                        .ok_or_else(|| {
+                            RuntimeError::Config(format!(
+                                "no active bedrock adapter for protocol {protocol_number}"
+                            ))
+                        })?
+                };
+                let gameplay =
+                    self.resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)?;
+                session.adapter = Some(next_adapter);
+                session.gameplay = Some(gameplay);
+                Self::refresh_session_capabilities(session);
+                self.sync_session_handle(connection_id, session).await;
+
+                let auth_profile = self.resolve_bedrock_auth_profile()?;
+                let authenticated = match auth_profile.mode()? {
+                    AuthMode::BedrockOffline => {
+                        auth_profile.authenticate_bedrock_offline(&display_name)?
+                    }
+                    AuthMode::BedrockXbl => auth_profile
+                        .authenticate_bedrock_xbl(&chain_jwts, &client_data_jwt)?,
+                    mode => {
+                        return Err(RuntimeError::Config(format!(
+                            "bedrock listener requires a bedrock auth profile, got {mode:?}"
+                        )));
+                    }
+                };
+                self.apply_bedrock_login(
+                    connection_id,
+                    session,
+                    authenticated,
+                    display_name,
+                )
+                .await?;
+                Ok(false)
+            }
             LoginRequest::LoginStart { username } => {
                 if self.config.online_mode {
                     if session.login_challenge.is_some() {
@@ -1248,9 +1449,19 @@ impl RuntimeServer {
                     &online_auth_keys.public_key_der,
                 );
                 let username = challenge.username.clone();
+                let login_username = challenge.username;
                 let auth_generation = Arc::clone(&challenge.auth_generation);
+                let captured_generation_id = auth_generation.generation_id;
+                let auth_profile = Arc::clone(&self.auth_profile);
                 let authenticated = match tokio::task::spawn_blocking(move || {
-                    auth_generation.authenticate_online(&username, &server_hash)
+                    let current_generation_id = auth_profile
+                        .plugin_generation_id()
+                        .ok_or_else(|| RuntimeError::Config("missing auth generation".to_string()))?;
+                    if current_generation_id != captured_generation_id {
+                        auth_generation.authenticate_online(&username, &server_hash)
+                    } else {
+                        auth_profile.authenticate_online(&username, &server_hash)
+                    }
                 })
                 .await
                 {
@@ -1268,7 +1479,7 @@ impl RuntimeServer {
                 self.apply_command(
                     CoreCommand::LoginStart {
                         connection_id,
-                        username: challenge.username,
+                        username: login_username,
                         player_id: authenticated,
                     },
                     Some(session),
@@ -1295,6 +1506,28 @@ impl RuntimeServer {
             self.apply_command(command, Some(session)).await?;
         }
         Ok(false)
+    }
+
+    async fn apply_bedrock_login(
+        &self,
+        connection_id: ConnectionId,
+        session: &SessionState,
+        authenticated: BedrockAuthResult,
+        fallback_display_name: String,
+    ) -> Result<(), RuntimeError> {
+        self.apply_command(
+            CoreCommand::LoginStart {
+                connection_id,
+                username: if authenticated.display_name.is_empty() {
+                    fallback_display_name
+                } else {
+                    authenticated.display_name
+                },
+                player_id: authenticated.player_id,
+            },
+            Some(session),
+        )
+        .await
     }
 
     async fn handle_outgoing_message(
@@ -1559,16 +1792,38 @@ fn build_listener_plans(
 
 async fn bind_transport_listener(
     plan: ListenerPlan,
+    config: &ServerConfig,
 ) -> Result<BoundTransportListener, RuntimeError> {
     match plan.transport {
         TransportKind::Tcp => Ok(BoundTransportListener::Tcp {
             listener: TcpListener::bind(plan.bind_addr).await?,
             adapter_ids: plan.adapter_ids,
         }),
-        TransportKind::Udp => Ok(BoundTransportListener::Udp {
-            socket: UdpSocket::bind(plan.bind_addr).await?,
-            adapter_ids: plan.adapter_ids,
-        }),
+        TransportKind::Udp => {
+            let mut listener = BedrockListener::new_raknet(
+                plan.bind_addr,
+                config.motd.clone(),
+                "RevyCraft".to_string(),
+                V924::GAME_VERSION.to_string(),
+                V924::PROTOCOL_VERSION,
+                V924::RAKNET_VERSION,
+                u32::from(config.max_players),
+                0,
+                false,
+            )
+            .await
+            .map_err(|error| {
+                RuntimeError::Unsupported(format!("failed to bind bedrock listener: {error}"))
+            })?;
+            listener.start().await.map_err(|error| {
+                RuntimeError::Unsupported(format!("failed to start bedrock listener: {error}"))
+            })?;
+            Ok(BoundTransportListener::Bedrock {
+                listener,
+                bind_addr: plan.bind_addr,
+                adapter_ids: plan.adapter_ids,
+            })
+        }
     }
 }
 
@@ -1605,17 +1860,19 @@ pub async fn spawn_server(
             config.default_adapter
         )));
     }
-
-    let mut enabled_adapter_ids = config.effective_enabled_adapters();
-    if config.enabled_adapters.is_none()
-        && config.be_enabled
+    if config.be_enabled
         && registries
             .protocols()
-            .resolve_adapter(BE_PLACEHOLDER_ADAPTER_ID)
-            .is_some()
+            .resolve_adapter(&config.default_bedrock_adapter)
+            .is_none()
     {
-        enabled_adapter_ids.push(BE_PLACEHOLDER_ADAPTER_ID.to_string());
+        return Err(RuntimeError::Config(format!(
+            "unknown default-bedrock-adapter `{}`",
+            config.default_bedrock_adapter
+        )));
     }
+
+    let mut enabled_adapter_ids = config.effective_enabled_adapters();
     if !enabled_adapter_ids
         .iter()
         .any(|adapter_id| adapter_id == &config.default_adapter)
@@ -1625,12 +1882,32 @@ pub async fn spawn_server(
             config.default_adapter
         )));
     }
+    let enabled_bedrock_adapter_ids = if config.be_enabled {
+        let enabled = config.effective_enabled_bedrock_adapters();
+        if !enabled
+            .iter()
+            .any(|adapter_id| adapter_id == &config.default_bedrock_adapter)
+        {
+            return Err(RuntimeError::Config(format!(
+                "default-bedrock-adapter `{}` must be included in enabled-bedrock-adapters",
+                config.default_bedrock_adapter
+            )));
+        }
+        enabled
+    } else {
+        Vec::new()
+    };
+    enabled_adapter_ids.extend(enabled_bedrock_adapter_ids.iter().cloned());
     let active_protocols = registries
         .protocols()
         .filter_enabled(&enabled_adapter_ids)?;
     plugin_host.activate_gameplay_profiles(&config)?;
     plugin_host.activate_storage_profile(&config.storage_profile)?;
-    plugin_host.activate_auth_profile(&config.auth_profile)?;
+    let mut auth_profiles = vec![config.auth_profile.clone()];
+    if config.be_enabled && !auth_profiles.contains(&config.bedrock_auth_profile) {
+        auth_profiles.push(config.bedrock_auth_profile.clone());
+    }
+    plugin_host.activate_auth_profiles(&auth_profiles)?;
     if !config.be_enabled
         && !active_protocols
             .adapter_ids_for_transport(TransportKind::Udp)
@@ -1649,6 +1926,32 @@ pub async fn spawn_server(
                 config.default_adapter
             ))
         })?;
+    if default_adapter.descriptor().transport != TransportKind::Tcp {
+        return Err(RuntimeError::Config(format!(
+            "default-adapter `{}` must be a tcp adapter",
+            config.default_adapter
+        )));
+    }
+    let default_bedrock_adapter = if config.be_enabled {
+        let adapter = active_protocols
+            .resolve_adapter(&config.default_bedrock_adapter)
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "default-bedrock-adapter `{}` is not active",
+                    config.default_bedrock_adapter
+                ))
+            })?;
+        let descriptor = adapter.descriptor();
+        if descriptor.transport != TransportKind::Udp || descriptor.edition != Edition::Be {
+            return Err(RuntimeError::Config(format!(
+                "default-bedrock-adapter `{}` must be a bedrock udp adapter",
+                config.default_bedrock_adapter
+            )));
+        }
+        Some(adapter)
+    } else {
+        None
+    };
     let storage_profile = plugin_host
         .resolve_storage_profile(&config.storage_profile)
         .ok_or_else(|| {
@@ -1662,6 +1965,20 @@ pub async fn spawn_server(
         .ok_or_else(|| {
             RuntimeError::Config(format!("unknown auth-profile `{}`", config.auth_profile))
         })?;
+    let bedrock_auth_profile = if config.be_enabled {
+        Some(
+            plugin_host
+                .resolve_auth_profile(&config.bedrock_auth_profile)
+                .ok_or_else(|| {
+                    RuntimeError::Config(format!(
+                        "unknown bedrock-auth-profile `{}`",
+                        config.bedrock_auth_profile
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
     let auth_mode = auth_profile.mode()?;
     match (config.online_mode, auth_mode) {
         (true, AuthMode::Online) | (false, AuthMode::Offline) => {}
@@ -1674,6 +1991,16 @@ pub async fn spawn_server(
             return Err(RuntimeError::Config(format!(
                 "online-mode=false requires an offline auth profile, got {mode:?}"
             )));
+        }
+    }
+    if let Some(profile) = &bedrock_auth_profile {
+        match profile.mode()? {
+            AuthMode::BedrockOffline | AuthMode::BedrockXbl => {}
+            mode => {
+                return Err(RuntimeError::Config(format!(
+                    "bedrock-auth-profile requires a bedrock auth mode, got {mode:?}"
+                )));
+            }
         }
     }
     let online_auth_keys = if config.online_mode {
@@ -1698,14 +2025,14 @@ pub async fn spawn_server(
     let listener_plans = build_listener_plans(&config, &active_protocols)?;
     let mut bound_listeners = Vec::with_capacity(listener_plans.len());
     for plan in listener_plans {
-        bound_listeners.push(bind_transport_listener(plan).await?);
+        bound_listeners.push(bind_transport_listener(plan, &config).await?);
     }
     let listener_bindings = bound_listeners
         .iter()
         .map(BoundTransportListener::listener_binding)
         .collect::<Result<Vec<_>, _>>()?;
     let mut tcp_listener = None;
-    let mut udp_socket = None;
+    let mut bedrock_listener = None;
     for listener in bound_listeners {
         match listener {
             BoundTransportListener::Tcp { listener, .. } => {
@@ -1715,8 +2042,8 @@ pub async fn spawn_server(
                     ));
                 }
             }
-            BoundTransportListener::Udp { socket, .. } => {
-                if udp_socket.replace(socket).is_some() {
+            BoundTransportListener::Bedrock { listener, .. } => {
+                if bedrock_listener.replace(listener).is_some() {
                     return Err(RuntimeError::Config(
                         "multiple udp listeners are not supported".to_string(),
                     ));
@@ -1732,7 +2059,9 @@ pub async fn spawn_server(
         protocol_registry: active_protocols,
         plugin_host: Some(plugin_host.clone()),
         default_adapter,
+        default_bedrock_adapter,
         auth_profile,
+        bedrock_auth_profile,
         online_auth_keys,
         storage_profile,
         state: Mutex::new(RuntimeState { core, dirty: false }),
@@ -1747,7 +2076,6 @@ pub async fn spawn_server(
         let mut save_interval = tokio::time::interval(Duration::from_secs(2));
         let mut plugin_reload_interval =
             tokio::time::interval(Duration::from_millis(plugin_reload_poll_interval_ms()));
-        let mut udp_buffer = [0_u8; 2048];
         loop {
             tokio::select! {
                 _ = &mut shutdown_rx => {
@@ -1765,30 +2093,19 @@ pub async fn spawn_server(
                     };
                     run_server.spawn_session(session).await;
                 }
-                udp_recv = async {
-                    let socket = udp_socket
-                        .as_ref()
-                        .expect("udp socket branch should only run when configured");
-                    socket.recv_from(&mut udp_buffer).await
-                }, if udp_socket.is_some() => {
-                    match udp_recv {
-                        Ok((bytes_read, peer_addr)) => {
-                            match classify_udp_datagram(&run_server.protocol_registry, &udp_buffer[..bytes_read]) {
-                                Ok(UdpDatagramAction::Ignore) => {}
-                                Ok(UdpDatagramAction::UnsupportedBedrock) => {
-                                    eprintln!(
-                                        "received unsupported bedrock datagram from {peer_addr}; bedrock support is not implemented yet"
-                                    );
-                                }
-                                Err(error) => {
-                                    eprintln!(
-                                        "failed to classify udp datagram from {peer_addr}: {error}"
-                                    );
-                                }
-                            }
+                accepted = async {
+                    bedrock_listener
+                        .as_mut()
+                        .expect("bedrock listener branch should only run when configured")
+                        .accept()
+                        .await
+                }, if bedrock_listener.is_some() => {
+                    match accepted {
+                        Ok(connection) => {
+                            run_server.spawn_bedrock_session(connection).await;
                         }
                         Err(error) => {
-                            eprintln!("udp receive failed: {error}");
+                            eprintln!("bedrock accept failed: {error}");
                         }
                     }
                 }
@@ -1854,7 +2171,8 @@ pub fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8
 #[cfg(test)]
 mod tests {
     use super::{
-        InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
+        BEDROCK_OFFLINE_AUTH_PROFILE_ID, InProcessAuthPlugin, InProcessGameplayPlugin,
+        InProcessProtocolPlugin,
         InProcessStoragePlugin, LevelType, PluginAbiRange, PluginCatalog, PluginFailurePolicy,
         PluginHost, RuntimeError, RuntimeRegistries, ServerConfig, UdpDatagramAction,
         build_listener_plans, classify_udp_datagram, encode_handshake, plugin_host_from_config,
@@ -1868,11 +2186,13 @@ mod tests {
     };
     use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
     use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
+    use mc_plugin_proto_be_26_3::in_process_protocol_entrypoints as be_26_3_entrypoints;
     use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
     use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints as je_1_7_10_entrypoints;
     use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entrypoints;
     use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
     use mc_plugin_storage_je_anvil_1_7_10::in_process_storage_entrypoints as storage_entrypoints;
+    use mc_proto_be_26_3::BE_26_3_ADAPTER_ID;
     use mc_proto_be_placeholder::BE_PLACEHOLDER_ADAPTER_ID;
     use mc_proto_common::{
         Edition, MinecraftWireCodec, PacketReader, PacketWriter, TransportKind, WireCodec,
@@ -1907,11 +2227,17 @@ mod tests {
         JE_1_7_10_ADAPTER_ID,
         JE_1_8_X_ADAPTER_ID,
         JE_1_12_2_ADAPTER_ID,
+        BE_26_3_ADAPTER_ID,
         BE_PLACEHOLDER_ADAPTER_ID,
     ];
     const TCP_ONLY_PROTOCOL_PLUGIN_IDS: &[&str] = &[JE_1_7_10_ADAPTER_ID];
     const GAMEPLAY_PLUGIN_IDS: &[&str] = &["gameplay-canonical", "gameplay-readonly"];
-    const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &["storage-je-anvil-1_7_10", "auth-offline"];
+    const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &[
+        "storage-je-anvil-1_7_10",
+        "auth-offline",
+        "auth-bedrock-offline",
+        "auth-bedrock-xbl",
+    ];
     static PLUGIN_TEST_HARNESS_BUILDS: AtomicUsize = AtomicUsize::new(0);
     static PLUGIN_TEST_HARNESS: OnceLock<Result<PluginTestHarness, String>> = OnceLock::new();
 
@@ -2037,6 +2363,13 @@ mod tests {
                         plugin_id: JE_1_12_2_ADAPTER_ID.to_string(),
                         manifest: je_1_12_2_entrypoints().manifest,
                         api: je_1_12_2_entrypoints().api,
+                    })
+                }
+                BE_26_3_ADAPTER_ID => {
+                    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                        plugin_id: BE_26_3_ADAPTER_ID.to_string(),
+                        manifest: be_26_3_entrypoints().manifest,
+                        api: be_26_3_entrypoints().api,
                     })
                 }
                 BE_PLACEHOLDER_ADAPTER_ID => {
@@ -2540,7 +2873,7 @@ mod tests {
             plans[1]
                 .adapter_ids
                 .iter()
-                .any(|adapter_id| adapter_id == BE_PLACEHOLDER_ADAPTER_ID)
+                .any(|adapter_id| adapter_id == BE_26_3_ADAPTER_ID)
         );
         Ok(())
     }
@@ -2603,7 +2936,7 @@ mod tests {
             binding
                 .adapter_ids
                 .iter()
-                .any(|adapter_id| adapter_id == BE_PLACEHOLDER_ADAPTER_ID)
+                .any(|adapter_id| adapter_id == BE_26_3_ADAPTER_ID)
         );
 
         server.shutdown().await
@@ -2624,8 +2957,10 @@ mod tests {
         assert_eq!(config.level_type, LevelType::Flat);
         assert!(config.be_enabled);
         assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
+        assert_eq!(config.default_bedrock_adapter, BE_26_3_ADAPTER_ID);
         assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
         assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
+        assert_eq!(config.bedrock_auth_profile, BEDROCK_OFFLINE_AUTH_PROFILE_ID);
         assert_eq!(config.world_dir, temp_dir.path().join("flatland"));
         Ok(())
     }
@@ -2640,8 +2975,10 @@ mod tests {
 
         assert!(!config.be_enabled);
         assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
+        assert_eq!(config.default_bedrock_adapter, BE_26_3_ADAPTER_ID);
         assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
         assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
+        assert_eq!(config.bedrock_auth_profile, BEDROCK_OFFLINE_AUTH_PROFILE_ID);
         Ok(())
     }
 
@@ -2660,6 +2997,29 @@ mod tests {
                 JE_1_12_2_ADAPTER_ID.to_string(),
             ])
         );
+        Ok(())
+    }
+
+    #[test]
+    fn server_properties_parse_bedrock_adapter_and_auth_profile() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(
+            &path,
+            "be-enabled=true\ndefault-bedrock-adapter=be-26_3\nenabled-bedrock-adapters=be-26_3,be-placeholder\nbedrock-auth-profile=bedrock-xbl-v1\n",
+        )?;
+
+        let config = ServerConfig::from_properties(&path)?;
+        assert!(config.be_enabled);
+        assert_eq!(config.default_bedrock_adapter, BE_26_3_ADAPTER_ID);
+        assert_eq!(
+            config.enabled_bedrock_adapters,
+            Some(vec![
+                BE_26_3_ADAPTER_ID.to_string(),
+                BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+            ])
+        );
+        assert_eq!(config.bedrock_auth_profile, "bedrock-xbl-v1");
         Ok(())
     }
 

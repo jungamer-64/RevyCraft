@@ -128,6 +128,13 @@ impl SessionAdapter for BePlaceholderAdapter {
         Err(unsupported())
     }
 
+    fn encode_network_settings(
+        &self,
+        _compression_threshold: u16,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        Err(unsupported())
+    }
+
     fn encode_login_success(&self, _player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
         Err(unsupported())
     }

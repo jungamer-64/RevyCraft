@@ -69,6 +69,13 @@ impl SessionAdapter for BePlaceholderProtocolPlugin {
             .encode_encryption_request(server_id, public_key_der, verify_token)
     }
 
+    fn encode_network_settings(
+        &self,
+        compression_threshold: u16,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        self.adapter.encode_network_settings(compression_threshold)
+    }
+
     fn encode_login_success(
         &self,
         player: &mc_core::PlayerSnapshot,

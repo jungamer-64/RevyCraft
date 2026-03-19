@@ -28,11 +28,12 @@ pub enum ProtocolOpCode {
     EncodeStatusPong = 7,
     EncodeDisconnect = 8,
     EncodeEncryptionRequest = 9,
-    EncodeLoginSuccess = 10,
-    DecodePlay = 11,
-    EncodePlayEvent = 12,
-    ExportSessionState = 13,
-    ImportSessionState = 14,
+    EncodeNetworkSettings = 10,
+    EncodeLoginSuccess = 11,
+    DecodePlay = 12,
+    EncodePlayEvent = 13,
+    ExportSessionState = 14,
+    ImportSessionState = 15,
 }
 
 impl TryFrom<u8> for ProtocolOpCode {
@@ -49,11 +50,12 @@ impl TryFrom<u8> for ProtocolOpCode {
             7 => Ok(Self::EncodeStatusPong),
             8 => Ok(Self::EncodeDisconnect),
             9 => Ok(Self::EncodeEncryptionRequest),
-            10 => Ok(Self::EncodeLoginSuccess),
-            11 => Ok(Self::DecodePlay),
-            12 => Ok(Self::EncodePlayEvent),
-            13 => Ok(Self::ExportSessionState),
-            14 => Ok(Self::ImportSessionState),
+            10 => Ok(Self::EncodeNetworkSettings),
+            11 => Ok(Self::EncodeLoginSuccess),
+            12 => Ok(Self::DecodePlay),
+            13 => Ok(Self::EncodePlayEvent),
+            14 => Ok(Self::ExportSessionState),
+            15 => Ok(Self::ImportSessionState),
             _ => Err(ProtocolCodecError::InvalidProtocolOpCode(value)),
         }
     }
@@ -114,6 +116,9 @@ pub enum ProtocolRequest {
         public_key_der: Vec<u8>,
         verify_token: Vec<u8>,
     },
+    EncodeNetworkSettings {
+        compression_threshold: u16,
+    },
     EncodeLoginSuccess {
         player: PlayerSnapshot,
     },
@@ -147,6 +152,7 @@ impl ProtocolRequest {
             Self::EncodeStatusPong { .. } => ProtocolOpCode::EncodeStatusPong,
             Self::EncodeDisconnect { .. } => ProtocolOpCode::EncodeDisconnect,
             Self::EncodeEncryptionRequest { .. } => ProtocolOpCode::EncodeEncryptionRequest,
+            Self::EncodeNetworkSettings { .. } => ProtocolOpCode::EncodeNetworkSettings,
             Self::EncodeLoginSuccess { .. } => ProtocolOpCode::EncodeLoginSuccess,
             Self::DecodePlay { .. } => ProtocolOpCode::DecodePlay,
             Self::EncodePlayEvent { .. } => ProtocolOpCode::EncodePlayEvent,
@@ -535,6 +541,12 @@ fn encode_protocol_request_payload(
             encoder.write_bytes(public_key_der)?;
             encoder.write_bytes(verify_token)
         }
+        ProtocolRequest::EncodeNetworkSettings {
+            compression_threshold,
+        } => {
+            encoder.write_u16(*compression_threshold);
+            Ok(())
+        }
         ProtocolRequest::EncodeLoginSuccess { player } => encode_player_snapshot(encoder, player),
         ProtocolRequest::DecodePlay { player_id, frame } => {
             encode_player_id(encoder, *player_id);
@@ -586,6 +598,9 @@ fn decode_protocol_request_payload(
             public_key_der: decoder.read_bytes()?,
             verify_token: decoder.read_bytes()?,
         }),
+        ProtocolOpCode::EncodeNetworkSettings => Ok(ProtocolRequest::EncodeNetworkSettings {
+            compression_threshold: decoder.read_u16()?,
+        }),
         ProtocolOpCode::EncodeLoginSuccess => Ok(ProtocolRequest::EncodeLoginSuccess {
             player: decode_player_snapshot(decoder)?,
         }),
@@ -633,6 +648,7 @@ fn encode_protocol_response_payload(
             | ProtocolOpCode::EncodeStatusPong
             | ProtocolOpCode::EncodeDisconnect
             | ProtocolOpCode::EncodeEncryptionRequest
+            | ProtocolOpCode::EncodeNetworkSettings
             | ProtocolOpCode::EncodeLoginSuccess,
             ProtocolResponse::Frame(frame),
         ) => encoder.write_bytes(frame),
@@ -681,6 +697,7 @@ fn decode_protocol_response_payload(
         | ProtocolOpCode::EncodeStatusPong
         | ProtocolOpCode::EncodeDisconnect
         | ProtocolOpCode::EncodeEncryptionRequest
+        | ProtocolOpCode::EncodeNetworkSettings
         | ProtocolOpCode::EncodeLoginSuccess => Ok(ProtocolResponse::Frame(decoder.read_bytes()?)),
         ProtocolOpCode::DecodePlay => Ok(ProtocolResponse::CoreCommand(decode_option(
             decoder,
@@ -1042,6 +1059,26 @@ fn encode_login_request(
             encoder.write_bytes(shared_secret_encrypted)?;
             encoder.write_bytes(verify_token_encrypted)
         }
+        LoginRequest::BedrockNetworkSettingsRequest { protocol_number } => {
+            encoder.write_u8(3);
+            encoder.write_i32(*protocol_number);
+            Ok(())
+        }
+        LoginRequest::BedrockLogin {
+            protocol_number,
+            display_name,
+            chain_jwts,
+            client_data_jwt,
+        } => {
+            encoder.write_u8(4);
+            encoder.write_i32(*protocol_number);
+            encoder.write_string(display_name)?;
+            encoder.write_len(chain_jwts.len())?;
+            for jwt in chain_jwts {
+                encoder.write_string(jwt)?;
+            }
+            encoder.write_string(client_data_jwt)
+        }
     }
 }
 
@@ -1054,6 +1091,24 @@ fn decode_login_request(decoder: &mut Decoder<'_>) -> Result<LoginRequest, Proto
             shared_secret_encrypted: decoder.read_bytes()?,
             verify_token_encrypted: decoder.read_bytes()?,
         }),
+        3 => Ok(LoginRequest::BedrockNetworkSettingsRequest {
+            protocol_number: decoder.read_i32()?,
+        }),
+        4 => {
+            let protocol_number = decoder.read_i32()?;
+            let display_name = decoder.read_string()?;
+            let chain_len = decoder.read_len()?;
+            let mut chain_jwts = Vec::with_capacity(chain_len);
+            for _ in 0..chain_len {
+                chain_jwts.push(decoder.read_string()?);
+            }
+            Ok(LoginRequest::BedrockLogin {
+                protocol_number,
+                display_name,
+                chain_jwts,
+                client_data_jwt: decoder.read_string()?,
+            })
+        }
         _ => Err(ProtocolCodecError::InvalidValue("invalid login request")),
     }
 }
