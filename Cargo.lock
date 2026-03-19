@@ -206,7 +206,7 @@ version = "0.38.0+1.3.281"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
 dependencies = [
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -1867,7 +1867,7 @@ checksum = "0b023947811758c97c59bf9d1c188fd619ad4718dcaa767947df1cadb14f39f4"
 dependencies = [
  "glob",
  "libc",
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -2249,7 +2249,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -3018,7 +3018,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6aae1df220ece3c0ada96b8153459b67eebe9ae9212258bb0134ae60416fdf76"
 dependencies = [
  "libc",
- "libloading",
+ "libloading 0.8.9",
  "pkg-config",
 ]
 
@@ -3071,6 +3071,16 @@ name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link 0.2.1",
+]
+
+[[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
 dependencies = [
  "cfg-if",
  "windows-link 0.2.1",
@@ -3181,6 +3191,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-api"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-proto-common",
+ "serde",
+]
+
+[[package]]
+name = "mc-plugin-proto-je-1_7_10"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-proto-common",
+ "mc-proto-je-1_7_10",
+]
+
+[[package]]
+name = "mc-plugin-sdk-rust"
+version = "0.1.0"
+dependencies = [
+ "mc-plugin-api",
+ "mc-proto-common",
+ "serde_json",
+]
+
+[[package]]
 name = "mc-proto-be-placeholder"
 version = "0.1.0"
 dependencies = [
@@ -3201,16 +3240,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-proto-je-1_12_2"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-proto-common",
+ "mc-proto-je-common",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "mc-proto-je-1_7_10"
 version = "0.1.0"
 dependencies = [
  "flate2",
  "mc-core",
  "mc-proto-common",
+ "mc-proto-je-common",
  "num-traits",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "mc-proto-je-1_8_x"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-proto-common",
+ "mc-proto-je-common",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "mc-proto-je-common"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-proto-common",
+ "num-traits",
  "uuid",
 ]
 
@@ -4428,19 +4500,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8bbf91e5a4d6315eee45e704372590b30e260ee83af6639d64557f51b067776"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "server-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "mc-proto-be-placeholder",
+ "mc-proto-je-1_12_2",
+ "mc-proto-je-1_7_10",
+ "mc-proto-je-1_8_x",
+ "server-runtime",
+ "tokio",
+]
+
+[[package]]
 name = "server-runtime"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "libloading 0.9.0",
  "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-proto-je-1_7_10",
  "mc-proto-be-placeholder",
  "mc-proto-common",
+ "mc-proto-je-1_12_2",
  "mc-proto-je-1_7_10",
+ "mc-proto-je-1_8_x",
+ "mc-proto-je-common",
  "md-5",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "toml",
  "uuid",
 ]
 
@@ -4807,6 +4908,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml"
+version = "1.0.7+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd28d57d8a6f6e458bc0b8784f8fdcc4b99a437936056fa122cb234f18656a96"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime 1.0.1+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 1.0.0",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "0.7.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4856,6 +4972,12 @@ checksum = "7df25b4befd31c4816df190124375d5a20c6b6921e2cad937316de3fccd63420"
 dependencies = [
  "winnow 1.0.0",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.0.7+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f17aaa1c6e3dc22b1da4b6bba97d066e354c7945cac2f7852d4e4e7ca7a6b56d"
 
 [[package]]
 name = "tracing"
@@ -5424,7 +5546,7 @@ dependencies = [
  "js-sys",
  "khronos-egl",
  "libc",
- "libloading",
+ "libloading 0.8.9",
  "log",
  "metal",
  "naga",
@@ -6121,7 +6243,7 @@ dependencies = [
  "as-raw-xcb-connection",
  "gethostname",
  "libc",
- "libloading",
+ "libloading 0.8.9",
  "once_cell",
  "rustix 1.1.4",
  "x11rb-protocol",

@@ -2,10 +2,17 @@
 members = [
     "revycraft-client",
     "mc-core",
+    "mc-plugin-api",
+    "mc-plugin-sdk-rust",
+    "mc-plugin-proto-je-1_7_10",
     "mc-proto-common",
     "mc-proto-be-placeholder",
+    "mc-proto-je-common",
     "mc-proto-je-1_7_10",
+    "mc-proto-je-1_8_x",
+    "mc-proto-je-1_12_2",
     "server-runtime",
+    "server-bootstrap",
 ]
 resolver = "3"
 
@@ -28,8 +35,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.20"
 thiserror = "2.0"
+toml = "1.0"
 tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "sync", "time", "io-util", "signal"] }
 uuid = { version = "1.18", features = ["v3", "serde"] }
+libloading = "0.9"
 
 [workspace.lints.rust]
 warnings = "deny"

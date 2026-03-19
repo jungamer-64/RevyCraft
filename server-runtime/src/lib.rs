@@ -1,19 +1,22 @@
+mod plugin_host;
+
 use bytes::BytesMut;
 use mc_core::{
     ConnectionId, CoreCommand, CoreConfig, CoreEvent, EventTarget, PlayerId, PlayerSummary,
-    ServerCore, TargetedEvent,
+    PluginGenerationId, ServerCore, SessionCapabilitySet, TargetedEvent,
 };
-use mc_proto_be_placeholder::BePlaceholderAdapter;
+use mc_plugin_api::PluginAbiVersion;
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeNextState, HandshakeProbe, LoginRequest, MinecraftWireCodec,
     PacketWriter, PlayEncodingContext, ProtocolAdapter, ProtocolError, ServerListStatus,
     StatusRequest, StorageAdapter, TransportKind, WireCodec,
 };
-use mc_proto_je_1_7_10::{
-    JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID, Je1710Adapter, Je1710StorageAdapter,
-};
 use md5::{Digest, Md5};
-use std::collections::HashMap;
+pub use plugin_host::{
+    InProcessProtocolPlugin, PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost,
+    plugin_host_from_config, plugin_reload_poll_interval_ms,
+};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -26,10 +29,14 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+const BE_PLACEHOLDER_ADAPTER_ID: &str = "be-placeholder";
+
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("plugin load error: {0}")]
+    PluginLoad(#[from] libloading::Error),
     #[error("protocol error: {0}")]
     Protocol(#[from] ProtocolError),
     #[error("storage error: {0}")]
@@ -107,7 +114,14 @@ pub struct ServerConfig {
     pub difficulty: u8,
     pub view_distance: u8,
     pub default_adapter: String,
+    pub enabled_adapters: Option<Vec<String>>,
     pub storage_profile: String,
+    pub plugins_dir: PathBuf,
+    pub plugin_allowlist: Option<Vec<String>>,
+    pub plugin_failure_policy: PluginFailurePolicy,
+    pub plugin_reload_watch: bool,
+    pub plugin_abi_min: PluginAbiVersion,
+    pub plugin_abi_max: PluginAbiVersion,
     pub world_dir: PathBuf,
 }
 
@@ -126,8 +140,15 @@ impl Default for ServerConfig {
             game_mode: 0,
             difficulty: 1,
             view_distance: 2,
-            default_adapter: JE_1_7_10_ADAPTER_ID.to_string(),
-            storage_profile: JE_1_7_10_STORAGE_PROFILE_ID.to_string(),
+            default_adapter: "je-1_7_10".to_string(),
+            enabled_adapters: None,
+            storage_profile: "je-anvil-1_7_10".to_string(),
+            plugins_dir: cwd.join("plugins"),
+            plugin_allowlist: None,
+            plugin_failure_policy: PluginFailurePolicy::Quarantine,
+            plugin_reload_watch: false,
+            plugin_abi_min: PluginAbiVersion { major: 1, minor: 0 },
+            plugin_abi_max: PluginAbiVersion { major: 1, minor: 0 },
             world_dir: cwd.join("world"),
         }
     }
@@ -200,8 +221,29 @@ impl ServerConfig {
                     "default-adapter" => {
                         config.default_adapter = value.to_string();
                     }
+                    "enabled-adapters" => {
+                        config.enabled_adapters = parse_enabled_adapters(value)?;
+                    }
                     "storage-profile" => {
                         config.storage_profile = value.to_string();
+                    }
+                    "plugins-dir" => {
+                        config.plugins_dir = PathBuf::from(value);
+                    }
+                    "plugin-allowlist" => {
+                        config.plugin_allowlist = parse_enabled_adapters(value)?;
+                    }
+                    "plugin-failure-policy" => {
+                        config.plugin_failure_policy = PluginFailurePolicy::parse(value)?;
+                    }
+                    "plugin-reload-watch" => {
+                        config.plugin_reload_watch = value.eq_ignore_ascii_case("true");
+                    }
+                    "plugin-abi-min" => {
+                        config.plugin_abi_min = PluginAbiRange::parse_version(value)?;
+                    }
+                    "plugin-abi-max" => {
+                        config.plugin_abi_max = PluginAbiRange::parse_version(value)?;
                     }
                     unknown => {
                         eprintln!("warning: ignoring unknown server.properties key `{unknown}`");
@@ -211,6 +253,9 @@ impl ServerConfig {
         }
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         config.world_dir = parent.join(&config.level_name);
+        if config.plugins_dir.is_relative() {
+            config.plugins_dir = parent.join(&config.plugins_dir);
+        }
         Ok(config)
     }
 
@@ -221,6 +266,26 @@ impl ServerConfig {
             self.server_port,
         )
     }
+
+    fn effective_enabled_adapters(&self) -> Vec<String> {
+        match &self.enabled_adapters {
+            Some(enabled_adapters) => enabled_adapters.clone(),
+            None => vec![self.default_adapter.clone()],
+        }
+    }
+}
+
+fn parse_enabled_adapters(value: &str) -> Result<Option<Vec<String>>, RuntimeError> {
+    let adapters = value
+        .split(',')
+        .map(str::trim)
+        .filter(|adapter_id| !adapter_id.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if adapters.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(adapters))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -278,6 +343,30 @@ impl ProtocolRegistry {
         self.adapters_by_route
             .get(&(transport_kind, edition, protocol_number))
             .cloned()
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when `enabled_adapters` contains duplicates or
+    /// unknown adapter identifiers.
+    pub fn filter_enabled(&self, enabled_adapters: &[String]) -> Result<Self, RuntimeError> {
+        let mut filtered = Self::new();
+        let mut seen = HashSet::new();
+        for adapter_id in enabled_adapters {
+            if !seen.insert(adapter_id.clone()) {
+                return Err(RuntimeError::Config(format!(
+                    "enabled-adapters contains duplicate adapter `{adapter_id}`"
+                )));
+            }
+            let Some(adapter) = self.resolve_adapter(adapter_id) else {
+                return Err(RuntimeError::Config(format!(
+                    "enabled-adapters contains unknown adapter `{adapter_id}`"
+                )));
+            };
+            filtered.register_adapter(adapter);
+        }
+        filtered.probes = self.probes.clone();
+        Ok(filtered)
     }
 
     #[must_use]
@@ -343,6 +432,7 @@ impl StorageRegistry {
 pub struct RuntimeRegistries {
     protocols: ProtocolRegistry,
     storage: StorageRegistry,
+    plugin_host: Option<Arc<PluginHost>>,
 }
 
 impl RuntimeRegistries {
@@ -370,9 +460,23 @@ impl RuntimeRegistries {
         self
     }
 
+    pub fn attach_plugin_host(&mut self, plugin_host: Arc<PluginHost>) -> &mut Self {
+        self.plugin_host = Some(plugin_host);
+        self
+    }
+
+    #[must_use]
+    pub fn plugin_host(&self) -> Option<Arc<PluginHost>> {
+        self.plugin_host.clone()
+    }
+
+    #[cfg(test)]
     #[must_use]
     pub fn with_je_1_7_10() -> Self {
         let mut registries = Self::new();
+        use mc_proto_je_1_7_10::{
+            JE_1_7_10_STORAGE_PROFILE_ID, Je1710Adapter, Je1710StorageAdapter,
+        };
         let adapter = Arc::new(Je1710Adapter::new());
         registries.register_adapter(adapter.clone());
         registries.register_probe(adapter);
@@ -381,13 +485,29 @@ impl RuntimeRegistries {
         registries
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn with_je_and_be_placeholder() -> Self {
+    pub fn with_builtin_adapters() -> Self {
         let mut registries = Self::with_je_1_7_10();
+        use mc_proto_be_placeholder::BePlaceholderAdapter;
+        use mc_proto_je_1_12_2::Je1122Adapter;
+        use mc_proto_je_1_8_x::Je18xAdapter;
+        let adapter = Arc::new(Je18xAdapter::new());
+        registries.register_adapter(adapter.clone());
+        registries.register_probe(adapter);
+        let adapter = Arc::new(Je1122Adapter::new());
+        registries.register_adapter(adapter.clone());
+        registries.register_probe(adapter);
         let adapter = Arc::new(BePlaceholderAdapter::new());
         registries.register_adapter(adapter.clone());
         registries.register_probe(adapter);
         registries
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_je_and_be_placeholder() -> Self {
+        Self::with_builtin_adapters()
     }
 
     #[must_use]
@@ -403,6 +523,7 @@ impl RuntimeRegistries {
 
 pub struct RunningServer {
     listener_bindings: Vec<ListenerBinding>,
+    plugin_host: Option<Arc<PluginHost>>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     join_handle: JoinHandle<Result<(), RuntimeError>>,
 }
@@ -411,6 +532,17 @@ impl RunningServer {
     #[must_use]
     pub fn listener_bindings(&self) -> &[ListenerBinding] {
         &self.listener_bindings
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when a loaded protocol plugin cannot be
+    /// reloaded successfully.
+    pub fn reload_plugins(&self) -> Result<Vec<String>, RuntimeError> {
+        match &self.plugin_host {
+            Some(plugin_host) => plugin_host.reload_modified(),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// # Errors
@@ -505,6 +637,8 @@ struct SessionState {
     adapter: Option<Arc<dyn ProtocolAdapter>>,
     player_id: Option<PlayerId>,
     entity_id: Option<mc_core::EntityId>,
+    plugin_generation_id: Option<PluginGenerationId>,
+    session_capabilities: Option<SessionCapabilitySet>,
 }
 
 struct RuntimeState {
@@ -515,6 +649,7 @@ struct RuntimeState {
 struct RuntimeServer {
     config: ServerConfig,
     protocol_registry: ProtocolRegistry,
+    plugin_host: Option<Arc<PluginHost>>,
     default_adapter: Arc<dyn ProtocolAdapter>,
     authenticator: Arc<dyn Authenticator>,
     storage_adapter: Arc<dyn StorageAdapter>,
@@ -540,6 +675,21 @@ fn classify_udp_datagram(
 }
 
 impl RuntimeServer {
+    fn refresh_session_capabilities(session: &mut SessionState) {
+        let Some(adapter) = session.adapter.as_ref() else {
+            session.plugin_generation_id = None;
+            session.session_capabilities = None;
+            return;
+        };
+        let plugin_generation = adapter.plugin_generation_id();
+        session.plugin_generation_id = plugin_generation;
+        session.session_capabilities = Some(SessionCapabilitySet {
+            protocol: adapter.capability_set(),
+            gameplay_profile: mc_core::GameplayProfileId::new("canonical"),
+            plugin_generation,
+        });
+    }
+
     async fn spawn_session(self: &Arc<Self>, transport_session: AcceptedTransportSession) {
         let connection_id = {
             let mut next_connection_id = self.next_connection_id.lock().await;
@@ -587,6 +737,8 @@ impl RuntimeServer {
             adapter: None,
             player_id: None,
             entity_id: None,
+            plugin_generation_id: None,
+            session_capabilities: None,
         };
 
         loop {
@@ -650,6 +802,7 @@ impl RuntimeServer {
         session: &mut SessionState,
         frame: Vec<u8>,
     ) -> Result<bool, RuntimeError> {
+        Self::refresh_session_capabilities(session);
         match session.phase {
             ConnectionPhase::Handshaking => {
                 self.handle_handshake_frame(transport_io, session, &frame)
@@ -690,6 +843,7 @@ impl RuntimeServer {
         ) {
             session.adapter = Some(next_adapter);
             session.phase = next_phase;
+            Self::refresh_session_capabilities(session);
             return Ok(false);
         }
 
@@ -699,6 +853,7 @@ impl RuntimeServer {
             ConnectionPhase::Status => {
                 session.adapter = Some(fallback);
                 session.phase = ConnectionPhase::Status;
+                Self::refresh_session_capabilities(session);
                 Ok(false)
             }
             ConnectionPhase::Login => {
@@ -803,6 +958,7 @@ impl RuntimeServer {
         message: SessionMessage,
     ) -> Result<bool, RuntimeError> {
         let SessionMessage::Event(event) = message;
+        Self::refresh_session_capabilities(session);
         let current = session
             .adapter
             .as_ref()
@@ -841,6 +997,7 @@ impl RuntimeServer {
                 session.player_id = Some(accepted_player_id);
                 session.entity_id = Some(accepted_entity_id);
                 session.phase = ConnectionPhase::Play;
+                Self::refresh_session_capabilities(session);
             }
             CoreEvent::Disconnect { .. } => return Ok(true),
             _ => {}
@@ -1016,17 +1173,60 @@ pub async fn spawn_server(
     config: ServerConfig,
     registries: RuntimeRegistries,
 ) -> Result<RunningServer, RuntimeError> {
+    let plugin_host = registries.plugin_host();
     if config.online_mode {
         return Err(RuntimeError::Unsupported(
             "online-mode=true is not implemented".to_string(),
         ));
     }
-    let default_adapter = registries
+    if registries
         .protocols()
+        .resolve_adapter(&config.default_adapter)
+        .is_none()
+    {
+        return Err(RuntimeError::Config(format!(
+            "unknown default-adapter `{}`",
+            config.default_adapter
+        )));
+    }
+
+    let mut enabled_adapter_ids = config.effective_enabled_adapters();
+    if config.enabled_adapters.is_none()
+        && config.be_enabled
+        && registries
+            .protocols()
+            .resolve_adapter(BE_PLACEHOLDER_ADAPTER_ID)
+            .is_some()
+    {
+        enabled_adapter_ids.push(BE_PLACEHOLDER_ADAPTER_ID.to_string());
+    }
+    if !enabled_adapter_ids
+        .iter()
+        .any(|adapter_id| adapter_id == &config.default_adapter)
+    {
+        return Err(RuntimeError::Config(format!(
+            "default-adapter `{}` must be included in enabled-adapters",
+            config.default_adapter
+        )));
+    }
+    let active_protocols = registries
+        .protocols()
+        .filter_enabled(&enabled_adapter_ids)?;
+    if !config.be_enabled
+        && !active_protocols
+            .adapter_ids_for_transport(TransportKind::Udp)
+            .is_empty()
+    {
+        return Err(RuntimeError::Config(
+            "enabled-adapters contains udp adapters but be-enabled=false".to_string(),
+        ));
+    }
+
+    let default_adapter = active_protocols
         .resolve_adapter(&config.default_adapter)
         .ok_or_else(|| {
             RuntimeError::Config(format!(
-                "unknown default-adapter `{}`",
+                "default-adapter `{}` is not active",
                 config.default_adapter
             ))
         })?;
@@ -1053,7 +1253,7 @@ pub async fn spawn_server(
         Some(snapshot) => ServerCore::from_snapshot(core_config, snapshot),
         None => ServerCore::new(core_config),
     };
-    let listener_plans = build_listener_plans(&config, registries.protocols())?;
+    let listener_plans = build_listener_plans(&config, &active_protocols)?;
     let mut bound_listeners = Vec::with_capacity(listener_plans.len());
     for plan in listener_plans {
         bound_listeners.push(bind_transport_listener(plan).await?);
@@ -1087,7 +1287,8 @@ pub async fn spawn_server(
 
     let server = Arc::new(RuntimeServer {
         config,
-        protocol_registry: registries.protocols().clone(),
+        protocol_registry: active_protocols,
+        plugin_host: plugin_host.clone(),
         default_adapter,
         authenticator: Arc::new(OfflineAuthenticator),
         storage_adapter,
@@ -1101,6 +1302,8 @@ pub async fn spawn_server(
     let join_handle = tokio::spawn(async move {
         let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
         let mut save_interval = tokio::time::interval(Duration::from_secs(2));
+        let mut plugin_reload_interval =
+            tokio::time::interval(Duration::from_millis(plugin_reload_poll_interval_ms()));
         let mut udp_buffer = [0_u8; 2048];
         loop {
             tokio::select! {
@@ -1146,6 +1349,13 @@ pub async fn spawn_server(
                 _ = tick_interval.tick() => {
                     run_server.tick().await?;
                 }
+                _ = plugin_reload_interval.tick(), if run_server.config.plugin_reload_watch && run_server.plugin_host.is_some() => {
+                    if let Some(plugin_host) = &run_server.plugin_host
+                        && let Err(error) = plugin_host.reload_modified()
+                    {
+                        eprintln!("plugin reload failed: {error}");
+                    }
+                }
                 _ = save_interval.tick() => {
                     run_server.maybe_save().await?;
                 }
@@ -1155,6 +1365,7 @@ pub async fn spawn_server(
 
     Ok(RunningServer {
         listener_bindings,
+        plugin_host,
         shutdown_tx: Some(shutdown_tx),
         join_handle,
     })
@@ -1208,6 +1419,8 @@ mod tests {
         PacketReader, PacketWriter, StorageAdapter, TransportKind, WireCodec,
     };
     use mc_proto_je_1_7_10::{JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID, Je1710Adapter};
+    use mc_proto_je_1_8_x::JE_1_8_X_ADAPTER_ID;
+    use mc_proto_je_1_12_2::JE_1_12_2_ADAPTER_ID;
     use std::fs;
     use std::net::SocketAddr;
     use std::path::Path;
@@ -1324,8 +1537,18 @@ mod tests {
         wanted_packet_id: i32,
         max_attempts: usize,
     ) -> Result<Vec<u8>, RuntimeError> {
+        let max_attempts = max_attempts.max(64);
         for _ in 0..max_attempts {
-            let packet = read_packet(stream, codec, buffer).await?;
+            let packet = tokio::time::timeout(
+                Duration::from_millis(250),
+                read_packet(stream, codec, buffer),
+            )
+            .await
+            .map_err(|_| {
+                RuntimeError::Config(format!(
+                    "timed out waiting for packet id 0x{wanted_packet_id:02x}"
+                ))
+            })??;
             if packet_id(&packet) == wanted_packet_id {
                 return Ok(packet);
             }
@@ -1522,6 +1745,24 @@ mod tests {
     }
 
     #[test]
+    fn server_properties_parse_enabled_adapters() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(&path, "enabled-adapters=je-1_7_10, je-1_8_x,je-1_12_2\n")?;
+
+        let config = ServerConfig::from_properties(&path)?;
+        assert_eq!(
+            config.enabled_adapters,
+            Some(vec![
+                JE_1_7_10_ADAPTER_ID.to_string(),
+                JE_1_8_X_ADAPTER_ID.to_string(),
+                JE_1_12_2_ADAPTER_ID.to_string(),
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
     fn server_properties_reject_non_flat_level_type() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let path = temp_dir.path().join("server.properties");
@@ -1549,6 +1790,106 @@ mod tests {
             error,
             RuntimeError::Config(message) if message.contains("be-enabled=true")
         ));
+    }
+
+    #[tokio::test]
+    async fn enabled_adapters_must_include_default_adapter() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                enabled_adapters: Some(vec![JE_1_8_X_ADAPTER_ID.to_string()]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_builtin_adapters(),
+        )
+        .await;
+
+        let Err(error) = result else {
+            panic!("default adapter missing from enabled list should fail");
+        };
+        assert!(matches!(
+            error,
+            RuntimeError::Config(message) if message.contains("default-adapter")
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_enabled_adapters_fail_fast() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_builtin_adapters(),
+        )
+        .await;
+
+        let Err(error) = result else {
+            panic!("duplicate enabled adapters should fail");
+        };
+        assert!(matches!(
+            error,
+            RuntimeError::Config(message) if message.contains("duplicate adapter")
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_builtin_adapters(),
+        )
+        .await?;
+
+        let binding = server
+            .listener_bindings()
+            .iter()
+            .find(|binding| binding.transport == TransportKind::Tcp)
+            .expect("tcp listener binding should exist");
+        assert_eq!(binding.adapter_ids.len(), 3);
+        assert!(
+            binding
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID)
+        );
+        assert!(
+            binding
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == JE_1_8_X_ADAPTER_ID)
+        );
+        assert!(
+            binding
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == JE_1_12_2_ADAPTER_ID)
+        );
+
+        server.shutdown().await
     }
 
     fn login_start(username: &str) -> Vec<u8> {
@@ -1645,6 +1986,43 @@ mod tests {
         writer.into_inner()
     }
 
+    fn player_position_look_1_8(x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x06);
+        writer.write_f64(x);
+        writer.write_f64(y);
+        writer.write_f64(z);
+        writer.write_f32(yaw);
+        writer.write_f32(pitch);
+        writer.write_bool(true);
+        writer.into_inner()
+    }
+
+    fn creative_inventory_action_1_12(slot: i16, item_id: i16, count: u8, damage: i16) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x1b);
+        writer.write_i16(slot);
+        writer.write_i16(item_id);
+        writer.write_u8(count);
+        writer.write_i16(damage);
+        writer.write_i16(-1);
+        writer.into_inner()
+    }
+
+    fn player_block_placement_1_12(x: i32, y: i32, z: i32, face: i32, hand: i32) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x1f);
+        writer.write_i64(mc_proto_je_common::pack_block_position(
+            mc_core::BlockPos::new(x, y, z),
+        ));
+        writer.write_varint(face);
+        writer.write_varint(hand);
+        writer.write_f32(0.5);
+        writer.write_f32(0.5);
+        writer.write_f32(0.5);
+        writer.into_inner()
+    }
+
     fn read_slot(reader: &mut PacketReader<'_>) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
         let item_id = reader.read_i16()?;
         if item_id < 0 {
@@ -1665,13 +2043,21 @@ mod tests {
         packet: &[u8],
         wanted_slot: usize,
     ) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
+        window_items_slot_with_packet_id(packet, 0x30, wanted_slot)
+    }
+
+    fn window_items_slot_with_packet_id(
+        packet: &[u8],
+        expected_packet_id: i32,
+        wanted_slot: usize,
+    ) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
         let mut reader = PacketReader::new(packet);
-        if reader.read_varint()? != 0x30 {
+        if reader.read_varint()? != expected_packet_id {
             return Err(RuntimeError::Config(
                 "expected window items packet".to_string(),
             ));
         }
-        let _window_id = reader.read_i8()?;
+        let _window_id = reader.read_u8()?;
         let count = usize::try_from(reader.read_i16()?)
             .map_err(|_| RuntimeError::Config("negative window item count".to_string()))?;
         if wanted_slot >= count {
@@ -1686,6 +2072,15 @@ mod tests {
             }
         }
         Err(RuntimeError::Config("wanted slot missing".to_string()))
+    }
+
+    fn set_slot_slot(packet: &[u8], expected_packet_id: i32) -> Result<i16, RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != expected_packet_id {
+            return Err(RuntimeError::Config("expected set slot packet".to_string()));
+        }
+        let _window_id = reader.read_i8()?;
+        reader.read_i16().map_err(RuntimeError::from)
     }
 
     fn held_item_from_packet(packet: &[u8]) -> Result<i8, RuntimeError> {
@@ -1711,6 +2106,18 @@ mod tests {
         let block_id = reader.read_varint()?;
         let metadata = reader.read_u8()?;
         Ok((x, y, z, block_id, metadata))
+    }
+
+    fn block_change_from_packet_1_8(packet: &[u8]) -> Result<(i32, i32, i32, i32), RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x23 {
+            return Err(RuntimeError::Config(
+                "expected 1.8 block change packet".to_string(),
+            ));
+        }
+        let position = mc_proto_je_common::unpack_block_position(reader.read_i64()?);
+        let block_state = reader.read_varint()?;
+        Ok((position.x, position.y, position.z, block_state))
     }
 
     fn player_abilities_flags(packet: &[u8]) -> Result<u8, RuntimeError> {
@@ -2029,6 +2436,169 @@ mod tests {
         assert!(reason.contains("1.7.10"));
 
         server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_builtin_adapters(),
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("legacy")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 12).await?;
+
+        let mut modern_18 = connect_tcp(addr).await?;
+        write_packet(&mut modern_18, &codec, &encode_handshake(47, 2)?).await?;
+        write_packet(&mut modern_18, &codec, &login_start("middle")).await?;
+        let mut modern_18_buffer = BytesMut::new();
+        let _ =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x30, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+        let mut modern_112 = connect_tcp(addr).await?;
+        write_packet(&mut modern_112, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern_112, &codec, &login_start("latest")).await?;
+        let mut modern_112_buffer = BytesMut::new();
+        let _ =
+            read_until_packet_id(&mut modern_112, &codec, &mut modern_112_buffer, 0x14, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+        let _ =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x0c, 12).await?;
+
+        write_packet(
+            &mut modern_18,
+            &codec,
+            &player_position_look_1_8(32.5, 4.0, 0.5, 90.0, 0.0),
+        )
+        .await?;
+        let legacy_teleport =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x18, 16).await?;
+        let modern_112_teleport =
+            read_until_packet_id(&mut modern_112, &codec, &mut modern_112_buffer, 0x4c, 16).await?;
+        assert_eq!(packet_id(&legacy_teleport), 0x18);
+        assert_eq!(packet_id(&modern_112_teleport), 0x4c);
+
+        write_packet(
+            &mut modern_112,
+            &codec,
+            &player_block_placement_1_12(2, 3, 0, 1, 0),
+        )
+        .await?;
+        let legacy_block_change =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x23, 16).await?;
+        let modern_18_block_change =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x23, 16).await?;
+        assert_eq!(
+            block_change_from_packet(&legacy_block_change)?,
+            (2, 4, 0, 1, 0)
+        );
+        assert_eq!(
+            block_change_from_packet_1_8(&modern_18_block_change)?,
+            (2, 4, 0, 16)
+        );
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let world_dir = temp_dir.path().join("world");
+        let codec = MinecraftWireCodec;
+
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: world_dir.clone(),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_builtin_adapters(),
+        )
+        .await?;
+        let addr = listener_addr(&server);
+
+        let mut modern = connect_tcp(addr).await?;
+        write_packet(&mut modern, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern, &codec, &login_start("alpha")).await?;
+        let mut modern_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 24).await?;
+
+        write_packet(
+            &mut modern,
+            &codec,
+            &creative_inventory_action_1_12(45, 20, 64, 0),
+        )
+        .await?;
+        let set_slot =
+            read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x16, 8).await?;
+        assert_eq!(set_slot_slot(&set_slot, 0x16)?, 45);
+
+        server.shutdown().await?;
+
+        let restarted = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                world_dir,
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_builtin_adapters(),
+        )
+        .await?;
+        let addr = listener_addr(&restarted);
+
+        let mut modern = connect_tcp(addr).await?;
+        write_packet(&mut modern, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern, &codec, &login_start("alpha")).await?;
+        let mut modern_buffer = BytesMut::new();
+        let window_items =
+            read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 24).await?;
+        assert_eq!(
+            window_items_slot_with_packet_id(&window_items, 0x14, 45)?,
+            Some((20, 64, 0))
+        );
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(47, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("beta")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let legacy_window_items =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 24).await?;
+        assert!(window_items_slot(&legacy_window_items, 45).is_err());
+
+        restarted.shutdown().await
     }
 
     #[tokio::test]

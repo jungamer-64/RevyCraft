@@ -1,0 +1,11 @@
+[plugin]
+id = "je-1_7_10"
+kind = "protocol"
+
+[artifacts]
+linux-x86_64 = "../../target/debug/libmc_plugin_proto_je_1_7_10.so"
+linux-aarch64 = "../../target/debug/libmc_plugin_proto_je_1_7_10.so"
+macos-x86_64 = "../../target/debug/libmc_plugin_proto_je_1_7_10.dylib"
+macos-aarch64 = "../../target/debug/libmc_plugin_proto_je_1_7_10.dylib"
+windows-x86_64 = "../../target/debug/mc_plugin_proto_je_1_7_10.dll"
+windows-aarch64 = "../../target/debug/mc_plugin_proto_je_1_7_10.dll"

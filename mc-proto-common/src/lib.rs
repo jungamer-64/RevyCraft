@@ -1,9 +1,13 @@
 use bytes::BytesMut;
-use mc_core::{CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot, WorldSnapshot};
+use mc_core::{
+    CapabilitySet, CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot,
+    PluginGenerationId, WorldSnapshot,
+};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionPhase {
     Handshaking,
     Status,
@@ -11,34 +15,34 @@ pub enum ConnectionPhase {
     Play,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HandshakeNextState {
     Status,
     Login,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TransportKind {
     Tcp,
     Udp,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Edition {
     Je,
     Be,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProtocolDescriptor {
-    pub adapter_id: &'static str,
+    pub adapter_id: String,
     pub transport: TransportKind,
     pub edition: Edition,
-    pub version_name: &'static str,
+    pub version_name: String,
     pub protocol_number: i32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HandshakeIntent {
     pub edition: Edition,
     pub protocol_number: i32,
@@ -47,19 +51,19 @@ pub struct HandshakeIntent {
     pub next_state: HandshakeNextState,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StatusRequest {
     Query,
     Ping { payload: i64 },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LoginRequest {
     LoginStart { username: String },
     EncryptionResponse,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerListStatus {
     pub version: ProtocolDescriptor,
     pub players_online: usize,
@@ -67,7 +71,7 @@ pub struct ServerListStatus {
     pub description: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayEncodingContext {
     pub player_id: PlayerId,
     pub entity_id: EntityId,
@@ -87,6 +91,8 @@ pub enum ProtocolError {
     InvalidPacket(&'static str),
     #[error("unsupported packet id 0x{0:02x}")]
     UnsupportedPacket(i32),
+    #[error("plugin error: {0}")]
+    Plugin(String),
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
 }
@@ -130,6 +136,11 @@ pub trait StorageAdapter: Send + Sync {
 
 pub trait HandshakeProbe: Send + Sync {
     fn transport_kind(&self) -> TransportKind;
+
+    #[must_use]
+    fn adapter_id(&self) -> Option<&'static str> {
+        None
+    }
 
     /// # Errors
     ///
@@ -208,6 +219,16 @@ pub trait PlaySyncAdapter: Send + Sync {
 
 pub trait ProtocolAdapter: SessionAdapter + PlaySyncAdapter + Send + Sync {
     fn descriptor(&self) -> ProtocolDescriptor;
+
+    #[must_use]
+    fn capability_set(&self) -> CapabilitySet {
+        CapabilitySet::default()
+    }
+
+    #[must_use]
+    fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+        None
+    }
 }
 
 #[derive(Default)]

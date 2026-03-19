@@ -68,6 +68,10 @@ impl HandshakeProbe for BePlaceholderAdapter {
         TransportKind::Udp
     }
 
+    fn adapter_id(&self) -> Option<&'static str> {
+        Some(BE_PLACEHOLDER_ADAPTER_ID)
+    }
+
     fn try_route(&self, frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
         if !detects_bedrock_datagram(frame) {
             return Ok(None);
@@ -141,10 +145,10 @@ impl PlaySyncAdapter for BePlaceholderAdapter {
 impl ProtocolAdapter for BePlaceholderAdapter {
     fn descriptor(&self) -> ProtocolDescriptor {
         ProtocolDescriptor {
-            adapter_id: BE_PLACEHOLDER_ADAPTER_ID,
+            adapter_id: BE_PLACEHOLDER_ADAPTER_ID.to_string(),
             transport: TransportKind::Udp,
             edition: Edition::Be,
-            version_name: VERSION_NAME_PLACEHOLDER,
+            version_name: VERSION_NAME_PLACEHOLDER.to_string(),
             protocol_number: 0,
         }
     }

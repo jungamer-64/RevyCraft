@@ -10,7 +10,8 @@ const SECTION_HEIGHT: i32 = 16;
 const DEFAULT_KEEPALIVE_INTERVAL_MS: u64 = 10_000;
 const DEFAULT_KEEPALIVE_TIMEOUT_MS: u64 = 30_000;
 const PLAYER_INVENTORY_SLOT_COUNT: usize = 45;
-const PLAYER_INVENTORY_SLOT_COUNT_U8: u8 = 45;
+const AUXILIARY_SLOT_COUNT: u8 = 9;
+const MAIN_INVENTORY_SLOT_COUNT: u8 = 27;
 const HOTBAR_START_SLOT: u8 = 36;
 const HOTBAR_SLOT_COUNT: u8 = 9;
 const PLAYER_WIDTH: f64 = 0.6;
@@ -25,6 +26,9 @@ pub struct EntityId(pub i32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PlayerId(pub Uuid);
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PluginGenerationId(pub u64);
 
 impl Serialize for PlayerId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -44,6 +48,54 @@ impl<'de> Deserialize<'de> for PlayerId {
         let uuid = Uuid::parse_str(&value).map_err(serde::de::Error::custom)?;
         Ok(Self(uuid))
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilitySet {
+    capabilities: BTreeSet<String>,
+}
+
+impl CapabilitySet {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, capability: impl Into<String>) -> bool {
+        self.capabilities.insert(capability.into())
+    }
+
+    #[must_use]
+    pub fn contains(&self, capability: &str) -> bool {
+        self.capabilities.contains(capability)
+    }
+
+    #[must_use]
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.capabilities.iter().map(String::as_str)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct GameplayProfileId(String);
+
+impl GameplayProfileId {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCapabilitySet {
+    pub protocol: CapabilitySet,
+    pub gameplay_profile: GameplayProfileId,
+    pub plugin_generation: Option<PluginGenerationId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -183,6 +235,8 @@ impl ItemStack {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerInventory {
     pub slots: Vec<Option<ItemStack>>,
+    #[serde(default)]
+    pub offhand: Option<ItemStack>,
 }
 
 impl Default for PlayerInventory {
@@ -196,6 +250,7 @@ impl PlayerInventory {
     pub fn new_empty() -> Self {
         Self {
             slots: vec![None; PLAYER_INVENTORY_SLOT_COUNT],
+            offhand: None,
         }
     }
 
@@ -232,11 +287,95 @@ impl PlayerInventory {
         }
         self.get(HOTBAR_START_SLOT + selected_hotbar_slot)
     }
+
+    #[must_use]
+    pub fn get_slot(&self, slot: InventorySlot) -> Option<&ItemStack> {
+        match slot {
+            InventorySlot::Offhand => self.offhand.as_ref(),
+            _ => slot
+                .legacy_window_index()
+                .and_then(|legacy_slot| self.get(legacy_slot)),
+        }
+    }
+
+    pub fn set_slot(&mut self, slot: InventorySlot, stack: Option<ItemStack>) -> bool {
+        match slot {
+            InventorySlot::Offhand => {
+                self.offhand = stack;
+                true
+            }
+            _ => slot
+                .legacy_window_index()
+                .is_some_and(|legacy_slot| self.set(legacy_slot, stack)),
+        }
+    }
+
+    #[must_use]
+    pub fn selected_stack(
+        &self,
+        selected_hotbar_slot: u8,
+        hand: InteractionHand,
+    ) -> Option<&ItemStack> {
+        match hand {
+            InteractionHand::Main => self.selected_hotbar_stack(selected_hotbar_slot),
+            InteractionHand::Offhand => self.offhand.as_ref(),
+        }
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InventoryContainer {
     Player,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InventorySlot {
+    Auxiliary(u8),
+    MainInventory(u8),
+    Hotbar(u8),
+    Offhand,
+}
+
+impl InventorySlot {
+    #[must_use]
+    pub const fn legacy_window_index(self) -> Option<u8> {
+        match self {
+            Self::Auxiliary(index) if index < AUXILIARY_SLOT_COUNT => Some(index),
+            Self::MainInventory(index) if index < MAIN_INVENTORY_SLOT_COUNT => {
+                Some(AUXILIARY_SLOT_COUNT + index)
+            }
+            Self::Hotbar(index) if index < HOTBAR_SLOT_COUNT => Some(HOTBAR_START_SLOT + index),
+            Self::Offhand => None,
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn from_legacy_window_index(index: u8) -> Option<Self> {
+        if index < AUXILIARY_SLOT_COUNT {
+            Some(Self::Auxiliary(index))
+        } else if index < HOTBAR_START_SLOT {
+            Some(Self::MainInventory(index - AUXILIARY_SLOT_COUNT))
+        } else if index < HOTBAR_START_SLOT + HOTBAR_SLOT_COUNT {
+            Some(Self::Hotbar(index - HOTBAR_START_SLOT))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn is_storage_slot(self) -> bool {
+        matches!(
+            self,
+            Self::MainInventory(_) | Self::Hotbar(_) | Self::Offhand
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InteractionHand {
+    Main,
+    Offhand,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -576,7 +715,7 @@ impl Default for CoreConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CoreCommand {
     LoginStart {
         connection_id: ConnectionId,
@@ -608,7 +747,7 @@ pub enum CoreCommand {
     },
     CreativeInventorySet {
         player_id: PlayerId,
-        slot: i16,
+        slot: InventorySlot,
         stack: Option<ItemStack>,
     },
     DigBlock {
@@ -619,6 +758,7 @@ pub enum CoreCommand {
     },
     PlaceBlock {
         player_id: PlayerId,
+        hand: InteractionHand,
         position: BlockPos,
         face: Option<BlockFace>,
         held_item: Option<ItemStack>,
@@ -628,7 +768,7 @@ pub enum CoreCommand {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CoreEvent {
     LoginAccepted {
         player_id: PlayerId,
@@ -661,7 +801,7 @@ pub enum CoreEvent {
     },
     InventorySlotChanged {
         container: InventoryContainer,
-        slot: u8,
+        slot: InventorySlot,
         stack: Option<ItemStack>,
     },
     SelectedHotbarSlotChanged {
@@ -827,10 +967,11 @@ impl ServerCore {
             } => self.apply_dig(player_id, position, status, face),
             CoreCommand::PlaceBlock {
                 player_id,
+                hand,
                 position,
                 face,
                 held_item,
-            } => self.apply_place(player_id, position, face, held_item.as_ref()),
+            } => self.apply_place(player_id, hand, position, face, held_item.as_ref()),
             CoreCommand::Disconnect { player_id } => self.disconnect_player(player_id),
         }
     }
@@ -1109,7 +1250,7 @@ impl ServerCore {
     fn set_creative_inventory_slot(
         &mut self,
         player_id: PlayerId,
-        slot: i16,
+        slot: InventorySlot,
         stack: Option<ItemStack>,
     ) -> Vec<TargetedEvent> {
         let Some(player) = self.online_players.get_mut(&player_id) else {
@@ -1119,34 +1260,17 @@ impl ServerCore {
             return reject_inventory_slot_events(player_id, slot, player);
         }
 
-        let Ok(slot) = u8::try_from(slot) else {
-            return vec![
-                TargetedEvent {
-                    target: EventTarget::Player(player_id),
-                    event: CoreEvent::InventoryContents {
-                        container: InventoryContainer::Player,
-                        inventory: player.snapshot.inventory.clone(),
-                    },
-                },
-                TargetedEvent {
-                    target: EventTarget::Player(player_id),
-                    event: CoreEvent::SelectedHotbarSlotChanged {
-                        slot: player.snapshot.selected_hotbar_slot,
-                    },
-                },
-            ];
-        };
-        if !(9..PLAYER_INVENTORY_SLOT_COUNT_U8).contains(&slot) {
-            return reject_inventory_slot_events(player_id, i16::from(slot), player);
+        if !slot.is_storage_slot() || matches!(slot, InventorySlot::Auxiliary(_)) {
+            return reject_inventory_slot_events(player_id, slot, player);
         }
 
         if let Some(stack) = stack.as_ref()
             && (!stack.is_supported_placeable() || stack.count == 0 || stack.count > 64)
         {
-            return reject_inventory_slot_events(player_id, i16::from(slot), player);
+            return reject_inventory_slot_events(player_id, slot, player);
         }
 
-        let _ = player.snapshot.inventory.set(slot, stack.clone());
+        let _ = player.snapshot.inventory.set_slot(slot, stack.clone());
         self.saved_players
             .insert(player_id, player.snapshot.clone());
         vec![TargetedEvent {
@@ -1201,6 +1325,7 @@ impl ServerCore {
     fn apply_place(
         &mut self,
         player_id: PlayerId,
+        hand: InteractionHand,
         position: BlockPos,
         face: Option<BlockFace>,
         held_item: Option<&ItemStack>,
@@ -1215,19 +1340,19 @@ impl ServerCore {
         let Some(selected_stack) = player
             .snapshot
             .inventory
-            .selected_hotbar_stack(player.snapshot.selected_hotbar_slot)
+            .selected_stack(player.snapshot.selected_hotbar_slot, hand)
             .cloned()
         else {
-            return self.place_rejection_events(player_id, place_pos, &player.snapshot);
+            return self.place_rejection_events(player_id, hand, place_pos, &player.snapshot);
         };
 
-        if held_item != Some(&selected_stack) {
-            return self.place_rejection_events(player_id, place_pos, &player.snapshot);
+        if held_item.is_some() && held_item != Some(&selected_stack) {
+            return self.place_rejection_events(player_id, hand, place_pos, &player.snapshot);
         }
 
         let Some(block) = catalog::placeable_block_state_from_item_key(selected_stack.key.as_str())
         else {
-            return self.place_rejection_events(player_id, place_pos, &player.snapshot);
+            return self.place_rejection_events(player_id, hand, place_pos, &player.snapshot);
         };
 
         if self.world_meta.game_mode != 1
@@ -1235,7 +1360,7 @@ impl ServerCore {
             || self.block_at(position).is_air()
             || !self.block_at(place_pos).is_air()
         {
-            return self.place_rejection_events(player_id, place_pos, &player.snapshot);
+            return self.place_rejection_events(player_id, hand, place_pos, &player.snapshot);
         }
 
         self.set_block_at(place_pos, block);
@@ -1244,16 +1369,20 @@ impl ServerCore {
 
     fn place_inventory_correction(
         player_id: PlayerId,
+        hand: InteractionHand,
         player: &PlayerSnapshot,
     ) -> Vec<TargetedEvent> {
-        let selected_slot = HOTBAR_START_SLOT + player.selected_hotbar_slot;
+        let selected_slot = match hand {
+            InteractionHand::Main => InventorySlot::Hotbar(player.selected_hotbar_slot),
+            InteractionHand::Offhand => InventorySlot::Offhand,
+        };
         vec![
             TargetedEvent {
                 target: EventTarget::Player(player_id),
                 event: CoreEvent::InventorySlotChanged {
                     container: InventoryContainer::Player,
                     slot: selected_slot,
-                    stack: player.inventory.get(selected_slot).cloned(),
+                    stack: player.inventory.get_slot(selected_slot).cloned(),
                 },
             },
             TargetedEvent {
@@ -1268,6 +1397,7 @@ impl ServerCore {
     fn place_rejection_events(
         &self,
         player_id: PlayerId,
+        hand: InteractionHand,
         place_pos: BlockPos,
         player: &PlayerSnapshot,
     ) -> Vec<TargetedEvent> {
@@ -1278,7 +1408,7 @@ impl ServerCore {
                 block: self.block_at(place_pos),
             },
         }];
-        events.extend(Self::place_inventory_correction(player_id, player));
+        events.extend(Self::place_inventory_correction(player_id, hand, player));
         events
     }
 
@@ -1434,30 +1564,17 @@ fn block_intersects_player(block: BlockPos, player: &PlayerSnapshot) -> bool {
 
 fn reject_inventory_slot_events(
     player_id: PlayerId,
-    slot: i16,
+    slot: InventorySlot,
     player: &OnlinePlayer,
 ) -> Vec<TargetedEvent> {
-    let mut events = Vec::new();
-    if let Ok(slot) = u8::try_from(slot)
-        && usize::from(slot) < PLAYER_INVENTORY_SLOT_COUNT
-    {
-        events.push(TargetedEvent {
-            target: EventTarget::Player(player_id),
-            event: CoreEvent::InventorySlotChanged {
-                container: InventoryContainer::Player,
-                slot,
-                stack: player.snapshot.inventory.get(slot).cloned(),
-            },
-        });
-    } else {
-        events.push(TargetedEvent {
-            target: EventTarget::Player(player_id),
-            event: CoreEvent::InventoryContents {
-                container: InventoryContainer::Player,
-                inventory: player.snapshot.inventory.clone(),
-            },
-        });
-    }
+    let mut events = vec![TargetedEvent {
+        target: EventTarget::Player(player_id),
+        event: CoreEvent::InventorySlotChanged {
+            container: InventoryContainer::Player,
+            slot,
+            stack: player.snapshot.inventory.get_slot(slot).cloned(),
+        },
+    }];
     events.push(TargetedEvent {
         target: EventTarget::Player(player_id),
         event: CoreEvent::SelectedHotbarSlotChanged {
@@ -1748,7 +1865,7 @@ mod tests {
         let slot_events = core.apply_command(
             CoreCommand::CreativeInventorySet {
                 player_id: first,
-                slot: 36,
+                slot: InventorySlot::Hotbar(0),
                 stack: Some(ItemStack::new("minecraft:glass", 64, 0)),
             },
             0,
@@ -1760,7 +1877,7 @@ mod tests {
                     target: EventTarget::Player(id),
                     event: CoreEvent::InventorySlotChanged {
                         container: InventoryContainer::Player,
-                        slot: 36,
+                        slot: InventorySlot::Hotbar(0),
                         ..
                     },
                 } if *id == first
@@ -1790,7 +1907,7 @@ mod tests {
         assert_eq!(
             player
                 .inventory
-                .get(36)
+                .get_slot(InventorySlot::Hotbar(0))
                 .expect("slot should be updated")
                 .key
                 .as_str(),
@@ -1875,6 +1992,7 @@ mod tests {
         let place_events = creative.apply_command(
             CoreCommand::PlaceBlock {
                 player_id: first,
+                hand: InteractionHand::Main,
                 position: BlockPos::new(2, 3, 0),
                 face: Some(BlockFace::Top),
                 held_item: Some(ItemStack::new("minecraft:stone", 64, 0)),
@@ -1934,6 +2052,7 @@ mod tests {
         let reject_events = survival.apply_command(
             CoreCommand::PlaceBlock {
                 player_id: lone,
+                hand: InteractionHand::Main,
                 position: BlockPos::new(2, 3, 0),
                 face: Some(BlockFace::Top),
                 held_item: Some(ItemStack::new("minecraft:stone", 64, 0)),
@@ -1956,7 +2075,7 @@ mod tests {
                 target: EventTarget::Player(id),
                 event: CoreEvent::InventorySlotChanged {
                     container: InventoryContainer::Player,
-                    slot: 36,
+                    slot: InventorySlot::Hotbar(0),
                     ..
                 },
             } if *id == lone

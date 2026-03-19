@@ -7,7 +7,8 @@ use mc_core::catalog::{
 };
 use mc_core::{
     BlockFace, BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DimensionId, EntityId,
-    InventoryContainer, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3, WorldMeta,
+    InteractionHand, InventoryContainer, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot,
+    Vec3, WorldMeta,
 };
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, LoginRequest,
@@ -15,6 +16,7 @@ use mc_proto_common::{
     ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
     StatusRequest, TransportKind, WireCodec,
 };
+use mc_proto_je_common::{legacy_inventory_slot, legacy_window_slot};
 use num_traits::ToPrimitive;
 use serde_json::json;
 use std::io::Write;
@@ -234,11 +236,17 @@ impl PlaySyncAdapter for Je1710Adapter {
                 player_id,
                 slot: reader.read_i16()?,
             })),
-            PACKET_SB_CREATIVE_INVENTORY_ACTION => Ok(Some(CoreCommand::CreativeInventorySet {
-                player_id,
-                slot: reader.read_i16()?,
-                stack: read_slot(&mut reader)?,
-            })),
+            PACKET_SB_CREATIVE_INVENTORY_ACTION => {
+                let slot = reader.read_i16()?;
+                let stack = read_slot(&mut reader)?;
+                Ok(
+                    legacy_inventory_slot(slot).map(|slot| CoreCommand::CreativeInventorySet {
+                        player_id,
+                        slot,
+                        stack,
+                    }),
+                )
+            }
             PACKET_SB_SETTINGS => Ok(Some(decode_client_settings_packet(player_id, &mut reader)?)),
             PACKET_SB_CLIENT_COMMAND => Ok(Some(CoreCommand::ClientStatus {
                 player_id,
@@ -291,11 +299,16 @@ impl PlaySyncAdapter for Je1710Adapter {
                 container,
                 slot,
                 stack,
-            } => Ok(vec![encode_set_slot(
-                window_id(*container),
-                *slot,
-                stack.as_ref(),
-            )?]),
+            } => {
+                let Some(protocol_slot) = legacy_window_slot(*slot) else {
+                    return Ok(Vec::new());
+                };
+                Ok(vec![encode_set_slot(
+                    window_id(*container),
+                    u8::try_from(protocol_slot).expect("legacy inventory slot should fit into u8"),
+                    stack.as_ref(),
+                )?])
+            }
             CoreEvent::SelectedHotbarSlotChanged { slot } => {
                 Ok(vec![encode_held_item_change(*slot)])
             }
@@ -315,10 +328,10 @@ impl PlaySyncAdapter for Je1710Adapter {
 impl ProtocolAdapter for Je1710Adapter {
     fn descriptor(&self) -> ProtocolDescriptor {
         ProtocolDescriptor {
-            adapter_id: JE_1_7_10_ADAPTER_ID,
+            adapter_id: JE_1_7_10_ADAPTER_ID.to_string(),
             transport: TransportKind::Tcp,
             edition: Edition::Je,
-            version_name: VERSION_NAME_1_7_10,
+            version_name: VERSION_NAME_1_7_10.to_string(),
             protocol_number: PROTOCOL_VERSION_1_7_10,
         }
     }
@@ -792,6 +805,7 @@ fn decode_place_block_packet(
     }
     Ok(Some(CoreCommand::PlaceBlock {
         player_id,
+        hand: InteractionHand::Main,
         position,
         face: BlockFace::from_protocol_byte(direction),
         held_item,
@@ -859,7 +873,8 @@ mod tests {
     };
     use mc_core::{
         BlockState, ChunkColumn, ChunkPos, ConnectionId, CoreCommand, CoreConfig, CoreEvent,
-        InventoryContainer, PlayerId, PlayerInventory, PlayerSnapshot, ServerCore, Vec3,
+        InventoryContainer, InventorySlot, PlayerId, PlayerInventory, PlayerSnapshot, ServerCore,
+        Vec3,
     };
     use mc_proto_common::{
         Edition, HandshakeProbe, LoginRequest, PacketWriter, PlayEncodingContext, PlaySyncAdapter,
@@ -897,10 +912,7 @@ mod tests {
             .try_route(&handshake)
             .expect("handshake should decode");
         let intent = intent.expect("handshake should match JE");
-        assert_eq!(
-            intent.protocol_number,
-            PROTOCOL_VERSION_1_7_10
-        );
+        assert_eq!(intent.protocol_number, PROTOCOL_VERSION_1_7_10);
         assert_eq!(intent.edition, Edition::Je);
 
         let status = adapter
@@ -927,10 +939,10 @@ mod tests {
         let status_packet = adapter
             .encode_status_response(&ServerListStatus {
                 version: ProtocolDescriptor {
-                    adapter_id: JE_1_7_10_ADAPTER_ID,
+                    adapter_id: JE_1_7_10_ADAPTER_ID.to_string(),
                     transport: TransportKind::Tcp,
                     edition: Edition::Je,
-                    version_name: VERSION_NAME_1_7_10,
+                    version_name: VERSION_NAME_1_7_10.to_string(),
                     protocol_number: PROTOCOL_VERSION_1_7_10,
                 },
                 players_online: 1,
@@ -1019,7 +1031,11 @@ mod tests {
             .expect("creative inventory should produce command");
         assert!(matches!(
             command,
-            CoreCommand::CreativeInventorySet { slot: 36, stack: Some(ref stack), .. }
+            CoreCommand::CreativeInventorySet {
+                slot: InventorySlot::Hotbar(0),
+                stack: Some(ref stack),
+                ..
+            }
                 if stack.key.as_str() == "minecraft:glass"
         ));
 

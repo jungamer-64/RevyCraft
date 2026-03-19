@@ -3,8 +3,8 @@ use flate2::Compression;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::GzEncoder;
 use mc_core::{
-    BlockPos, ChunkColumn, ChunkPos, PlayerId, PlayerInventory, PlayerSnapshot, WorldMeta,
-    WorldSnapshot, expand_block_index,
+    BlockPos, ChunkColumn, ChunkPos, InventorySlot, PlayerId, PlayerInventory, PlayerSnapshot,
+    WorldMeta, WorldSnapshot, expand_block_index,
 };
 use mc_proto_common::{StorageAdapter, StorageError};
 use std::collections::BTreeMap;
@@ -19,6 +19,7 @@ const REGION_DIR: &str = "region";
 const ANVIL_SECTOR_BYTES: usize = 4096;
 const ANVIL_HEADER_BYTES: usize = ANVIL_SECTOR_BYTES * 2;
 const CHUNK_COMPRESSION_ZLIB: u8 = 2;
+const PLAYERDATA_OFFHAND_SLOT: i8 = -106;
 
 #[derive(Default)]
 pub struct Je1710StorageAdapter;
@@ -242,7 +243,7 @@ fn player_from_nbt(root: &NbtTag) -> Result<PlayerSnapshot, StorageError> {
 }
 
 fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
-    inventory
+    let mut entries: Vec<_> = inventory
         .slots
         .iter()
         .enumerate()
@@ -265,7 +266,24 @@ fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
             );
             Some(NbtTag::Compound(compound))
         })
-        .collect()
+        .collect();
+    if let Some(stack) = inventory.offhand.as_ref() {
+        if let Some((item_id, damage)) = crate::legacy_item(stack) {
+            let mut compound = BTreeMap::new();
+            compound.insert("Slot".to_string(), NbtTag::Byte(PLAYERDATA_OFFHAND_SLOT));
+            compound.insert("id".to_string(), NbtTag::Short(item_id));
+            compound.insert(
+                "Damage".to_string(),
+                NbtTag::Short(i16::from_be_bytes(damage.to_be_bytes())),
+            );
+            compound.insert(
+                "Count".to_string(),
+                NbtTag::Byte(i8::try_from(stack.count).expect("count should fit into i8")),
+            );
+            entries.push(NbtTag::Compound(compound));
+        }
+    }
+    entries
 }
 
 fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
@@ -278,9 +296,6 @@ fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
     for entry in entries {
         let compound = as_compound(entry)?;
         let slot = byte_field(compound, "Slot")?;
-        let Some(window_slot) = playerdata_slot_to_window_slot(slot) else {
-            continue;
-        };
         let count = byte_field(compound, "Count").unwrap_or(0);
         if count <= 0 {
             continue;
@@ -291,6 +306,13 @@ fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
         if stack.key.as_str() == "minecraft:unsupported" {
             continue;
         }
+        if slot == PLAYERDATA_OFFHAND_SLOT {
+            let _ = inventory.set_slot(InventorySlot::Offhand, Some(stack));
+            continue;
+        }
+        let Some(window_slot) = playerdata_slot_to_window_slot(slot) else {
+            continue;
+        };
         let _ = inventory.set(window_slot, Some(stack));
     }
     Ok(inventory)
@@ -915,7 +937,9 @@ fn set_nibble(target: &mut [u8], index: usize, value: u8) {
 #[cfg(test)]
 mod tests {
     use super::Je1710StorageAdapter;
-    use mc_core::{ChunkColumn, ChunkPos, CoreConfig, PlayerId, ServerCore};
+    use mc_core::{
+        ChunkColumn, ChunkPos, CoreConfig, InventorySlot, ItemStack, PlayerId, ServerCore,
+    };
     use mc_proto_common::StorageAdapter;
     use tempfile::tempdir;
     use uuid::Uuid;
@@ -937,6 +961,15 @@ mod tests {
         let mut custom_chunk = ChunkColumn::new(ChunkPos::new(4, 5));
         custom_chunk.set_block(0, 0, 0, mc_core::BlockState::bedrock());
         snapshot.chunks.insert(custom_chunk.pos, custom_chunk);
+        snapshot
+            .players
+            .get_mut(&player_id)
+            .expect("player should exist")
+            .inventory
+            .set_slot(
+                InventorySlot::Offhand,
+                Some(ItemStack::new("minecraft:glass", 16, 0)),
+            );
 
         let storage = Je1710StorageAdapter;
         storage
@@ -949,6 +982,17 @@ mod tests {
 
         assert_eq!(loaded.meta.level_name, snapshot.meta.level_name);
         assert!(loaded.players.contains_key(&player_id));
+        assert_eq!(
+            loaded
+                .players
+                .get(&player_id)
+                .expect("player should load")
+                .inventory
+                .offhand
+                .as_ref()
+                .map(|stack| (stack.key.as_str(), stack.count, stack.damage)),
+            Some(("minecraft:glass", 16, 0))
+        );
         assert_eq!(
             loaded
                 .chunks
