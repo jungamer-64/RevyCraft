@@ -56,7 +56,7 @@ use mc_proto_be_26_3::BE_26_3_ADAPTER_ID;
 use mc_proto_be_placeholder::BE_PLACEHOLDER_ADAPTER_ID;
 use mc_proto_common::{
     Edition, MinecraftWireCodec, PacketReader, PacketWriter, ProtocolError, TransportKind,
-    WireCodec,
+    WireCodec, WireFormatKind,
 };
 use mc_proto_je_1_7_10::{JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID};
 use mc_proto_je_1_8_x::JE_1_8_X_ADAPTER_ID;
@@ -669,6 +669,61 @@ fn listener_plan_includes_udp_binding_when_bedrock_is_enabled() -> Result<(), Ru
             .iter()
             .any(|adapter_id| adapter_id == BE_26_3_ADAPTER_ID)
     );
+    let default_bedrock_adapter = registries
+        .protocols()
+        .resolve_adapter(BE_26_3_ADAPTER_ID)
+        .expect("default bedrock adapter should resolve");
+    let expected_bedrock_listener = default_bedrock_adapter
+        .bedrock_listener_descriptor()
+        .expect("bedrock adapter should expose listener metadata");
+    let expected_descriptor = default_bedrock_adapter.descriptor();
+    let bedrock_metadata = plans[1]
+        .bedrock_bind_metadata
+        .as_ref()
+        .expect("udp listener plan should keep bedrock metadata");
+    assert_eq!(
+        bedrock_metadata.protocol_number,
+        expected_descriptor.protocol_number
+    );
+    assert_eq!(
+        bedrock_metadata.raknet_version,
+        expected_bedrock_listener.raknet_version
+    );
+    assert_eq!(
+        bedrock_metadata.game_version,
+        expected_bedrock_listener.game_version
+    );
+    Ok(())
+}
+
+#[test]
+fn plugin_host_preserves_wire_format_per_adapter() -> Result<(), RuntimeError> {
+    let registries = plugin_test_registries_all()?;
+    let je_adapter = registries
+        .protocols()
+        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .expect("je adapter should resolve");
+    let bedrock_adapter = registries
+        .protocols()
+        .resolve_adapter(BE_26_3_ADAPTER_ID)
+        .expect("bedrock adapter should resolve");
+
+    assert_eq!(
+        je_adapter.descriptor().wire_format,
+        WireFormatKind::MinecraftFramed
+    );
+    assert_eq!(
+        bedrock_adapter.descriptor().wire_format,
+        WireFormatKind::RawPacketStream
+    );
+    assert_eq!(
+        je_adapter.wire_codec().encode_frame(&[1, 2, 3])?,
+        vec![3, 1, 2, 3]
+    );
+    assert_eq!(
+        bedrock_adapter.wire_codec().encode_frame(&[1, 2, 3])?,
+        vec![1, 2, 3]
+    );
     Ok(())
 }
 
@@ -730,6 +785,70 @@ async fn running_server_exposes_udp_listener_binding_when_enabled() -> Result<()
             .adapter_ids
             .iter()
             .any(|adapter_id| adapter_id == BE_26_3_ADAPTER_ID)
+    );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn default_bedrock_adapter_requires_listener_metadata() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let result = spawn_server(
+        ServerConfig {
+            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+            server_port: 0,
+            be_enabled: true,
+            default_bedrock_adapter: BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+            enabled_bedrock_adapters: Some(vec![BE_PLACEHOLDER_ADAPTER_ID.to_string()]),
+            world_dir: temp_dir.path().join("world"),
+            ..ServerConfig::default()
+        },
+        plugin_test_registries_all()?,
+    )
+    .await;
+
+    let Err(error) = result else {
+        panic!("placeholder default bedrock adapter should fail fast");
+    };
+    assert!(matches!(
+        error,
+        RuntimeError::Config(message)
+            if message.contains("must provide bedrock listener metadata")
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn placeholder_bedrock_adapter_can_remain_enabled_when_not_default()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = spawn_server(
+        ServerConfig {
+            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+            server_port: 0,
+            be_enabled: true,
+            default_bedrock_adapter: BE_26_3_ADAPTER_ID.to_string(),
+            enabled_bedrock_adapters: Some(vec![
+                BE_26_3_ADAPTER_ID.to_string(),
+                BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+            ]),
+            world_dir: temp_dir.path().join("world"),
+            ..ServerConfig::default()
+        },
+        plugin_test_registries_all()?,
+    )
+    .await?;
+
+    let binding = server
+        .listener_bindings()
+        .iter()
+        .find(|binding| binding.transport == TransportKind::Udp)
+        .expect("udp listener binding should exist");
+    assert!(
+        binding
+            .adapter_ids
+            .iter()
+            .any(|adapter_id| adapter_id == BE_PLACEHOLDER_ADAPTER_ID)
     );
 
     server.shutdown().await

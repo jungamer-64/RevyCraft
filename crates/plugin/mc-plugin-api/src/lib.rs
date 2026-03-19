@@ -35,7 +35,7 @@ pub const PLUGIN_STORAGE_API_SYMBOL_V1: &[u8] = b"mc_plugin_storage_api_v1\0";
 pub const PLUGIN_AUTH_API_SYMBOL_V1: &[u8] = b"mc_plugin_auth_api_v1\0";
 pub const PLUGIN_GAMEPLAY_API_SYMBOL_V1: &[u8] = b"mc_plugin_gameplay_api_v1\0";
 
-pub const CURRENT_PLUGIN_ABI: PluginAbiVersion = PluginAbiVersion { major: 1, minor: 0 };
+pub const CURRENT_PLUGIN_ABI: PluginAbiVersion = PluginAbiVersion { major: 1, minor: 1 };
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

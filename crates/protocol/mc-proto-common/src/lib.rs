@@ -28,15 +28,28 @@ pub enum TransportKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum WireFormatKind {
+    MinecraftFramed,
+    RawPacketStream,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Edition {
     Je,
     Be,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BedrockListenerDescriptor {
+    pub game_version: String,
+    pub raknet_version: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProtocolDescriptor {
     pub adapter_id: String,
     pub transport: TransportKind,
+    pub wire_format: WireFormatKind,
     pub edition: Edition,
     pub version_name: String,
     pub protocol_number: i32,
@@ -255,6 +268,11 @@ pub trait ProtocolAdapter: SessionAdapter + PlaySyncAdapter + Send + Sync {
     fn descriptor(&self) -> ProtocolDescriptor;
 
     #[must_use]
+    fn bedrock_listener_descriptor(&self) -> Option<BedrockListenerDescriptor> {
+        None
+    }
+
+    #[must_use]
     fn capability_set(&self) -> CapabilitySet {
         CapabilitySet::default()
     }
@@ -290,6 +308,23 @@ impl WireCodec for MinecraftWireCodec {
         }
         let frame = buffer.split_to(header_len + payload_length);
         Ok(Some(frame[header_len..].to_vec()))
+    }
+}
+
+#[derive(Default)]
+pub struct RawPacketStreamWireCodec;
+
+impl WireCodec for RawPacketStreamWireCodec {
+    fn encode_frame(&self, payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+        Ok(payload.to_vec())
+    }
+
+    fn try_decode_frame(&self, buffer: &mut BytesMut) -> Result<Option<Vec<u8>>, ProtocolError> {
+        if buffer.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(buffer.split_to(buffer.len()).to_vec()))
+        }
     }
 }
 

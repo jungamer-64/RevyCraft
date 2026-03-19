@@ -21,16 +21,16 @@ use bedrockrs_proto::v818::types::SyncedPlayerMovementSettings;
 use bedrockrs_proto::v898::packets::ResourcePackStackPacket;
 use bedrockrs_proto::v924::packets::StartGamePacket;
 use bedrockrs_proto::v924::types::LevelSettings;
-use bytes::BytesMut;
 use mc_core::{BlockFace, BlockState, CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
 use mc_proto_be_common::{
     bedrock_probe_intent, block_pos_from_network, block_pos_to_network, detects_bedrock_datagram,
     parse_bedrock_login_payload, protocol_error, vec3_to_bedrock,
 };
 use mc_proto_common::{
-    ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest, PlayEncodingContext,
-    PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus,
-    SessionAdapter, StatusRequest, TransportKind, WireCodec,
+    BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
+    LoginRequest, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor,
+    ProtocolError, RawPacketStreamWireCodec, ServerListStatus, SessionAdapter, StatusRequest,
+    TransportKind, WireCodec, WireFormatKind,
 };
 use std::collections::HashMap;
 use vek::Vec2;
@@ -41,24 +41,7 @@ pub const BE_26_3_PROTOCOL_NUMBER: i32 = 924;
 
 #[derive(Default)]
 pub struct Bedrock263Adapter {
-    codec: BedrockPacketStreamWireCodec,
-}
-
-#[derive(Default)]
-struct BedrockPacketStreamWireCodec;
-
-impl WireCodec for BedrockPacketStreamWireCodec {
-    fn encode_frame(&self, payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
-        Ok(payload.to_vec())
-    }
-
-    fn try_decode_frame(&self, buffer: &mut BytesMut) -> Result<Option<Vec<u8>>, ProtocolError> {
-        if buffer.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(buffer.split_to(buffer.len()).to_vec()))
-        }
-    }
+    codec: RawPacketStreamWireCodec,
 }
 
 impl Bedrock263Adapter {
@@ -448,10 +431,19 @@ impl ProtocolAdapter for Bedrock263Adapter {
         ProtocolDescriptor {
             adapter_id: BE_26_3_ADAPTER_ID.to_string(),
             transport: TransportKind::Udp,
+            wire_format: WireFormatKind::RawPacketStream,
             edition: Edition::Be,
             version_name: BE_26_3_VERSION_NAME.to_string(),
             protocol_number: BE_26_3_PROTOCOL_NUMBER,
         }
+    }
+
+    fn bedrock_listener_descriptor(&self) -> Option<BedrockListenerDescriptor> {
+        Some(BedrockListenerDescriptor {
+            game_version: V924::GAME_VERSION.to_string(),
+            raknet_version: u8::try_from(V924::RAKNET_VERSION)
+                .expect("bedrock raknet version should fit into u8"),
+        })
     }
 }
 

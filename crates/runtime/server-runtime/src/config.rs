@@ -1,6 +1,6 @@
 use crate::RuntimeError;
 use crate::host::{PluginAbiRange, PluginFailurePolicy};
-use mc_plugin_api::PluginAbiVersion;
+use mc_plugin_api::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -85,8 +85,8 @@ impl Default for ServerConfig {
             plugin_allowlist: None,
             plugin_failure_policy: PluginFailurePolicy::Quarantine,
             plugin_reload_watch: false,
-            plugin_abi_min: PluginAbiVersion { major: 1, minor: 0 },
-            plugin_abi_max: PluginAbiVersion { major: 1, minor: 0 },
+            plugin_abi_min: CURRENT_PLUGIN_ABI,
+            plugin_abi_max: CURRENT_PLUGIN_ABI,
             world_dir: cwd.join("runtime").join("world"),
         }
     }

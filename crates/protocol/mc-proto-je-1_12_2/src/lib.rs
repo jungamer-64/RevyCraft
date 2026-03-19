@@ -7,7 +7,7 @@ use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, LoginRequest,
     MinecraftWireCodec, PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter,
     ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
-    StatusRequest, TransportKind, WireCodec,
+    StatusRequest, TransportKind, WireCodec, WireFormatKind,
 };
 use mc_proto_je_common::{
     build_chunk_data_1_12, legacy_block_state_id, modern_inventory_slot, modern_window_items,
@@ -379,6 +379,7 @@ impl ProtocolAdapter for Je1122Adapter {
         ProtocolDescriptor {
             adapter_id: JE_1_12_2_ADAPTER_ID.to_string(),
             transport: TransportKind::Tcp,
+            wire_format: WireFormatKind::MinecraftFramed,
             edition: Edition::Je,
             version_name: VERSION_NAME_1_12_2.to_string(),
             protocol_number: PROTOCOL_VERSION_1_12_2,
@@ -764,6 +765,7 @@ mod tests {
                 version: ProtocolDescriptor {
                     adapter_id: JE_1_12_2_ADAPTER_ID.to_string(),
                     transport: TransportKind::Tcp,
+                    wire_format: WireFormatKind::MinecraftFramed,
                     edition: Edition::Je,
                     version_name: VERSION_NAME_1_12_2.to_string(),
                     protocol_number: PROTOCOL_VERSION_1_12_2,

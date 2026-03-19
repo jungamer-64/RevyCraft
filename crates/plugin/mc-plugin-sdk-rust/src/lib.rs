@@ -348,6 +348,9 @@ pub fn handle_protocol_request<P: RustProtocolPlugin>(
 ) -> Result<ProtocolResponse, String> {
     match request {
         ProtocolRequest::Describe => Ok(ProtocolResponse::Descriptor(plugin.descriptor())),
+        ProtocolRequest::DescribeBedrockListener => Ok(
+            ProtocolResponse::BedrockListenerDescriptor(plugin.bedrock_listener_descriptor()),
+        ),
         ProtocolRequest::CapabilitySet => {
             Ok(ProtocolResponse::CapabilitySet(plugin.capability_set()))
         }

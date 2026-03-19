@@ -20,9 +20,10 @@ use mc_plugin_api::{
     encode_storage_request,
 };
 use mc_proto_common::{
-    ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
-    PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus,
-    StatusRequest, StorageError, TransportKind, WireCodec,
+    BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest,
+    MinecraftWireCodec, PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
+    RawPacketStreamWireCodec, ServerListStatus, StatusRequest, StorageError, TransportKind,
+    WireCodec, WireFormatKind,
 };
 use serde::Deserialize;
 use std::cell::RefCell;
@@ -387,6 +388,7 @@ struct ProtocolGeneration {
     generation_id: PluginGenerationId,
     plugin_id: String,
     descriptor: ProtocolDescriptor,
+    bedrock_listener_descriptor: Option<BedrockListenerDescriptor>,
     capabilities: CapabilitySet,
     invoke: mc_plugin_api::PluginInvokeFn,
     free_buffer: mc_plugin_api::PluginFreeBufferFn,
@@ -859,6 +861,16 @@ impl PluginLoader {
                 )));
             }
         };
+        let bedrock_listener_descriptor =
+            match invoke_protocol(&api, ProtocolRequest::DescribeBedrockListener)? {
+                ProtocolResponse::BedrockListenerDescriptor(descriptor) => descriptor,
+                other => {
+                    return Err(RuntimeError::Config(format!(
+                        "plugin `{}` returned unexpected bedrock listener payload: {other:?}",
+                        package.plugin_id
+                    )));
+                }
+            };
         let capabilities = match invoke_protocol(&api, ProtocolRequest::CapabilitySet)? {
             ProtocolResponse::CapabilitySet(capabilities) => capabilities,
             other => {
@@ -872,6 +884,7 @@ impl PluginLoader {
             generation_id,
             plugin_id: package.plugin_id.clone(),
             descriptor,
+            bedrock_listener_descriptor,
             capabilities,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
@@ -1598,8 +1611,16 @@ impl HandshakeProbe for HotSwappableProtocolAdapter {
 
 impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     fn wire_codec(&self) -> &dyn WireCodec {
-        static CODEC: MinecraftWireCodec = MinecraftWireCodec;
-        &CODEC
+        static MINECRAFT_CODEC: MinecraftWireCodec = MinecraftWireCodec;
+        static RAW_PACKET_STREAM_CODEC: RawPacketStreamWireCodec = RawPacketStreamWireCodec;
+        match self
+            .current_generation()
+            .map(|generation| generation.descriptor.wire_format)
+            .unwrap_or(WireFormatKind::MinecraftFramed)
+        {
+            WireFormatKind::MinecraftFramed => &MINECRAFT_CODEC,
+            WireFormatKind::RawPacketStream => &RAW_PACKET_STREAM_CODEC,
+        }
     }
 
     fn decode_status(&self, frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
@@ -1778,10 +1799,17 @@ impl ProtocolAdapter for HotSwappableProtocolAdapter {
             .unwrap_or_else(|_| ProtocolDescriptor {
                 adapter_id: self.plugin_id.clone(),
                 transport: TransportKind::Tcp,
+                wire_format: WireFormatKind::MinecraftFramed,
                 edition: mc_proto_common::Edition::Je,
                 version_name: "quarantined".to_string(),
                 protocol_number: -1,
             })
+    }
+
+    fn bedrock_listener_descriptor(&self) -> Option<BedrockListenerDescriptor> {
+        self.current_generation()
+            .ok()
+            .and_then(|generation| generation.bedrock_listener_descriptor.clone())
     }
 
     fn capability_set(&self) -> CapabilitySet {
@@ -2871,12 +2899,13 @@ mod tests {
     use mc_plugin_auth_offline::in_process_auth_entrypoints as offline_auth_entrypoints;
     use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
     use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
+    use mc_plugin_proto_be_26_3::in_process_protocol_entrypoints as be_26_3_entrypoints;
     use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
     use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints;
     use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entrypoints;
     use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
     use mc_plugin_storage_je_anvil_1_7_10::in_process_storage_entrypoints as storage_entrypoints;
-    use mc_proto_common::{Edition, PacketWriter, TransportKind};
+    use mc_proto_common::{Edition, PacketWriter, TransportKind, WireFormatKind};
     use std::env;
     use std::ffi::OsString;
     use std::fs;
@@ -2992,6 +3021,61 @@ mod tests {
             .expect("udp probe should not fail")
             .expect("udp datagram should resolve");
         assert_eq!(be_intent.edition, Edition::Be);
+    }
+
+    #[test]
+    fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata() {
+        let mut catalog = PluginCatalog::default();
+        for (plugin_id, entrypoints) in [
+            ("je-1_7_10", in_process_protocol_entrypoints()),
+            ("be-26_3", be_26_3_entrypoints()),
+            ("be-placeholder", be_placeholder_entrypoints()),
+        ] {
+            catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                plugin_id: plugin_id.to_string(),
+                manifest: entrypoints.manifest,
+                api: entrypoints.api,
+            });
+        }
+
+        let host = Arc::new(PluginHost::new(
+            catalog,
+            PluginAbiRange::default(),
+            PluginFailurePolicy::Quarantine,
+        ));
+        let mut registries = RuntimeRegistries::new();
+        host.load_into_registries(&mut registries)
+            .expect("protocol plugins should load");
+
+        let je_adapter = registries
+            .protocols()
+            .resolve_adapter("je-1_7_10")
+            .expect("je adapter should resolve");
+        assert_eq!(
+            je_adapter.descriptor().wire_format,
+            WireFormatKind::MinecraftFramed
+        );
+        assert!(je_adapter.bedrock_listener_descriptor().is_none());
+
+        let bedrock_adapter = registries
+            .protocols()
+            .resolve_adapter("be-26_3")
+            .expect("bedrock adapter should resolve");
+        assert_eq!(
+            bedrock_adapter.descriptor().wire_format,
+            WireFormatKind::RawPacketStream
+        );
+        assert!(bedrock_adapter.bedrock_listener_descriptor().is_some());
+
+        let placeholder_adapter = registries
+            .protocols()
+            .resolve_adapter("be-placeholder")
+            .expect("placeholder adapter should resolve");
+        assert_eq!(
+            placeholder_adapter.descriptor().wire_format,
+            WireFormatKind::RawPacketStream
+        );
+        assert!(placeholder_adapter.bedrock_listener_descriptor().is_none());
     }
 
     #[test]

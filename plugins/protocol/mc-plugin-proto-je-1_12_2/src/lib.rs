@@ -1,7 +1,7 @@
 use mc_plugin_sdk_rust::{StaticPluginManifest, export_protocol_plugin};
 use mc_proto_common::{
-    HandshakeProbe, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor,
-    ProtocolError, SessionAdapter, StatusRequest, WireCodec,
+    BedrockListenerDescriptor, HandshakeProbe, PlayEncodingContext, PlaySyncAdapter,
+    ProtocolAdapter, ProtocolDescriptor, ProtocolError, SessionAdapter, StatusRequest, WireCodec,
 };
 use mc_proto_je_1_12_2::Je1122Adapter;
 
@@ -105,6 +105,10 @@ impl PlaySyncAdapter for Je1122ProtocolPlugin {
 impl ProtocolAdapter for Je1122ProtocolPlugin {
     fn descriptor(&self) -> ProtocolDescriptor {
         self.adapter.descriptor()
+    }
+
+    fn bedrock_listener_descriptor(&self) -> Option<BedrockListenerDescriptor> {
+        self.adapter.bedrock_listener_descriptor()
     }
 
     fn capability_set(&self) -> mc_core::CapabilitySet {

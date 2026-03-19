@@ -1,8 +1,8 @@
 use mc_plugin_sdk_rust::{StaticPluginManifest, export_protocol_plugin};
 use mc_proto_be_26_3::Bedrock263Adapter;
 use mc_proto_common::{
-    HandshakeProbe, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor,
-    ProtocolError, SessionAdapter, StatusRequest, WireCodec,
+    BedrockListenerDescriptor, HandshakeProbe, PlayEncodingContext, PlaySyncAdapter,
+    ProtocolAdapter, ProtocolDescriptor, ProtocolError, SessionAdapter, StatusRequest, WireCodec,
 };
 
 #[derive(Default)]
@@ -105,6 +105,10 @@ impl PlaySyncAdapter for Bedrock263ProtocolPlugin {
 impl ProtocolAdapter for Bedrock263ProtocolPlugin {
     fn descriptor(&self) -> ProtocolDescriptor {
         self.adapter.descriptor()
+    }
+
+    fn bedrock_listener_descriptor(&self) -> Option<BedrockListenerDescriptor> {
+        self.adapter.bedrock_listener_descriptor()
     }
 
     fn capability_set(&self) -> mc_core::CapabilitySet {

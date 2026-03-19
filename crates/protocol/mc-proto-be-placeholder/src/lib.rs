@@ -1,9 +1,9 @@
-use bytes::BytesMut;
 use mc_core::{CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, LoginRequest,
     PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
-    ServerListStatus, SessionAdapter, StatusRequest, TransportKind, WireCodec,
+    RawPacketStreamWireCodec, ServerListStatus, SessionAdapter, StatusRequest, TransportKind,
+    WireCodec, WireFormatKind,
 };
 
 const VERSION_NAME_PLACEHOLDER: &str = "bedrock-placeholder";
@@ -17,30 +17,13 @@ const UNCONNECTED_MAGIC: [u8; 16] = [
 
 #[derive(Default)]
 pub struct BePlaceholderAdapter {
-    codec: PlaceholderWireCodec,
+    codec: RawPacketStreamWireCodec,
 }
 
 impl BePlaceholderAdapter {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-}
-
-#[derive(Default)]
-struct PlaceholderWireCodec;
-
-impl WireCodec for PlaceholderWireCodec {
-    fn encode_frame(&self, _payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
-        Err(ProtocolError::InvalidPacket(
-            "bedrock placeholder codec cannot encode frames",
-        ))
-    }
-
-    fn try_decode_frame(&self, _buffer: &mut BytesMut) -> Result<Option<Vec<u8>>, ProtocolError> {
-        Err(ProtocolError::InvalidPacket(
-            "bedrock placeholder codec cannot decode frames",
-        ))
     }
 }
 
@@ -163,6 +146,7 @@ impl ProtocolAdapter for BePlaceholderAdapter {
         ProtocolDescriptor {
             adapter_id: BE_PLACEHOLDER_ADAPTER_ID.to_string(),
             transport: TransportKind::Udp,
+            wire_format: WireFormatKind::RawPacketStream,
             edition: Edition::Be,
             version_name: VERSION_NAME_PLACEHOLDER.to_string(),
             protocol_number: 0,

@@ -5,8 +5,6 @@ use aes::Aes128;
 use aes::cipher::{BlockEncrypt, KeyInit};
 use bedrockrs_network::connection::Connection as BedrockConnection;
 use bedrockrs_network::listener::Listener as BedrockListener;
-use bedrockrs_proto::ProtoVersion;
-use bedrockrs_proto::V924;
 use bedrockrs_proto::compression::Compression as BedrockCompression;
 use bytes::BytesMut;
 use mc_proto_common::{MinecraftWireCodec, TransportKind, WireCodec};
@@ -19,6 +17,14 @@ pub(crate) struct ListenerPlan {
     pub(crate) transport: TransportKind,
     pub(crate) bind_addr: SocketAddr,
     pub(crate) adapter_ids: Vec<String>,
+    pub(crate) bedrock_bind_metadata: Option<BedrockBindMetadata>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BedrockBindMetadata {
+    pub(crate) game_version: String,
+    pub(crate) protocol_number: i32,
+    pub(crate) raknet_version: u8,
 }
 
 pub(crate) struct AcceptedTransportSession {
@@ -225,6 +231,7 @@ pub(crate) fn build_listener_plans(
         transport: TransportKind::Tcp,
         bind_addr: config.bind_addr(),
         adapter_ids: tcp_adapter_ids,
+        bedrock_bind_metadata: None,
     }];
     if config.be_enabled {
         let udp_adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Udp);
@@ -233,10 +240,32 @@ pub(crate) fn build_listener_plans(
                 "be-enabled=true requires at least one udp protocol adapter".to_string(),
             ));
         }
+        let default_bedrock_adapter = protocols
+            .resolve_adapter(&config.default_bedrock_adapter)
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "default-bedrock-adapter `{}` is not registered",
+                    config.default_bedrock_adapter
+                ))
+            })?;
+        let descriptor = default_bedrock_adapter.descriptor();
+        let bedrock_listener_descriptor = default_bedrock_adapter
+            .bedrock_listener_descriptor()
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "default-bedrock-adapter `{}` must provide bedrock listener metadata",
+                    config.default_bedrock_adapter
+                ))
+            })?;
         plans.push(ListenerPlan {
             transport: TransportKind::Udp,
             bind_addr: config.bind_addr(),
             adapter_ids: udp_adapter_ids,
+            bedrock_bind_metadata: Some(BedrockBindMetadata {
+                game_version: bedrock_listener_descriptor.game_version,
+                protocol_number: descriptor.protocol_number,
+                raknet_version: bedrock_listener_descriptor.raknet_version,
+            }),
         });
     }
     Ok(plans)
@@ -252,13 +281,23 @@ pub(crate) async fn bind_transport_listener(
             adapter_ids: plan.adapter_ids,
         }),
         TransportKind::Udp => {
+            let metadata = plan.bedrock_bind_metadata.ok_or_else(|| {
+                RuntimeError::Config(
+                    "udp listener plan is missing bedrock listener metadata".to_string(),
+                )
+            })?;
             let mut listener = BedrockListener::new_raknet(
                 plan.bind_addr,
                 config.motd.clone(),
                 "RevyCraft".to_string(),
-                V924::GAME_VERSION.to_string(),
-                V924::PROTOCOL_VERSION,
-                V924::RAKNET_VERSION,
+                metadata.game_version,
+                u32::try_from(metadata.protocol_number).map_err(|_| {
+                    RuntimeError::Config(format!(
+                        "bedrock protocol number {} must be non-negative",
+                        metadata.protocol_number
+                    ))
+                })?,
+                metadata.raknet_version,
                 u32::from(config.max_players),
                 0,
                 false,

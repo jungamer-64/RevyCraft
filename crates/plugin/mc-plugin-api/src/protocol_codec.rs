@@ -6,8 +6,9 @@ use mc_core::{
     WorldSnapshot, expand_block_index,
 };
 use mc_proto_common::{
-    ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, LoginRequest,
-    PlayEncodingContext, ProtocolDescriptor, ServerListStatus, StatusRequest, TransportKind,
+    BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState,
+    LoginRequest, PlayEncodingContext, ProtocolDescriptor, ServerListStatus, StatusRequest,
+    TransportKind, WireFormatKind,
 };
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -20,20 +21,21 @@ pub const PLUGIN_ENVELOPE_HEADER_LEN: usize = 12;
 #[repr(u8)]
 pub enum ProtocolOpCode {
     Describe = 1,
-    CapabilitySet = 2,
-    TryRoute = 3,
-    DecodeStatus = 4,
-    DecodeLogin = 5,
-    EncodeStatusResponse = 6,
-    EncodeStatusPong = 7,
-    EncodeDisconnect = 8,
-    EncodeEncryptionRequest = 9,
-    EncodeNetworkSettings = 10,
-    EncodeLoginSuccess = 11,
-    DecodePlay = 12,
-    EncodePlayEvent = 13,
-    ExportSessionState = 14,
-    ImportSessionState = 15,
+    DescribeBedrockListener = 2,
+    CapabilitySet = 3,
+    TryRoute = 4,
+    DecodeStatus = 5,
+    DecodeLogin = 6,
+    EncodeStatusResponse = 7,
+    EncodeStatusPong = 8,
+    EncodeDisconnect = 9,
+    EncodeEncryptionRequest = 10,
+    EncodeNetworkSettings = 11,
+    EncodeLoginSuccess = 12,
+    DecodePlay = 13,
+    EncodePlayEvent = 14,
+    ExportSessionState = 15,
+    ImportSessionState = 16,
 }
 
 impl TryFrom<u8> for ProtocolOpCode {
@@ -42,20 +44,21 @@ impl TryFrom<u8> for ProtocolOpCode {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Describe),
-            2 => Ok(Self::CapabilitySet),
-            3 => Ok(Self::TryRoute),
-            4 => Ok(Self::DecodeStatus),
-            5 => Ok(Self::DecodeLogin),
-            6 => Ok(Self::EncodeStatusResponse),
-            7 => Ok(Self::EncodeStatusPong),
-            8 => Ok(Self::EncodeDisconnect),
-            9 => Ok(Self::EncodeEncryptionRequest),
-            10 => Ok(Self::EncodeNetworkSettings),
-            11 => Ok(Self::EncodeLoginSuccess),
-            12 => Ok(Self::DecodePlay),
-            13 => Ok(Self::EncodePlayEvent),
-            14 => Ok(Self::ExportSessionState),
-            15 => Ok(Self::ImportSessionState),
+            2 => Ok(Self::DescribeBedrockListener),
+            3 => Ok(Self::CapabilitySet),
+            4 => Ok(Self::TryRoute),
+            5 => Ok(Self::DecodeStatus),
+            6 => Ok(Self::DecodeLogin),
+            7 => Ok(Self::EncodeStatusResponse),
+            8 => Ok(Self::EncodeStatusPong),
+            9 => Ok(Self::EncodeDisconnect),
+            10 => Ok(Self::EncodeEncryptionRequest),
+            11 => Ok(Self::EncodeNetworkSettings),
+            12 => Ok(Self::EncodeLoginSuccess),
+            13 => Ok(Self::DecodePlay),
+            14 => Ok(Self::EncodePlayEvent),
+            15 => Ok(Self::ExportSessionState),
+            16 => Ok(Self::ImportSessionState),
             _ => Err(ProtocolCodecError::InvalidProtocolOpCode(value)),
         }
     }
@@ -91,6 +94,7 @@ pub struct ProtocolSessionSnapshot {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProtocolRequest {
     Describe,
+    DescribeBedrockListener,
     CapabilitySet,
     TryRoute {
         frame: Vec<u8>,
@@ -144,6 +148,7 @@ impl ProtocolRequest {
     pub const fn op_code(&self) -> ProtocolOpCode {
         match self {
             Self::Describe => ProtocolOpCode::Describe,
+            Self::DescribeBedrockListener => ProtocolOpCode::DescribeBedrockListener,
             Self::CapabilitySet => ProtocolOpCode::CapabilitySet,
             Self::TryRoute { .. } => ProtocolOpCode::TryRoute,
             Self::DecodeStatus { .. } => ProtocolOpCode::DecodeStatus,
@@ -165,6 +170,7 @@ impl ProtocolRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProtocolResponse {
     Descriptor(ProtocolDescriptor),
+    BedrockListenerDescriptor(Option<BedrockListenerDescriptor>),
     CapabilitySet(CapabilitySet),
     HandshakeIntent(Option<HandshakeIntent>),
     StatusRequest(StatusRequest),
@@ -517,7 +523,9 @@ fn encode_protocol_request_payload(
     request: &ProtocolRequest,
 ) -> Result<(), ProtocolCodecError> {
     match request {
-        ProtocolRequest::Describe | ProtocolRequest::CapabilitySet => Ok(()),
+        ProtocolRequest::Describe
+        | ProtocolRequest::DescribeBedrockListener
+        | ProtocolRequest::CapabilitySet => Ok(()),
         ProtocolRequest::TryRoute { frame }
         | ProtocolRequest::DecodeStatus { frame }
         | ProtocolRequest::DecodeLogin { frame } => encoder.write_bytes(frame),
@@ -573,6 +581,7 @@ fn decode_protocol_request_payload(
 ) -> Result<ProtocolRequest, ProtocolCodecError> {
     match op_code {
         ProtocolOpCode::Describe => Ok(ProtocolRequest::Describe),
+        ProtocolOpCode::DescribeBedrockListener => Ok(ProtocolRequest::DescribeBedrockListener),
         ProtocolOpCode::CapabilitySet => Ok(ProtocolRequest::CapabilitySet),
         ProtocolOpCode::TryRoute => Ok(ProtocolRequest::TryRoute {
             frame: decoder.read_bytes()?,
@@ -631,6 +640,14 @@ fn encode_protocol_response_payload(
         (ProtocolOpCode::Describe, ProtocolResponse::Descriptor(descriptor)) => {
             encode_protocol_descriptor(encoder, descriptor)
         }
+        (
+            ProtocolOpCode::DescribeBedrockListener,
+            ProtocolResponse::BedrockListenerDescriptor(descriptor),
+        ) => encode_option(
+            encoder,
+            descriptor.as_ref(),
+            encode_bedrock_listener_descriptor,
+        ),
         (ProtocolOpCode::CapabilitySet, ProtocolResponse::CapabilitySet(capabilities)) => {
             encode_capability_set(encoder, capabilities)
         }
@@ -680,6 +697,9 @@ fn decode_protocol_response_payload(
         ProtocolOpCode::Describe => Ok(ProtocolResponse::Descriptor(decode_protocol_descriptor(
             decoder,
         )?)),
+        ProtocolOpCode::DescribeBedrockListener => Ok(ProtocolResponse::BedrockListenerDescriptor(
+            decode_option(decoder, decode_bedrock_listener_descriptor)?,
+        )),
         ProtocolOpCode::CapabilitySet => Ok(ProtocolResponse::CapabilitySet(
             decode_capability_set(decoder)?,
         )),
@@ -779,6 +799,23 @@ fn decode_transport_kind(decoder: &mut Decoder<'_>) -> Result<TransportKind, Pro
         1 => Ok(TransportKind::Tcp),
         2 => Ok(TransportKind::Udp),
         _ => Err(ProtocolCodecError::InvalidValue("invalid transport kind")),
+    }
+}
+
+fn encode_wire_format_kind(encoder: &mut Encoder, wire_format: WireFormatKind) {
+    encoder.write_u8(match wire_format {
+        WireFormatKind::MinecraftFramed => 1,
+        WireFormatKind::RawPacketStream => 2,
+    });
+}
+
+fn decode_wire_format_kind(
+    decoder: &mut Decoder<'_>,
+) -> Result<WireFormatKind, ProtocolCodecError> {
+    match decoder.read_u8()? {
+        1 => Ok(WireFormatKind::MinecraftFramed),
+        2 => Ok(WireFormatKind::RawPacketStream),
+        _ => Err(ProtocolCodecError::InvalidValue("invalid wire format kind")),
     }
 }
 
@@ -949,6 +986,7 @@ fn encode_protocol_descriptor(
 ) -> Result<(), ProtocolCodecError> {
     encoder.write_string(&descriptor.adapter_id)?;
     encode_transport_kind(encoder, descriptor.transport);
+    encode_wire_format_kind(encoder, descriptor.wire_format);
     encode_edition(encoder, descriptor.edition);
     encoder.write_string(&descriptor.version_name)?;
     encoder.write_i32(descriptor.protocol_number);
@@ -961,9 +999,28 @@ fn decode_protocol_descriptor(
     Ok(ProtocolDescriptor {
         adapter_id: decoder.read_string()?,
         transport: decode_transport_kind(decoder)?,
+        wire_format: decode_wire_format_kind(decoder)?,
         edition: decode_edition(decoder)?,
         version_name: decoder.read_string()?,
         protocol_number: decoder.read_i32()?,
+    })
+}
+
+fn encode_bedrock_listener_descriptor(
+    encoder: &mut Encoder,
+    descriptor: &BedrockListenerDescriptor,
+) -> Result<(), ProtocolCodecError> {
+    encoder.write_string(&descriptor.game_version)?;
+    encoder.write_u8(descriptor.raknet_version);
+    Ok(())
+}
+
+fn decode_bedrock_listener_descriptor(
+    decoder: &mut Decoder<'_>,
+) -> Result<BedrockListenerDescriptor, ProtocolCodecError> {
+    Ok(BedrockListenerDescriptor {
+        game_version: decoder.read_string()?,
+        raknet_version: decoder.read_u8()?,
     })
 }
 
@@ -1796,8 +1853,9 @@ mod tests {
         PlayerSnapshot, PluginGenerationId, SessionCapabilitySet, Vec3, WorldMeta,
     };
     use mc_proto_common::{
-        ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, LoginRequest,
-        PlayEncodingContext, ProtocolDescriptor, ServerListStatus, StatusRequest, TransportKind,
+        BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState,
+        LoginRequest, PlayEncodingContext, ProtocolDescriptor, ServerListStatus, StatusRequest,
+        TransportKind, WireFormatKind,
     };
     use uuid::Uuid;
 
@@ -1844,9 +1902,17 @@ mod tests {
         ProtocolDescriptor {
             adapter_id: "je-1_7_10".to_string(),
             transport: TransportKind::Tcp,
+            wire_format: WireFormatKind::MinecraftFramed,
             edition: Edition::Je,
             version_name: "1.7.10".to_string(),
             protocol_number: 5,
+        }
+    }
+
+    fn sample_bedrock_listener_descriptor() -> BedrockListenerDescriptor {
+        BedrockListenerDescriptor {
+            game_version: "1.21.90".to_string(),
+            raknet_version: 11,
         }
     }
 
@@ -1920,6 +1986,12 @@ mod tests {
             (
                 ProtocolRequest::Describe,
                 ProtocolResponse::Descriptor(descriptor.clone()),
+            ),
+            (
+                ProtocolRequest::DescribeBedrockListener,
+                ProtocolResponse::BedrockListenerDescriptor(Some(
+                    sample_bedrock_listener_descriptor(),
+                )),
             ),
             (
                 ProtocolRequest::CapabilitySet,
