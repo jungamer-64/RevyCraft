@@ -73,6 +73,8 @@ phase 2 以降は protocol plugin が必須です。`server-bootstrap` は `dist
 cargo test --workspace
 ```
 
+`server-runtime` の integration test は shared test harness 経由で protocol plugin を package/load します。
+
 ## Client Controls
 
 - `WASD`: move

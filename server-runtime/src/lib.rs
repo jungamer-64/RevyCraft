@@ -470,46 +470,6 @@ impl RuntimeRegistries {
         self.plugin_host.clone()
     }
 
-    #[cfg(test)]
-    #[must_use]
-    pub fn with_je_1_7_10() -> Self {
-        let mut registries = Self::new();
-        use mc_proto_je_1_7_10::{
-            JE_1_7_10_STORAGE_PROFILE_ID, Je1710Adapter, Je1710StorageAdapter,
-        };
-        let adapter = Arc::new(Je1710Adapter::new());
-        registries.register_adapter(adapter.clone());
-        registries.register_probe(adapter);
-        registries
-            .register_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID, Arc::new(Je1710StorageAdapter));
-        registries
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn with_builtin_adapters() -> Self {
-        let mut registries = Self::with_je_1_7_10();
-        use mc_proto_be_placeholder::BePlaceholderAdapter;
-        use mc_proto_je_1_12_2::Je1122Adapter;
-        use mc_proto_je_1_8_x::Je18xAdapter;
-        let adapter = Arc::new(Je18xAdapter::new());
-        registries.register_adapter(adapter.clone());
-        registries.register_probe(adapter);
-        let adapter = Arc::new(Je1122Adapter::new());
-        registries.register_adapter(adapter.clone());
-        registries.register_probe(adapter);
-        let adapter = Arc::new(BePlaceholderAdapter::new());
-        registries.register_adapter(adapter.clone());
-        registries.register_probe(adapter);
-        registries
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn with_je_and_be_placeholder() -> Self {
-        Self::with_builtin_adapters()
-    }
-
     #[must_use]
     pub const fn protocols(&self) -> &ProtocolRegistry {
         &self.protocols
@@ -1407,20 +1367,19 @@ pub fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8
 #[cfg(test)]
 mod tests {
     use super::{
-        LevelType, ProtocolRegistry, RuntimeError, RuntimeRegistries, ServerConfig,
-        StorageRegistry, UdpDatagramAction, build_listener_plans, classify_udp_datagram,
-        encode_handshake, plugin_host_from_config, spawn_server,
+        LevelType, RuntimeError, RuntimeRegistries, ServerConfig, StorageRegistry,
+        UdpDatagramAction, build_listener_plans, classify_udp_datagram, encode_handshake,
+        plugin_host_from_config, spawn_server,
     };
     use bytes::BytesMut;
     use mc_core::WorldSnapshot;
     use mc_proto_be_placeholder::BE_PLACEHOLDER_ADAPTER_ID;
     use mc_proto_common::{
-        Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, MinecraftWireCodec,
-        PacketReader, PacketWriter, StorageAdapter, TransportKind, WireCodec,
+        Edition, MinecraftWireCodec, PacketReader, PacketWriter, StorageAdapter, TransportKind,
+        WireCodec,
     };
     use mc_proto_je_1_7_10::{
-        JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID, Je1710Adapter,
-        Je1710StorageAdapter,
+        JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID, Je1710StorageAdapter,
     };
     use mc_proto_je_1_8_x::JE_1_8_X_ADAPTER_ID;
     use mc_proto_je_1_12_2::JE_1_12_2_ADAPTER_ID;
@@ -1432,6 +1391,7 @@ mod tests {
     use std::process::Command;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::OnceLock;
     use std::time::Duration;
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1448,36 +1408,52 @@ mod tests {
         save_calls: AtomicUsize,
     }
 
-    struct FakeUdpProbe;
+    const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
+        JE_1_7_10_ADAPTER_ID,
+        JE_1_8_X_ADAPTER_ID,
+        JE_1_12_2_ADAPTER_ID,
+        BE_PLACEHOLDER_ADAPTER_ID,
+    ];
+    const TCP_ONLY_PROTOCOL_PLUGIN_IDS: &[&str] = &[JE_1_7_10_ADAPTER_ID];
+    static PLUGIN_TEST_HARNESS_BUILDS: AtomicUsize = AtomicUsize::new(0);
+    static PLUGIN_TEST_HARNESS: OnceLock<Result<PluginTestHarness, String>> = OnceLock::new();
 
-    impl HandshakeProbe for FakeUdpProbe {
-        fn transport_kind(&self) -> TransportKind {
-            TransportKind::Udp
-        }
+    struct PluginTestHarness {
+        dist_dir: PathBuf,
+    }
 
-        fn try_route(
-            &self,
-            _frame: &[u8],
-        ) -> Result<Option<HandshakeIntent>, mc_proto_common::ProtocolError> {
-            Ok(Some(HandshakeIntent {
-                edition: Edition::Be,
-                protocol_number: 999,
-                server_host: "localhost".to_string(),
-                server_port: 19132,
-                next_state: HandshakeNextState::Status,
-            }))
+    fn plugin_test_harness() -> Result<&'static PluginTestHarness, RuntimeError> {
+        match PLUGIN_TEST_HARNESS
+            .get_or_init(|| {
+                PLUGIN_TEST_HARNESS_BUILDS.fetch_add(1, Ordering::SeqCst);
+                let root_dir = workspace_root().join("target").join(format!(
+                    "server-runtime-plugin-test-harness-{}",
+                    std::process::id()
+                ));
+                if root_dir.exists() {
+                    fs::remove_dir_all(&root_dir).map_err(|error| error.to_string())?;
+                }
+                let dist_dir = root_dir.join("dist").join("plugins");
+                let target_dir = root_dir.join("target");
+                fs::create_dir_all(&dist_dir).map_err(|error| error.to_string())?;
+                run_xtask_package_plugins(&dist_dir, &target_dir, "runtime-test-harness")
+                    .map_err(|error| error.to_string())?;
+                Ok(PluginTestHarness { dist_dir })
+            })
+            .as_ref()
+        {
+            Ok(harness) => Ok(harness),
+            Err(error) => Err(RuntimeError::Config(error.clone())),
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn packaged_protocol_registries(
-        dist_dir: &Path,
-        target_dir: &Path,
-        build_tag: &str,
+    fn plugin_test_registries_with_allowlist(
+        allowlist: &[&str],
     ) -> Result<RuntimeRegistries, RuntimeError> {
-        run_xtask_package_plugins(dist_dir, target_dir, build_tag)?;
+        let harness = plugin_test_harness()?;
         let config = ServerConfig {
-            plugins_dir: dist_dir.to_path_buf(),
+            plugins_dir: harness.dist_dir.clone(),
+            plugin_allowlist: Some(allowlist.iter().map(|entry| (*entry).to_string()).collect()),
             ..ServerConfig::default()
         };
         let plugin_host = plugin_host_from_config(&config)?.ok_or_else(|| {
@@ -1492,7 +1468,14 @@ mod tests {
         Ok(registries)
     }
 
-    #[cfg(target_os = "linux")]
+    fn plugin_test_registries_tcp_only() -> Result<RuntimeRegistries, RuntimeError> {
+        plugin_test_registries_with_allowlist(TCP_ONLY_PROTOCOL_PLUGIN_IDS)
+    }
+
+    fn plugin_test_registries_all() -> Result<RuntimeRegistries, RuntimeError> {
+        plugin_test_registries_with_allowlist(ALL_PROTOCOL_PLUGIN_IDS)
+    }
+
     fn run_xtask_package_plugins(
         dist_dir: &Path,
         target_dir: &Path,
@@ -1521,7 +1504,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
     fn workspace_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -1630,22 +1612,29 @@ mod tests {
     }
 
     #[test]
-    fn protocol_registry_resolves_registered_adapter() {
-        let mut registry = ProtocolRegistry::new();
-        let adapter = Arc::new(Je1710Adapter::new());
-        registry.register_adapter(adapter.clone());
-        registry.register_probe(adapter);
+    fn plugin_test_harness_is_packaged_once_per_process() -> Result<(), RuntimeError> {
+        let _ = plugin_test_registries_tcp_only()?;
+        let _ = plugin_test_registries_all()?;
+        assert_eq!(PLUGIN_TEST_HARNESS_BUILDS.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
 
+    #[test]
+    fn protocol_registry_resolves_registered_adapter() -> Result<(), RuntimeError> {
+        let registry = plugin_test_registries_tcp_only()?;
         let by_id = registry
+            .protocols()
             .resolve_adapter(JE_1_7_10_ADAPTER_ID)
             .expect("registered adapter should resolve by id");
         let by_route = registry
+            .protocols()
             .resolve_route(TransportKind::Tcp, Edition::Je, 5)
             .expect("registered adapter should resolve by route");
 
         assert_eq!(by_id.descriptor().adapter_id, JE_1_7_10_ADAPTER_ID);
         assert_eq!(by_id.descriptor().transport, TransportKind::Tcp);
         assert_eq!(by_route.descriptor().version_name, "1.7.10");
+        Ok(())
     }
 
     #[test]
@@ -1659,24 +1648,25 @@ mod tests {
     }
 
     #[test]
-    fn handshake_probe_transport_kind_filters_routing() {
-        let mut registry = ProtocolRegistry::new();
-        registry.register_probe(Arc::new(FakeUdpProbe));
-
+    fn handshake_probe_transport_kind_filters_routing() -> Result<(), RuntimeError> {
+        let registry = plugin_test_registries_all()?;
         let tcp_route = registry
-            .route_handshake(TransportKind::Tcp, &[0x00])
+            .protocols()
+            .route_handshake(TransportKind::Tcp, &raknet_unconnected_ping())
             .expect("tcp routing should not fail");
         let udp_route = registry
-            .route_handshake(TransportKind::Udp, &[0x00])
+            .protocols()
+            .route_handshake(TransportKind::Udp, &raknet_unconnected_ping())
             .expect("udp routing should not fail");
 
         assert!(tcp_route.is_none());
         assert!(udp_route.is_some());
+        Ok(())
     }
 
     #[test]
     fn listener_plan_includes_tcp_binding_and_registered_adapter() -> Result<(), RuntimeError> {
-        let registries = RuntimeRegistries::with_je_1_7_10();
+        let registries = plugin_test_registries_tcp_only()?;
         let plans = build_listener_plans(&ServerConfig::default(), registries.protocols())?;
 
         assert_eq!(plans.len(), 1);
@@ -1692,7 +1682,7 @@ mod tests {
 
     #[test]
     fn listener_plan_includes_udp_binding_when_bedrock_is_enabled() -> Result<(), RuntimeError> {
-        let registries = RuntimeRegistries::with_je_and_be_placeholder();
+        let registries = plugin_test_registries_all()?;
         let plans = build_listener_plans(
             &ServerConfig {
                 be_enabled: true,
@@ -1722,7 +1712,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
 
@@ -1755,7 +1745,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_and_be_placeholder(),
+            plugin_test_registries_all()?,
         )
         .await?;
 
@@ -1843,7 +1833,8 @@ mod tests {
 
     #[test]
     fn be_enabled_requires_udp_adapter() {
-        let registry = RuntimeRegistries::with_je_1_7_10();
+        let registry = plugin_test_registries_tcp_only()
+            .expect("tcp-only plugin registry should be available");
         let error = build_listener_plans(
             &ServerConfig {
                 be_enabled: true,
@@ -1869,7 +1860,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_builtin_adapters(),
+            plugin_test_registries_all()?,
         )
         .await;
 
@@ -1897,7 +1888,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_builtin_adapters(),
+            plugin_test_registries_all()?,
         )
         .await;
 
@@ -1926,7 +1917,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_builtin_adapters(),
+            plugin_test_registries_all()?,
         )
         .await?;
 
@@ -2206,7 +2197,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -2249,7 +2240,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -2300,7 +2291,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -2329,7 +2320,7 @@ mod tests {
 
     #[test]
     fn udp_bedrock_probe_classifies_placeholder_datagram() -> Result<(), RuntimeError> {
-        let registry = RuntimeRegistries::with_je_and_be_placeholder();
+        let registry = plugin_test_registries_all()?;
         let action = classify_udp_datagram(registry.protocols(), &raknet_unconnected_ping())?;
         assert_eq!(action, UdpDatagramAction::UnsupportedBedrock);
         Ok(())
@@ -2337,7 +2328,7 @@ mod tests {
 
     #[test]
     fn udp_unknown_datagram_is_ignored() -> Result<(), RuntimeError> {
-        let registry = RuntimeRegistries::with_je_and_be_placeholder();
+        let registry = plugin_test_registries_all()?;
         let action = classify_udp_datagram(registry.protocols(), &[0xde, 0xad, 0xbe, 0xef])?;
         assert_eq!(action, UdpDatagramAction::Ignore);
         Ok(())
@@ -2354,7 +2345,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_and_be_placeholder(),
+            plugin_test_registries_all()?,
         )
         .await?;
 
@@ -2391,7 +2382,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await;
         let Err(error) = result else {
@@ -2412,7 +2403,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await;
         let Err(error) = result else {
@@ -2433,7 +2424,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await;
         let Err(error) = result else {
@@ -2455,7 +2446,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -2483,7 +2474,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -2520,7 +2511,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_builtin_adapters(),
+            plugin_test_registries_all()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -2590,9 +2581,7 @@ mod tests {
     async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(), RuntimeError>
     {
         let temp_dir = tempdir()?;
-        let dist_dir = temp_dir.path().join("dist").join("plugins");
-        let target_dir = temp_dir.path().join("target");
-        let registries = packaged_protocol_registries(&dist_dir, &target_dir, "plugin-only")?;
+        let registries = plugin_test_registries_all()?;
         let server = spawn_server(
             ServerConfig {
                 server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
@@ -2606,7 +2595,6 @@ mod tests {
                     BE_PLACEHOLDER_ADAPTER_ID.to_string(),
                 ]),
                 world_dir: temp_dir.path().join("world"),
-                plugins_dir: dist_dir,
                 ..ServerConfig::default()
             },
             registries,
@@ -2708,7 +2696,7 @@ mod tests {
                 world_dir: world_dir.clone(),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_builtin_adapters(),
+            plugin_test_registries_all()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -2744,7 +2732,7 @@ mod tests {
                 world_dir,
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_builtin_adapters(),
+            plugin_test_registries_all()?,
         )
         .await?;
         let addr = listener_addr(&restarted);
@@ -2782,7 +2770,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -2834,7 +2822,7 @@ mod tests {
                 world_dir: world_dir.clone(),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -2874,7 +2862,7 @@ mod tests {
                 world_dir,
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&restarted);
@@ -2897,10 +2885,7 @@ mod tests {
         let temp_dir = tempdir()?;
         let codec = MinecraftWireCodec;
         let storage = Arc::new(RecordingStorageAdapter::default());
-        let mut registries = RuntimeRegistries::new();
-        let adapter = Arc::new(Je1710Adapter::new());
-        registries.register_adapter(adapter.clone());
-        registries.register_probe(adapter);
+        let mut registries = plugin_test_registries_tcp_only()?;
         registries.register_storage_profile("recording", storage.clone());
 
         let server = spawn_server(
@@ -2940,7 +2925,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -2979,7 +2964,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -3024,7 +3009,7 @@ mod tests {
                 world_dir: world_dir.clone(),
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&server);
@@ -3070,7 +3055,7 @@ mod tests {
                 world_dir,
                 ..ServerConfig::default()
             },
-            RuntimeRegistries::with_je_1_7_10(),
+            plugin_test_registries_tcp_only()?,
         )
         .await?;
         let addr = listener_addr(&restarted);
