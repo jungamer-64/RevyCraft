@@ -11,6 +11,7 @@ pub enum AuthOpCode {
     Describe = 1,
     CapabilitySet = 2,
     AuthenticateOffline = 3,
+    AuthenticateOnline = 4,
 }
 
 impl TryFrom<u8> for AuthOpCode {
@@ -21,6 +22,7 @@ impl TryFrom<u8> for AuthOpCode {
             1 => Ok(Self::Describe),
             2 => Ok(Self::CapabilitySet),
             3 => Ok(Self::AuthenticateOffline),
+            4 => Ok(Self::AuthenticateOnline),
             _ => Err(ProtocolCodecError::InvalidValue("invalid auth op code")),
         }
     }
@@ -29,6 +31,7 @@ impl TryFrom<u8> for AuthOpCode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthMode {
     Offline,
+    Online,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,7 +44,13 @@ pub struct AuthDescriptor {
 pub enum AuthRequest {
     Describe,
     CapabilitySet,
-    AuthenticateOffline { username: String },
+    AuthenticateOffline {
+        username: String,
+    },
+    AuthenticateOnline {
+        username: String,
+        server_hash: String,
+    },
 }
 
 impl AuthRequest {
@@ -51,6 +60,7 @@ impl AuthRequest {
             Self::Describe => AuthOpCode::Describe,
             Self::CapabilitySet => AuthOpCode::CapabilitySet,
             Self::AuthenticateOffline { .. } => AuthOpCode::AuthenticateOffline,
+            Self::AuthenticateOnline { .. } => AuthOpCode::AuthenticateOnline,
         }
     }
 }
@@ -150,6 +160,13 @@ fn encode_auth_request_payload(
     match request {
         AuthRequest::Describe | AuthRequest::CapabilitySet => Ok(()),
         AuthRequest::AuthenticateOffline { username } => encoder.write_string(username),
+        AuthRequest::AuthenticateOnline {
+            username,
+            server_hash,
+        } => {
+            encoder.write_string(username)?;
+            encoder.write_string(server_hash)
+        }
     }
 }
 
@@ -162,6 +179,10 @@ fn decode_auth_request_payload(
         AuthOpCode::CapabilitySet => Ok(AuthRequest::CapabilitySet),
         AuthOpCode::AuthenticateOffline => Ok(AuthRequest::AuthenticateOffline {
             username: decoder.read_string()?,
+        }),
+        AuthOpCode::AuthenticateOnline => Ok(AuthRequest::AuthenticateOnline {
+            username: decoder.read_string()?,
+            server_hash: decoder.read_string()?,
         }),
     }
 }
@@ -181,6 +202,10 @@ fn encode_auth_response_payload(
             encode_capability_set(encoder, capabilities)
         }
         (AuthOpCode::AuthenticateOffline, AuthResponse::AuthenticatedPlayer(player_id)) => {
+            encode_player_id(encoder, *player_id);
+            Ok(())
+        }
+        (AuthOpCode::AuthenticateOnline, AuthResponse::AuthenticatedPlayer(player_id)) => {
             encode_player_id(encoder, *player_id);
             Ok(())
         }
@@ -205,18 +230,23 @@ fn decode_auth_response_payload(
         AuthOpCode::AuthenticateOffline => Ok(AuthResponse::AuthenticatedPlayer(decode_player_id(
             decoder,
         )?)),
+        AuthOpCode::AuthenticateOnline => Ok(AuthResponse::AuthenticatedPlayer(decode_player_id(
+            decoder,
+        )?)),
     }
 }
 
 fn encode_auth_mode(encoder: &mut Encoder, mode: AuthMode) {
     encoder.write_u8(match mode {
         AuthMode::Offline => 1,
+        AuthMode::Online => 2,
     });
 }
 
 fn decode_auth_mode(decoder: &mut Decoder<'_>) -> Result<AuthMode, ProtocolCodecError> {
     match decoder.read_u8()? {
         1 => Ok(AuthMode::Offline),
+        2 => Ok(AuthMode::Online),
         _ => Err(ProtocolCodecError::InvalidValue("invalid auth mode")),
     }
 }
@@ -244,8 +274,8 @@ mod tests {
     fn auth_response_roundtrip() {
         let request = AuthRequest::Describe;
         let response = AuthResponse::Descriptor(AuthDescriptor {
-            auth_profile: "offline-v1".to_string(),
-            mode: AuthMode::Offline,
+            auth_profile: "mojang-online-v1".to_string(),
+            mode: AuthMode::Online,
         });
         let encoded = encode_auth_response(&request, &response).expect("response should encode");
         let decoded = decode_auth_response(&request, &encoded).expect("response should decode");
@@ -265,12 +295,24 @@ mod tests {
 
     #[test]
     fn auth_player_roundtrip() {
-        let request = AuthRequest::AuthenticateOffline {
+        let request = AuthRequest::AuthenticateOnline {
             username: "alice".to_string(),
+            server_hash: "abc123".to_string(),
         };
         let response = AuthResponse::AuthenticatedPlayer(PlayerId(Uuid::from_u128(99)));
         let encoded = encode_auth_response(&request, &response).expect("response should encode");
         let decoded = decode_auth_response(&request, &encoded).expect("response should decode");
         assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn auth_online_request_roundtrip() {
+        let request = AuthRequest::AuthenticateOnline {
+            username: "alice".to_string(),
+            server_hash: "-deadbeef".to_string(),
+        };
+        let encoded = encode_auth_request(&request).expect("request should encode");
+        let decoded = decode_auth_request(&encoded).expect("request should decode");
+        assert_eq!(decoded, request);
     }
 }

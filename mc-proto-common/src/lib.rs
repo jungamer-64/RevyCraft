@@ -59,8 +59,13 @@ pub enum StatusRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LoginRequest {
-    LoginStart { username: String },
-    EncryptionResponse,
+    LoginStart {
+        username: String,
+    },
+    EncryptionResponse {
+        shared_secret_encrypted: Vec<u8>,
+        verify_token_encrypted: Vec<u8>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,6 +193,17 @@ pub trait SessionAdapter: Send + Sync {
         &self,
         phase: ConnectionPhase,
         reason: &str,
+    ) -> Result<Vec<u8>, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the encryption request payload cannot be
+    /// encoded for the adapter's protocol version.
+    fn encode_encryption_request(
+        &self,
+        server_id: &str,
+        public_key_der: &[u8],
+        verify_token: &[u8],
     ) -> Result<Vec<u8>, ProtocolError>;
 
     /// # Errors

@@ -698,11 +698,11 @@ impl StorageGeneration {
 }
 
 #[derive(Clone)]
-struct AuthGeneration {
-    #[allow(dead_code)]
-    generation_id: PluginGenerationId,
+pub(crate) struct AuthGeneration {
+    pub(crate) generation_id: PluginGenerationId,
     plugin_id: String,
     profile_id: String,
+    mode: AuthMode,
     #[allow(dead_code)]
     capabilities: CapabilitySet,
     invoke: mc_plugin_api::PluginInvokeFn,
@@ -738,6 +738,43 @@ impl AuthGeneration {
             (self.free_buffer)(output);
         }
         decode_auth_response(&request, &response_bytes).map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn mode(&self) -> AuthMode {
+        self.mode
+    }
+
+    pub(crate) fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
+        match self
+            .invoke(AuthRequest::AuthenticateOffline {
+                username: username.to_string(),
+            })
+            .map_err(RuntimeError::Config)?
+        {
+            AuthResponse::AuthenticatedPlayer(player_id) => Ok(player_id),
+            other => Err(RuntimeError::Config(format!(
+                "unexpected auth authenticate_offline payload: {other:?}"
+            ))),
+        }
+    }
+
+    pub(crate) fn authenticate_online(
+        &self,
+        username: &str,
+        server_hash: &str,
+    ) -> Result<PlayerId, RuntimeError> {
+        match self
+            .invoke(AuthRequest::AuthenticateOnline {
+                username: username.to_string(),
+                server_hash: server_hash.to_string(),
+            })
+            .map_err(RuntimeError::Config)?
+        {
+            AuthResponse::AuthenticatedPlayer(player_id) => Ok(player_id),
+            other => Err(RuntimeError::Config(format!(
+                "unexpected auth authenticate_online payload: {other:?}"
+            ))),
+        }
     }
 }
 
@@ -1028,12 +1065,6 @@ impl PluginLoader {
                 package.plugin_id, descriptor.auth_profile, profile_id
             )));
         }
-        if descriptor.mode != AuthMode::Offline {
-            return Err(RuntimeError::Unsupported(format!(
-                "auth plugin `{}` mode {:?} is not supported yet",
-                package.plugin_id, descriptor.mode
-            )));
-        }
         let capabilities = match invoke_auth(&package.plugin_id, &api, AuthRequest::CapabilitySet)?
         {
             AuthResponse::CapabilitySet(capabilities) => capabilities,
@@ -1048,6 +1079,7 @@ impl PluginLoader {
             generation_id,
             plugin_id: package.plugin_id.clone(),
             profile_id,
+            mode: descriptor.mode,
             capabilities,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
@@ -1603,6 +1635,27 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
         )
     }
 
+    fn encode_encryption_request(
+        &self,
+        server_id: &str,
+        public_key_der: &[u8],
+        verify_token: &[u8],
+    ) -> Result<Vec<u8>, ProtocolError> {
+        let generation = self.current_generation()?;
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::EncodeEncryptionRequest {
+                server_id: server_id.to_string(),
+                public_key_der: public_key_der.to_vec(),
+                verify_token: verify_token.to_vec(),
+            })? {
+                ProtocolResponse::Frame(frame) => Ok(frame),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected encode_encryption_request payload: {other:?}"
+                ))),
+            },
+        )
+    }
+
     fn encode_login_success(
         &self,
         player: &mc_core::PlayerSnapshot,
@@ -2107,19 +2160,18 @@ impl HotSwappableAuthProfile {
             .map(|generation| generation.generation_id)
     }
 
+    pub(crate) fn mode(&self) -> Result<AuthMode, RuntimeError> {
+        self.current_generation()
+            .map(|generation| generation.mode())
+            .map_err(RuntimeError::Config)
+    }
+
+    pub(crate) fn capture_generation(&self) -> Result<Arc<AuthGeneration>, RuntimeError> {
+        self.current_generation().map_err(RuntimeError::Config)
+    }
+
     pub(crate) fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
-        let generation = self.current_generation().map_err(RuntimeError::Config)?;
-        match generation
-            .invoke(AuthRequest::AuthenticateOffline {
-                username: username.to_string(),
-            })
-            .map_err(RuntimeError::Config)?
-        {
-            AuthResponse::AuthenticatedPlayer(player_id) => Ok(player_id),
-            other => Err(RuntimeError::Config(format!(
-                "unexpected auth authenticate_offline payload: {other:?}"
-            ))),
-        }
+        self.capture_generation()?.authenticate_offline(username)
     }
 }
 
@@ -3035,7 +3087,7 @@ mod tests {
     fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), crate::RuntimeError> {
         let temp_dir = tempdir()?;
         let dist_dir = temp_dir.path().join("dist").join("plugins");
-        let target_dir = temp_dir.path().join("target");
+        let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-dynamic-load");
         run_xtask_package_plugins(&dist_dir, &target_dir, "dynamic-load-v1")?;
 
         let config = ServerConfig {
@@ -3068,7 +3120,7 @@ mod tests {
     fn packaged_protocol_reload_replaces_generation() -> Result<(), crate::RuntimeError> {
         let temp_dir = tempdir()?;
         let dist_dir = temp_dir.path().join("dist").join("plugins");
-        let target_dir = temp_dir.path().join("target");
+        let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-reload");
         run_xtask_package_plugins(&dist_dir, &target_dir, "reload-v1")?;
 
         let config = ServerConfig {
@@ -3143,6 +3195,9 @@ mod tests {
         target_dir: &Path,
         build_tag: &str,
     ) -> Result<(), crate::RuntimeError> {
+        let _guard = crate::packaged_plugin_test_build_lock()
+            .lock()
+            .expect("packaged plugin build lock should not be poisoned");
         let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
         let status = Command::new(cargo)
             .current_dir(workspace_root())
@@ -3174,6 +3229,9 @@ mod tests {
         target_dir: &Path,
         build_tag: &str,
     ) -> Result<(), crate::RuntimeError> {
+        let _guard = crate::packaged_plugin_test_build_lock()
+            .lock()
+            .expect("packaged plugin build lock should not be poisoned");
         let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
         let status = Command::new(cargo)
             .current_dir(workspace_root())

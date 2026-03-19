@@ -59,6 +59,16 @@ impl SessionAdapter for Je18xProtocolPlugin {
         self.adapter.encode_disconnect(phase, reason)
     }
 
+    fn encode_encryption_request(
+        &self,
+        server_id: &str,
+        public_key_der: &[u8],
+        verify_token: &[u8],
+    ) -> Result<Vec<u8>, ProtocolError> {
+        self.adapter
+            .encode_encryption_request(server_id, public_key_der, verify_token)
+    }
+
     fn encode_login_success(
         &self,
         player: &mc_core::PlayerSnapshot,

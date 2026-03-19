@@ -169,6 +169,10 @@ pub trait RustAuthPlugin: Send + Sync + 'static {
     }
 
     fn authenticate_offline(&self, username: &str) -> Result<PlayerId, String>;
+
+    fn authenticate_online(&self, _username: &str, _server_hash: &str) -> Result<PlayerId, String> {
+        Err("online auth is not implemented for this plugin".to_string())
+    }
 }
 
 pub trait GameplayHost {
@@ -356,6 +360,14 @@ pub fn handle_protocol_request<P: RustProtocolPlugin>(
             .encode_disconnect(phase, &reason)
             .map(ProtocolResponse::Frame)
             .map_err(|error| error.to_string()),
+        ProtocolRequest::EncodeEncryptionRequest {
+            server_id,
+            public_key_der,
+            verify_token,
+        } => plugin
+            .encode_encryption_request(&server_id, &public_key_der, &verify_token)
+            .map(ProtocolResponse::Frame)
+            .map_err(|error| error.to_string()),
         ProtocolRequest::EncodeLoginSuccess { player } => plugin
             .encode_login_success(&player)
             .map(ProtocolResponse::Frame)
@@ -424,6 +436,12 @@ pub fn handle_auth_request<P: RustAuthPlugin>(
         AuthRequest::CapabilitySet => Ok(AuthResponse::CapabilitySet(plugin.capability_set())),
         AuthRequest::AuthenticateOffline { username } => plugin
             .authenticate_offline(&username)
+            .map(AuthResponse::AuthenticatedPlayer),
+        AuthRequest::AuthenticateOnline {
+            username,
+            server_hash,
+        } => plugin
+            .authenticate_online(&username, &server_hash)
             .map(AuthResponse::AuthenticatedPlayer),
     }
 }

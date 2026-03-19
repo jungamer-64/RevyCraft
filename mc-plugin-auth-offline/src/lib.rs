@@ -39,6 +39,10 @@ impl RustAuthPlugin for OfflineAuthPlugin {
         bytes[8] = (bytes[8] & 0x3f) | 0x80;
         Ok(PlayerId(Uuid::from_bytes(bytes)))
     }
+
+    fn authenticate_online(&self, _username: &str, _server_hash: &str) -> Result<PlayerId, String> {
+        Err("offline auth plugin cannot handle online-mode authentication".to_string())
+    }
 }
 
 const MANIFEST: StaticPluginManifest = StaticPluginManifest::auth(

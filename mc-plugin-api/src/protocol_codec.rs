@@ -27,11 +27,12 @@ pub enum ProtocolOpCode {
     EncodeStatusResponse = 6,
     EncodeStatusPong = 7,
     EncodeDisconnect = 8,
-    EncodeLoginSuccess = 9,
-    DecodePlay = 10,
-    EncodePlayEvent = 11,
-    ExportSessionState = 12,
-    ImportSessionState = 13,
+    EncodeEncryptionRequest = 9,
+    EncodeLoginSuccess = 10,
+    DecodePlay = 11,
+    EncodePlayEvent = 12,
+    ExportSessionState = 13,
+    ImportSessionState = 14,
 }
 
 impl TryFrom<u8> for ProtocolOpCode {
@@ -47,11 +48,12 @@ impl TryFrom<u8> for ProtocolOpCode {
             6 => Ok(Self::EncodeStatusResponse),
             7 => Ok(Self::EncodeStatusPong),
             8 => Ok(Self::EncodeDisconnect),
-            9 => Ok(Self::EncodeLoginSuccess),
-            10 => Ok(Self::DecodePlay),
-            11 => Ok(Self::EncodePlayEvent),
-            12 => Ok(Self::ExportSessionState),
-            13 => Ok(Self::ImportSessionState),
+            9 => Ok(Self::EncodeEncryptionRequest),
+            10 => Ok(Self::EncodeLoginSuccess),
+            11 => Ok(Self::DecodePlay),
+            12 => Ok(Self::EncodePlayEvent),
+            13 => Ok(Self::ExportSessionState),
+            14 => Ok(Self::ImportSessionState),
             _ => Err(ProtocolCodecError::InvalidProtocolOpCode(value)),
         }
     }
@@ -107,6 +109,11 @@ pub enum ProtocolRequest {
         phase: ConnectionPhase,
         reason: String,
     },
+    EncodeEncryptionRequest {
+        server_id: String,
+        public_key_der: Vec<u8>,
+        verify_token: Vec<u8>,
+    },
     EncodeLoginSuccess {
         player: PlayerSnapshot,
     },
@@ -139,6 +146,7 @@ impl ProtocolRequest {
             Self::EncodeStatusResponse { .. } => ProtocolOpCode::EncodeStatusResponse,
             Self::EncodeStatusPong { .. } => ProtocolOpCode::EncodeStatusPong,
             Self::EncodeDisconnect { .. } => ProtocolOpCode::EncodeDisconnect,
+            Self::EncodeEncryptionRequest { .. } => ProtocolOpCode::EncodeEncryptionRequest,
             Self::EncodeLoginSuccess { .. } => ProtocolOpCode::EncodeLoginSuccess,
             Self::DecodePlay { .. } => ProtocolOpCode::DecodePlay,
             Self::EncodePlayEvent { .. } => ProtocolOpCode::EncodePlayEvent,
@@ -518,6 +526,15 @@ fn encode_protocol_request_payload(
             encode_connection_phase(encoder, *phase);
             encoder.write_string(reason)
         }
+        ProtocolRequest::EncodeEncryptionRequest {
+            server_id,
+            public_key_der,
+            verify_token,
+        } => {
+            encoder.write_string(server_id)?;
+            encoder.write_bytes(public_key_der)?;
+            encoder.write_bytes(verify_token)
+        }
         ProtocolRequest::EncodeLoginSuccess { player } => encode_player_snapshot(encoder, player),
         ProtocolRequest::DecodePlay { player_id, frame } => {
             encode_player_id(encoder, *player_id);
@@ -563,6 +580,11 @@ fn decode_protocol_request_payload(
         ProtocolOpCode::EncodeDisconnect => Ok(ProtocolRequest::EncodeDisconnect {
             phase: decode_connection_phase(decoder)?,
             reason: decoder.read_string()?,
+        }),
+        ProtocolOpCode::EncodeEncryptionRequest => Ok(ProtocolRequest::EncodeEncryptionRequest {
+            server_id: decoder.read_string()?,
+            public_key_der: decoder.read_bytes()?,
+            verify_token: decoder.read_bytes()?,
         }),
         ProtocolOpCode::EncodeLoginSuccess => Ok(ProtocolRequest::EncodeLoginSuccess {
             player: decode_player_snapshot(decoder)?,
@@ -610,6 +632,7 @@ fn encode_protocol_response_payload(
             ProtocolOpCode::EncodeStatusResponse
             | ProtocolOpCode::EncodeStatusPong
             | ProtocolOpCode::EncodeDisconnect
+            | ProtocolOpCode::EncodeEncryptionRequest
             | ProtocolOpCode::EncodeLoginSuccess,
             ProtocolResponse::Frame(frame),
         ) => encoder.write_bytes(frame),
@@ -657,6 +680,7 @@ fn decode_protocol_response_payload(
         ProtocolOpCode::EncodeStatusResponse
         | ProtocolOpCode::EncodeStatusPong
         | ProtocolOpCode::EncodeDisconnect
+        | ProtocolOpCode::EncodeEncryptionRequest
         | ProtocolOpCode::EncodeLoginSuccess => Ok(ProtocolResponse::Frame(decoder.read_bytes()?)),
         ProtocolOpCode::DecodePlay => Ok(ProtocolResponse::CoreCommand(decode_option(
             decoder,
@@ -1010,9 +1034,13 @@ fn encode_login_request(
             encoder.write_string(username)?;
             Ok(())
         }
-        LoginRequest::EncryptionResponse => {
+        LoginRequest::EncryptionResponse {
+            shared_secret_encrypted,
+            verify_token_encrypted,
+        } => {
             encoder.write_u8(2);
-            Ok(())
+            encoder.write_bytes(shared_secret_encrypted)?;
+            encoder.write_bytes(verify_token_encrypted)
         }
     }
 }
@@ -1022,7 +1050,10 @@ fn decode_login_request(decoder: &mut Decoder<'_>) -> Result<LoginRequest, Proto
         1 => Ok(LoginRequest::LoginStart {
             username: decoder.read_string()?,
         }),
-        2 => Ok(LoginRequest::EncryptionResponse),
+        2 => Ok(LoginRequest::EncryptionResponse {
+            shared_secret_encrypted: decoder.read_bytes()?,
+            verify_token_encrypted: decoder.read_bytes()?,
+        }),
         _ => Err(ProtocolCodecError::InvalidValue("invalid login request")),
     }
 }
@@ -1861,8 +1892,9 @@ mod tests {
                 ProtocolRequest::DecodeLogin {
                     frame: vec![6, 5, 4],
                 },
-                ProtocolResponse::LoginRequest(LoginRequest::LoginStart {
-                    username: "alice".to_string(),
+                ProtocolResponse::LoginRequest(LoginRequest::EncryptionResponse {
+                    shared_secret_encrypted: vec![1, 2, 3, 4],
+                    verify_token_encrypted: vec![5, 6, 7, 8],
                 }),
             ),
             (
@@ -1888,15 +1920,23 @@ mod tests {
                 ProtocolResponse::Frame(vec![4, 5]),
             ),
             (
-                ProtocolRequest::EncodeLoginSuccess {
-                    player: player.clone(),
+                ProtocolRequest::EncodeEncryptionRequest {
+                    server_id: String::new(),
+                    public_key_der: vec![9, 8, 7, 6],
+                    verify_token: vec![5, 4, 3, 2],
                 },
                 ProtocolResponse::Frame(vec![6, 7]),
             ),
             (
+                ProtocolRequest::EncodeLoginSuccess {
+                    player: player.clone(),
+                },
+                ProtocolResponse::Frame(vec![8, 9]),
+            ),
+            (
                 ProtocolRequest::DecodePlay {
                     player_id: sample_player_id(),
-                    frame: vec![8, 9],
+                    frame: vec![10, 11],
                 },
                 ProtocolResponse::CoreCommand(Some(sample_command())),
             ),
@@ -1908,7 +1948,7 @@ mod tests {
                         entity_id: EntityId(7),
                     },
                 },
-                ProtocolResponse::Frames(vec![vec![10], vec![11, 12]]),
+                ProtocolResponse::Frames(vec![vec![12], vec![13, 14]]),
             ),
             (
                 ProtocolRequest::ExportSessionState {
@@ -1918,7 +1958,7 @@ mod tests {
                         entity_id: Some(EntityId(7)),
                     },
                 },
-                ProtocolResponse::SessionTransferBlob(vec![13, 14]),
+                ProtocolResponse::SessionTransferBlob(vec![15, 16]),
             ),
             (
                 ProtocolRequest::ImportSessionState {
@@ -1927,7 +1967,7 @@ mod tests {
                         player_id: Some(sample_player_id()),
                         entity_id: Some(EntityId(7)),
                     },
-                    blob: vec![15, 16],
+                    blob: vec![17, 18],
                 },
                 ProtocolResponse::Empty,
             ),

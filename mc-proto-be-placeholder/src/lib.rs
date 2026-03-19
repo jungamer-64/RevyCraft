@@ -119,6 +119,15 @@ impl SessionAdapter for BePlaceholderAdapter {
         Err(unsupported())
     }
 
+    fn encode_encryption_request(
+        &self,
+        _server_id: &str,
+        _public_key_der: &[u8],
+        _verify_token: &[u8],
+    ) -> Result<Vec<u8>, ProtocolError> {
+        Err(unsupported())
+    }
+
     fn encode_login_success(&self, _player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
         Err(unsupported())
     }

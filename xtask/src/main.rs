@@ -51,6 +51,11 @@ const PLUGINS: &[PluginSpec] = &[
         plugin_id: "auth-offline",
         plugin_kind: "auth",
     },
+    PluginSpec {
+        cargo_package: "mc-plugin-auth-mojang-online",
+        plugin_id: "auth-mojang-online",
+        plugin_kind: "auth",
+    },
 ];
 
 fn main() -> Result<(), String> {

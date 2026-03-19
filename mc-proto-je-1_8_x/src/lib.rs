@@ -29,6 +29,7 @@ const PACKET_LOGIN_ENCRYPTION_RESPONSE: i32 = 0x01;
 const PACKET_CB_STATUS_RESPONSE: i32 = 0x00;
 const PACKET_CB_STATUS_PONG: i32 = 0x01;
 const PACKET_CB_LOGIN_DISCONNECT: i32 = 0x00;
+const PACKET_CB_LOGIN_ENCRYPTION_REQUEST: i32 = 0x01;
 const PACKET_CB_LOGIN_SUCCESS: i32 = 0x02;
 
 const PACKET_CB_KEEP_ALIVE: i32 = 0x00;
@@ -136,7 +137,10 @@ impl SessionAdapter for Je18xAdapter {
             PACKET_LOGIN_START => Ok(LoginRequest::LoginStart {
                 username: reader.read_string(16)?,
             }),
-            PACKET_LOGIN_ENCRYPTION_RESPONSE => Ok(LoginRequest::EncryptionResponse),
+            PACKET_LOGIN_ENCRYPTION_RESPONSE => Ok(LoginRequest::EncryptionResponse {
+                shared_secret_encrypted: read_login_byte_array(&mut reader)?,
+                verify_token_encrypted: read_login_byte_array(&mut reader)?,
+            }),
             packet_id => Err(ProtocolError::UnsupportedPacket(packet_id)),
         }
     }
@@ -186,6 +190,20 @@ impl SessionAdapter for Je18xAdapter {
         };
         writer.write_varint(packet_id);
         writer.write_string(&json!({ "text": reason }).to_string())?;
+        Ok(writer.into_inner())
+    }
+
+    fn encode_encryption_request(
+        &self,
+        server_id: &str,
+        public_key_der: &[u8],
+        verify_token: &[u8],
+    ) -> Result<Vec<u8>, ProtocolError> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(PACKET_CB_LOGIN_ENCRYPTION_REQUEST);
+        writer.write_string(server_id)?;
+        write_login_byte_array(&mut writer, public_key_der)?;
+        write_login_byte_array(&mut writer, verify_token)?;
         Ok(writer.into_inner())
     }
 
@@ -324,6 +342,21 @@ impl PlaySyncAdapter for Je18xAdapter {
             ),
         }
     }
+}
+
+fn write_login_byte_array(writer: &mut PacketWriter, bytes: &[u8]) -> Result<(), ProtocolError> {
+    writer.write_varint(
+        i32::try_from(bytes.len())
+            .map_err(|_| ProtocolError::InvalidPacket("login byte array too large"))?,
+    );
+    writer.write_bytes(bytes);
+    Ok(())
+}
+
+fn read_login_byte_array(reader: &mut PacketReader<'_>) -> Result<Vec<u8>, ProtocolError> {
+    let len = usize::try_from(reader.read_varint()?)
+        .map_err(|_| ProtocolError::InvalidPacket("negative login byte array length"))?;
+    Ok(reader.read_bytes(len)?.to_vec())
 }
 
 impl ProtocolAdapter for Je18xAdapter {
@@ -687,6 +720,17 @@ mod tests {
                 username: "test".to_string()
             }
         );
+
+        let encryption_response = adapter
+            .decode_login(&[0x01, 0x03, 1, 2, 3, 0x02, 4, 5])
+            .expect("encryption response should decode");
+        assert_eq!(
+            encryption_response,
+            LoginRequest::EncryptionResponse {
+                shared_secret_encrypted: vec![1, 2, 3],
+                verify_token_encrypted: vec![4, 5],
+            }
+        );
     }
 
     #[test]
@@ -707,6 +751,11 @@ mod tests {
             })
             .expect("status should encode");
         assert_eq!(status_packet[0], 0x00);
+
+        let encryption_request = adapter
+            .encode_encryption_request("", &[1, 2, 3], &[4, 5])
+            .expect("encryption request should encode");
+        assert_eq!(encryption_request[0], 0x01);
 
         let packet = adapter
             .encode_play_event(

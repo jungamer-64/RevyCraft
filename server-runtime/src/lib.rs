@@ -1,25 +1,32 @@
 mod plugin_host;
 
+use aes::Aes128;
+use aes::cipher::{BlockEncrypt, KeyInit};
 use bytes::BytesMut;
 use mc_core::{
     ConnectionId, CoreCommand, CoreConfig, CoreEvent, EventTarget, PlayerId, PlayerSummary,
     ServerCore, SessionCapabilitySet, TargetedEvent,
 };
-use mc_plugin_api::GameplaySessionSnapshot;
-use mc_plugin_api::PluginAbiVersion;
+use mc_plugin_api::{AuthMode, GameplaySessionSnapshot, PluginAbiVersion};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeNextState, HandshakeProbe, LoginRequest, MinecraftWireCodec,
     PacketWriter, PlayEncodingContext, ProtocolAdapter, ProtocolError, ServerListStatus,
     StatusRequest, StorageAdapter, TransportKind, WireCodec,
 };
+use num_bigint::BigInt;
 use plugin_host::{
-    HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableStorageProfile,
+    AuthGeneration, HotSwappableAuthProfile, HotSwappableGameplayProfile,
+    HotSwappableStorageProfile,
 };
 pub use plugin_host::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
     PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost, plugin_host_from_config,
     plugin_reload_poll_interval_ms,
 };
+use rand::RngCore;
+use rsa::pkcs8::EncodePublicKey;
+use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
+use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -33,6 +40,27 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 const BE_PLACEHOLDER_ADAPTER_ID: &str = "be-placeholder";
+const LOGIN_SERVER_ID: &str = "";
+const LOGIN_VERIFY_TOKEN_LEN: usize = 4;
+
+#[cfg(test)]
+pub(crate) fn packaged_plugin_test_build_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
+pub(crate) fn packaged_plugin_test_target_dir(scope: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("server-runtime crate should live under the workspace root")
+        .join("target")
+        .join(format!(
+            "server-runtime-packaged-plugin-builds-{}",
+            std::process::id()
+        ))
+        .join(scope)
+}
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -551,19 +579,48 @@ struct AcceptedTransportSession {
 }
 
 enum TransportSessionIo {
-    Tcp(TcpStream),
+    Tcp {
+        stream: TcpStream,
+        encryption: Option<TransportEncryptionState>,
+    },
 }
 
 impl TransportSessionIo {
     async fn read_into(&mut self, buffer: &mut BytesMut) -> Result<usize, std::io::Error> {
         match self {
-            Self::Tcp(stream) => stream.read_buf(buffer).await,
+            Self::Tcp { stream, encryption } => {
+                let mut chunk = [0_u8; 8192];
+                let bytes_read = stream.read(&mut chunk).await?;
+                if bytes_read == 0 {
+                    return Ok(0);
+                }
+                let bytes = &mut chunk[..bytes_read];
+                if let Some(encryption) = encryption.as_mut() {
+                    encryption.decrypt.apply_decrypt(bytes);
+                }
+                buffer.extend_from_slice(bytes);
+                Ok(bytes_read)
+            }
         }
     }
 
     async fn write_all(&mut self, bytes: &[u8]) -> Result<(), std::io::Error> {
         match self {
-            Self::Tcp(stream) => stream.write_all(bytes).await,
+            Self::Tcp { stream, encryption } => {
+                let mut encrypted = bytes.to_vec();
+                if let Some(encryption) = encryption.as_mut() {
+                    encryption.encrypt.apply_encrypt(&mut encrypted);
+                }
+                stream.write_all(&encrypted).await
+            }
+        }
+    }
+
+    fn enable_encryption(&mut self, shared_secret: [u8; 16]) {
+        match self {
+            Self::Tcp { encryption, .. } => {
+                *encryption = Some(TransportEncryptionState::new(shared_secret));
+            }
         }
     }
 }
@@ -622,6 +679,7 @@ struct SessionState {
     phase: ConnectionPhase,
     adapter: Option<Arc<dyn ProtocolAdapter>>,
     gameplay: Option<Arc<HotSwappableGameplayProfile>>,
+    login_challenge: Option<LoginChallengeState>,
     player_id: Option<PlayerId>,
     entity_id: Option<mc_core::EntityId>,
     session_capabilities: Option<SessionCapabilitySet>,
@@ -638,10 +696,124 @@ struct RuntimeServer {
     plugin_host: Option<Arc<PluginHost>>,
     default_adapter: Arc<dyn ProtocolAdapter>,
     auth_profile: Arc<HotSwappableAuthProfile>,
+    online_auth_keys: Option<Arc<OnlineAuthKeys>>,
     storage_profile: Arc<HotSwappableStorageProfile>,
     state: Mutex<RuntimeState>,
     sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
     next_connection_id: Mutex<u64>,
+}
+
+struct OnlineAuthKeys {
+    private_key: RsaPrivateKey,
+    public_key_der: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct LoginChallengeState {
+    username: String,
+    verify_token: [u8; LOGIN_VERIFY_TOKEN_LEN],
+    auth_generation: Arc<AuthGeneration>,
+    #[allow(dead_code)]
+    challenge_started_at: u64,
+}
+
+struct TransportEncryptionState {
+    encrypt: MinecraftStreamCipher,
+    decrypt: MinecraftStreamCipher,
+}
+
+impl TransportEncryptionState {
+    fn new(shared_secret: [u8; 16]) -> Self {
+        Self {
+            encrypt: MinecraftStreamCipher::new(shared_secret),
+            decrypt: MinecraftStreamCipher::new(shared_secret),
+        }
+    }
+}
+
+struct MinecraftStreamCipher {
+    cipher: Aes128,
+    shift_register: [u8; 16],
+}
+
+impl MinecraftStreamCipher {
+    fn new(shared_secret: [u8; 16]) -> Self {
+        Self {
+            cipher: Aes128::new_from_slice(&shared_secret)
+                .expect("AES-128 key length should be exactly 16 bytes"),
+            shift_register: shared_secret,
+        }
+    }
+
+    fn apply_encrypt(&mut self, bytes: &mut [u8]) {
+        for byte in bytes {
+            let mut block = aes::Block::default();
+            block.copy_from_slice(&self.shift_register);
+            self.cipher.encrypt_block(&mut block);
+            let ciphertext = *byte ^ block[0];
+            self.shift_register.copy_within(1.., 0);
+            self.shift_register[15] = ciphertext;
+            *byte = ciphertext;
+        }
+    }
+
+    fn apply_decrypt(&mut self, bytes: &mut [u8]) {
+        for byte in bytes {
+            let ciphertext = *byte;
+            let mut block = aes::Block::default();
+            block.copy_from_slice(&self.shift_register);
+            self.cipher.encrypt_block(&mut block);
+            let plaintext = ciphertext ^ block[0];
+            self.shift_register.copy_within(1.., 0);
+            self.shift_register[15] = ciphertext;
+            *byte = plaintext;
+        }
+    }
+}
+
+impl OnlineAuthKeys {
+    fn generate() -> Result<Self, RuntimeError> {
+        let mut rng = rand::rngs::OsRng;
+        let private_key = RsaPrivateKey::new(&mut rng, 1024).map_err(|error| {
+            RuntimeError::Auth(format!("failed to generate RSA keypair: {error}"))
+        })?;
+        let public_key_der = RsaPublicKey::from(&private_key)
+            .to_public_key_der()
+            .map_err(|error| {
+                RuntimeError::Auth(format!("failed to encode RSA public key: {error}"))
+            })?
+            .as_bytes()
+            .to_vec();
+        Ok(Self {
+            private_key,
+            public_key_der,
+        })
+    }
+}
+
+fn random_verify_token() -> [u8; LOGIN_VERIFY_TOKEN_LEN] {
+    let mut verify_token = [0_u8; LOGIN_VERIFY_TOKEN_LEN];
+    rand::rngs::OsRng.fill_bytes(&mut verify_token);
+    verify_token
+}
+
+fn decrypt_login_blob(private_key: &RsaPrivateKey, bytes: &[u8]) -> Result<Vec<u8>, RuntimeError> {
+    private_key
+        .decrypt(Pkcs1v15Encrypt, bytes)
+        .map_err(|error| RuntimeError::Auth(format!("failed to decrypt login blob: {error}")))
+}
+
+fn minecraft_server_hash(
+    server_id: &str,
+    shared_secret: &[u8; 16],
+    public_key_der: &[u8],
+) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(server_id.as_bytes());
+    hasher.update(shared_secret);
+    hasher.update(public_key_der);
+    let digest = hasher.finalize();
+    BigInt::from_signed_bytes_be(&digest).to_str_radix(16)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -765,6 +937,7 @@ impl RuntimeServer {
             phase: ConnectionPhase::Handshaking,
             adapter: None,
             gameplay: None,
+            login_challenge: None,
             player_id: None,
             entity_id: None,
             session_capabilities: None,
@@ -942,7 +1115,7 @@ impl RuntimeServer {
         &self,
         connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
-        session: &SessionState,
+        session: &mut SessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
         let current = session
@@ -951,6 +1124,37 @@ impl RuntimeServer {
             .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
         match current.decode_login(frame)? {
             LoginRequest::LoginStart { username } => {
+                if self.config.online_mode {
+                    if session.login_challenge.is_some() {
+                        let disconnect = current.encode_disconnect(
+                            ConnectionPhase::Login,
+                            "Login encryption is already in progress",
+                        )?;
+                        write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                        return Ok(true);
+                    }
+                    let Some(online_auth_keys) = self.online_auth_keys.as_ref() else {
+                        return Err(RuntimeError::Config(
+                            "online-mode=true requires generated auth keys".to_string(),
+                        ));
+                    };
+                    let verify_token = random_verify_token();
+                    let auth_generation = self.auth_profile.capture_generation()?;
+                    let encryption_request = current.encode_encryption_request(
+                        LOGIN_SERVER_ID,
+                        &online_auth_keys.public_key_der,
+                        &verify_token,
+                    )?;
+                    session.login_challenge = Some(LoginChallengeState {
+                        username,
+                        verify_token,
+                        auth_generation,
+                        challenge_started_at: now_ms(),
+                    });
+                    write_payload(transport_io, current.wire_codec(), &encryption_request).await?;
+                    return Ok(false);
+                }
+
                 let authenticated = self.auth_profile.authenticate_offline(&username)?;
                 self.apply_command(
                     CoreCommand::LoginStart {
@@ -963,11 +1167,114 @@ impl RuntimeServer {
                 .await?;
                 Ok(false)
             }
-            LoginRequest::EncryptionResponse => {
-                let disconnect = current
-                    .encode_disconnect(ConnectionPhase::Login, "online-mode is not implemented")?;
-                write_payload(transport_io, current.wire_codec(), &disconnect).await?;
-                Ok(true)
+            LoginRequest::EncryptionResponse {
+                shared_secret_encrypted,
+                verify_token_encrypted,
+            } => {
+                if !self.config.online_mode {
+                    let disconnect = current.encode_disconnect(
+                        ConnectionPhase::Login,
+                        "Encryption response is not valid in offline mode",
+                    )?;
+                    write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                    return Ok(true);
+                }
+
+                let Some(challenge) = session.login_challenge.take() else {
+                    let disconnect = current.encode_disconnect(
+                        ConnectionPhase::Login,
+                        "Unexpected encryption response",
+                    )?;
+                    write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                    return Ok(true);
+                };
+
+                let Some(online_auth_keys) = self.online_auth_keys.as_ref() else {
+                    return Err(RuntimeError::Config(
+                        "online-mode=true requires generated auth keys".to_string(),
+                    ));
+                };
+                let shared_secret = match decrypt_login_blob(
+                    &online_auth_keys.private_key,
+                    &shared_secret_encrypted,
+                ) {
+                    Ok(shared_secret) => shared_secret,
+                    Err(_) => {
+                        let disconnect = current.encode_disconnect(
+                            ConnectionPhase::Login,
+                            "Invalid encryption response",
+                        )?;
+                        write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                        return Ok(true);
+                    }
+                };
+                let verify_token = match decrypt_login_blob(
+                    &online_auth_keys.private_key,
+                    &verify_token_encrypted,
+                ) {
+                    Ok(verify_token) => verify_token,
+                    Err(_) => {
+                        let disconnect = current.encode_disconnect(
+                            ConnectionPhase::Login,
+                            "Invalid encryption response",
+                        )?;
+                        write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                        return Ok(true);
+                    }
+                };
+                let shared_secret: [u8; 16] = match shared_secret.try_into() {
+                    Ok(shared_secret) => shared_secret,
+                    Err(_) => {
+                        let disconnect = current.encode_disconnect(
+                            ConnectionPhase::Login,
+                            "Invalid shared secret length",
+                        )?;
+                        write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                        return Ok(true);
+                    }
+                };
+                transport_io.enable_encryption(shared_secret);
+                if verify_token.as_slice() != challenge.verify_token {
+                    let disconnect = current.encode_disconnect(
+                        ConnectionPhase::Login,
+                        "Encryption verification failed",
+                    )?;
+                    write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                    return Ok(true);
+                }
+                let server_hash = minecraft_server_hash(
+                    LOGIN_SERVER_ID,
+                    &shared_secret,
+                    &online_auth_keys.public_key_der,
+                );
+                let username = challenge.username.clone();
+                let auth_generation = Arc::clone(&challenge.auth_generation);
+                let authenticated = match tokio::task::spawn_blocking(move || {
+                    auth_generation.authenticate_online(&username, &server_hash)
+                })
+                .await
+                {
+                    Ok(Ok(player_id)) => player_id,
+                    Ok(Err(error)) => {
+                        let disconnect = current.encode_disconnect(
+                            ConnectionPhase::Login,
+                            &format!("Authentication failed: {error}"),
+                        )?;
+                        write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                        return Ok(true);
+                    }
+                    Err(error) => return Err(RuntimeError::Join(error)),
+                };
+                self.apply_command(
+                    CoreCommand::LoginStart {
+                        connection_id,
+                        username: challenge.username,
+                        player_id: authenticated,
+                    },
+                    Some(session),
+                )
+                .await?;
+                Ok(false)
             }
         }
     }
@@ -1277,7 +1584,7 @@ fn default_wire_codec(transport: TransportKind) -> &'static dyn WireCodec {
 ///
 /// Returns [`RuntimeError`] when the server cannot bind, load its persisted
 /// world state, or starts with unsupported configuration such as
-/// `online-mode=true`.
+/// an auth profile mode mismatch.
 pub async fn spawn_server(
     config: ServerConfig,
     registries: RuntimeRegistries,
@@ -1288,11 +1595,6 @@ pub async fn spawn_server(
             config.plugins_dir.display()
         ))
     })?;
-    if config.online_mode {
-        return Err(RuntimeError::Unsupported(
-            "online-mode=true is not implemented".to_string(),
-        ));
-    }
     if registries
         .protocols()
         .resolve_adapter(&config.default_adapter)
@@ -1360,6 +1662,25 @@ pub async fn spawn_server(
         .ok_or_else(|| {
             RuntimeError::Config(format!("unknown auth-profile `{}`", config.auth_profile))
         })?;
+    let auth_mode = auth_profile.mode()?;
+    match (config.online_mode, auth_mode) {
+        (true, AuthMode::Online) | (false, AuthMode::Offline) => {}
+        (true, mode) => {
+            return Err(RuntimeError::Config(format!(
+                "online-mode=true requires an online auth profile, got {mode:?}"
+            )));
+        }
+        (false, mode) => {
+            return Err(RuntimeError::Config(format!(
+                "online-mode=false requires an offline auth profile, got {mode:?}"
+            )));
+        }
+    }
+    let online_auth_keys = if config.online_mode {
+        Some(Arc::new(OnlineAuthKeys::generate()?))
+    } else {
+        None
+    };
     let snapshot = storage_profile.load_snapshot(&config.world_dir)?;
     let core_config = CoreConfig {
         level_name: config.level_name.clone(),
@@ -1412,6 +1733,7 @@ pub async fn spawn_server(
         plugin_host: Some(plugin_host.clone()),
         default_adapter,
         auth_profile,
+        online_auth_keys,
         storage_profile,
         state: Mutex::new(RuntimeState { core, dirty: false }),
         sessions: Mutex::new(HashMap::new()),
@@ -1436,7 +1758,10 @@ pub async fn spawn_server(
                     let (stream, _) = accepted?;
                     let session = AcceptedTransportSession {
                         transport: TransportKind::Tcp,
-                        io: TransportSessionIo::Tcp(stream),
+                        io: TransportSessionIo::Tcp {
+                            stream,
+                            encryption: None,
+                        },
                     };
                     run_server.spawn_session(session).await;
                 }
@@ -1529,12 +1854,25 @@ pub fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8
 #[cfg(test)]
 mod tests {
     use super::{
-        LevelType, RuntimeError, RuntimeRegistries, ServerConfig, UdpDatagramAction,
+        InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
+        InProcessStoragePlugin, LevelType, PluginAbiRange, PluginCatalog, PluginFailurePolicy,
+        PluginHost, RuntimeError, RuntimeRegistries, ServerConfig, UdpDatagramAction,
         build_listener_plans, classify_udp_datagram, encode_handshake, plugin_host_from_config,
         spawn_server,
     };
     use bytes::BytesMut;
     use mc_plugin_auth_offline::OFFLINE_AUTH_PROFILE_ID;
+    use mc_plugin_auth_online_stub::{
+        ONLINE_STUB_AUTH_PLUGIN_ID, ONLINE_STUB_AUTH_PROFILE_ID,
+        in_process_auth_entrypoints as online_stub_auth_entrypoints,
+    };
+    use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
+    use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
+    use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
+    use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints as je_1_7_10_entrypoints;
+    use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entrypoints;
+    use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
+    use mc_plugin_storage_je_anvil_1_7_10::in_process_storage_entrypoints as storage_entrypoints;
     use mc_proto_be_placeholder::BE_PLACEHOLDER_ADAPTER_ID;
     use mc_proto_common::{
         Edition, MinecraftWireCodec, PacketReader, PacketWriter, TransportKind, WireCodec,
@@ -1542,6 +1880,9 @@ mod tests {
     use mc_proto_je_1_7_10::{JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID};
     use mc_proto_je_1_8_x::JE_1_8_X_ADAPTER_ID;
     use mc_proto_je_1_12_2::JE_1_12_2_ADAPTER_ID;
+    use rand::RngCore;
+    use rsa::pkcs8::DecodePublicKey;
+    use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
     use std::collections::HashMap;
     use std::env;
     use std::ffi::OsString;
@@ -1549,6 +1890,7 @@ mod tests {
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::Arc;
     use std::sync::OnceLock;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -1609,7 +1951,10 @@ mod tests {
         plugin_test_registries_from_dist(harness.dist_dir.clone(), allowlist)
     }
 
-    fn plugin_allowlist_with_gameplay(allowlist: &[&str]) -> Vec<String> {
+    fn plugin_allowlist_with_supporting_plugins(
+        allowlist: &[&str],
+        supporting_plugin_ids: &[&str],
+    ) -> Vec<String> {
         let mut plugin_allowlist = allowlist
             .iter()
             .map(|entry| (*entry).to_string())
@@ -1620,7 +1965,7 @@ mod tests {
                 .map(|plugin_id| (*plugin_id).to_string()),
         );
         plugin_allowlist.extend(
-            STORAGE_AND_AUTH_PLUGIN_IDS
+            supporting_plugin_ids
                 .iter()
                 .map(|plugin_id| (*plugin_id).to_string()),
         );
@@ -1631,9 +1976,24 @@ mod tests {
         dist_dir: PathBuf,
         allowlist: &[&str],
     ) -> Result<RuntimeRegistries, RuntimeError> {
+        plugin_test_registries_from_dist_with_supporting_plugins(
+            dist_dir,
+            allowlist,
+            STORAGE_AND_AUTH_PLUGIN_IDS,
+        )
+    }
+
+    fn plugin_test_registries_from_dist_with_supporting_plugins(
+        dist_dir: PathBuf,
+        allowlist: &[&str],
+        supporting_plugin_ids: &[&str],
+    ) -> Result<RuntimeRegistries, RuntimeError> {
         let config = ServerConfig {
             plugins_dir: dist_dir,
-            plugin_allowlist: Some(plugin_allowlist_with_gameplay(allowlist)),
+            plugin_allowlist: Some(plugin_allowlist_with_supporting_plugins(
+                allowlist,
+                supporting_plugin_ids,
+            )),
             ..ServerConfig::default()
         };
         let plugin_host = plugin_host_from_config(&config)?.ok_or_else(|| {
@@ -1652,6 +2012,78 @@ mod tests {
         plugin_test_registries_with_allowlist(ALL_PROTOCOL_PLUGIN_IDS)
     }
 
+    fn in_process_online_auth_registries(
+        allowlist: &[&str],
+    ) -> Result<RuntimeRegistries, RuntimeError> {
+        let mut catalog = PluginCatalog::default();
+        for adapter_id in allowlist {
+            match *adapter_id {
+                JE_1_7_10_ADAPTER_ID => {
+                    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                        plugin_id: JE_1_7_10_ADAPTER_ID.to_string(),
+                        manifest: je_1_7_10_entrypoints().manifest,
+                        api: je_1_7_10_entrypoints().api,
+                    })
+                }
+                JE_1_8_X_ADAPTER_ID => {
+                    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                        plugin_id: JE_1_8_X_ADAPTER_ID.to_string(),
+                        manifest: je_1_8_x_entrypoints().manifest,
+                        api: je_1_8_x_entrypoints().api,
+                    })
+                }
+                JE_1_12_2_ADAPTER_ID => {
+                    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                        plugin_id: JE_1_12_2_ADAPTER_ID.to_string(),
+                        manifest: je_1_12_2_entrypoints().manifest,
+                        api: je_1_12_2_entrypoints().api,
+                    })
+                }
+                BE_PLACEHOLDER_ADAPTER_ID => {
+                    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                        plugin_id: BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+                        manifest: be_placeholder_entrypoints().manifest,
+                        api: be_placeholder_entrypoints().api,
+                    })
+                }
+                other => {
+                    return Err(RuntimeError::Config(format!(
+                        "unknown in-process adapter `{other}`"
+                    )));
+                }
+            }
+        }
+        catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+            plugin_id: "gameplay-canonical".to_string(),
+            manifest: canonical_gameplay_entrypoints().manifest,
+            api: canonical_gameplay_entrypoints().api,
+        });
+        catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+            plugin_id: "gameplay-readonly".to_string(),
+            manifest: readonly_gameplay_entrypoints().manifest,
+            api: readonly_gameplay_entrypoints().api,
+        });
+        catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
+            plugin_id: "storage-je-anvil-1_7_10".to_string(),
+            manifest: storage_entrypoints().manifest,
+            api: storage_entrypoints().api,
+        });
+        catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
+            plugin_id: ONLINE_STUB_AUTH_PLUGIN_ID.to_string(),
+            manifest: online_stub_auth_entrypoints().manifest,
+            api: online_stub_auth_entrypoints().api,
+        });
+
+        let plugin_host = Arc::new(PluginHost::new(
+            catalog,
+            PluginAbiRange::default(),
+            PluginFailurePolicy::Quarantine,
+        ));
+        let mut registries = RuntimeRegistries::new();
+        plugin_host.load_into_registries(&mut registries)?;
+        Ok(registries)
+    }
+
     fn gameplay_profile_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
         entries
             .iter()
@@ -1664,6 +2096,9 @@ mod tests {
         target_dir: &Path,
         build_tag: &str,
     ) -> Result<(), RuntimeError> {
+        let _guard = crate::packaged_plugin_test_build_lock()
+            .lock()
+            .expect("packaged plugin build lock should not be poisoned");
         let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
         let status = Command::new(cargo)
             .current_dir(workspace_root())
@@ -1703,6 +2138,9 @@ mod tests {
         target_dir: &Path,
         build_tag: &str,
     ) -> Result<(), RuntimeError> {
+        let _guard = crate::packaged_plugin_test_build_lock()
+            .lock()
+            .expect("packaged plugin build lock should not be poisoned");
         let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
         let status = Command::new(cargo)
             .current_dir(workspace_root())
@@ -1878,6 +2316,152 @@ mod tests {
     fn packet_id(frame: &[u8]) -> i32 {
         let mut reader = PacketReader::new(frame);
         reader.read_varint().expect("packet id should decode")
+    }
+
+    struct TestClientEncryptionState {
+        encrypt: super::MinecraftStreamCipher,
+        decrypt: super::MinecraftStreamCipher,
+    }
+
+    impl TestClientEncryptionState {
+        fn new(shared_secret: [u8; 16]) -> Self {
+            Self {
+                encrypt: super::MinecraftStreamCipher::new(shared_secret),
+                decrypt: super::MinecraftStreamCipher::new(shared_secret),
+            }
+        }
+    }
+
+    fn login_encryption_response(
+        shared_secret_encrypted: &[u8],
+        verify_token_encrypted: &[u8],
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x01);
+        writer.write_varint(
+            i32::try_from(shared_secret_encrypted.len()).map_err(|_| {
+                RuntimeError::Config("encrypted shared secret too large".to_string())
+            })?,
+        );
+        writer.write_bytes(shared_secret_encrypted);
+        writer.write_varint(
+            i32::try_from(verify_token_encrypted.len()).map_err(|_| {
+                RuntimeError::Config("encrypted verify token too large".to_string())
+            })?,
+        );
+        writer.write_bytes(verify_token_encrypted);
+        Ok(writer.into_inner())
+    }
+
+    fn parse_encryption_request(packet: &[u8]) -> Result<(String, Vec<u8>, Vec<u8>), RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x01 {
+            return Err(RuntimeError::Config(
+                "expected login encryption request packet".to_string(),
+            ));
+        }
+        let server_id = reader.read_string(20)?;
+        let public_key_len = usize::try_from(reader.read_varint()?)
+            .map_err(|_| RuntimeError::Config("negative public key length".to_string()))?;
+        let public_key_der = reader.read_bytes(public_key_len)?.to_vec();
+        let verify_token_len = usize::try_from(reader.read_varint()?)
+            .map_err(|_| RuntimeError::Config("negative verify token length".to_string()))?;
+        let verify_token = reader.read_bytes(verify_token_len)?.to_vec();
+        Ok((server_id, public_key_der, verify_token))
+    }
+
+    async fn write_packet_encrypted(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        payload: &[u8],
+        encryption: &mut TestClientEncryptionState,
+    ) -> Result<(), RuntimeError> {
+        let mut frame = codec.encode_frame(payload)?;
+        encryption.encrypt.apply_encrypt(&mut frame);
+        stream.write_all(&frame).await?;
+        Ok(())
+    }
+
+    async fn read_packet_encrypted(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        buffer: &mut BytesMut,
+        encryption: &mut TestClientEncryptionState,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        loop {
+            if let Some(frame) = codec.try_decode_frame(buffer)? {
+                return Ok(frame);
+            }
+            let mut chunk = [0_u8; 8192];
+            let bytes_read = stream.read(&mut chunk).await?;
+            if bytes_read == 0 {
+                return Err(RuntimeError::Config("connection closed".to_string()));
+            }
+            let bytes = &mut chunk[..bytes_read];
+            encryption.decrypt.apply_decrypt(bytes);
+            buffer.extend_from_slice(bytes);
+        }
+    }
+
+    async fn read_until_packet_id_encrypted(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        buffer: &mut BytesMut,
+        wanted_packet_id: i32,
+        max_attempts: usize,
+        encryption: &mut TestClientEncryptionState,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let max_attempts = max_attempts.max(64);
+        for _ in 0..max_attempts {
+            let packet = tokio::time::timeout(
+                Duration::from_millis(250),
+                read_packet_encrypted(stream, codec, buffer, encryption),
+            )
+            .await
+            .map_err(|_| {
+                RuntimeError::Config(format!(
+                    "timed out waiting for encrypted packet id 0x{wanted_packet_id:02x}"
+                ))
+            })??;
+            if packet_id(&packet) == wanted_packet_id {
+                return Ok(packet);
+            }
+        }
+        Err(RuntimeError::Config(format!(
+            "did not receive encrypted packet id 0x{wanted_packet_id:02x}"
+        )))
+    }
+
+    async fn perform_online_login(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        protocol_version: i32,
+        username: &str,
+    ) -> Result<(TestClientEncryptionState, BytesMut), RuntimeError> {
+        let mut buffer = BytesMut::new();
+        write_packet(stream, codec, &encode_handshake(protocol_version, 2)?).await?;
+        write_packet(stream, codec, &login_start(username)).await?;
+        let request = read_packet(stream, codec, &mut buffer).await?;
+        let (server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;
+        assert_eq!(server_id, super::LOGIN_SERVER_ID);
+        let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
+            .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
+        let mut shared_secret = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut shared_secret);
+        let shared_secret_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
+            })?;
+        let verify_token_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &verify_token)
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
+            })?;
+        let response =
+            login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
+        write_packet(stream, codec, &response).await?;
+        Ok((TestClientEncryptionState::new(shared_secret), buffer))
     }
 
     #[test]
@@ -2679,7 +3263,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn online_mode_fails_fast() -> Result<(), RuntimeError> {
+    async fn online_mode_requires_online_auth_profile() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let result = spawn_server(
             ServerConfig {
@@ -2691,12 +3275,205 @@ mod tests {
         )
         .await;
         let Err(error) = result else {
-            panic!("online-mode should fail fast");
+            panic!("online-mode should require an online auth profile");
         };
         assert!(
-            matches!(error, RuntimeError::Unsupported(message) if message.contains("online-mode=true"))
+            matches!(error, RuntimeError::Config(message) if message.contains("requires an online auth profile"))
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn offline_mode_rejects_online_auth_profile() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("offline mode should reject online auth profile");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("requires an offline auth profile"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                online_mode: true,
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            in_process_online_auth_registries(&[
+                JE_1_7_10_ADAPTER_ID,
+                JE_1_8_X_ADAPTER_ID,
+                JE_1_12_2_ADAPTER_ID,
+            ])?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        for (protocol_version, username, expected_packet_id) in [
+            (5, "legacy-online", 0x30),
+            (47, "middle-online", 0x30),
+            (340, "latest-online", 0x14),
+        ] {
+            let mut stream = connect_tcp(addr).await?;
+            let (mut encryption, mut buffer) =
+                perform_online_login(&mut stream, &codec, protocol_version, username).await?;
+            let login_success = read_until_packet_id_encrypted(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                0x02,
+                8,
+                &mut encryption,
+            )
+            .await?;
+            assert_eq!(packet_id(&login_success), 0x02);
+
+            let bootstrap = read_until_packet_id_encrypted(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                expected_packet_id,
+                24,
+                &mut encryption,
+            )
+            .await?;
+            assert_eq!(packet_id(&bootstrap), expected_packet_id);
+        }
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                online_mode: true,
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut stream = connect_tcp(addr).await?;
+        let (mut encryption, mut buffer) =
+            perform_online_login(&mut stream, &codec, 5, "encrypted-alpha").await?;
+        let _ = read_until_packet_id_encrypted(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            0x30,
+            16,
+            &mut encryption,
+        )
+        .await?;
+        let _ = read_until_packet_id_encrypted(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            0x09,
+            16,
+            &mut encryption,
+        )
+        .await?;
+
+        write_packet_encrypted(&mut stream, &codec, &held_item_change(4), &mut encryption).await?;
+        let held_item = read_until_packet_id_encrypted(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            0x09,
+            8,
+            &mut encryption,
+        )
+        .await?;
+        assert_eq!(held_item_from_packet(&held_item)?, 4);
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn verify_token_mismatch_disconnects_in_online_mode() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                online_mode: true,
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("mismatch")).await?;
+        let mut buffer = BytesMut::new();
+        let request = read_packet(&mut stream, &codec, &mut buffer).await?;
+        let (_server_id, public_key_der, _verify_token) = parse_encryption_request(&request)?;
+        let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
+            .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
+        let mut shared_secret = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut shared_secret);
+        let shared_secret_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
+            })?;
+        let verify_token_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &[9, 9, 9, 9])
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
+            })?;
+        let response =
+            login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
+        write_packet(&mut stream, &codec, &response).await?;
+
+        let mut encryption = TestClientEncryptionState::new(shared_secret);
+        let disconnect = read_until_packet_id_encrypted(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            0x00,
+            4,
+            &mut encryption,
+        )
+        .await?;
+        assert_eq!(packet_id(&disconnect), 0x00);
+
+        server.shutdown().await
     }
 
     #[tokio::test]
@@ -3103,7 +3880,7 @@ mod tests {
     async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let dist_dir = temp_dir.path().join("dist").join("plugins");
-        let target_dir = temp_dir.path().join("target");
+        let target_dir = crate::packaged_plugin_test_target_dir("gameplay-reload-success");
         run_xtask_package_plugins(&dist_dir, &target_dir, "gameplay-reload-v1")?;
         let registries = plugin_test_registries_from_dist(
             dist_dir.clone(),
@@ -3223,7 +4000,7 @@ mod tests {
     async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let dist_dir = temp_dir.path().join("dist").join("plugins");
-        let target_dir = temp_dir.path().join("target");
+        let target_dir = crate::packaged_plugin_test_target_dir("gameplay-reload-failure");
         run_xtask_package_plugins(&dist_dir, &target_dir, "gameplay-reload-ok")?;
         let registries = plugin_test_registries_from_dist(
             dist_dir.clone(),
@@ -3331,10 +4108,11 @@ mod tests {
     -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let dist_dir = temp_dir.path().join("dist").join("plugins");
-        let target_dir = temp_dir.path().join("target");
+        let target_dir = crate::packaged_plugin_test_target_dir("storage-reload-success");
         let world_dir = temp_dir.path().join("world");
         run_xtask_package_plugins(&dist_dir, &target_dir, "storage-reload-v1")?;
-        let registries = plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?;
+        let registries =
+            plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?;
         let server = spawn_server(
             ServerConfig {
                 server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
@@ -3439,7 +4217,7 @@ mod tests {
     async fn storage_reload_failure_keeps_existing_generation() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let dist_dir = temp_dir.path().join("dist").join("plugins");
-        let target_dir = temp_dir.path().join("target");
+        let target_dir = crate::packaged_plugin_test_target_dir("storage-reload-failure");
         run_xtask_package_plugins(&dist_dir, &target_dir, "storage-reload-ok")?;
         let server = spawn_server(
             ServerConfig {
@@ -3502,7 +4280,7 @@ mod tests {
     async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let dist_dir = temp_dir.path().join("dist").join("plugins");
-        let target_dir = temp_dir.path().join("target");
+        let target_dir = crate::packaged_plugin_test_target_dir("auth-reload-offline");
         run_xtask_package_plugins(&dist_dir, &target_dir, "auth-reload-v1")?;
         let server = spawn_server(
             ServerConfig {
@@ -3568,7 +4346,8 @@ mod tests {
         );
 
         write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
-        let held_item = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
+        let held_item =
+            read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
         assert_eq!(held_item_from_packet(&held_item)?, 4);
 
         let mut beta = connect_tcp(addr).await?;
@@ -3578,6 +4357,214 @@ mod tests {
         let login_success =
             read_until_packet_id(&mut beta, &codec, &mut beta_buffer, 0x02, 8).await?;
         assert_eq!(packet_id(&login_success), 0x02);
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("dist").join("plugins");
+        let target_dir = crate::packaged_plugin_test_target_dir("auth-online-packaged");
+        run_xtask_package_plugins(&dist_dir, &target_dir, "online-packaged-v1")?;
+        package_single_plugin(
+            "mc-plugin-auth-online-stub",
+            ONLINE_STUB_AUTH_PLUGIN_ID,
+            "auth",
+            &dist_dir,
+            &target_dir,
+            "online-stub-v1",
+        )?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                online_mode: true,
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_from_dist_with_supporting_plugins(
+                dist_dir,
+                &[
+                    JE_1_7_10_ADAPTER_ID,
+                    JE_1_8_X_ADAPTER_ID,
+                    JE_1_12_2_ADAPTER_ID,
+                ],
+                &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
+            )?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        for (protocol_version, username, expected_packet_id) in [
+            (5, "packaged-legacy", 0x30),
+            (47, "packaged-middle", 0x30),
+            (340, "packaged-latest", 0x14),
+        ] {
+            let mut stream = connect_tcp(addr).await?;
+            let (mut encryption, mut buffer) =
+                perform_online_login(&mut stream, &codec, protocol_version, username).await?;
+            let login_success = read_until_packet_id_encrypted(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                0x02,
+                8,
+                &mut encryption,
+            )
+            .await?;
+            assert_eq!(packet_id(&login_success), 0x02);
+
+            let bootstrap = read_until_packet_id_encrypted(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                expected_packet_id,
+                24,
+                &mut encryption,
+            )
+            .await?;
+            assert_eq!(packet_id(&bootstrap), expected_packet_id);
+        }
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("dist").join("plugins");
+        let target_dir = crate::packaged_plugin_test_target_dir("auth-online-reload");
+        run_xtask_package_plugins(&dist_dir, &target_dir, "online-auth-reload-v1")?;
+        package_single_plugin(
+            "mc-plugin-auth-online-stub",
+            ONLINE_STUB_AUTH_PLUGIN_ID,
+            "auth",
+            &dist_dir,
+            &target_dir,
+            "online-auth-v1",
+        )?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                online_mode: true,
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_from_dist_with_supporting_plugins(
+                dist_dir.clone(),
+                &[JE_1_7_10_ADAPTER_ID],
+                &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
+            )?,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let auth_before = plugin_host
+            .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
+            .expect("online auth profile should resolve");
+        let before_generation = auth_before
+            .plugin_generation_id()
+            .expect("online auth profile should report generation");
+        assert!(
+            auth_before
+                .capability_set()
+                .contains("build-tag:online-auth-v1")
+        );
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut alpha = connect_tcp(addr).await?;
+        write_packet(&mut alpha, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut alpha, &codec, &login_start("alpha-online")).await?;
+        let mut alpha_buffer = BytesMut::new();
+        let request = read_packet(&mut alpha, &codec, &mut alpha_buffer).await?;
+        let (_server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;
+        let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
+            .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_plugin(
+            "mc-plugin-auth-online-stub",
+            ONLINE_STUB_AUTH_PLUGIN_ID,
+            "auth",
+            &dist_dir,
+            &target_dir,
+            "online-auth-v2",
+        )?;
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == ONLINE_STUB_AUTH_PLUGIN_ID)
+        );
+
+        let auth_after = plugin_host
+            .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
+            .expect("online auth profile should still resolve");
+        assert_ne!(auth_after.plugin_generation_id(), Some(before_generation));
+        assert!(
+            auth_after
+                .capability_set()
+                .contains("build-tag:online-auth-v2")
+        );
+
+        let mut shared_secret = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut shared_secret);
+        let shared_secret_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
+            })?;
+        let verify_token_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &verify_token)
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
+            })?;
+        let response =
+            login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
+        write_packet(&mut alpha, &codec, &response).await?;
+
+        let mut alpha_encryption = TestClientEncryptionState::new(shared_secret);
+        let login_success = read_until_packet_id_encrypted(
+            &mut alpha,
+            &codec,
+            &mut alpha_buffer,
+            0x02,
+            8,
+            &mut alpha_encryption,
+        )
+        .await?;
+        assert_eq!(packet_id(&login_success), 0x02);
+
+        let mut beta = connect_tcp(addr).await?;
+        let (mut beta_encryption, mut beta_buffer) =
+            perform_online_login(&mut beta, &codec, 5, "beta-online").await?;
+        let beta_login_success = read_until_packet_id_encrypted(
+            &mut beta,
+            &codec,
+            &mut beta_buffer,
+            0x02,
+            8,
+            &mut beta_encryption,
+        )
+        .await?;
+        assert_eq!(packet_id(&beta_login_success), 0x02);
 
         server.shutdown().await
     }
