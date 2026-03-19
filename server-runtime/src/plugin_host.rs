@@ -1,10 +1,16 @@
-use crate::{RuntimeError, RuntimeRegistries, ServerConfig};
+use crate::{RuntimeError, RuntimeRegistries, RuntimeServer, ServerConfig};
 use libloading::Library;
-use mc_core::{CapabilitySet, PluginGenerationId};
+use mc_core::{
+    CapabilitySet, GameplayEffect, GameplayJoinEffect, GameplayPolicyResolver, GameplayProfileId,
+    GameplayQuery, PlayerSnapshot, PluginGenerationId, SessionCapabilitySet,
+};
 use mc_plugin_api::{
-    CURRENT_PLUGIN_ABI, OwnedBuffer, PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1,
-    PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1, ProtocolPluginApiV1,
-    ProtocolRequest, ProtocolResponse, decode_protocol_response, encode_protocol_request,
+    CURRENT_PLUGIN_ABI, GameplayPluginApiV1, GameplayRequest, GameplayResponse,
+    GameplaySessionSnapshot, HostApiTableV1, OwnedBuffer, PLUGIN_GAMEPLAY_API_SYMBOL_V1,
+    PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1, PluginAbiVersion, PluginErrorCode,
+    PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
+    decode_gameplay_response, decode_protocol_response, encode_gameplay_request,
+    encode_protocol_request,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
@@ -12,6 +18,7 @@ use mc_proto_common::{
     StatusRequest, TransportKind, WireCodec,
 };
 use serde::Deserialize;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,12 +67,12 @@ impl PluginAbiRange {
             )));
         };
         Ok(PluginAbiVersion {
-            major: major
-                .parse()
-                .map_err(|_| RuntimeError::Config(format!("invalid plugin ABI version `{value}`")))?,
-            minor: minor
-                .parse()
-                .map_err(|_| RuntimeError::Config(format!("invalid plugin ABI version `{value}`")))?,
+            major: major.parse().map_err(|_| {
+                RuntimeError::Config(format!("invalid plugin ABI version `{value}`"))
+            })?,
+            minor: minor.parse().map_err(|_| {
+                RuntimeError::Config(format!("invalid plugin ABI version `{value}`"))
+            })?,
         })
     }
 
@@ -82,12 +89,20 @@ pub struct InProcessProtocolPlugin {
 }
 
 #[derive(Clone, Debug)]
+pub struct InProcessGameplayPlugin {
+    pub plugin_id: String,
+    pub manifest: &'static PluginManifestV1,
+    pub api: &'static GameplayPluginApiV1,
+}
+
+#[derive(Clone, Debug)]
 enum PluginSource {
     DynamicLibrary {
         manifest_path: PathBuf,
         library_path: PathBuf,
     },
-    InProcess(InProcessProtocolPlugin),
+    InProcessProtocol(InProcessProtocolPlugin),
+    InProcessGameplay(InProcessGameplayPlugin),
 }
 
 #[derive(Clone, Debug)]
@@ -103,12 +118,12 @@ impl PluginPackage {
             PluginSource::DynamicLibrary {
                 manifest_path,
                 library_path,
-            } => Ok(
-                fs::metadata(manifest_path)?
-                    .modified()?
-                    .max(fs::metadata(library_path)?.modified()?),
-            ),
-            PluginSource::InProcess(_) => Ok(SystemTime::UNIX_EPOCH),
+            } => Ok(fs::metadata(manifest_path)?
+                .modified()?
+                .max(fs::metadata(library_path)?.modified()?)),
+            PluginSource::InProcessProtocol(_) | PluginSource::InProcessGameplay(_) => {
+                Ok(SystemTime::UNIX_EPOCH)
+            }
         }
     }
 
@@ -120,8 +135,8 @@ impl PluginPackage {
         else {
             return Ok(());
         };
-        let document: PluginPackageDocument =
-            toml::from_str(&fs::read_to_string(&*manifest_path)?).map_err(|error| {
+        let document: PluginPackageDocument = toml::from_str(&fs::read_to_string(&*manifest_path)?)
+            .map_err(|error| {
                 RuntimeError::Config(format!(
                     "failed to parse plugin manifest {}: {error}",
                     manifest_path.display()
@@ -140,16 +155,17 @@ impl PluginPackage {
                 self.plugin_id
             )));
         }
-        let relative_library_path = document
-            .artifacts
-            .get(&current_artifact_key())
-            .ok_or_else(|| {
-                RuntimeError::Config(format!(
-                    "plugin `{}` does not provide an artifact for {}",
-                    self.plugin_id,
-                    current_artifact_key()
-                ))
-            })?;
+        let relative_library_path =
+            document
+                .artifacts
+                .get(&current_artifact_key())
+                .ok_or_else(|| {
+                    RuntimeError::Config(format!(
+                        "plugin `{}` does not provide an artifact for {}",
+                        self.plugin_id,
+                        current_artifact_key()
+                    ))
+                })?;
         *library_path = manifest_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
@@ -182,8 +198,8 @@ impl PluginCatalog {
             if !manifest_path.exists() {
                 continue;
             }
-            let document: PluginPackageDocument = toml::from_str(&fs::read_to_string(&manifest_path)?)
-                .map_err(|error| {
+            let document: PluginPackageDocument =
+                toml::from_str(&fs::read_to_string(&manifest_path)?).map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to parse plugin manifest {}: {error}",
                         manifest_path.display()
@@ -195,7 +211,8 @@ impl PluginCatalog {
             {
                 continue;
             }
-            let Some(relative_library_path) = document.artifacts.get(&current_artifact_key()) else {
+            let Some(relative_library_path) = document.artifacts.get(&current_artifact_key())
+            else {
                 continue;
             };
             let library_path = manifest_path
@@ -224,7 +241,18 @@ impl PluginCatalog {
             PluginPackage {
                 plugin_id: plugin.plugin_id.clone(),
                 plugin_kind: PluginKind::Protocol,
-                source: PluginSource::InProcess(plugin),
+                source: PluginSource::InProcessProtocol(plugin),
+            },
+        );
+    }
+
+    pub fn register_in_process_gameplay_plugin(&mut self, plugin: InProcessGameplayPlugin) {
+        self.packages.insert(
+            plugin.plugin_id.clone(),
+            PluginPackage {
+                plugin_id: plugin.plugin_id.clone(),
+                plugin_kind: PluginKind::Gameplay,
+                source: PluginSource::InProcessGameplay(plugin),
             },
         );
     }
@@ -319,10 +347,28 @@ struct ProtocolGeneration {
     _library_guard: Option<Arc<Mutex<Library>>>,
 }
 
+fn decode_plugin_error(
+    plugin_id: &str,
+    status: PluginErrorCode,
+    free_buffer: mc_plugin_api::PluginFreeBufferFn,
+    error: OwnedBuffer,
+) -> String {
+    if error.ptr.is_null() {
+        format!("plugin `{plugin_id}` returned {status:?}")
+    } else {
+        let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
+        unsafe {
+            (free_buffer)(error);
+        }
+        String::from_utf8(bytes)
+            .unwrap_or_else(|_| format!("plugin `{plugin_id}` returned invalid utf-8"))
+    }
+}
+
 impl ProtocolGeneration {
     fn invoke(&self, request: ProtocolRequest) -> Result<ProtocolResponse, ProtocolError> {
-        let request_bytes =
-            encode_protocol_request(&request).map_err(|error| ProtocolError::Plugin(error.to_string()))?;
+        let request_bytes = encode_protocol_request(&request)
+            .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
         let mut output = OwnedBuffer::empty();
         let mut error = OwnedBuffer::empty();
         let status = unsafe {
@@ -336,17 +382,12 @@ impl ProtocolGeneration {
             )
         };
         if status != PluginErrorCode::Ok {
-            let message = if error.ptr.is_null() {
-                format!("plugin `{}` returned {status:?}", self.plugin_id)
-            } else {
-                let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
-                unsafe {
-                    (self.free_buffer)(error);
-                }
-                String::from_utf8(bytes)
-                    .unwrap_or_else(|_| format!("plugin `{}` returned invalid utf-8", self.plugin_id))
-            };
-            return Err(ProtocolError::Plugin(message));
+            return Err(ProtocolError::Plugin(decode_plugin_error(
+                &self.plugin_id,
+                status,
+                self.free_buffer,
+                error,
+            )));
         }
 
         let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
@@ -355,6 +396,216 @@ impl ProtocolGeneration {
         }
         decode_protocol_response(&request, &response_bytes)
             .map_err(|error| ProtocolError::Plugin(error.to_string()))
+    }
+}
+
+thread_local! {
+    static CURRENT_GAMEPLAY_QUERY: RefCell<Option<*const dyn GameplayQuery>> = RefCell::new(None);
+}
+
+fn with_gameplay_query<T>(
+    query: &dyn GameplayQuery,
+    f: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    CURRENT_GAMEPLAY_QUERY.with(|slot| {
+        // The pointer never outlives this closure; callbacks run synchronously inside `f`.
+        let query_ptr = unsafe {
+            std::mem::transmute::<*const dyn GameplayQuery, *const dyn GameplayQuery>(
+                query as *const dyn GameplayQuery,
+            )
+        };
+        let previous = slot.replace(Some(query_ptr));
+        let result = f();
+        let _ = slot.replace(previous);
+        result
+    })
+}
+
+fn with_current_gameplay_query<T>(
+    f: impl FnOnce(&dyn GameplayQuery) -> Result<T, String>,
+) -> Result<T, String> {
+    CURRENT_GAMEPLAY_QUERY.with(|slot| {
+        let query =
+            slot.borrow().as_ref().copied().ok_or_else(|| {
+                "gameplay host callback invoked without an active query".to_string()
+            })?;
+        let query = unsafe { &*query };
+        f(query)
+    })
+}
+
+unsafe extern "C" fn gameplay_host_log(level: u32, message: mc_plugin_api::Utf8Slice) {
+    if let Ok(message) = decode_utf8_slice(message) {
+        eprintln!("gameplay[{level}]: {message}");
+    }
+}
+
+unsafe extern "C" fn gameplay_host_read_player_snapshot(
+    _context: *mut std::ffi::c_void,
+    payload: mc_plugin_api::ByteSlice,
+    output: *mut OwnedBuffer,
+    error_out: *mut OwnedBuffer,
+) -> PluginErrorCode {
+    let payload = unsafe { std::slice::from_raw_parts(payload.ptr, payload.len) };
+    let result = with_current_gameplay_query(|query| {
+        let player_id = mc_plugin_api::decode_host_player_id_blob(payload)
+            .map_err(|error| error.to_string())?;
+        let bytes = mc_plugin_api::encode_host_player_snapshot_blob(
+            query.player_snapshot(player_id).as_ref(),
+        )
+        .map_err(|error| error.to_string())?;
+        write_owned_buffer(output, bytes);
+        Ok(())
+    });
+    match result {
+        Ok(()) => PluginErrorCode::Ok,
+        Err(error) => {
+            write_error_buffer(error_out, error);
+            PluginErrorCode::Internal
+        }
+    }
+}
+
+unsafe extern "C" fn gameplay_host_read_world_meta(
+    _context: *mut std::ffi::c_void,
+    output: *mut OwnedBuffer,
+    error_out: *mut OwnedBuffer,
+) -> PluginErrorCode {
+    let result = with_current_gameplay_query(|query| {
+        let world_meta = query.world_meta();
+        let bytes = mc_plugin_api::encode_host_world_meta_blob(&world_meta)
+            .map_err(|error| error.to_string())?;
+        write_owned_buffer(output, bytes);
+        Ok(())
+    });
+    match result {
+        Ok(()) => PluginErrorCode::Ok,
+        Err(error) => {
+            write_error_buffer(error_out, error);
+            PluginErrorCode::Internal
+        }
+    }
+}
+
+unsafe extern "C" fn gameplay_host_read_block_state(
+    _context: *mut std::ffi::c_void,
+    payload: mc_plugin_api::ByteSlice,
+    output: *mut OwnedBuffer,
+    error_out: *mut OwnedBuffer,
+) -> PluginErrorCode {
+    let payload = unsafe { std::slice::from_raw_parts(payload.ptr, payload.len) };
+    let result = with_current_gameplay_query(|query| {
+        let position = mc_plugin_api::decode_host_block_pos_blob(payload)
+            .map_err(|error| error.to_string())?;
+        let bytes = mc_plugin_api::encode_host_block_state_blob(&query.block_state(position))
+            .map_err(|error| error.to_string())?;
+        write_owned_buffer(output, bytes);
+        Ok(())
+    });
+    match result {
+        Ok(()) => PluginErrorCode::Ok,
+        Err(error) => {
+            write_error_buffer(error_out, error);
+            PluginErrorCode::Internal
+        }
+    }
+}
+
+unsafe extern "C" fn gameplay_host_can_edit_block(
+    _context: *mut std::ffi::c_void,
+    payload: mc_plugin_api::ByteSlice,
+    out: *mut bool,
+    error_out: *mut OwnedBuffer,
+) -> PluginErrorCode {
+    let payload = unsafe { std::slice::from_raw_parts(payload.ptr, payload.len) };
+    let result = with_current_gameplay_query(|query| {
+        let (player_id, position) = mc_plugin_api::decode_host_can_edit_block_key(payload)
+            .map_err(|error| error.to_string())?;
+        if !out.is_null() {
+            unsafe {
+                *out = query.can_edit_block(player_id, position);
+            }
+        }
+        Ok(())
+    });
+    match result {
+        Ok(()) => PluginErrorCode::Ok,
+        Err(error) => {
+            write_error_buffer(error_out, error);
+            PluginErrorCode::Internal
+        }
+    }
+}
+
+fn gameplay_host_api() -> HostApiTableV1 {
+    HostApiTableV1 {
+        abi: CURRENT_PLUGIN_ABI,
+        context: std::ptr::null_mut(),
+        log: Some(gameplay_host_log),
+        read_player_snapshot: Some(gameplay_host_read_player_snapshot),
+        read_world_meta: Some(gameplay_host_read_world_meta),
+        read_block_state: Some(gameplay_host_read_block_state),
+        can_edit_block: Some(gameplay_host_can_edit_block),
+    }
+}
+
+fn write_owned_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
+    if output.is_null() {
+        return;
+    }
+    unsafe {
+        *output = OwnedBuffer {
+            ptr: bytes.as_mut_ptr(),
+            len: bytes.len(),
+            cap: bytes.capacity(),
+        };
+        std::mem::forget(bytes);
+    }
+}
+
+fn write_error_buffer(error_out: *mut OwnedBuffer, message: String) {
+    write_owned_buffer(error_out, message.into_bytes());
+}
+
+#[derive(Clone)]
+pub(crate) struct GameplayGeneration {
+    generation_id: PluginGenerationId,
+    plugin_id: String,
+    profile_id: GameplayProfileId,
+    capabilities: CapabilitySet,
+    invoke: mc_plugin_api::PluginInvokeFn,
+    free_buffer: mc_plugin_api::PluginFreeBufferFn,
+    _library_guard: Option<Arc<Mutex<Library>>>,
+}
+
+impl GameplayGeneration {
+    fn invoke(&self, request: GameplayRequest) -> Result<GameplayResponse, String> {
+        let request_bytes = encode_gameplay_request(&request).map_err(|error| error.to_string())?;
+        let mut output = OwnedBuffer::empty();
+        let mut error = OwnedBuffer::empty();
+        let status = unsafe {
+            (self.invoke)(
+                mc_plugin_api::ByteSlice {
+                    ptr: request_bytes.as_ptr(),
+                    len: request_bytes.len(),
+                },
+                &mut output,
+                &mut error,
+            )
+        };
+        if status != PluginErrorCode::Ok {
+            return Err(decode_plugin_error(
+                &self.plugin_id,
+                status,
+                self.free_buffer,
+                error,
+            ));
+        }
+        let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
+        unsafe {
+            (self.free_buffer)(output);
+        }
+        decode_gameplay_response(&request, &response_bytes).map_err(|error| error.to_string())
     }
 }
 
@@ -377,7 +628,15 @@ impl PluginLoader {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
                 self.load_dynamic_protocol(library_path)?
             },
-            PluginSource::InProcess(plugin) => (None, decode_manifest(plugin.manifest)?, *plugin.api),
+            PluginSource::InProcessProtocol(plugin) => {
+                (None, decode_manifest(plugin.manifest)?, *plugin.api)
+            }
+            PluginSource::InProcessGameplay(_) => {
+                return Err(RuntimeError::Config(format!(
+                    "plugin `{}` is not a protocol plugin",
+                    package.plugin_id
+                )));
+            }
         };
         self.validate_manifest(package, &manifest)?;
         let descriptor = match invoke_protocol(&api, ProtocolRequest::Describe)? {
@@ -386,7 +645,7 @@ impl PluginLoader {
                 return Err(RuntimeError::Config(format!(
                     "plugin `{}` returned unexpected describe payload: {other:?}",
                     package.plugin_id
-                )))
+                )));
             }
         };
         let capabilities = match invoke_protocol(&api, ProtocolRequest::CapabilitySet)? {
@@ -395,7 +654,7 @@ impl PluginLoader {
                 return Err(RuntimeError::Config(format!(
                     "plugin `{}` returned unexpected capability payload: {other:?}",
                     package.plugin_id
-                )))
+                )));
             }
         };
         Ok(ProtocolGeneration {
@@ -409,10 +668,104 @@ impl PluginLoader {
         })
     }
 
+    fn load_gameplay_generation(
+        &self,
+        package: &PluginPackage,
+        generation_id: PluginGenerationId,
+    ) -> Result<GameplayGeneration, RuntimeError> {
+        let (guard, manifest, api) = match &package.source {
+            PluginSource::DynamicLibrary { library_path, .. } => unsafe {
+                self.load_dynamic_gameplay(library_path)?
+            },
+            PluginSource::InProcessGameplay(plugin) => {
+                let status = unsafe { (plugin.api.set_host_api)(&gameplay_host_api()) };
+                if status != PluginErrorCode::Ok {
+                    return Err(RuntimeError::Config(format!(
+                        "failed to configure gameplay host api for plugin `{}`: {status:?}",
+                        package.plugin_id
+                    )));
+                }
+                (None, decode_manifest(plugin.manifest)?, *plugin.api)
+            }
+            PluginSource::InProcessProtocol(_) => {
+                return Err(RuntimeError::Config(format!(
+                    "plugin `{}` is not a gameplay plugin",
+                    package.plugin_id
+                )));
+            }
+        };
+        self.validate_manifest(package, &manifest)?;
+        let profile_id = manifest
+            .capabilities
+            .iter()
+            .find_map(|capability| capability.strip_prefix("gameplay.profile:"))
+            .map(GameplayProfileId::new)
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "gameplay plugin `{}` is missing gameplay.profile:<id> manifest capability",
+                    package.plugin_id
+                ))
+            })?;
+        if !manifest
+            .capabilities
+            .iter()
+            .any(|capability| capability == "runtime.reload.gameplay")
+        {
+            return Err(RuntimeError::Config(format!(
+                "gameplay plugin `{}` is missing runtime.reload.gameplay capability",
+                package.plugin_id
+            )));
+        }
+        let descriptor = match invoke_gameplay(&package.plugin_id, &api, GameplayRequest::Describe)?
+        {
+            GameplayResponse::Descriptor(descriptor) => descriptor,
+            other => {
+                return Err(RuntimeError::Config(format!(
+                    "plugin `{}` returned unexpected gameplay describe payload: {other:?}",
+                    package.plugin_id
+                )));
+            }
+        };
+        if descriptor.profile != profile_id {
+            return Err(RuntimeError::Config(format!(
+                "gameplay plugin `{}` describe profile `{}` did not match manifest profile `{}`",
+                package.plugin_id,
+                descriptor.profile.as_str(),
+                profile_id.as_str()
+            )));
+        }
+        let capabilities =
+            match invoke_gameplay(&package.plugin_id, &api, GameplayRequest::CapabilitySet)? {
+                GameplayResponse::CapabilitySet(capabilities) => capabilities,
+                other => {
+                    return Err(RuntimeError::Config(format!(
+                        "plugin `{}` returned unexpected gameplay capability payload: {other:?}",
+                        package.plugin_id
+                    )));
+                }
+            };
+        Ok(GameplayGeneration {
+            generation_id,
+            plugin_id: package.plugin_id.clone(),
+            profile_id,
+            capabilities,
+            invoke: api.invoke,
+            free_buffer: api.free_buffer,
+            _library_guard: guard,
+        })
+    }
+
     unsafe fn load_dynamic_protocol(
         &self,
         library_path: &Path,
-    ) -> Result<(Option<Arc<Mutex<Library>>>, DecodedManifest, ProtocolPluginApiV1), RuntimeError> {
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            ProtocolPluginApiV1,
+        ),
+        RuntimeError,
+    > {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
             let library = library
@@ -440,11 +793,55 @@ impl PluginLoader {
                 })?;
             unsafe { *api_fn() }
         };
-        Ok((
-            Some(library),
-            decode_manifest(manifest_ptr)?,
-            api,
-        ))
+        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+    }
+
+    unsafe fn load_dynamic_gameplay(
+        &self,
+        library_path: &Path,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            GameplayPluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
+        let manifest_ptr = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve plugin manifest symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { manifest_fn() }
+        };
+        let api = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const GameplayPluginApiV1> =
+                unsafe { library.get(PLUGIN_GAMEPLAY_API_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve gameplay api symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { *api_fn() }
+        };
+        let status = unsafe { (api.set_host_api)(&gameplay_host_api()) };
+        if status != PluginErrorCode::Ok {
+            return Err(RuntimeError::Config(format!(
+                "failed to configure gameplay host api in {}: {status:?}",
+                library_path.display()
+            )));
+        }
+        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
     }
 
     fn validate_manifest(
@@ -467,20 +864,14 @@ impl PluginLoader {
         if !self.abi_range.contains(manifest.plugin_abi) {
             return Err(RuntimeError::Config(format!(
                 "plugin `{}` ABI {} is outside host range {}..={}",
-                package.plugin_id,
-                manifest.plugin_abi,
-                self.abi_range.min,
-                self.abi_range.max
+                package.plugin_id, manifest.plugin_abi, self.abi_range.min, self.abi_range.max
             )));
         }
         if manifest.min_host_abi > CURRENT_PLUGIN_ABI || manifest.max_host_abi < CURRENT_PLUGIN_ABI
         {
             return Err(RuntimeError::Config(format!(
                 "plugin `{}` host ABI range {}..={} does not include {}",
-                package.plugin_id,
-                manifest.min_host_abi,
-                manifest.max_host_abi,
-                CURRENT_PLUGIN_ABI
+                package.plugin_id, manifest.min_host_abi, manifest.max_host_abi, CURRENT_PLUGIN_ABI
             )));
         }
         Ok(())
@@ -494,6 +885,7 @@ struct DecodedManifest {
     plugin_abi: PluginAbiVersion,
     min_host_abi: PluginAbiVersion,
     max_host_abi: PluginAbiVersion,
+    capabilities: Vec<String>,
 }
 
 fn decode_manifest(manifest: *const PluginManifestV1) -> Result<DecodedManifest, RuntimeError> {
@@ -502,18 +894,32 @@ fn decode_manifest(manifest: *const PluginManifestV1) -> Result<DecodedManifest,
             .as_ref()
             .ok_or_else(|| RuntimeError::Config("plugin manifest pointer was null".to_string()))?
     };
+    let capabilities = if manifest.capabilities.is_null() || manifest.capabilities_len == 0 {
+        Vec::new()
+    } else {
+        let descriptors =
+            unsafe { std::slice::from_raw_parts(manifest.capabilities, manifest.capabilities_len) };
+        let mut capabilities = Vec::with_capacity(descriptors.len());
+        for descriptor in descriptors {
+            capabilities.push(decode_utf8_slice(descriptor.name)?);
+        }
+        capabilities
+    };
     Ok(DecodedManifest {
         plugin_id: decode_utf8_slice(manifest.plugin_id)?,
         plugin_kind: manifest.plugin_kind,
         plugin_abi: manifest.plugin_abi,
         min_host_abi: manifest.min_host_abi,
         max_host_abi: manifest.max_host_abi,
+        capabilities,
     })
 }
 
 fn decode_utf8_slice(slice: mc_plugin_api::Utf8Slice) -> Result<String, RuntimeError> {
     if slice.ptr.is_null() {
-        return Err(RuntimeError::Config("plugin utf8 slice was null".to_string()));
+        return Err(RuntimeError::Config(
+            "plugin utf8 slice was null".to_string(),
+        ));
     }
     let bytes = unsafe { std::slice::from_raw_parts(slice.ptr, slice.len) };
     String::from_utf8(bytes.to_vec()).map_err(|error| RuntimeError::Config(error.to_string()))
@@ -523,8 +929,8 @@ fn invoke_protocol(
     api: &ProtocolPluginApiV1,
     request: ProtocolRequest,
 ) -> Result<ProtocolResponse, RuntimeError> {
-    let request_bytes =
-        encode_protocol_request(&request).map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let request_bytes = encode_protocol_request(&request)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
@@ -555,6 +961,41 @@ fn invoke_protocol(
         (api.free_buffer)(output);
     }
     decode_protocol_response(&request, &response_bytes)
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn invoke_gameplay(
+    plugin_id: &str,
+    api: &GameplayPluginApiV1,
+    request: GameplayRequest,
+) -> Result<GameplayResponse, RuntimeError> {
+    let request_bytes = encode_gameplay_request(&request)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let mut output = OwnedBuffer::empty();
+    let mut error = OwnedBuffer::empty();
+    let status = unsafe {
+        (api.invoke)(
+            mc_plugin_api::ByteSlice {
+                ptr: request_bytes.as_ptr(),
+                len: request_bytes.len(),
+            },
+            &mut output,
+            &mut error,
+        )
+    };
+    if status != PluginErrorCode::Ok {
+        return Err(RuntimeError::Config(decode_plugin_error(
+            plugin_id,
+            status,
+            api.free_buffer,
+            error,
+        )));
+    }
+    let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
+    unsafe {
+        (api.free_buffer)(output);
+    }
+    decode_gameplay_response(&request, &response_bytes)
         .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
@@ -616,14 +1057,16 @@ impl HandshakeProbe for HotSwappableProtocolAdapter {
 
     fn try_route(&self, frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
         let generation = self.current_generation()?;
-        self.quarantine_on_error(match generation.invoke(ProtocolRequest::TryRoute {
-            frame: frame.to_vec(),
-        })? {
-            ProtocolResponse::HandshakeIntent(intent) => Ok(intent),
-            other => Err(ProtocolError::Plugin(format!(
-                "unexpected try_route response: {other:?}"
-            ))),
-        })
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::TryRoute {
+                frame: frame.to_vec(),
+            })? {
+                ProtocolResponse::HandshakeIntent(intent) => Ok(intent),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected try_route response: {other:?}"
+                ))),
+            },
+        )
     }
 }
 
@@ -635,50 +1078,56 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
 
     fn decode_status(&self, frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
         let generation = self.current_generation()?;
-        self.quarantine_on_error(match generation.invoke(ProtocolRequest::DecodeStatus {
-            frame: frame.to_vec(),
-        })? {
-            ProtocolResponse::StatusRequest(request) => Ok(request),
-            other => Err(ProtocolError::Plugin(format!(
-                "unexpected decode_status response: {other:?}"
-            ))),
-        })
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::DecodeStatus {
+                frame: frame.to_vec(),
+            })? {
+                ProtocolResponse::StatusRequest(request) => Ok(request),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected decode_status response: {other:?}"
+                ))),
+            },
+        )
     }
 
     fn decode_login(&self, frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
         let generation = self.current_generation()?;
-        self.quarantine_on_error(match generation.invoke(ProtocolRequest::DecodeLogin {
-            frame: frame.to_vec(),
-        })? {
-            ProtocolResponse::LoginRequest(request) => Ok(request),
-            other => Err(ProtocolError::Plugin(format!(
-                "unexpected decode_login response: {other:?}"
-            ))),
-        })
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::DecodeLogin {
+                frame: frame.to_vec(),
+            })? {
+                ProtocolResponse::LoginRequest(request) => Ok(request),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected decode_login response: {other:?}"
+                ))),
+            },
+        )
     }
 
     fn encode_status_response(&self, status: &ServerListStatus) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
-        self.quarantine_on_error(match generation.invoke(ProtocolRequest::EncodeStatusResponse {
-            status: status.clone(),
-        })? {
-            ProtocolResponse::Frame(frame) => Ok(frame),
-            other => Err(ProtocolError::Plugin(format!(
-                "unexpected encode_status_response payload: {other:?}"
-            ))),
-        })
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::EncodeStatusResponse {
+                status: status.clone(),
+            })? {
+                ProtocolResponse::Frame(frame) => Ok(frame),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected encode_status_response payload: {other:?}"
+                ))),
+            },
+        )
     }
 
     fn encode_status_pong(&self, payload: i64) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
-        self.quarantine_on_error(match generation.invoke(ProtocolRequest::EncodeStatusPong {
-            payload,
-        })? {
-            ProtocolResponse::Frame(frame) => Ok(frame),
-            other => Err(ProtocolError::Plugin(format!(
-                "unexpected encode_status_pong payload: {other:?}"
-            ))),
-        })
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::EncodeStatusPong { payload })? {
+                ProtocolResponse::Frame(frame) => Ok(frame),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected encode_status_pong payload: {other:?}"
+                ))),
+            },
+        )
     }
 
     fn encode_disconnect(
@@ -687,15 +1136,17 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
         reason: &str,
     ) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
-        self.quarantine_on_error(match generation.invoke(ProtocolRequest::EncodeDisconnect {
-            phase,
-            reason: reason.to_string(),
-        })? {
-            ProtocolResponse::Frame(frame) => Ok(frame),
-            other => Err(ProtocolError::Plugin(format!(
-                "unexpected encode_disconnect payload: {other:?}"
-            ))),
-        })
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::EncodeDisconnect {
+                phase,
+                reason: reason.to_string(),
+            })? {
+                ProtocolResponse::Frame(frame) => Ok(frame),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected encode_disconnect payload: {other:?}"
+                ))),
+            },
+        )
     }
 
     fn encode_login_success(
@@ -703,14 +1154,16 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
         player: &mc_core::PlayerSnapshot,
     ) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
-        self.quarantine_on_error(match generation.invoke(ProtocolRequest::EncodeLoginSuccess {
-            player: player.clone(),
-        })? {
-            ProtocolResponse::Frame(frame) => Ok(frame),
-            other => Err(ProtocolError::Plugin(format!(
-                "unexpected encode_login_success payload: {other:?}"
-            ))),
-        })
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::EncodeLoginSuccess {
+                player: player.clone(),
+            })? {
+                ProtocolResponse::Frame(frame) => Ok(frame),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected encode_login_success payload: {other:?}"
+                ))),
+            },
+        )
     }
 }
 
@@ -721,15 +1174,17 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
         frame: &[u8],
     ) -> Result<Option<mc_core::CoreCommand>, ProtocolError> {
         let generation = self.current_generation()?;
-        self.quarantine_on_error(match generation.invoke(ProtocolRequest::DecodePlay {
-            player_id,
-            frame: frame.to_vec(),
-        })? {
-            ProtocolResponse::CoreCommand(command) => Ok(command),
-            other => Err(ProtocolError::Plugin(format!(
-                "unexpected decode_play payload: {other:?}"
-            ))),
-        })
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::DecodePlay {
+                player_id,
+                frame: frame.to_vec(),
+            })? {
+                ProtocolResponse::CoreCommand(command) => Ok(command),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected decode_play payload: {other:?}"
+                ))),
+            },
+        )
     }
 
     fn encode_play_event(
@@ -738,15 +1193,17 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
         context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         let generation = self.current_generation()?;
-        self.quarantine_on_error(match generation.invoke(ProtocolRequest::EncodePlayEvent {
-            event: event.clone(),
-            context: *context,
-        })? {
-            ProtocolResponse::Frames(frames) => Ok(frames),
-            other => Err(ProtocolError::Plugin(format!(
-                "unexpected encode_play_event payload: {other:?}"
-            ))),
-        })
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::EncodePlayEvent {
+                event: event.clone(),
+                context: *context,
+            })? {
+                ProtocolResponse::Frames(frames) => Ok(frames),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected encode_play_event payload: {other:?}"
+                ))),
+            },
+        )
     }
 }
 
@@ -776,9 +1233,238 @@ impl ProtocolAdapter for HotSwappableProtocolAdapter {
     }
 }
 
+pub(crate) struct HotSwappableGameplayProfile {
+    plugin_id: String,
+    profile_id: GameplayProfileId,
+    generation: RwLock<Arc<GameplayGeneration>>,
+    quarantine: Arc<QuarantineManager>,
+    reload_gate: RwLock<()>,
+}
+
+impl HotSwappableGameplayProfile {
+    fn new(
+        plugin_id: String,
+        profile_id: GameplayProfileId,
+        generation: Arc<GameplayGeneration>,
+        quarantine: Arc<QuarantineManager>,
+    ) -> Self {
+        Self {
+            plugin_id,
+            profile_id,
+            generation: RwLock::new(generation),
+            quarantine,
+            reload_gate: RwLock::new(()),
+        }
+    }
+
+    fn current_generation(&self) -> Result<Arc<GameplayGeneration>, String> {
+        if self.quarantine.is_quarantined(&self.plugin_id) {
+            return Err(self
+                .quarantine
+                .reason(&self.plugin_id)
+                .unwrap_or_else(|| "plugin quarantined".to_string()));
+        }
+        Ok(self
+            .generation
+            .read()
+            .expect("gameplay generation lock should not be poisoned")
+            .clone())
+    }
+
+    fn swap_generation(&self, generation: Arc<GameplayGeneration>) {
+        *self
+            .generation
+            .write()
+            .expect("gameplay generation lock should not be poisoned") = generation;
+    }
+
+    pub(crate) fn profile_id(&self) -> GameplayProfileId {
+        self.profile_id.clone()
+    }
+
+    pub(crate) fn capability_set(&self) -> CapabilitySet {
+        self.current_generation()
+            .map(|generation| generation.capabilities.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+        self.current_generation()
+            .ok()
+            .map(|generation| generation.generation_id)
+    }
+
+    #[expect(
+        dead_code,
+        reason = "host reload exports from the current generation under the reload gate"
+    )]
+    pub(crate) fn export_session_state(
+        &self,
+        session: &GameplaySessionSnapshot,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let _guard = self
+            .reload_gate
+            .read()
+            .expect("gameplay reload gate should not be poisoned");
+        let generation = self.current_generation().map_err(RuntimeError::Config)?;
+        match generation
+            .invoke(GameplayRequest::ExportSessionState {
+                session: session.clone(),
+            })
+            .map_err(RuntimeError::Config)?
+        {
+            GameplayResponse::SessionTransferBlob(blob) => Ok(blob),
+            other => Err(RuntimeError::Config(format!(
+                "unexpected gameplay export payload: {other:?}"
+            ))),
+        }
+    }
+
+    #[expect(
+        dead_code,
+        reason = "host reload imports into the candidate generation before swap"
+    )]
+    pub(crate) fn import_session_state(
+        &self,
+        session: &GameplaySessionSnapshot,
+        blob: &[u8],
+    ) -> Result<(), RuntimeError> {
+        let _guard = self
+            .reload_gate
+            .read()
+            .expect("gameplay reload gate should not be poisoned");
+        let generation = self.current_generation().map_err(RuntimeError::Config)?;
+        match generation
+            .invoke(GameplayRequest::ImportSessionState {
+                session: session.clone(),
+                blob: blob.to_vec(),
+            })
+            .map_err(RuntimeError::Config)?
+        {
+            GameplayResponse::Empty => Ok(()),
+            other => Err(RuntimeError::Config(format!(
+                "unexpected gameplay import payload: {other:?}"
+            ))),
+        }
+    }
+
+    pub(crate) fn session_closed(
+        &self,
+        session: &GameplaySessionSnapshot,
+    ) -> Result<(), RuntimeError> {
+        let _guard = self
+            .reload_gate
+            .read()
+            .expect("gameplay reload gate should not be poisoned");
+        let generation = self.current_generation().map_err(RuntimeError::Config)?;
+        match generation
+            .invoke(GameplayRequest::SessionClosed {
+                session: session.clone(),
+            })
+            .map_err(RuntimeError::Config)?
+        {
+            GameplayResponse::Empty => Ok(()),
+            other => Err(RuntimeError::Config(format!(
+                "unexpected gameplay session_closed payload: {other:?}"
+            ))),
+        }
+    }
+}
+
+impl GameplayPolicyResolver for HotSwappableGameplayProfile {
+    fn handle_player_join(
+        &self,
+        query: &dyn GameplayQuery,
+        session: &SessionCapabilitySet,
+        player: &PlayerSnapshot,
+    ) -> Result<GameplayJoinEffect, String> {
+        let session = GameplaySessionSnapshot {
+            phase: ConnectionPhase::Login,
+            player_id: Some(player.id),
+            entity_id: None,
+            gameplay_profile: session.gameplay_profile.clone(),
+        };
+        let _guard = self
+            .reload_gate
+            .read()
+            .expect("gameplay reload gate should not be poisoned");
+        let generation = self.current_generation()?;
+        with_gameplay_query(query, || {
+            match generation.invoke(GameplayRequest::HandlePlayerJoin {
+                session,
+                player: player.clone(),
+            })? {
+                GameplayResponse::JoinEffect(effect) => Ok(effect),
+                other => Err(format!("unexpected gameplay join payload: {other:?}")),
+            }
+        })
+    }
+
+    fn handle_command(
+        &self,
+        query: &dyn GameplayQuery,
+        session: &SessionCapabilitySet,
+        command: &mc_core::CoreCommand,
+    ) -> Result<GameplayEffect, String> {
+        let session = GameplaySessionSnapshot {
+            phase: ConnectionPhase::Play,
+            player_id: command.player_id(),
+            entity_id: None,
+            gameplay_profile: session.gameplay_profile.clone(),
+        };
+        let _guard = self
+            .reload_gate
+            .read()
+            .expect("gameplay reload gate should not be poisoned");
+        let generation = self.current_generation()?;
+        with_gameplay_query(query, || {
+            match generation.invoke(GameplayRequest::HandleCommand {
+                session,
+                command: command.clone(),
+            })? {
+                GameplayResponse::Effect(effect) => Ok(effect),
+                other => Err(format!("unexpected gameplay command payload: {other:?}")),
+            }
+        })
+    }
+
+    fn handle_tick(
+        &self,
+        query: &dyn GameplayQuery,
+        session: &SessionCapabilitySet,
+        player_id: mc_core::PlayerId,
+        now_ms: u64,
+    ) -> Result<GameplayEffect, String> {
+        let session = GameplaySessionSnapshot {
+            phase: ConnectionPhase::Play,
+            player_id: Some(player_id),
+            entity_id: None,
+            gameplay_profile: session.gameplay_profile.clone(),
+        };
+        let _guard = self
+            .reload_gate
+            .read()
+            .expect("gameplay reload gate should not be poisoned");
+        let generation = self.current_generation()?;
+        with_gameplay_query(query, || {
+            match generation.invoke(GameplayRequest::HandleTick { session, now_ms })? {
+                GameplayResponse::Effect(effect) => Ok(effect),
+                other => Err(format!("unexpected gameplay tick payload: {other:?}")),
+            }
+        })
+    }
+}
+
 struct ManagedProtocolPlugin {
     package: PluginPackage,
     adapter: Arc<HotSwappableProtocolAdapter>,
+    loaded_at: SystemTime,
+}
+
+struct ManagedGameplayPlugin {
+    package: PluginPackage,
+    profile_id: GameplayProfileId,
+    profile: Arc<HotSwappableGameplayProfile>,
     loaded_at: SystemTime,
 }
 
@@ -789,6 +1475,7 @@ pub struct PluginHost {
     quarantine: Arc<QuarantineManager>,
     _failure_policy: PluginFailurePolicy,
     protocols: Mutex<HashMap<String, ManagedProtocolPlugin>>,
+    gameplay: Mutex<HashMap<String, ManagedGameplayPlugin>>,
 }
 
 impl PluginHost {
@@ -805,6 +1492,7 @@ impl PluginHost {
             quarantine: Arc::new(QuarantineManager::default()),
             _failure_policy: failure_policy,
             protocols: Mutex::new(HashMap::new()),
+            gameplay: Mutex::new(HashMap::new()),
         }
     }
 
@@ -839,7 +1527,8 @@ impl PluginHost {
                             },
                         );
                 }
-                PluginKind::Storage | PluginKind::Auth | PluginKind::Gameplay => {
+                PluginKind::Gameplay => {}
+                PluginKind::Storage | PluginKind::Auth => {
                     self.quarantine.quarantine(
                         &package.plugin_id,
                         format!(
@@ -857,6 +1546,72 @@ impl PluginHost {
         }
         registries.attach_plugin_host(Arc::clone(self));
         Ok(())
+    }
+
+    pub fn activate_gameplay_profiles(&self, config: &ServerConfig) -> Result<(), RuntimeError> {
+        let mut required_profiles = HashSet::new();
+        required_profiles.insert(config.default_gameplay_profile.clone());
+        required_profiles.extend(config.gameplay_profile_map.values().cloned());
+
+        let mut gameplay = self
+            .gameplay
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        gameplay.clear();
+
+        for package in self.catalog.packages() {
+            if package.plugin_kind != PluginKind::Gameplay {
+                continue;
+            }
+            let generation = Arc::new(
+                self.loader
+                    .load_gameplay_generation(package, self.generations.next_generation_id())?,
+            );
+            if !required_profiles.contains(generation.profile_id.as_str()) {
+                continue;
+            }
+            if gameplay.contains_key(generation.profile_id.as_str()) {
+                return Err(RuntimeError::Config(format!(
+                    "duplicate gameplay profile `{}` discovered",
+                    generation.profile_id.as_str()
+                )));
+            }
+            gameplay.insert(
+                generation.profile_id.as_str().to_string(),
+                ManagedGameplayPlugin {
+                    package: package.clone(),
+                    profile_id: generation.profile_id.clone(),
+                    profile: Arc::new(HotSwappableGameplayProfile::new(
+                        package.plugin_id.clone(),
+                        generation.profile_id.clone(),
+                        generation,
+                        Arc::clone(&self.quarantine),
+                    )),
+                    loaded_at: package.modified_at()?,
+                },
+            );
+        }
+
+        for profile in required_profiles {
+            if !gameplay.contains_key(&profile) {
+                return Err(RuntimeError::Config(format!(
+                    "unknown gameplay profile `{profile}`"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn resolve_gameplay_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<HotSwappableGameplayProfile>> {
+        self.gameplay
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .get(profile_id)
+            .map(|managed| Arc::clone(&managed.profile))
     }
 
     pub fn reload_modified(&self) -> Result<Vec<String>, RuntimeError> {
@@ -885,6 +1640,119 @@ impl PluginHost {
         Ok(reloaded)
     }
 
+    pub(crate) async fn reload_modified_with_runtime(
+        &self,
+        runtime: &RuntimeServer,
+    ) -> Result<Vec<String>, RuntimeError> {
+        let mut reloaded = self.reload_modified()?;
+        let session_snapshots = {
+            runtime
+                .sessions
+                .lock()
+                .await
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let mut gameplay = self
+            .gameplay
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        for managed in gameplay.values_mut() {
+            managed.package.refresh_dynamic_manifest()?;
+            let modified_at = managed.package.modified_at()?;
+            if modified_at <= managed.loaded_at {
+                continue;
+            }
+            let generation = match self
+                .loader
+                .load_gameplay_generation(&managed.package, self.generations.next_generation_id())
+            {
+                Ok(generation) => Arc::new(generation),
+                Err(_) => {
+                    managed.loaded_at = modified_at;
+                    continue;
+                }
+            };
+            if generation.profile_id != managed.profile_id {
+                return Err(RuntimeError::Config(format!(
+                    "gameplay plugin `{}` changed profile from `{}` to `{}` during reload",
+                    managed.package.plugin_id,
+                    managed.profile_id.as_str(),
+                    generation.profile_id.as_str()
+                )));
+            }
+            let _reload_guard = managed
+                .profile
+                .reload_gate
+                .write()
+                .expect("gameplay reload gate should not be poisoned");
+            let current_generation = managed
+                .profile
+                .current_generation()
+                .map_err(RuntimeError::Config)?;
+            let relevant_sessions = session_snapshots
+                .iter()
+                .filter_map(|handle| {
+                    gameplay_session_snapshot_from_handle(handle, &managed.profile_id)
+                })
+                .collect::<Vec<_>>();
+            let mut migration_failed = false;
+            for session in &relevant_sessions {
+                let blob = match current_generation.invoke(GameplayRequest::ExportSessionState {
+                    session: session.clone(),
+                }) {
+                    Ok(GameplayResponse::SessionTransferBlob(blob)) => blob,
+                    Ok(other) => {
+                        eprintln!(
+                            "gameplay reload export returned unexpected payload for `{}`: {other:?}",
+                            managed.package.plugin_id
+                        );
+                        migration_failed = true;
+                        break;
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "gameplay reload export failed for `{}`: {error}",
+                            managed.package.plugin_id
+                        );
+                        migration_failed = true;
+                        break;
+                    }
+                };
+                match generation.invoke(GameplayRequest::ImportSessionState {
+                    session: session.clone(),
+                    blob,
+                }) {
+                    Ok(GameplayResponse::Empty) => {}
+                    Ok(other) => {
+                        eprintln!(
+                            "gameplay reload import returned unexpected payload for `{}`: {other:?}",
+                            managed.package.plugin_id
+                        );
+                        migration_failed = true;
+                        break;
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "gameplay reload import failed for `{}`: {error}",
+                            managed.package.plugin_id
+                        );
+                        migration_failed = true;
+                        break;
+                    }
+                }
+            }
+            managed.loaded_at = modified_at;
+            if migration_failed {
+                continue;
+            }
+            managed.profile.swap_generation(generation);
+            reloaded.push(managed.package.plugin_id.clone());
+        }
+        Ok(reloaded)
+    }
+
     pub fn replace_in_process_protocol_plugin(
         &self,
         plugin: InProcessProtocolPlugin,
@@ -899,7 +1767,7 @@ impl PluginHost {
                 plugin.plugin_id
             ))
         })?;
-        managed.package.source = PluginSource::InProcess(plugin);
+        managed.package.source = PluginSource::InProcessProtocol(plugin);
         let generation_id = self.generations.next_generation_id();
         let generation = Arc::new(
             self.loader
@@ -940,18 +1808,37 @@ pub const fn plugin_reload_poll_interval_ms() -> u64 {
     PLUGIN_RELOAD_POLL_INTERVAL_MS
 }
 
+fn gameplay_session_snapshot_from_handle(
+    handle: &crate::SessionHandle,
+    profile_id: &GameplayProfileId,
+) -> Option<GameplaySessionSnapshot> {
+    if handle.player_id.is_none() || handle.gameplay_profile.as_ref()? != profile_id {
+        return None;
+    }
+    Some(GameplaySessionSnapshot {
+        phase: handle.phase,
+        player_id: handle.player_id,
+        entity_id: handle.entity_id,
+        gameplay_profile: handle.gameplay_profile.clone()?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        InProcessProtocolPlugin, PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost,
-        PluginPackage, PluginSource,
+        InProcessGameplayPlugin, InProcessProtocolPlugin, PluginAbiRange, PluginCatalog,
+        PluginFailurePolicy, PluginHost, PluginPackage, PluginSource,
     };
     use crate::{RuntimeRegistries, ServerConfig, plugin_host_from_config};
-    use mc_plugin_api::{CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind, PluginManifestV1, Utf8Slice};
+    use mc_plugin_api::{
+        CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind, PluginManifestV1, Utf8Slice,
+    };
+    use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
+    use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
     use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
-    use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
     use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints;
     use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entrypoints;
+    use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
     use mc_proto_common::{Edition, PacketWriter, TransportKind};
     use std::env;
     use std::ffi::OsString;
@@ -1076,13 +1963,7 @@ mod tests {
         let mut catalog = PluginCatalog::default();
         catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
             plugin_id: "je-1_7_10".to_string(),
-            manifest: manifest_with_abi(
-                "je-1_7_10",
-                PluginAbiVersion {
-                    major: 9,
-                    minor: 0,
-                },
-            ),
+            manifest: manifest_with_abi("je-1_7_10", PluginAbiVersion { major: 9, minor: 0 }),
             api: entrypoints.api,
         });
         let host = Arc::new(PluginHost::new(
@@ -1130,6 +2011,67 @@ mod tests {
         assert!(reason.contains("deferred"));
     }
 
+    #[test]
+    fn gameplay_profiles_activate_and_resolve() {
+        let mut catalog = PluginCatalog::default();
+        let canonical = canonical_gameplay_entrypoints();
+        catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+            plugin_id: "gameplay-canonical".to_string(),
+            manifest: canonical.manifest,
+            api: canonical.api,
+        });
+        let readonly = readonly_gameplay_entrypoints();
+        catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+            plugin_id: "gameplay-readonly".to_string(),
+            manifest: readonly.manifest,
+            api: readonly.api,
+        });
+
+        let host = Arc::new(PluginHost::new(
+            catalog,
+            PluginAbiRange::default(),
+            PluginFailurePolicy::Quarantine,
+        ));
+        host.activate_gameplay_profiles(&ServerConfig {
+            default_gameplay_profile: "canonical".to_string(),
+            gameplay_profile_map: [("je-1_7_10".to_string(), "readonly".to_string())]
+                .into_iter()
+                .collect(),
+            ..ServerConfig::default()
+        })
+        .expect("known gameplay profiles should activate");
+
+        assert!(host.resolve_gameplay_profile("canonical").is_some());
+        assert!(host.resolve_gameplay_profile("readonly").is_some());
+    }
+
+    #[test]
+    fn unknown_gameplay_profile_fails_activation() {
+        let mut catalog = PluginCatalog::default();
+        let canonical = canonical_gameplay_entrypoints();
+        catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+            plugin_id: "gameplay-canonical".to_string(),
+            manifest: canonical.manifest,
+            api: canonical.api,
+        });
+
+        let host = Arc::new(PluginHost::new(
+            catalog,
+            PluginAbiRange::default(),
+            PluginFailurePolicy::Quarantine,
+        ));
+        let error = host
+            .activate_gameplay_profiles(&ServerConfig {
+                default_gameplay_profile: "readonly".to_string(),
+                ..ServerConfig::default()
+            })
+            .expect_err("unknown gameplay profile should fail fast");
+        assert!(matches!(
+            error,
+            crate::RuntimeError::Config(message) if message.contains("unknown gameplay profile")
+        ));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), crate::RuntimeError> {
@@ -1142,7 +2084,8 @@ mod tests {
             plugins_dir: dist_dir,
             ..ServerConfig::default()
         };
-        let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+        let host =
+            plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
         let mut registries = RuntimeRegistries::new();
         host.load_into_registries(&mut registries)?;
 
@@ -1152,7 +2095,9 @@ mod tests {
                 .resolve_adapter(adapter_id)
                 .expect("packaged plugin adapter should resolve");
             assert!(
-                adapter.capability_set().contains("build-tag:dynamic-load-v1"),
+                adapter
+                    .capability_set()
+                    .contains("build-tag:dynamic-load-v1"),
                 "adapter `{adapter_id}` should expose build tag capability"
             );
         }
@@ -1172,7 +2117,8 @@ mod tests {
             plugins_dir: dist_dir.clone(),
             ..ServerConfig::default()
         };
-        let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+        let host =
+            plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
         let mut registries = RuntimeRegistries::new();
         host.load_into_registries(&mut registries)?;
 
@@ -1226,8 +2172,8 @@ mod tests {
         frame.push(0x01);
         frame.extend_from_slice(&123_i64.to_be_bytes());
         frame.extend_from_slice(&[
-            0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12,
-            0x34, 0x56, 0x78,
+            0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34,
+            0x56, 0x78,
         ]);
         frame.extend_from_slice(&456_i64.to_be_bytes());
         frame

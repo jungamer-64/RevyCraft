@@ -27,7 +27,9 @@ pub struct EntityId(pub i32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PlayerId(pub Uuid);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct PluginGenerationId(pub u64);
 
 impl Serialize for PlayerId {
@@ -94,9 +96,85 @@ impl GameplayProfileId {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCapabilitySet {
     pub protocol: CapabilitySet,
+    pub gameplay: CapabilitySet,
     pub gameplay_profile: GameplayProfileId,
-    pub plugin_generation: Option<PluginGenerationId>,
+    pub protocol_generation: Option<PluginGenerationId>,
+    pub gameplay_generation: Option<PluginGenerationId>,
 }
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GameplayJoinEffect {
+    pub inventory: Option<PlayerInventory>,
+    pub selected_hotbar_slot: Option<u8>,
+    pub emitted_events: Vec<TargetedEvent>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GameplayEffect {
+    pub mutations: Vec<GameplayMutation>,
+    pub emitted_events: Vec<TargetedEvent>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum GameplayMutation {
+    PlayerPose {
+        player_id: PlayerId,
+        position: Option<Vec3>,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        on_ground: bool,
+    },
+    SelectedHotbarSlot {
+        player_id: PlayerId,
+        slot: u8,
+    },
+    InventorySlot {
+        player_id: PlayerId,
+        slot: InventorySlot,
+        stack: Option<ItemStack>,
+    },
+    Block {
+        position: BlockPos,
+        block: BlockState,
+    },
+}
+
+pub trait GameplayQuery {
+    fn world_meta(&self) -> WorldMeta;
+    fn player_snapshot(&self, player_id: PlayerId) -> Option<PlayerSnapshot>;
+    fn block_state(&self, position: BlockPos) -> BlockState;
+    fn can_edit_block(&self, player_id: PlayerId, position: BlockPos) -> bool;
+}
+
+pub trait GameplayPolicyResolver: Send + Sync {
+    fn handle_player_join(
+        &self,
+        query: &dyn GameplayQuery,
+        session: &SessionCapabilitySet,
+        player: &PlayerSnapshot,
+    ) -> Result<GameplayJoinEffect, String>;
+
+    fn handle_command(
+        &self,
+        query: &dyn GameplayQuery,
+        session: &SessionCapabilitySet,
+        command: &CoreCommand,
+    ) -> Result<GameplayEffect, String>;
+
+    fn handle_tick(
+        &self,
+        query: &dyn GameplayQuery,
+        session: &SessionCapabilitySet,
+        player_id: PlayerId,
+        now_ms: u64,
+    ) -> Result<GameplayEffect, String>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CanonicalGameplayPolicy;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ReadonlyGameplayPolicy;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BlockKey(String);
@@ -768,6 +846,24 @@ pub enum CoreCommand {
     },
 }
 
+impl CoreCommand {
+    #[must_use]
+    pub const fn player_id(&self) -> Option<PlayerId> {
+        match self {
+            Self::LoginStart { player_id, .. }
+            | Self::UpdateClientView { player_id, .. }
+            | Self::ClientStatus { player_id, .. }
+            | Self::MoveIntent { player_id, .. }
+            | Self::KeepAliveResponse { player_id, .. }
+            | Self::SetHeldSlot { player_id, .. }
+            | Self::CreativeInventorySet { player_id, .. }
+            | Self::DigBlock { player_id, .. }
+            | Self::PlaceBlock { player_id, .. }
+            | Self::Disconnect { player_id, .. } => Some(*player_id),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CoreEvent {
     LoginAccepted {
@@ -925,54 +1021,58 @@ impl ServerCore {
     }
 
     pub fn apply_command(&mut self, command: CoreCommand, now_ms: u64) -> Vec<TargetedEvent> {
+        let session = canonical_session_capabilities();
+        self.apply_command_with_policy(command, now_ms, Some(&session), &CanonicalGameplayPolicy)
+            .expect("canonical gameplay policy should not fail")
+    }
+
+    pub fn apply_command_with_policy<R: GameplayPolicyResolver>(
+        &mut self,
+        command: CoreCommand,
+        now_ms: u64,
+        session: Option<&SessionCapabilitySet>,
+        resolver: &R,
+    ) -> Result<Vec<TargetedEvent>, String> {
         match command {
             CoreCommand::LoginStart {
                 connection_id,
                 username,
                 player_id,
-            } => self.login_player(connection_id, username, player_id, now_ms),
+            } => self.login_player_with_policy(
+                connection_id,
+                username,
+                player_id,
+                now_ms,
+                session.ok_or_else(|| "login requires session capabilities".to_string())?,
+                resolver,
+            ),
             CoreCommand::UpdateClientView {
                 player_id,
                 view_distance,
-            } => self.update_client_settings(player_id, view_distance),
+            } => Ok(self.update_client_settings(player_id, view_distance)),
             CoreCommand::ClientStatus {
                 player_id: _,
                 action_id: _,
-            } => Vec::new(),
-            CoreCommand::MoveIntent {
-                player_id,
-                position,
-                yaw,
-                pitch,
-                on_ground,
-            } => self.apply_move(player_id, position, yaw, pitch, on_ground),
+            } => Ok(Vec::new()),
+            CoreCommand::MoveIntent { .. }
+            | CoreCommand::SetHeldSlot { .. }
+            | CoreCommand::CreativeInventorySet { .. }
+            | CoreCommand::DigBlock { .. }
+            | CoreCommand::PlaceBlock { .. } => {
+                let session = session.ok_or_else(|| {
+                    "gameplay-owned command requires session capabilities".to_string()
+                })?;
+                let effect = resolver.handle_command(self, session, &command)?;
+                Ok(self.apply_gameplay_effect(effect))
+            }
             CoreCommand::KeepAliveResponse {
                 player_id,
                 keep_alive_id,
             } => {
                 self.accept_keep_alive(player_id, keep_alive_id);
-                Vec::new()
+                Ok(Vec::new())
             }
-            CoreCommand::SetHeldSlot { player_id, slot } => self.set_held_slot(player_id, slot),
-            CoreCommand::CreativeInventorySet {
-                player_id,
-                slot,
-                stack,
-            } => self.set_creative_inventory_slot(player_id, slot, stack),
-            CoreCommand::DigBlock {
-                player_id,
-                position,
-                status,
-                face,
-            } => self.apply_dig(player_id, position, status, face),
-            CoreCommand::PlaceBlock {
-                player_id,
-                hand,
-                position,
-                face,
-                held_item,
-            } => self.apply_place(player_id, hand, position, face, held_item.as_ref()),
-            CoreCommand::Disconnect { player_id } => self.disconnect_player(player_id),
+            CoreCommand::Disconnect { player_id } => Ok(self.disconnect_player(player_id)),
         }
     }
 
@@ -1004,21 +1104,37 @@ impl ServerCore {
         events
     }
 
-    fn login_player(
+    pub fn tick_player_with_policy<R: GameplayPolicyResolver>(
+        &mut self,
+        player_id: PlayerId,
+        now_ms: u64,
+        session: &SessionCapabilitySet,
+        resolver: &R,
+    ) -> Result<Vec<TargetedEvent>, String> {
+        let effect = resolver.handle_tick(self, session, player_id, now_ms)?;
+        Ok(self.apply_gameplay_effect(effect))
+    }
+
+    fn login_player_with_policy<R: GameplayPolicyResolver>(
         &mut self,
         connection_id: ConnectionId,
         username: String,
         player_id: PlayerId,
         now_ms: u64,
-    ) -> Vec<TargetedEvent> {
+        session: &SessionCapabilitySet,
+        resolver: &R,
+    ) -> Result<Vec<TargetedEvent>, String> {
         if username.is_empty() || username.len() > 16 {
-            return Self::reject_connection(connection_id, "Invalid username");
+            return Ok(Self::reject_connection(connection_id, "Invalid username"));
         }
         if self.online_players.len() >= usize::from(self.config.max_players) {
-            return Self::reject_connection(connection_id, "Server is full");
+            return Ok(Self::reject_connection(connection_id, "Server is full"));
         }
         if self.online_players.contains_key(&player_id) {
-            return Self::reject_connection(connection_id, "Player is already online");
+            return Ok(Self::reject_connection(
+                connection_id,
+                "Player is already online",
+            ));
         }
 
         let mut player = self
@@ -1027,6 +1143,8 @@ impl ServerCore {
             .cloned()
             .unwrap_or_else(|| default_player(player_id, username.clone(), self.config.spawn));
         player.username = username;
+        let join_effect = resolver.handle_player_join(self, session, &player)?;
+        let join_events = self.apply_gameplay_join_effect(&mut player, join_effect);
 
         let entity_id = EntityId(self.next_entity_id);
         self.next_entity_id = self.next_entity_id.saturating_add(1);
@@ -1059,12 +1177,27 @@ impl ServerCore {
             connection_id,
             existing_players,
         ));
+        events.extend(join_events);
 
         events.push(TargetedEvent {
             target: EventTarget::EveryoneExcept(player_id),
             event: CoreEvent::EntitySpawned { entity_id, player },
         });
-        events
+        Ok(events)
+    }
+
+    fn apply_gameplay_join_effect(
+        &self,
+        player: &mut PlayerSnapshot,
+        effect: GameplayJoinEffect,
+    ) -> Vec<TargetedEvent> {
+        if let Some(inventory) = effect.inventory {
+            player.inventory = inventory;
+        }
+        if let Some(selected_hotbar_slot) = effect.selected_hotbar_slot {
+            player.selected_hotbar_slot = selected_hotbar_slot;
+        }
+        effect.emitted_events
     }
 
     fn reject_connection(connection_id: ConnectionId, reason: &str) -> Vec<TargetedEvent> {
@@ -1161,7 +1294,41 @@ impl ServerCore {
             .collect()
     }
 
-    fn apply_move(
+    pub fn apply_gameplay_effect(&mut self, effect: GameplayEffect) -> Vec<TargetedEvent> {
+        let mut events = Vec::new();
+        for mutation in effect.mutations {
+            match mutation {
+                GameplayMutation::PlayerPose {
+                    player_id,
+                    position,
+                    yaw,
+                    pitch,
+                    on_ground,
+                } => {
+                    events.extend(
+                        self.apply_player_pose_mutation(player_id, position, yaw, pitch, on_ground),
+                    );
+                }
+                GameplayMutation::SelectedHotbarSlot { player_id, slot } => {
+                    events.extend(self.apply_selected_hotbar_slot_mutation(player_id, slot));
+                }
+                GameplayMutation::InventorySlot {
+                    player_id,
+                    slot,
+                    stack,
+                } => {
+                    events.extend(self.apply_inventory_slot_mutation(player_id, slot, stack));
+                }
+                GameplayMutation::Block { position, block } => {
+                    events.extend(self.apply_block_mutation(position, block));
+                }
+            }
+        }
+        events.extend(effect.emitted_events);
+        events
+    }
+
+    fn apply_player_pose_mutation(
         &mut self,
         player_id: PlayerId,
         position: Option<Vec3>,
@@ -1223,21 +1390,17 @@ impl ServerCore {
         }
     }
 
-    fn set_held_slot(&mut self, player_id: PlayerId, slot: i16) -> Vec<TargetedEvent> {
+    fn apply_selected_hotbar_slot_mutation(
+        &mut self,
+        player_id: PlayerId,
+        slot: u8,
+    ) -> Vec<TargetedEvent> {
         let Some(player) = self.online_players.get_mut(&player_id) else {
             return Vec::new();
         };
-        let slot = match u8::try_from(slot) {
-            Ok(slot) if slot < HOTBAR_SLOT_COUNT => slot,
-            _ => {
-                return vec![TargetedEvent {
-                    target: EventTarget::Player(player_id),
-                    event: CoreEvent::SelectedHotbarSlotChanged {
-                        slot: player.snapshot.selected_hotbar_slot,
-                    },
-                }];
-            }
-        };
+        if slot >= HOTBAR_SLOT_COUNT {
+            return Vec::new();
+        }
         player.snapshot.selected_hotbar_slot = slot;
         self.saved_players
             .insert(player_id, player.snapshot.clone());
@@ -1247,7 +1410,7 @@ impl ServerCore {
         }]
     }
 
-    fn set_creative_inventory_slot(
+    fn apply_inventory_slot_mutation(
         &mut self,
         player_id: PlayerId,
         slot: InventorySlot,
@@ -1256,20 +1419,6 @@ impl ServerCore {
         let Some(player) = self.online_players.get_mut(&player_id) else {
             return Vec::new();
         };
-        if self.world_meta.game_mode != 1 {
-            return reject_inventory_slot_events(player_id, slot, player);
-        }
-
-        if !slot.is_storage_slot() || matches!(slot, InventorySlot::Auxiliary(_)) {
-            return reject_inventory_slot_events(player_id, slot, player);
-        }
-
-        if let Some(stack) = stack.as_ref()
-            && (!stack.is_supported_placeable() || stack.count == 0 || stack.count > 64)
-        {
-            return reject_inventory_slot_events(player_id, slot, player);
-        }
-
         let _ = player.snapshot.inventory.set_slot(slot, stack.clone());
         self.saved_players
             .insert(player_id, player.snapshot.clone());
@@ -1283,88 +1432,13 @@ impl ServerCore {
         }]
     }
 
-    fn apply_dig(
+    fn apply_block_mutation(
         &mut self,
-        player_id: PlayerId,
         position: BlockPos,
-        status: u8,
-        _face: Option<BlockFace>,
+        block: BlockState,
     ) -> Vec<TargetedEvent> {
-        if !matches!(status, 0 | 2) {
-            return Vec::new();
-        }
-        let Some(player) = self.online_players.get(&player_id) else {
-            return Vec::new();
-        };
-        if self.world_meta.game_mode != 1 || !self.can_edit_block(&player.snapshot, position) {
-            let current = self.block_at(position);
-            return vec![TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::BlockChanged {
-                    position,
-                    block: current,
-                },
-            }];
-        }
-
-        let current = self.block_at(position);
-        if current.is_air() || current.key.as_str() == "minecraft:bedrock" {
-            return vec![TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::BlockChanged {
-                    position,
-                    block: current,
-                },
-            }];
-        }
-
-        self.set_block_at(position, BlockState::air());
+        self.set_block_at(position, block);
         self.emit_block_change(position)
-    }
-
-    fn apply_place(
-        &mut self,
-        player_id: PlayerId,
-        hand: InteractionHand,
-        position: BlockPos,
-        face: Option<BlockFace>,
-        held_item: Option<&ItemStack>,
-    ) -> Vec<TargetedEvent> {
-        let Some(face) = face else {
-            return Vec::new();
-        };
-        let Some(player) = self.online_players.get(&player_id) else {
-            return Vec::new();
-        };
-        let place_pos = position.offset(face);
-        let Some(selected_stack) = player
-            .snapshot
-            .inventory
-            .selected_stack(player.snapshot.selected_hotbar_slot, hand)
-            .cloned()
-        else {
-            return self.place_rejection_events(player_id, hand, place_pos, &player.snapshot);
-        };
-
-        if held_item.is_some() && held_item != Some(&selected_stack) {
-            return self.place_rejection_events(player_id, hand, place_pos, &player.snapshot);
-        }
-
-        let Some(block) = catalog::placeable_block_state_from_item_key(selected_stack.key.as_str())
-        else {
-            return self.place_rejection_events(player_id, hand, place_pos, &player.snapshot);
-        };
-
-        if self.world_meta.game_mode != 1
-            || !self.can_edit_block(&player.snapshot, place_pos)
-            || self.block_at(position).is_air()
-            || !self.block_at(place_pos).is_air()
-        {
-            return self.place_rejection_events(player_id, hand, place_pos, &player.snapshot);
-        }
-
-        self.set_block_at(place_pos, block);
-        self.emit_block_change(place_pos)
     }
 
     fn place_inventory_correction(
@@ -1392,24 +1466,6 @@ impl ServerCore {
                 },
             },
         ]
-    }
-
-    fn place_rejection_events(
-        &self,
-        player_id: PlayerId,
-        hand: InteractionHand,
-        place_pos: BlockPos,
-        player: &PlayerSnapshot,
-    ) -> Vec<TargetedEvent> {
-        let mut events = vec![TargetedEvent {
-            target: EventTarget::Player(player_id),
-            event: CoreEvent::BlockChanged {
-                position: place_pos,
-                block: self.block_at(place_pos),
-            },
-        }];
-        events.extend(Self::place_inventory_correction(player_id, hand, player));
-        events
     }
 
     fn disconnect_player(&mut self, player_id: PlayerId) -> Vec<TargetedEvent> {
@@ -1479,7 +1535,7 @@ impl ServerCore {
             .collect()
     }
 
-    fn can_edit_block(&self, actor: &PlayerSnapshot, position: BlockPos) -> bool {
+    fn can_edit_block_for_snapshot(&self, actor: &PlayerSnapshot, position: BlockPos) -> bool {
         if !(0..=255).contains(&position.y) {
             return false;
         }
@@ -1491,6 +1547,343 @@ impl ServerCore {
             .iter()
             .any(|(_, player)| block_intersects_player(position, &player.snapshot))
     }
+}
+
+impl GameplayQuery for ServerCore {
+    fn world_meta(&self) -> WorldMeta {
+        self.world_meta.clone()
+    }
+
+    fn player_snapshot(&self, player_id: PlayerId) -> Option<PlayerSnapshot> {
+        self.online_players
+            .get(&player_id)
+            .map(|player| player.snapshot.clone())
+    }
+
+    fn block_state(&self, position: BlockPos) -> BlockState {
+        self.block_at(position)
+    }
+
+    fn can_edit_block(&self, player_id: PlayerId, position: BlockPos) -> bool {
+        self.player_snapshot(player_id)
+            .is_some_and(|player| self.can_edit_block_for_snapshot(&player, position))
+    }
+}
+
+impl GameplayPolicyResolver for CanonicalGameplayPolicy {
+    fn handle_player_join(
+        &self,
+        _query: &dyn GameplayQuery,
+        _session: &SessionCapabilitySet,
+        _player: &PlayerSnapshot,
+    ) -> Result<GameplayJoinEffect, String> {
+        Ok(GameplayJoinEffect::default())
+    }
+
+    fn handle_command(
+        &self,
+        query: &dyn GameplayQuery,
+        _session: &SessionCapabilitySet,
+        command: &CoreCommand,
+    ) -> Result<GameplayEffect, String> {
+        match command {
+            CoreCommand::MoveIntent {
+                player_id,
+                position,
+                yaw,
+                pitch,
+                on_ground,
+            } => Ok(GameplayEffect {
+                mutations: vec![GameplayMutation::PlayerPose {
+                    player_id: *player_id,
+                    position: *position,
+                    yaw: *yaw,
+                    pitch: *pitch,
+                    on_ground: *on_ground,
+                }],
+                emitted_events: Vec::new(),
+            }),
+            CoreCommand::SetHeldSlot { player_id, slot } => {
+                let Some(player) = query.player_snapshot(*player_id) else {
+                    return Ok(GameplayEffect::default());
+                };
+                let Ok(slot) = u8::try_from(*slot) else {
+                    return Ok(GameplayEffect {
+                        mutations: Vec::new(),
+                        emitted_events: vec![TargetedEvent {
+                            target: EventTarget::Player(*player_id),
+                            event: CoreEvent::SelectedHotbarSlotChanged {
+                                slot: player.selected_hotbar_slot,
+                            },
+                        }],
+                    });
+                };
+                if slot >= HOTBAR_SLOT_COUNT {
+                    return Ok(GameplayEffect {
+                        mutations: Vec::new(),
+                        emitted_events: vec![TargetedEvent {
+                            target: EventTarget::Player(*player_id),
+                            event: CoreEvent::SelectedHotbarSlotChanged {
+                                slot: player.selected_hotbar_slot,
+                            },
+                        }],
+                    });
+                }
+                Ok(GameplayEffect {
+                    mutations: vec![GameplayMutation::SelectedHotbarSlot {
+                        player_id: *player_id,
+                        slot,
+                    }],
+                    emitted_events: Vec::new(),
+                })
+            }
+            CoreCommand::CreativeInventorySet {
+                player_id,
+                slot,
+                stack,
+            } => {
+                let Some(player) = query.player_snapshot(*player_id) else {
+                    return Ok(GameplayEffect::default());
+                };
+                if query.world_meta().game_mode != 1
+                    || !slot.is_storage_slot()
+                    || matches!(slot, InventorySlot::Auxiliary(_))
+                    || stack.as_ref().is_some_and(|stack| {
+                        !stack.is_supported_placeable() || stack.count == 0 || stack.count > 64
+                    })
+                {
+                    return Ok(GameplayEffect {
+                        mutations: Vec::new(),
+                        emitted_events: reject_inventory_slot_events_snapshot(
+                            *player_id, *slot, &player,
+                        ),
+                    });
+                }
+                Ok(GameplayEffect {
+                    mutations: vec![GameplayMutation::InventorySlot {
+                        player_id: *player_id,
+                        slot: *slot,
+                        stack: stack.clone(),
+                    }],
+                    emitted_events: Vec::new(),
+                })
+            }
+            CoreCommand::DigBlock {
+                player_id,
+                position,
+                status,
+                ..
+            } => {
+                if !matches!(status, 0 | 2) {
+                    return Ok(GameplayEffect::default());
+                }
+                let Some(_player) = query.player_snapshot(*player_id) else {
+                    return Ok(GameplayEffect::default());
+                };
+                if query.world_meta().game_mode != 1 || !query.can_edit_block(*player_id, *position)
+                {
+                    return Ok(GameplayEffect {
+                        mutations: Vec::new(),
+                        emitted_events: vec![TargetedEvent {
+                            target: EventTarget::Player(*player_id),
+                            event: CoreEvent::BlockChanged {
+                                position: *position,
+                                block: query.block_state(*position),
+                            },
+                        }],
+                    });
+                }
+                let current = query.block_state(*position);
+                if current.is_air() || current.key.as_str() == "minecraft:bedrock" {
+                    return Ok(GameplayEffect {
+                        mutations: Vec::new(),
+                        emitted_events: vec![TargetedEvent {
+                            target: EventTarget::Player(*player_id),
+                            event: CoreEvent::BlockChanged {
+                                position: *position,
+                                block: current,
+                            },
+                        }],
+                    });
+                }
+                Ok(GameplayEffect {
+                    mutations: vec![GameplayMutation::Block {
+                        position: *position,
+                        block: BlockState::air(),
+                    }],
+                    emitted_events: Vec::new(),
+                })
+            }
+            CoreCommand::PlaceBlock {
+                player_id,
+                hand,
+                position,
+                face,
+                held_item,
+            } => {
+                let Some(face) = *face else {
+                    return Ok(GameplayEffect::default());
+                };
+                let Some(player) = query.player_snapshot(*player_id) else {
+                    return Ok(GameplayEffect::default());
+                };
+                let place_pos = position.offset(face);
+                let Some(selected_stack) = player
+                    .inventory
+                    .selected_stack(player.selected_hotbar_slot, *hand)
+                    .cloned()
+                else {
+                    return Ok(GameplayEffect {
+                        mutations: Vec::new(),
+                        emitted_events: place_rejection_events_snapshot(
+                            query, *player_id, *hand, place_pos, &player,
+                        ),
+                    });
+                };
+                if held_item.is_some() && held_item != &Some(selected_stack.clone()) {
+                    return Ok(GameplayEffect {
+                        mutations: Vec::new(),
+                        emitted_events: place_rejection_events_snapshot(
+                            query, *player_id, *hand, place_pos, &player,
+                        ),
+                    });
+                }
+                let Some(block) =
+                    catalog::placeable_block_state_from_item_key(selected_stack.key.as_str())
+                else {
+                    return Ok(GameplayEffect {
+                        mutations: Vec::new(),
+                        emitted_events: place_rejection_events_snapshot(
+                            query, *player_id, *hand, place_pos, &player,
+                        ),
+                    });
+                };
+                if query.world_meta().game_mode != 1
+                    || !query.can_edit_block(*player_id, place_pos)
+                    || query.block_state(*position).is_air()
+                    || !query.block_state(place_pos).is_air()
+                {
+                    return Ok(GameplayEffect {
+                        mutations: Vec::new(),
+                        emitted_events: place_rejection_events_snapshot(
+                            query, *player_id, *hand, place_pos, &player,
+                        ),
+                    });
+                }
+                Ok(GameplayEffect {
+                    mutations: vec![GameplayMutation::Block {
+                        position: place_pos,
+                        block,
+                    }],
+                    emitted_events: Vec::new(),
+                })
+            }
+            _ => Ok(GameplayEffect::default()),
+        }
+    }
+
+    fn handle_tick(
+        &self,
+        _query: &dyn GameplayQuery,
+        _session: &SessionCapabilitySet,
+        _player_id: PlayerId,
+        _now_ms: u64,
+    ) -> Result<GameplayEffect, String> {
+        Ok(GameplayEffect::default())
+    }
+}
+
+impl GameplayPolicyResolver for ReadonlyGameplayPolicy {
+    fn handle_player_join(
+        &self,
+        query: &dyn GameplayQuery,
+        session: &SessionCapabilitySet,
+        player: &PlayerSnapshot,
+    ) -> Result<GameplayJoinEffect, String> {
+        CanonicalGameplayPolicy.handle_player_join(query, session, player)
+    }
+
+    fn handle_command(
+        &self,
+        query: &dyn GameplayQuery,
+        session: &SessionCapabilitySet,
+        command: &CoreCommand,
+    ) -> Result<GameplayEffect, String> {
+        match command {
+            CoreCommand::MoveIntent { .. } | CoreCommand::SetHeldSlot { .. } => {
+                CanonicalGameplayPolicy.handle_command(query, session, command)
+            }
+            CoreCommand::CreativeInventorySet { .. }
+            | CoreCommand::DigBlock { .. }
+            | CoreCommand::PlaceBlock { .. } => Ok(GameplayEffect::default()),
+            _ => Ok(GameplayEffect::default()),
+        }
+    }
+
+    fn handle_tick(
+        &self,
+        _query: &dyn GameplayQuery,
+        _session: &SessionCapabilitySet,
+        _player_id: PlayerId,
+        _now_ms: u64,
+    ) -> Result<GameplayEffect, String> {
+        Ok(GameplayEffect::default())
+    }
+}
+
+fn canonical_session_capabilities() -> SessionCapabilitySet {
+    let mut gameplay = CapabilitySet::new();
+    let _ = gameplay.insert("gameplay.profile.canonical");
+    SessionCapabilitySet {
+        protocol: CapabilitySet::new(),
+        gameplay,
+        gameplay_profile: GameplayProfileId::new("canonical"),
+        protocol_generation: None,
+        gameplay_generation: None,
+    }
+}
+
+fn reject_inventory_slot_events_snapshot(
+    player_id: PlayerId,
+    slot: InventorySlot,
+    player: &PlayerSnapshot,
+) -> Vec<TargetedEvent> {
+    vec![
+        TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::InventorySlotChanged {
+                container: InventoryContainer::Player,
+                slot,
+                stack: player.inventory.get_slot(slot).cloned(),
+            },
+        },
+        TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::SelectedHotbarSlotChanged {
+                slot: player.selected_hotbar_slot,
+            },
+        },
+    ]
+}
+
+fn place_rejection_events_snapshot(
+    query: &dyn GameplayQuery,
+    player_id: PlayerId,
+    hand: InteractionHand,
+    place_pos: BlockPos,
+    player: &PlayerSnapshot,
+) -> Vec<TargetedEvent> {
+    let mut events = vec![TargetedEvent {
+        target: EventTarget::Player(player_id),
+        event: CoreEvent::BlockChanged {
+            position: place_pos,
+            block: query.block_state(place_pos),
+        },
+    }];
+    events.extend(ServerCore::place_inventory_correction(
+        player_id, hand, player,
+    ));
+    events
 }
 
 fn default_player(player_id: PlayerId, username: String, spawn: BlockPos) -> PlayerSnapshot {
@@ -1560,28 +1953,6 @@ fn block_intersects_player(block: BlockPos, player: &PlayerSnapshot) -> bool {
         && player_max_y > block_min_y
         && player_min_z < block_max_z
         && player_max_z > block_min_z
-}
-
-fn reject_inventory_slot_events(
-    player_id: PlayerId,
-    slot: InventorySlot,
-    player: &OnlinePlayer,
-) -> Vec<TargetedEvent> {
-    let mut events = vec![TargetedEvent {
-        target: EventTarget::Player(player_id),
-        event: CoreEvent::InventorySlotChanged {
-            container: InventoryContainer::Player,
-            slot,
-            stack: player.snapshot.inventory.get_slot(slot).cloned(),
-        },
-    }];
-    events.push(TargetedEvent {
-        target: EventTarget::Player(player_id),
-        event: CoreEvent::SelectedHotbarSlotChanged {
-            slot: player.snapshot.selected_hotbar_slot,
-        },
-    });
-    events
 }
 
 fn required_chunks(center: ChunkPos, view_distance: u8) -> BTreeSet<ChunkPos> {
@@ -1716,6 +2087,77 @@ mod tests {
                 } if *id == second
             )
         }));
+    }
+
+    #[test]
+    fn canonical_policy_matches_default_apply_command() {
+        let config = CoreConfig {
+            game_mode: 1,
+            ..CoreConfig::default()
+        };
+        let mut default_core = ServerCore::new(config.clone());
+        let mut explicit_core = ServerCore::new(config);
+        let player = player_id("policy-parity");
+        let command = CoreCommand::LoginStart {
+            connection_id: ConnectionId(1),
+            username: "policy-parity".to_string(),
+            player_id: player,
+        };
+
+        let default_events = default_core.apply_command(command.clone(), 0);
+        let explicit_events = explicit_core
+            .apply_command_with_policy(
+                command,
+                0,
+                Some(&canonical_session_capabilities()),
+                &CanonicalGameplayPolicy,
+            )
+            .expect("canonical gameplay policy should succeed");
+
+        assert_eq!(default_events, explicit_events);
+        assert_eq!(default_core.snapshot(), explicit_core.snapshot());
+    }
+
+    #[test]
+    fn readonly_policy_rejects_block_edit_without_mutation() {
+        let mut core = ServerCore::new(CoreConfig {
+            game_mode: 1,
+            ..CoreConfig::default()
+        });
+        let player = player_id("readonly");
+        let _ = core.apply_command(
+            CoreCommand::LoginStart {
+                connection_id: ConnectionId(1),
+                username: "readonly".to_string(),
+                player_id: player,
+            },
+            0,
+        );
+        let before = core.snapshot();
+        let mut readonly_capabilities = canonical_session_capabilities();
+        readonly_capabilities.gameplay = CapabilitySet::new();
+        let _ = readonly_capabilities
+            .gameplay
+            .insert("gameplay.profile.readonly");
+        readonly_capabilities.gameplay_profile = GameplayProfileId::new("readonly");
+
+        let effect = ReadonlyGameplayPolicy
+            .handle_command(
+                &core,
+                &readonly_capabilities,
+                &CoreCommand::PlaceBlock {
+                    player_id: player,
+                    position: BlockPos::new(2, 3, 0),
+                    hand: InteractionHand::Main,
+                    face: Some(BlockFace::Top),
+                    held_item: None,
+                },
+            )
+            .expect("readonly gameplay policy should handle place rejection");
+
+        assert!(effect.mutations.is_empty());
+        assert!(effect.emitted_events.is_empty());
+        assert_eq!(before, core.snapshot());
     }
 
     #[test]

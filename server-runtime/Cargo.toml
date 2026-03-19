@@ -23,6 +23,8 @@ toml.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+mc-plugin-gameplay-canonical = { path = "../mc-plugin-gameplay-canonical", features = ["disable-exported-symbols"] }
+mc-plugin-gameplay-readonly = { path = "../mc-plugin-gameplay-readonly", features = ["disable-exported-symbols"] }
 mc-plugin-proto-be-placeholder = { path = "../mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols"] }
 mc-plugin-proto-je-1_12_2 = { path = "../mc-plugin-proto-je-1_12_2", features = ["disable-exported-symbols"] }
 mc-plugin-proto-je-1_7_10 = { path = "../mc-plugin-proto-je-1_7_10", features = ["disable-exported-symbols"] }

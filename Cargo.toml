@@ -3,6 +3,8 @@ members = [
     "revycraft-client",
     "mc-core",
     "mc-plugin-api",
+    "mc-plugin-gameplay-canonical",
+    "mc-plugin-gameplay-readonly",
     "mc-plugin-sdk-rust",
     "mc-plugin-proto-be-placeholder",
     "mc-plugin-proto-je-1_12_2",

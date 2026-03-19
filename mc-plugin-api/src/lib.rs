@@ -1,7 +1,18 @@
+mod gameplay_codec;
 mod protocol_codec;
 
+use std::ffi::c_void;
 use std::fmt;
 
+pub use gameplay_codec::{
+    GameplayDescriptor, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
+    decode_gameplay_request, decode_gameplay_response, decode_host_block_pos_blob,
+    decode_host_block_state_blob, decode_host_can_edit_block_key, decode_host_player_id_blob,
+    decode_host_player_snapshot_blob, decode_host_world_meta_blob, encode_gameplay_request,
+    encode_gameplay_response, encode_host_block_pos_blob, encode_host_block_state_blob,
+    encode_host_can_edit_block_key, encode_host_player_id_blob, encode_host_player_snapshot_blob,
+    encode_host_world_meta_blob,
+};
 pub use protocol_codec::{
     PLUGIN_ENVELOPE_HEADER_LEN, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, ProtocolOpCode,
     ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, decode_protocol_request,
@@ -135,17 +146,42 @@ pub struct SessionTransferBlobV1 {
 }
 
 pub type HostLogFn = unsafe extern "C" fn(level: u32, message: Utf8Slice);
+pub type HostReadPlayerSnapshotFn = unsafe extern "C" fn(
+    *mut c_void,
+    ByteSlice,
+    *mut OwnedBuffer,
+    *mut OwnedBuffer,
+) -> PluginErrorCode;
+pub type HostReadWorldMetaFn =
+    unsafe extern "C" fn(*mut c_void, *mut OwnedBuffer, *mut OwnedBuffer) -> PluginErrorCode;
+pub type HostReadBlockStateFn = unsafe extern "C" fn(
+    *mut c_void,
+    ByteSlice,
+    *mut OwnedBuffer,
+    *mut OwnedBuffer,
+) -> PluginErrorCode;
+pub type HostCanEditBlockFn =
+    unsafe extern "C" fn(*mut c_void, ByteSlice, *mut bool, *mut OwnedBuffer) -> PluginErrorCode;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct HostApiTableV1 {
     pub abi: PluginAbiVersion,
+    pub context: *mut c_void,
     pub log: Option<HostLogFn>,
+    pub read_player_snapshot: Option<HostReadPlayerSnapshotFn>,
+    pub read_world_meta: Option<HostReadWorldMetaFn>,
+    pub read_block_state: Option<HostReadBlockStateFn>,
+    pub can_edit_block: Option<HostCanEditBlockFn>,
 }
+
+unsafe impl Send for HostApiTableV1 {}
+unsafe impl Sync for HostApiTableV1 {}
 
 pub type PluginInvokeFn =
     unsafe extern "C" fn(ByteSlice, *mut OwnedBuffer, *mut OwnedBuffer) -> PluginErrorCode;
 pub type PluginFreeBufferFn = unsafe extern "C" fn(OwnedBuffer);
+pub type GameplaySetHostApiFn = unsafe extern "C" fn(*const HostApiTableV1) -> PluginErrorCode;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -187,6 +223,7 @@ pub struct AuthPluginApiV1 {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct GameplayPluginApiV1 {
+    pub set_host_api: GameplaySetHostApiFn,
     pub invoke: PluginInvokeFn,
     pub free_buffer: PluginFreeBufferFn,
 }
@@ -208,15 +245,5 @@ pub enum AuthRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthResponse {
-    Empty,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GameplayRequest {
-    Describe,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GameplayResponse {
     Empty,
 }

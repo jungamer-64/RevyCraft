@@ -10,7 +10,7 @@ struct PluginSpec {
     plugin_kind: &'static str,
 }
 
-const PROTOCOL_PLUGINS: &[PluginSpec] = &[
+const PLUGINS: &[PluginSpec] = &[
     PluginSpec {
         cargo_package: "mc-plugin-proto-je-1_7_10",
         plugin_id: "je-1_7_10",
@@ -30,6 +30,16 @@ const PROTOCOL_PLUGINS: &[PluginSpec] = &[
         cargo_package: "mc-plugin-proto-be-placeholder",
         plugin_id: "be-placeholder",
         plugin_kind: "protocol",
+    },
+    PluginSpec {
+        cargo_package: "mc-plugin-gameplay-canonical",
+        plugin_id: "gameplay-canonical",
+        plugin_kind: "gameplay",
+    },
+    PluginSpec {
+        cargo_package: "mc-plugin-gameplay-readonly",
+        plugin_id: "gameplay-readonly",
+        plugin_kind: "gameplay",
     },
 ];
 
@@ -76,12 +86,12 @@ fn package_plugins(args: Vec<String>) -> Result<(), String> {
     let dist_dir = workspace_root.join(dist_dir);
     fs::create_dir_all(&dist_dir).map_err(|error| error.to_string())?;
 
-    for plugin in PROTOCOL_PLUGINS {
+    for plugin in PLUGINS {
         build_plugin(&workspace_root, plugin, release)?;
         package_plugin(&workspace_root, &dist_dir, plugin, release)?;
     }
 
-    println!("packaged protocol plugins into {}", dist_dir.display());
+    println!("packaged plugins into {}", dist_dir.display());
     Ok(())
 }
 
@@ -146,10 +156,7 @@ fn package_plugin(
             .as_ref(),
     );
     let destination = plugin_dir.join(&packaged_artifact_name);
-    let staging = plugin_dir.join(format!(
-        ".{}.tmp",
-        packaged_artifact_name
-    ));
+    let staging = plugin_dir.join(format!(".{}.tmp", packaged_artifact_name));
     fs::copy(&source, &staging).map_err(|error| {
         format!(
             "failed to copy {} to {}: {error}",

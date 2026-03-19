@@ -9,7 +9,8 @@ use std::sync::Arc;
 async fn main() -> Result<(), RuntimeError> {
     let config = ServerConfig::from_properties(Path::new("server.properties"))?;
     let mut registries = RuntimeRegistries::new();
-    registries.register_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID, Arc::new(Je1710StorageAdapter));
+    registries
+        .register_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID, Arc::new(Je1710StorageAdapter));
 
     let plugin_host = plugin_host_from_config(&config)?.ok_or_else(|| {
         RuntimeError::Config(format!(

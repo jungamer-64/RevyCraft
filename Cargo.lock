@@ -3201,6 +3201,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-gameplay-canonical"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+]
+
+[[package]]
+name = "mc-plugin-gameplay-readonly"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+]
+
+[[package]]
 name = "mc-plugin-proto-be-placeholder"
 version = "0.1.0"
 dependencies = [
@@ -3248,6 +3266,7 @@ dependencies = [
 name = "mc-plugin-sdk-rust"
 version = "0.1.0"
 dependencies = [
+ "mc-core",
  "mc-plugin-api",
  "mc-proto-common",
 ]
@@ -4558,6 +4577,8 @@ dependencies = [
  "libloading 0.9.0",
  "mc-core",
  "mc-plugin-api",
+ "mc-plugin-gameplay-canonical",
+ "mc-plugin-gameplay-readonly",
  "mc-plugin-proto-be-placeholder",
  "mc-plugin-proto-je-1_12_2",
  "mc-plugin-proto-je-1_7_10",

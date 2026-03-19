@@ -3,8 +3,9 @@ mod plugin_host;
 use bytes::BytesMut;
 use mc_core::{
     ConnectionId, CoreCommand, CoreConfig, CoreEvent, EventTarget, PlayerId, PlayerSummary,
-    PluginGenerationId, ServerCore, SessionCapabilitySet, TargetedEvent,
+    ServerCore, SessionCapabilitySet, TargetedEvent,
 };
+use mc_plugin_api::GameplaySessionSnapshot;
 use mc_plugin_api::PluginAbiVersion;
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeNextState, HandshakeProbe, LoginRequest, MinecraftWireCodec,
@@ -12,9 +13,10 @@ use mc_proto_common::{
     StatusRequest, StorageAdapter, TransportKind, WireCodec,
 };
 use md5::{Digest, Md5};
+use plugin_host::HotSwappableGameplayProfile;
 pub use plugin_host::{
-    InProcessProtocolPlugin, PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost,
-    plugin_host_from_config, plugin_reload_poll_interval_ms,
+    InProcessGameplayPlugin, InProcessProtocolPlugin, PluginAbiRange, PluginCatalog,
+    PluginFailurePolicy, PluginHost, plugin_host_from_config, plugin_reload_poll_interval_ms,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -116,6 +118,8 @@ pub struct ServerConfig {
     pub default_adapter: String,
     pub enabled_adapters: Option<Vec<String>>,
     pub storage_profile: String,
+    pub default_gameplay_profile: String,
+    pub gameplay_profile_map: HashMap<String, String>,
     pub plugins_dir: PathBuf,
     pub plugin_allowlist: Option<Vec<String>>,
     pub plugin_failure_policy: PluginFailurePolicy,
@@ -143,6 +147,8 @@ impl Default for ServerConfig {
             default_adapter: "je-1_7_10".to_string(),
             enabled_adapters: None,
             storage_profile: "je-anvil-1_7_10".to_string(),
+            default_gameplay_profile: "canonical".to_string(),
+            gameplay_profile_map: HashMap::new(),
             plugins_dir: cwd.join("dist").join("plugins"),
             plugin_allowlist: None,
             plugin_failure_policy: PluginFailurePolicy::Quarantine,
@@ -227,6 +233,12 @@ impl ServerConfig {
                     "storage-profile" => {
                         config.storage_profile = value.to_string();
                     }
+                    "default-gameplay-profile" => {
+                        config.default_gameplay_profile = value.to_string();
+                    }
+                    "gameplay-profile-map" => {
+                        config.gameplay_profile_map = parse_gameplay_profile_map(value)?;
+                    }
                     "plugins-dir" => {
                         config.plugins_dir = PathBuf::from(value);
                     }
@@ -286,6 +298,37 @@ fn parse_enabled_adapters(value: &str) -> Result<Option<Vec<String>>, RuntimeErr
         return Ok(None);
     }
     Ok(Some(adapters))
+}
+
+fn parse_gameplay_profile_map(value: &str) -> Result<HashMap<String, String>, RuntimeError> {
+    let mut map = HashMap::new();
+    for entry in value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some((adapter_id, profile_id)) = entry.split_once(':') else {
+            return Err(RuntimeError::Config(format!(
+                "invalid gameplay-profile-map entry `{entry}`"
+            )));
+        };
+        let adapter_id = adapter_id.trim();
+        let profile_id = profile_id.trim();
+        if adapter_id.is_empty() || profile_id.is_empty() {
+            return Err(RuntimeError::Config(format!(
+                "invalid gameplay-profile-map entry `{entry}`"
+            )));
+        }
+        if map
+            .insert(adapter_id.to_string(), profile_id.to_string())
+            .is_some()
+        {
+            return Err(RuntimeError::Config(format!(
+                "duplicate gameplay profile mapping for adapter `{adapter_id}`"
+            )));
+        }
+    }
+    Ok(map)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -484,6 +527,7 @@ impl RuntimeRegistries {
 pub struct RunningServer {
     listener_bindings: Vec<ListenerBinding>,
     plugin_host: Option<Arc<PluginHost>>,
+    runtime: Arc<RuntimeServer>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     join_handle: JoinHandle<Result<(), RuntimeError>>,
 }
@@ -498,9 +542,13 @@ impl RunningServer {
     ///
     /// Returns [`RuntimeError`] when a loaded protocol plugin cannot be
     /// reloaded successfully.
-    pub fn reload_plugins(&self) -> Result<Vec<String>, RuntimeError> {
+    pub async fn reload_plugins(&self) -> Result<Vec<String>, RuntimeError> {
         match &self.plugin_host {
-            Some(plugin_host) => plugin_host.reload_modified(),
+            Some(plugin_host) => {
+                plugin_host
+                    .reload_modified_with_runtime(&self.runtime)
+                    .await
+            }
             None => Ok(Vec::new()),
         }
     }
@@ -583,7 +631,11 @@ impl BoundTransportListener {
 #[derive(Clone)]
 struct SessionHandle {
     tx: mpsc::UnboundedSender<SessionMessage>,
+    phase: ConnectionPhase,
     player_id: Option<PlayerId>,
+    entity_id: Option<mc_core::EntityId>,
+    gameplay_profile: Option<mc_core::GameplayProfileId>,
+    session_capabilities: Option<SessionCapabilitySet>,
 }
 
 #[derive(Clone, Debug)]
@@ -595,9 +647,9 @@ struct SessionState {
     transport: TransportKind,
     phase: ConnectionPhase,
     adapter: Option<Arc<dyn ProtocolAdapter>>,
+    gameplay: Option<Arc<HotSwappableGameplayProfile>>,
     player_id: Option<PlayerId>,
     entity_id: Option<mc_core::EntityId>,
-    plugin_generation_id: Option<PluginGenerationId>,
     session_capabilities: Option<SessionCapabilitySet>,
 }
 
@@ -637,17 +689,56 @@ fn classify_udp_datagram(
 impl RuntimeServer {
     fn refresh_session_capabilities(session: &mut SessionState) {
         let Some(adapter) = session.adapter.as_ref() else {
-            session.plugin_generation_id = None;
             session.session_capabilities = None;
             return;
         };
-        let plugin_generation = adapter.plugin_generation_id();
-        session.plugin_generation_id = plugin_generation;
+        let Some(gameplay) = session.gameplay.as_ref() else {
+            session.session_capabilities = None;
+            return;
+        };
         session.session_capabilities = Some(SessionCapabilitySet {
             protocol: adapter.capability_set(),
-            gameplay_profile: mc_core::GameplayProfileId::new("canonical"),
-            plugin_generation,
+            gameplay: gameplay.capability_set(),
+            gameplay_profile: gameplay.profile_id(),
+            protocol_generation: adapter.plugin_generation_id(),
+            gameplay_generation: gameplay.plugin_generation_id(),
         });
+    }
+
+    fn gameplay_profile_for_adapter(&self, adapter_id: &str) -> &str {
+        self.config
+            .gameplay_profile_map
+            .get(adapter_id)
+            .map(String::as_str)
+            .unwrap_or(&self.config.default_gameplay_profile)
+    }
+
+    fn resolve_gameplay_for_adapter(
+        &self,
+        adapter_id: &str,
+    ) -> Result<Arc<HotSwappableGameplayProfile>, RuntimeError> {
+        let profile_id = self.gameplay_profile_for_adapter(adapter_id);
+        self.plugin_host
+            .as_ref()
+            .and_then(|plugin_host| plugin_host.resolve_gameplay_profile(profile_id))
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "gameplay profile `{profile_id}` for adapter `{adapter_id}` is not active"
+                ))
+            })
+    }
+
+    async fn sync_session_handle(&self, connection_id: ConnectionId, session: &SessionState) {
+        if let Some(handle) = self.sessions.lock().await.get_mut(&connection_id) {
+            handle.phase = session.phase;
+            handle.player_id = session.player_id;
+            handle.entity_id = session.entity_id;
+            handle.gameplay_profile = session
+                .session_capabilities
+                .as_ref()
+                .map(|capabilities| capabilities.gameplay_profile.clone());
+            handle.session_capabilities = session.session_capabilities.clone();
+        }
     }
 
     async fn spawn_session(self: &Arc<Self>, transport_session: AcceptedTransportSession) {
@@ -663,7 +754,11 @@ impl RuntimeServer {
             connection_id,
             SessionHandle {
                 tx,
+                phase: ConnectionPhase::Handshaking,
                 player_id: None,
+                entity_id: None,
+                gameplay_profile: None,
+                session_capabilities: None,
             },
         );
 
@@ -695,9 +790,9 @@ impl RuntimeServer {
             transport,
             phase: ConnectionPhase::Handshaking,
             adapter: None,
+            gameplay: None,
             player_id: None,
             entity_id: None,
-            plugin_generation_id: None,
             session_capabilities: None,
         };
 
@@ -725,7 +820,7 @@ impl RuntimeServer {
                         )
                         .await?;
                     if should_close {
-                        self.unregister_session(connection_id, session.player_id).await?;
+                        self.unregister_session(connection_id, &session).await?;
                         return Ok(());
                     }
                 }
@@ -743,15 +838,14 @@ impl RuntimeServer {
                         )
                         .await?;
                     if should_close {
-                        self.unregister_session(connection_id, session.player_id).await?;
+                        self.unregister_session(connection_id, &session).await?;
                         return Ok(());
                     }
                 }
             }
         }
 
-        self.unregister_session(connection_id, session.player_id)
-            .await?;
+        self.unregister_session(connection_id, &session).await?;
         Ok(())
     }
 
@@ -765,7 +859,7 @@ impl RuntimeServer {
         Self::refresh_session_capabilities(session);
         match session.phase {
             ConnectionPhase::Handshaking => {
-                self.handle_handshake_frame(transport_io, session, &frame)
+                self.handle_handshake_frame(connection_id, transport_io, session, &frame)
                     .await
             }
             ConnectionPhase::Status => {
@@ -782,6 +876,7 @@ impl RuntimeServer {
 
     async fn handle_handshake_frame(
         &self,
+        connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
         session: &mut SessionState,
         frame: &[u8],
@@ -801,9 +896,13 @@ impl RuntimeServer {
             intent.edition,
             intent.protocol_number,
         ) {
+            let gameplay =
+                self.resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)?;
             session.adapter = Some(next_adapter);
+            session.gameplay = Some(gameplay);
             session.phase = next_phase;
             Self::refresh_session_capabilities(session);
+            self.sync_session_handle(connection_id, session).await;
             return Ok(false);
         }
 
@@ -811,9 +910,13 @@ impl RuntimeServer {
         let descriptor = fallback.descriptor();
         match next_phase {
             ConnectionPhase::Status => {
+                let gameplay =
+                    self.resolve_gameplay_for_adapter(&fallback.descriptor().adapter_id)?;
                 session.adapter = Some(fallback);
+                session.gameplay = Some(gameplay);
                 session.phase = ConnectionPhase::Status;
                 Self::refresh_session_capabilities(session);
+                self.sync_session_handle(connection_id, session).await;
                 Ok(false)
             }
             ConnectionPhase::Login => {
@@ -875,11 +978,14 @@ impl RuntimeServer {
         match current.decode_login(frame)? {
             LoginRequest::LoginStart { username } => {
                 let authenticated = self.authenticator.authenticate(&username)?;
-                self.apply_command(CoreCommand::LoginStart {
-                    connection_id,
-                    username,
-                    player_id: authenticated,
-                })
+                self.apply_command(
+                    CoreCommand::LoginStart {
+                        connection_id,
+                        username,
+                        player_id: authenticated,
+                    },
+                    Some(session),
+                )
                 .await?;
                 Ok(false)
             }
@@ -905,14 +1011,14 @@ impl RuntimeServer {
             return Ok(true);
         };
         if let Some(command) = current.decode_play(current_player_id, frame)? {
-            self.apply_command(command).await?;
+            self.apply_command(command, Some(session)).await?;
         }
         Ok(false)
     }
 
     async fn handle_outgoing_message(
         &self,
-        _connection_id: ConnectionId,
+        connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
         session: &mut SessionState,
         message: SessionMessage,
@@ -958,6 +1064,7 @@ impl RuntimeServer {
                 session.entity_id = Some(accepted_entity_id);
                 session.phase = ConnectionPhase::Play;
                 Self::refresh_session_capabilities(session);
+                self.sync_session_handle(connection_id, session).await;
             }
             CoreEvent::Disconnect { .. } => return Ok(true),
             _ => {}
@@ -965,7 +1072,11 @@ impl RuntimeServer {
         Ok(false)
     }
 
-    async fn apply_command(&self, command: CoreCommand) -> Result<(), RuntimeError> {
+    async fn apply_command(
+        &self,
+        command: CoreCommand,
+        session: Option<&SessionState>,
+    ) -> Result<(), RuntimeError> {
         let should_persist = matches!(
             command,
             CoreCommand::LoginStart { .. }
@@ -976,9 +1087,25 @@ impl RuntimeServer {
                 | CoreCommand::PlaceBlock { .. }
                 | CoreCommand::Disconnect { .. }
         );
+        let session_capabilities = session.and_then(|session| session.session_capabilities.clone());
+        let gameplay = session.and_then(|session| session.gameplay.clone());
         let events = {
             let mut state = self.state.lock().await;
-            let events = state.core.apply_command(command, now_ms());
+            let events = if let (Some(session_capabilities), Some(gameplay)) =
+                (session_capabilities.as_ref(), gameplay.as_ref())
+            {
+                state
+                    .core
+                    .apply_command_with_policy(
+                        command,
+                        now_ms(),
+                        Some(session_capabilities),
+                        gameplay.as_ref(),
+                    )
+                    .map_err(RuntimeError::Config)?
+            } else {
+                state.core.apply_command(command, now_ms())
+            };
             if should_persist {
                 state.dirty = true;
             }
@@ -989,9 +1116,42 @@ impl RuntimeServer {
     }
 
     async fn tick(&self) -> Result<(), RuntimeError> {
+        let gameplay_sessions = {
+            self.sessions
+                .lock()
+                .await
+                .values()
+                .filter_map(|handle| {
+                    let player_id = handle.player_id?;
+                    let session_capabilities = handle.session_capabilities.clone()?;
+                    let gameplay_profile = handle.gameplay_profile.clone()?;
+                    Some((player_id, session_capabilities, gameplay_profile))
+                })
+                .collect::<Vec<_>>()
+        };
         let events = {
             let mut state = self.state.lock().await;
-            state.core.tick(now_ms())
+            let now = now_ms();
+            let mut events = state.core.tick(now);
+            for (player_id, session_capabilities, gameplay_profile) in &gameplay_sessions {
+                let Some(gameplay) = self.plugin_host.as_ref().and_then(|plugin_host| {
+                    plugin_host.resolve_gameplay_profile(gameplay_profile.as_str())
+                }) else {
+                    continue;
+                };
+                events.extend(
+                    state
+                        .core
+                        .tick_player_with_policy(
+                            *player_id,
+                            now,
+                            session_capabilities,
+                            gameplay.as_ref(),
+                        )
+                        .map_err(RuntimeError::Config)?,
+                );
+            }
+            events
         };
         self.dispatch_events(events).await;
         Ok(())
@@ -1055,11 +1215,26 @@ impl RuntimeServer {
     async fn unregister_session(
         &self,
         connection_id: ConnectionId,
-        player_id: Option<PlayerId>,
+        session: &SessionState,
     ) -> Result<(), RuntimeError> {
+        if let (Some(gameplay), Some(gameplay_profile), Some(player_id)) = (
+            session.gameplay.as_ref(),
+            session
+                .session_capabilities
+                .as_ref()
+                .map(|capabilities| capabilities.gameplay_profile.clone()),
+            session.player_id,
+        ) {
+            gameplay.session_closed(&GameplaySessionSnapshot {
+                phase: session.phase,
+                player_id: Some(player_id),
+                entity_id: session.entity_id,
+                gameplay_profile,
+            })?;
+        }
         self.sessions.lock().await.remove(&connection_id);
-        if let Some(player_id) = player_id {
-            self.apply_command(CoreCommand::Disconnect { player_id })
+        if let Some(player_id) = session.player_id {
+            self.apply_command(CoreCommand::Disconnect { player_id }, None)
                 .await?;
         }
         Ok(())
@@ -1172,6 +1347,9 @@ pub async fn spawn_server(
     let active_protocols = registries
         .protocols()
         .filter_enabled(&enabled_adapter_ids)?;
+    if let Some(plugin_host) = &plugin_host {
+        plugin_host.activate_gameplay_profiles(&config)?;
+    }
     if !config.be_enabled
         && !active_protocols
             .adapter_ids_for_transport(TransportKind::Udp)
@@ -1311,7 +1489,7 @@ pub async fn spawn_server(
                 }
                 _ = plugin_reload_interval.tick(), if run_server.config.plugin_reload_watch && run_server.plugin_host.is_some() => {
                     if let Some(plugin_host) = &run_server.plugin_host
-                        && let Err(error) = plugin_host.reload_modified()
+                        && let Err(error) = plugin_host.reload_modified_with_runtime(&run_server).await
                     {
                         eprintln!("plugin reload failed: {error}");
                     }
@@ -1326,6 +1504,7 @@ pub async fn spawn_server(
     Ok(RunningServer {
         listener_bindings,
         plugin_host,
+        runtime: server,
         shutdown_tx: Some(shutdown_tx),
         join_handle,
     })
@@ -1383,6 +1562,7 @@ mod tests {
     };
     use mc_proto_je_1_8_x::JE_1_8_X_ADAPTER_ID;
     use mc_proto_je_1_12_2::JE_1_12_2_ADAPTER_ID;
+    use std::collections::HashMap;
     use std::env;
     use std::ffi::OsString;
     use std::fs;
@@ -1390,8 +1570,8 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1415,6 +1595,7 @@ mod tests {
         BE_PLACEHOLDER_ADAPTER_ID,
     ];
     const TCP_ONLY_PROTOCOL_PLUGIN_IDS: &[&str] = &[JE_1_7_10_ADAPTER_ID];
+    const GAMEPLAY_PLUGIN_IDS: &[&str] = &["gameplay-canonical", "gameplay-readonly"];
     static PLUGIN_TEST_HARNESS_BUILDS: AtomicUsize = AtomicUsize::new(0);
     static PLUGIN_TEST_HARNESS: OnceLock<Result<PluginTestHarness, String>> = OnceLock::new();
 
@@ -1451,19 +1632,37 @@ mod tests {
         allowlist: &[&str],
     ) -> Result<RuntimeRegistries, RuntimeError> {
         let harness = plugin_test_harness()?;
+        plugin_test_registries_from_dist(harness.dist_dir.clone(), allowlist)
+    }
+
+    fn plugin_allowlist_with_gameplay(allowlist: &[&str]) -> Vec<String> {
+        let mut plugin_allowlist = allowlist
+            .iter()
+            .map(|entry| (*entry).to_string())
+            .collect::<Vec<_>>();
+        plugin_allowlist.extend(
+            GAMEPLAY_PLUGIN_IDS
+                .iter()
+                .map(|plugin_id| (*plugin_id).to_string()),
+        );
+        plugin_allowlist
+    }
+
+    fn plugin_test_registries_from_dist(
+        dist_dir: PathBuf,
+        allowlist: &[&str],
+    ) -> Result<RuntimeRegistries, RuntimeError> {
         let config = ServerConfig {
-            plugins_dir: harness.dist_dir.clone(),
-            plugin_allowlist: Some(allowlist.iter().map(|entry| (*entry).to_string()).collect()),
+            plugins_dir: dist_dir,
+            plugin_allowlist: Some(plugin_allowlist_with_gameplay(allowlist)),
             ..ServerConfig::default()
         };
         let plugin_host = plugin_host_from_config(&config)?.ok_or_else(|| {
             RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
         })?;
         let mut registries = RuntimeRegistries::new();
-        registries.register_storage_profile(
-            JE_1_7_10_STORAGE_PROFILE_ID,
-            Arc::new(Je1710StorageAdapter),
-        );
+        registries
+            .register_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID, Arc::new(Je1710StorageAdapter));
         plugin_host.load_into_registries(&mut registries)?;
         Ok(registries)
     }
@@ -1474,6 +1673,13 @@ mod tests {
 
     fn plugin_test_registries_all() -> Result<RuntimeRegistries, RuntimeError> {
         plugin_test_registries_with_allowlist(ALL_PROTOCOL_PLUGIN_IDS)
+    }
+
+    fn gameplay_profile_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(adapter_id, profile_id)| ((*adapter_id).to_string(), (*profile_id).to_string()))
+            .collect()
     }
 
     fn run_xtask_package_plugins(
@@ -1509,6 +1715,89 @@ mod tests {
             .parent()
             .expect("server-runtime crate should live under the workspace root")
             .to_path_buf()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn package_single_plugin(
+        cargo_package: &str,
+        plugin_id: &str,
+        plugin_kind: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), RuntimeError> {
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+        let status = Command::new(cargo)
+            .current_dir(workspace_root())
+            .env("CARGO_TARGET_DIR", target_dir)
+            .env("REVY_PLUGIN_BUILD_TAG", build_tag)
+            .arg("build")
+            .arg("-p")
+            .arg(cargo_package)
+            .status()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        if !status.success() {
+            return Err(RuntimeError::Config(format!(
+                "cargo build failed for `{cargo_package}`"
+            )));
+        }
+
+        let artifact_name = dynamic_library_filename(cargo_package);
+        let source = target_dir.join("debug").join(&artifact_name);
+        let plugin_dir = dist_dir.join(plugin_id);
+        fs::create_dir_all(&plugin_dir)?;
+        let packaged_artifact = packaged_artifact_name(&artifact_name, build_tag);
+        let destination = plugin_dir.join(&packaged_artifact);
+        let staging = plugin_dir.join(format!(".{packaged_artifact}.tmp"));
+        fs::copy(&source, &staging)?;
+        if destination.exists() {
+            fs::remove_file(&destination)?;
+        }
+        fs::rename(&staging, &destination)?;
+        let manifest = format!(
+            "[plugin]\nid = \"{plugin_id}\"\nkind = \"{plugin_kind}\"\n\n[artifacts]\n\"{}-{}\" = \"{packaged_artifact}\"\n",
+            env::consts::OS,
+            env::consts::ARCH
+        );
+        fs::write(plugin_dir.join("plugin.toml"), manifest)?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn package_single_gameplay_plugin(
+        cargo_package: &str,
+        plugin_id: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), RuntimeError> {
+        package_single_plugin(
+            cargo_package,
+            plugin_id,
+            "gameplay",
+            dist_dir,
+            target_dir,
+            build_tag,
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dynamic_library_filename(package: &str) -> String {
+        let crate_name = package.replace('-', "_");
+        match env::consts::OS {
+            "windows" => format!("{crate_name}.dll"),
+            "macos" => format!("lib{crate_name}.dylib"),
+            _ => format!("lib{crate_name}.so"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn packaged_artifact_name(base_name: &str, build_tag: &str) -> String {
+        if let Some((stem, extension)) = base_name.rsplit_once('.') {
+            format!("{stem}-{build_tag}.{extension}")
+        } else {
+            format!("{base_name}-{build_tag}")
+        }
     }
 
     impl StorageAdapter for RecordingStorageAdapter {
@@ -1604,6 +1893,28 @@ mod tests {
         Err(RuntimeError::Config(format!(
             "did not receive packet id 0x{wanted_packet_id:02x}"
         )))
+    }
+
+    async fn assert_no_packet_id(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        buffer: &mut BytesMut,
+        wanted_packet_id: i32,
+    ) -> Result<(), RuntimeError> {
+        match tokio::time::timeout(
+            Duration::from_millis(200),
+            read_until_packet_id(stream, codec, buffer, wanted_packet_id, 2),
+        )
+        .await
+        {
+            Err(_) => Ok(()),
+            Ok(Err(RuntimeError::Config(_))) => Ok(()),
+            Ok(Err(error)) => Err(error),
+            Ok(Ok(packet)) => Err(RuntimeError::Config(format!(
+                "unexpected packet id 0x{wanted_packet_id:02x}: got 0x{:02x}",
+                packet_id(&packet),
+            ))),
+        }
     }
 
     fn packet_id(frame: &[u8]) -> i32 {
@@ -1813,6 +2124,27 @@ mod tests {
                 JE_1_7_10_ADAPTER_ID.to_string(),
                 JE_1_8_X_ADAPTER_ID.to_string(),
                 JE_1_12_2_ADAPTER_ID.to_string(),
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn server_properties_parse_gameplay_profile_configuration() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(
+            &path,
+            "default-gameplay-profile=canonical\ngameplay-profile-map=je-1_7_10:readonly,je-1_12_2:canonical\n",
+        )?;
+
+        let config = ServerConfig::from_properties(&path)?;
+        assert_eq!(config.default_gameplay_profile, "canonical");
+        assert_eq!(
+            config.gameplay_profile_map,
+            gameplay_profile_map(&[
+                (JE_1_7_10_ADAPTER_ID, "readonly"),
+                (JE_1_12_2_ADAPTER_ID, "canonical"),
             ])
         );
         Ok(())
@@ -2046,6 +2378,18 @@ mod tests {
     fn player_position_look_1_8(x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
         let mut writer = PacketWriter::default();
         writer.write_varint(0x06);
+        writer.write_f64(x);
+        writer.write_f64(y);
+        writer.write_f64(z);
+        writer.write_f32(yaw);
+        writer.write_f32(pitch);
+        writer.write_bool(true);
+        writer.into_inner()
+    }
+
+    fn player_position_look_1_12(x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x0e);
         writer.write_f64(x);
         writer.write_f64(y);
         writer.write_f64(z);
@@ -2416,6 +2760,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unknown_gameplay_profile_fails_fast() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                default_gameplay_profile: "missing".to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("unknown gameplay profile should fail fast");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("unknown gameplay profile"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn unknown_storage_profile_fails_fast() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let result = spawn_server(
@@ -2576,6 +2941,80 @@ mod tests {
         server.shutdown().await
     }
 
+    #[tokio::test]
+    async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                default_gameplay_profile: "canonical".to_string(),
+                gameplay_profile_map: gameplay_profile_map(&[
+                    (JE_1_7_10_ADAPTER_ID, "readonly"),
+                    (JE_1_12_2_ADAPTER_ID, "canonical"),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_all()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("legacy-readonly")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 12).await?;
+
+        let mut modern = connect_tcp(addr).await?;
+        write_packet(&mut modern, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern, &codec, &login_start("modern-canonical")).await?;
+        let mut modern_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+        write_packet(
+            &mut modern,
+            &codec,
+            &player_block_placement_1_12(2, 3, 0, 1, 0),
+        )
+        .await?;
+        let _ = read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x0b, 16).await?;
+        let legacy_block_change =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x23, 16).await?;
+        assert_eq!(
+            block_change_from_packet(&legacy_block_change)?,
+            (2, 4, 0, 1, 0)
+        );
+
+        write_packet(
+            &mut legacy,
+            &codec,
+            &player_block_placement(3, 3, 0, 1, Some((1, 64, 0))),
+        )
+        .await?;
+        assert_no_packet_id(&mut modern, &codec, &mut modern_buffer, 0x0b).await?;
+
+        write_packet(
+            &mut legacy,
+            &codec,
+            &player_position_look(12.5, 4.0, 0.5, 0.0, 0.0),
+        )
+        .await?;
+        let modern_teleport =
+            read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x4c, 16).await?;
+        assert_eq!(packet_id(&modern_teleport), 0x4c);
+
+        server.shutdown().await
+    }
+
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(), RuntimeError>
@@ -2673,6 +3112,233 @@ mod tests {
             block_change_from_packet_1_8(&modern_18_block_change)?,
             (2, 4, 0, 16)
         );
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("dist").join("plugins");
+        let target_dir = temp_dir.path().join("target");
+        run_xtask_package_plugins(&dist_dir, &target_dir, "gameplay-reload-v1")?;
+        let registries = plugin_test_registries_from_dist(
+            dist_dir.clone(),
+            &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
+        )?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                default_gameplay_profile: "canonical".to_string(),
+                gameplay_profile_map: gameplay_profile_map(&[
+                    (JE_1_7_10_ADAPTER_ID, "readonly"),
+                    (JE_1_12_2_ADAPTER_ID, "canonical"),
+                ]),
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            registries,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let canonical_before = plugin_host
+            .resolve_gameplay_profile("canonical")
+            .expect("canonical gameplay profile should resolve");
+        let readonly_before = plugin_host
+            .resolve_gameplay_profile("readonly")
+            .expect("readonly gameplay profile should resolve");
+        let canonical_generation = canonical_before
+            .plugin_generation_id()
+            .expect("canonical profile should report generation");
+        let readonly_generation = readonly_before
+            .plugin_generation_id()
+            .expect("readonly profile should report generation");
+        assert!(
+            canonical_before
+                .capability_set()
+                .contains("build-tag:gameplay-reload-v1")
+        );
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("legacy-observer")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 12).await?;
+
+        let mut modern = connect_tcp(addr).await?;
+        write_packet(&mut modern, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern, &codec, &login_start("modern-reload")).await?;
+        let mut modern_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_gameplay_plugin(
+            "mc-plugin-gameplay-canonical",
+            "gameplay-canonical",
+            &dist_dir,
+            &target_dir,
+            "gameplay-reload-v2",
+        )?;
+
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == "gameplay-canonical"),
+            "gameplay reload should report canonical plugin reload"
+        );
+
+        let canonical_after = plugin_host
+            .resolve_gameplay_profile("canonical")
+            .expect("canonical gameplay profile should still resolve");
+        let readonly_after = plugin_host
+            .resolve_gameplay_profile("readonly")
+            .expect("readonly gameplay profile should still resolve");
+        assert_ne!(
+            canonical_after.plugin_generation_id(),
+            Some(canonical_generation)
+        );
+        assert_eq!(
+            readonly_after.plugin_generation_id(),
+            Some(readonly_generation)
+        );
+        assert!(
+            canonical_after
+                .capability_set()
+                .contains("build-tag:gameplay-reload-v2")
+        );
+
+        write_packet(
+            &mut modern,
+            &codec,
+            &player_position_look_1_12(18.5, 4.0, 0.5, 30.0, 0.0),
+        )
+        .await?;
+        let legacy_teleport =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x18, 16).await?;
+        assert_eq!(packet_id(&legacy_teleport), 0x18);
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("dist").join("plugins");
+        let target_dir = temp_dir.path().join("target");
+        run_xtask_package_plugins(&dist_dir, &target_dir, "gameplay-reload-ok")?;
+        let registries = plugin_test_registries_from_dist(
+            dist_dir.clone(),
+            &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
+        )?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                default_gameplay_profile: "canonical".to_string(),
+                gameplay_profile_map: gameplay_profile_map(&[
+                    (JE_1_7_10_ADAPTER_ID, "readonly"),
+                    (JE_1_12_2_ADAPTER_ID, "canonical"),
+                ]),
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            registries,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let canonical_before = plugin_host
+            .resolve_gameplay_profile("canonical")
+            .expect("canonical gameplay profile should resolve");
+        let before_generation = canonical_before
+            .plugin_generation_id()
+            .expect("canonical profile should report generation");
+        assert!(
+            canonical_before
+                .capability_set()
+                .contains("build-tag:gameplay-reload-ok")
+        );
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("legacy-failure")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 12).await?;
+
+        let mut modern = connect_tcp(addr).await?;
+        write_packet(&mut modern, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern, &codec, &login_start("modern-failure")).await?;
+        let mut modern_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_gameplay_plugin(
+            "mc-plugin-gameplay-canonical",
+            "gameplay-canonical",
+            &dist_dir,
+            &target_dir,
+            "gameplay-reload-fail",
+        )?;
+
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            !reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == "gameplay-canonical"),
+            "failed gameplay migration should not swap the canonical generation"
+        );
+
+        let canonical_after = plugin_host
+            .resolve_gameplay_profile("canonical")
+            .expect("canonical gameplay profile should still resolve");
+        assert_eq!(
+            canonical_after.plugin_generation_id(),
+            Some(before_generation)
+        );
+        assert!(
+            canonical_after
+                .capability_set()
+                .contains("build-tag:gameplay-reload-ok")
+        );
+
+        write_packet(
+            &mut modern,
+            &codec,
+            &player_position_look_1_12(22.5, 4.0, 0.5, 45.0, 0.0),
+        )
+        .await?;
+        let legacy_teleport =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x18, 16).await?;
+        assert_eq!(packet_id(&legacy_teleport), 0x18);
 
         server.shutdown().await
     }

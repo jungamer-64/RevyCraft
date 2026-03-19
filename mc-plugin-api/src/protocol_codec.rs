@@ -163,21 +163,21 @@ pub enum ProtocolResponse {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct EnvelopeHeader {
-    abi: PluginAbiVersion,
-    plugin_kind: PluginKind,
-    op_code: ProtocolOpCode,
-    flags: u16,
-    payload_len: u32,
+pub(crate) struct EnvelopeHeader {
+    pub(crate) abi: PluginAbiVersion,
+    pub(crate) plugin_kind: PluginKind,
+    pub(crate) op_code: u8,
+    pub(crate) flags: u16,
+    pub(crate) payload_len: u32,
 }
 
 #[derive(Default)]
-struct Encoder {
+pub(crate) struct Encoder {
     bytes: Vec<u8>,
 }
 
 impl Encoder {
-    fn with_header(header: EnvelopeHeader) -> Self {
+    pub(crate) fn with_header(header: EnvelopeHeader) -> Self {
         let mut encoder = Self::default();
         encoder.write_u16(header.abi.major);
         encoder.write_u16(header.abi.minor);
@@ -187,88 +187,88 @@ impl Encoder {
             PluginKind::Auth => 3,
             PluginKind::Gameplay => 4,
         });
-        encoder.write_u8(header.op_code as u8);
+        encoder.write_u8(header.op_code);
         encoder.write_u16(header.flags);
         encoder.write_u32(header.payload_len);
         encoder
     }
 
-    fn into_inner(self) -> Vec<u8> {
+    pub(crate) fn into_inner(self) -> Vec<u8> {
         self.bytes
     }
 
-    fn write_u8(&mut self, value: u8) {
+    pub(crate) fn write_u8(&mut self, value: u8) {
         self.bytes.push(value);
     }
 
-    fn write_i8(&mut self, value: i8) {
+    pub(crate) fn write_i8(&mut self, value: i8) {
         self.bytes.push(value.to_le_bytes()[0]);
     }
 
-    fn write_bool(&mut self, value: bool) {
+    pub(crate) fn write_bool(&mut self, value: bool) {
         self.write_u8(u8::from(value));
     }
 
-    fn write_u16(&mut self, value: u16) {
+    pub(crate) fn write_u16(&mut self, value: u16) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn write_i16(&mut self, value: i16) {
+    pub(crate) fn write_i16(&mut self, value: i16) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn write_u32(&mut self, value: u32) {
+    pub(crate) fn write_u32(&mut self, value: u32) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn write_i32(&mut self, value: i32) {
+    pub(crate) fn write_i32(&mut self, value: i32) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn write_u64(&mut self, value: u64) {
+    pub(crate) fn write_u64(&mut self, value: u64) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn write_i64(&mut self, value: i64) {
+    pub(crate) fn write_i64(&mut self, value: i64) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn write_f32(&mut self, value: f32) {
+    pub(crate) fn write_f32(&mut self, value: f32) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn write_f64(&mut self, value: f64) {
+    pub(crate) fn write_f64(&mut self, value: f64) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn write_len(&mut self, value: usize) -> Result<(), ProtocolCodecError> {
+    pub(crate) fn write_len(&mut self, value: usize) -> Result<(), ProtocolCodecError> {
         let value = u32::try_from(value).map_err(|_| ProtocolCodecError::LengthOverflow)?;
         self.write_u32(value);
         Ok(())
     }
 
-    fn write_string(&mut self, value: &str) -> Result<(), ProtocolCodecError> {
+    pub(crate) fn write_string(&mut self, value: &str) -> Result<(), ProtocolCodecError> {
         self.write_bytes(value.as_bytes())
     }
 
-    fn write_bytes(&mut self, value: &[u8]) -> Result<(), ProtocolCodecError> {
+    pub(crate) fn write_bytes(&mut self, value: &[u8]) -> Result<(), ProtocolCodecError> {
         self.write_len(value.len())?;
         self.bytes.extend_from_slice(value);
         Ok(())
     }
 }
 
-struct Decoder<'a> {
+pub(crate) struct Decoder<'a> {
     bytes: &'a [u8],
     cursor: usize,
 }
 
 impl<'a> Decoder<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(crate) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, cursor: 0 }
     }
 
-    fn finish(&self) -> Result<(), ProtocolCodecError> {
+    pub(crate) fn finish(&self) -> Result<(), ProtocolCodecError> {
         if self.cursor == self.bytes.len() {
             Ok(())
         } else {
@@ -276,7 +276,7 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn read_u8(&mut self) -> Result<u8, ProtocolCodecError> {
+    pub(crate) fn read_u8(&mut self) -> Result<u8, ProtocolCodecError> {
         let byte = *self
             .bytes
             .get(self.cursor)
@@ -285,11 +285,11 @@ impl<'a> Decoder<'a> {
         Ok(byte)
     }
 
-    fn read_i8(&mut self) -> Result<i8, ProtocolCodecError> {
+    pub(crate) fn read_i8(&mut self) -> Result<i8, ProtocolCodecError> {
         Ok(i8::from_le_bytes([self.read_u8()?]))
     }
 
-    fn read_bool(&mut self) -> Result<bool, ProtocolCodecError> {
+    pub(crate) fn read_bool(&mut self) -> Result<bool, ProtocolCodecError> {
         match self.read_u8()? {
             0 => Ok(false),
             1 => Ok(true),
@@ -297,54 +297,54 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    fn read_u16(&mut self) -> Result<u16, ProtocolCodecError> {
+    pub(crate) fn read_u16(&mut self) -> Result<u16, ProtocolCodecError> {
         Ok(u16::from_le_bytes(self.read_exact::<2>()?))
     }
 
-    fn read_i16(&mut self) -> Result<i16, ProtocolCodecError> {
+    pub(crate) fn read_i16(&mut self) -> Result<i16, ProtocolCodecError> {
         Ok(i16::from_le_bytes(self.read_exact::<2>()?))
     }
 
-    fn read_u32(&mut self) -> Result<u32, ProtocolCodecError> {
+    pub(crate) fn read_u32(&mut self) -> Result<u32, ProtocolCodecError> {
         Ok(u32::from_le_bytes(self.read_exact::<4>()?))
     }
 
-    fn read_i32(&mut self) -> Result<i32, ProtocolCodecError> {
+    pub(crate) fn read_i32(&mut self) -> Result<i32, ProtocolCodecError> {
         Ok(i32::from_le_bytes(self.read_exact::<4>()?))
     }
 
-    fn read_u64(&mut self) -> Result<u64, ProtocolCodecError> {
+    pub(crate) fn read_u64(&mut self) -> Result<u64, ProtocolCodecError> {
         Ok(u64::from_le_bytes(self.read_exact::<8>()?))
     }
 
-    fn read_i64(&mut self) -> Result<i64, ProtocolCodecError> {
+    pub(crate) fn read_i64(&mut self) -> Result<i64, ProtocolCodecError> {
         Ok(i64::from_le_bytes(self.read_exact::<8>()?))
     }
 
-    fn read_f32(&mut self) -> Result<f32, ProtocolCodecError> {
+    pub(crate) fn read_f32(&mut self) -> Result<f32, ProtocolCodecError> {
         Ok(f32::from_le_bytes(self.read_exact::<4>()?))
     }
 
-    fn read_f64(&mut self) -> Result<f64, ProtocolCodecError> {
+    pub(crate) fn read_f64(&mut self) -> Result<f64, ProtocolCodecError> {
         Ok(f64::from_le_bytes(self.read_exact::<8>()?))
     }
 
-    fn read_len(&mut self) -> Result<usize, ProtocolCodecError> {
+    pub(crate) fn read_len(&mut self) -> Result<usize, ProtocolCodecError> {
         usize::try_from(self.read_u32()?).map_err(|_| ProtocolCodecError::LengthOverflow)
     }
 
-    fn read_string(&mut self) -> Result<String, ProtocolCodecError> {
+    pub(crate) fn read_string(&mut self) -> Result<String, ProtocolCodecError> {
         let bytes = self.read_bytes()?;
         String::from_utf8(bytes).map_err(|_| ProtocolCodecError::InvalidUtf8)
     }
 
-    fn read_bytes(&mut self) -> Result<Vec<u8>, ProtocolCodecError> {
+    pub(crate) fn read_bytes(&mut self) -> Result<Vec<u8>, ProtocolCodecError> {
         let len = self.read_len()?;
         let bytes = self.read_raw(len)?;
         Ok(bytes.to_vec())
     }
 
-    fn read_raw(&mut self, len: usize) -> Result<&'a [u8], ProtocolCodecError> {
+    pub(crate) fn read_raw(&mut self, len: usize) -> Result<&'a [u8], ProtocolCodecError> {
         let end = self.cursor.saturating_add(len);
         let slice = self
             .bytes
@@ -354,7 +354,7 @@ impl<'a> Decoder<'a> {
         Ok(slice)
     }
 
-    fn read_exact<const N: usize>(&mut self) -> Result<[u8; N], ProtocolCodecError> {
+    pub(crate) fn read_exact<const N: usize>(&mut self) -> Result<[u8; N], ProtocolCodecError> {
         let bytes = self.read_raw(N)?;
         let mut array = [0_u8; N];
         array.copy_from_slice(bytes);
@@ -369,7 +369,7 @@ pub fn encode_protocol_request(request: &ProtocolRequest) -> Result<Vec<u8>, Pro
         EnvelopeHeader {
             abi: CURRENT_PLUGIN_ABI,
             plugin_kind: PluginKind::Protocol,
-            op_code: request.op_code(),
+            op_code: request.op_code() as u8,
             flags: 0,
             payload_len: u32::try_from(payload.bytes.len())
                 .map_err(|_| ProtocolCodecError::LengthOverflow)?,
@@ -391,7 +391,8 @@ pub fn decode_protocol_request(bytes: &[u8]) -> Result<ProtocolRequest, Protocol
         ));
     }
     let mut decoder = Decoder::new(payload);
-    let request = decode_protocol_request_payload(&mut decoder, header.op_code)?;
+    let request =
+        decode_protocol_request_payload(&mut decoder, ProtocolOpCode::try_from(header.op_code)?)?;
     decoder.finish()?;
     Ok(request)
 }
@@ -406,7 +407,7 @@ pub fn encode_protocol_response(
         EnvelopeHeader {
             abi: CURRENT_PLUGIN_ABI,
             plugin_kind: PluginKind::Protocol,
-            op_code: request.op_code(),
+            op_code: request.op_code() as u8,
             flags: PROTOCOL_FLAG_RESPONSE,
             payload_len: u32::try_from(payload.bytes.len())
                 .map_err(|_| ProtocolCodecError::LengthOverflow)?,
@@ -430,18 +431,19 @@ pub fn decode_protocol_response(
             "protocol response was missing response flag",
         ));
     }
-    if header.op_code != request.op_code() {
+    if header.op_code != request.op_code() as u8 {
         return Err(ProtocolCodecError::InvalidEnvelope(
             "protocol response opcode did not match request",
         ));
     }
     let mut decoder = Decoder::new(payload);
-    let response = decode_protocol_response_payload(&mut decoder, header.op_code)?;
+    let response =
+        decode_protocol_response_payload(&mut decoder, ProtocolOpCode::try_from(header.op_code)?)?;
     decoder.finish()?;
     Ok(response)
 }
 
-fn encode_envelope(
+pub(crate) fn encode_envelope(
     header: EnvelopeHeader,
     payload: Vec<u8>,
 ) -> Result<Vec<u8>, ProtocolCodecError> {
@@ -457,9 +459,11 @@ fn encode_envelope(
     Ok(encoder.into_inner())
 }
 
-fn decode_envelope(bytes: &[u8]) -> Result<(EnvelopeHeader, &[u8]), ProtocolCodecError> {
+pub(crate) fn decode_envelope(bytes: &[u8]) -> Result<(EnvelopeHeader, &[u8]), ProtocolCodecError> {
     if bytes.len() < PLUGIN_ENVELOPE_HEADER_LEN {
-        return Err(ProtocolCodecError::InvalidEnvelope("message shorter than header"));
+        return Err(ProtocolCodecError::InvalidEnvelope(
+            "message shorter than header",
+        ));
     }
     let mut decoder = Decoder::new(bytes);
     let abi = PluginAbiVersion {
@@ -467,7 +471,7 @@ fn decode_envelope(bytes: &[u8]) -> Result<(EnvelopeHeader, &[u8]), ProtocolCode
         minor: decoder.read_u16()?,
     };
     let plugin_kind = PluginKind::try_from(decoder.read_u8()?)?;
-    let op_code = ProtocolOpCode::try_from(decoder.read_u8()?)?;
+    let op_code = decoder.read_u8()?;
     let flags = decoder.read_u16()?;
     let payload_len = decoder.read_u32()?;
     if abi != CURRENT_PLUGIN_ABI {
@@ -503,7 +507,9 @@ fn encode_protocol_request_payload(
         ProtocolRequest::TryRoute { frame }
         | ProtocolRequest::DecodeStatus { frame }
         | ProtocolRequest::DecodeLogin { frame } => encoder.write_bytes(frame),
-        ProtocolRequest::EncodeStatusResponse { status } => encode_server_list_status(encoder, status),
+        ProtocolRequest::EncodeStatusResponse { status } => {
+            encode_server_list_status(encoder, status)
+        }
         ProtocolRequest::EncodeStatusPong { payload } => {
             encoder.write_i64(*payload);
             Ok(())
@@ -522,7 +528,9 @@ fn encode_protocol_request_payload(
             encode_play_encoding_context(encoder, context);
             Ok(())
         }
-        ProtocolRequest::ExportSessionState { session } => encode_protocol_session_snapshot(encoder, session),
+        ProtocolRequest::ExportSessionState { session } => {
+            encode_protocol_session_snapshot(encoder, session)
+        }
         ProtocolRequest::ImportSessionState { session, blob } => {
             encode_protocol_session_snapshot(encoder, session)?;
             encoder.write_bytes(blob)
@@ -615,10 +623,9 @@ fn encode_protocol_response_payload(
             }
             Ok(())
         }
-        (
-            ProtocolOpCode::ExportSessionState,
-            ProtocolResponse::SessionTransferBlob(blob),
-        ) => encoder.write_bytes(blob),
+        (ProtocolOpCode::ExportSessionState, ProtocolResponse::SessionTransferBlob(blob)) => {
+            encoder.write_bytes(blob)
+        }
         (ProtocolOpCode::ImportSessionState, ProtocolResponse::Empty) => Ok(()),
         _ => Err(ProtocolCodecError::InvalidValue(
             "protocol response did not match opcode",
@@ -650,9 +657,7 @@ fn decode_protocol_response_payload(
         ProtocolOpCode::EncodeStatusResponse
         | ProtocolOpCode::EncodeStatusPong
         | ProtocolOpCode::EncodeDisconnect
-        | ProtocolOpCode::EncodeLoginSuccess => {
-            Ok(ProtocolResponse::Frame(decoder.read_bytes()?))
-        }
+        | ProtocolOpCode::EncodeLoginSuccess => Ok(ProtocolResponse::Frame(decoder.read_bytes()?)),
         ProtocolOpCode::DecodePlay => Ok(ProtocolResponse::CoreCommand(decode_option(
             decoder,
             decode_core_command,
@@ -665,14 +670,14 @@ fn decode_protocol_response_payload(
             }
             Ok(ProtocolResponse::Frames(frames))
         }
-        ProtocolOpCode::ExportSessionState => Ok(ProtocolResponse::SessionTransferBlob(
-            decoder.read_bytes()?,
-        )),
+        ProtocolOpCode::ExportSessionState => {
+            Ok(ProtocolResponse::SessionTransferBlob(decoder.read_bytes()?))
+        }
         ProtocolOpCode::ImportSessionState => Ok(ProtocolResponse::Empty),
     }
 }
 
-fn encode_option<T>(
+pub(crate) fn encode_option<T>(
     encoder: &mut Encoder,
     value: Option<&T>,
     encode: fn(&mut Encoder, &T) -> Result<(), ProtocolCodecError>,
@@ -689,7 +694,7 @@ fn encode_option<T>(
     }
 }
 
-fn decode_option<T>(
+pub(crate) fn decode_option<T>(
     decoder: &mut Decoder<'_>,
     decode: fn(&mut Decoder<'_>) -> Result<T, ProtocolCodecError>,
 ) -> Result<Option<T>, ProtocolCodecError> {
@@ -700,7 +705,7 @@ fn decode_option<T>(
     }
 }
 
-fn encode_connection_phase(encoder: &mut Encoder, phase: ConnectionPhase) {
+pub(crate) fn encode_connection_phase(encoder: &mut Encoder, phase: ConnectionPhase) {
     encoder.write_u8(match phase {
         ConnectionPhase::Handshaking => 1,
         ConnectionPhase::Status => 2,
@@ -709,7 +714,9 @@ fn encode_connection_phase(encoder: &mut Encoder, phase: ConnectionPhase) {
     });
 }
 
-fn decode_connection_phase(decoder: &mut Decoder<'_>) -> Result<ConnectionPhase, ProtocolCodecError> {
+pub(crate) fn decode_connection_phase(
+    decoder: &mut Decoder<'_>,
+) -> Result<ConnectionPhase, ProtocolCodecError> {
     match decoder.read_u8()? {
         1 => Ok(ConnectionPhase::Handshaking),
         2 => Ok(ConnectionPhase::Status),
@@ -838,7 +845,7 @@ fn decode_inventory_container(
     }
 }
 
-fn encode_inventory_slot(encoder: &mut Encoder, slot: InventorySlot) {
+pub(crate) fn encode_inventory_slot(encoder: &mut Encoder, slot: InventorySlot) {
     match slot {
         InventorySlot::Auxiliary(index) => {
             encoder.write_u8(1);
@@ -858,7 +865,9 @@ fn encode_inventory_slot(encoder: &mut Encoder, slot: InventorySlot) {
     }
 }
 
-fn decode_inventory_slot(decoder: &mut Decoder<'_>) -> Result<InventorySlot, ProtocolCodecError> {
+pub(crate) fn decode_inventory_slot(
+    decoder: &mut Decoder<'_>,
+) -> Result<InventorySlot, ProtocolCodecError> {
     match decoder.read_u8()? {
         1 => Ok(InventorySlot::Auxiliary(decoder.read_u8()?)),
         2 => Ok(InventorySlot::MainInventory(decoder.read_u8()?)),
@@ -868,20 +877,20 @@ fn decode_inventory_slot(decoder: &mut Decoder<'_>) -> Result<InventorySlot, Pro
     }
 }
 
-fn encode_player_id(encoder: &mut Encoder, player_id: PlayerId) {
+pub(crate) fn encode_player_id(encoder: &mut Encoder, player_id: PlayerId) {
     encoder.bytes.extend_from_slice(player_id.0.as_bytes());
 }
 
-fn decode_player_id(decoder: &mut Decoder<'_>) -> Result<PlayerId, ProtocolCodecError> {
+pub(crate) fn decode_player_id(decoder: &mut Decoder<'_>) -> Result<PlayerId, ProtocolCodecError> {
     let bytes = decoder.read_exact::<16>()?;
     Ok(PlayerId(Uuid::from_bytes(bytes)))
 }
 
-fn encode_entity_id(encoder: &mut Encoder, entity_id: EntityId) {
+pub(crate) fn encode_entity_id(encoder: &mut Encoder, entity_id: EntityId) {
     encoder.write_i32(entity_id.0);
 }
 
-fn decode_entity_id(decoder: &mut Decoder<'_>) -> Result<EntityId, ProtocolCodecError> {
+pub(crate) fn decode_entity_id(decoder: &mut Decoder<'_>) -> Result<EntityId, ProtocolCodecError> {
     Ok(EntityId(decoder.read_i32()?))
 }
 
@@ -917,7 +926,7 @@ fn decode_protocol_descriptor(
     })
 }
 
-fn encode_capability_set(
+pub(crate) fn encode_capability_set(
     encoder: &mut Encoder,
     capability_set: &CapabilitySet,
 ) -> Result<(), ProtocolCodecError> {
@@ -929,7 +938,9 @@ fn encode_capability_set(
     Ok(())
 }
 
-fn decode_capability_set(decoder: &mut Decoder<'_>) -> Result<CapabilitySet, ProtocolCodecError> {
+pub(crate) fn decode_capability_set(
+    decoder: &mut Decoder<'_>,
+) -> Result<CapabilitySet, ProtocolCodecError> {
     let len = decoder.read_len()?;
     let mut capabilities = CapabilitySet::new();
     for _ in 0..len {
@@ -1057,14 +1068,22 @@ fn encode_protocol_session_snapshot(
     snapshot: &ProtocolSessionSnapshot,
 ) -> Result<(), ProtocolCodecError> {
     encode_connection_phase(encoder, snapshot.phase);
-    encode_option(encoder, snapshot.player_id.as_ref(), |encoder, player_id| {
-        encode_player_id(encoder, *player_id);
-        Ok(())
-    })?;
-    encode_option(encoder, snapshot.entity_id.as_ref(), |encoder, entity_id| {
-        encode_entity_id(encoder, *entity_id);
-        Ok(())
-    })
+    encode_option(
+        encoder,
+        snapshot.player_id.as_ref(),
+        |encoder, player_id| {
+            encode_player_id(encoder, *player_id);
+            Ok(())
+        },
+    )?;
+    encode_option(
+        encoder,
+        snapshot.entity_id.as_ref(),
+        |encoder, entity_id| {
+            encode_entity_id(encoder, *entity_id);
+            Ok(())
+        },
+    )
 }
 
 fn decode_protocol_session_snapshot(
@@ -1077,7 +1096,7 @@ fn decode_protocol_session_snapshot(
     })
 }
 
-fn encode_item_stack(
+pub(crate) fn encode_item_stack(
     encoder: &mut Encoder,
     stack: &ItemStack,
 ) -> Result<(), ProtocolCodecError> {
@@ -1087,7 +1106,9 @@ fn encode_item_stack(
     Ok(())
 }
 
-fn decode_item_stack(decoder: &mut Decoder<'_>) -> Result<ItemStack, ProtocolCodecError> {
+pub(crate) fn decode_item_stack(
+    decoder: &mut Decoder<'_>,
+) -> Result<ItemStack, ProtocolCodecError> {
     Ok(ItemStack::new(
         decoder.read_string()?,
         decoder.read_u8()?,
@@ -1120,13 +1141,13 @@ fn decode_player_inventory(
     })
 }
 
-fn encode_block_pos(encoder: &mut Encoder, position: BlockPos) {
+pub(crate) fn encode_block_pos(encoder: &mut Encoder, position: BlockPos) {
     encoder.write_i32(position.x);
     encoder.write_i32(position.y);
     encoder.write_i32(position.z);
 }
 
-fn decode_block_pos(decoder: &mut Decoder<'_>) -> Result<BlockPos, ProtocolCodecError> {
+pub(crate) fn decode_block_pos(decoder: &mut Decoder<'_>) -> Result<BlockPos, ProtocolCodecError> {
     Ok(BlockPos::new(
         decoder.read_i32()?,
         decoder.read_i32()?,
@@ -1148,7 +1169,7 @@ fn decode_vec3(decoder: &mut Decoder<'_>) -> Result<Vec3, ProtocolCodecError> {
     ))
 }
 
-fn encode_block_state(
+pub(crate) fn encode_block_state(
     encoder: &mut Encoder,
     block_state: &BlockState,
 ) -> Result<(), ProtocolCodecError> {
@@ -1161,7 +1182,9 @@ fn encode_block_state(
     Ok(())
 }
 
-fn decode_block_state(decoder: &mut Decoder<'_>) -> Result<BlockState, ProtocolCodecError> {
+pub(crate) fn decode_block_state(
+    decoder: &mut Decoder<'_>,
+) -> Result<BlockState, ProtocolCodecError> {
     let key = decoder.read_string()?;
     let len = decoder.read_len()?;
     let mut properties = BTreeMap::new();
@@ -1232,7 +1255,10 @@ fn decode_chunk_column(decoder: &mut Decoder<'_>) -> Result<ChunkColumn, Protoco
     })
 }
 
-fn encode_world_meta(encoder: &mut Encoder, meta: &WorldMeta) -> Result<(), ProtocolCodecError> {
+pub(crate) fn encode_world_meta(
+    encoder: &mut Encoder,
+    meta: &WorldMeta,
+) -> Result<(), ProtocolCodecError> {
     encoder.write_string(&meta.level_name)?;
     encoder.write_u64(meta.seed);
     encode_block_pos(encoder, meta.spawn);
@@ -1246,7 +1272,9 @@ fn encode_world_meta(encoder: &mut Encoder, meta: &WorldMeta) -> Result<(), Prot
     Ok(())
 }
 
-fn decode_world_meta(decoder: &mut Decoder<'_>) -> Result<WorldMeta, ProtocolCodecError> {
+pub(crate) fn decode_world_meta(
+    decoder: &mut Decoder<'_>,
+) -> Result<WorldMeta, ProtocolCodecError> {
     Ok(WorldMeta {
         level_name: decoder.read_string()?,
         seed: decoder.read_u64()?,
@@ -1261,7 +1289,7 @@ fn decode_world_meta(decoder: &mut Decoder<'_>) -> Result<WorldMeta, ProtocolCod
     })
 }
 
-fn encode_player_snapshot(
+pub(crate) fn encode_player_snapshot(
     encoder: &mut Encoder,
     player: &PlayerSnapshot,
 ) -> Result<(), ProtocolCodecError> {
@@ -1280,7 +1308,7 @@ fn encode_player_snapshot(
     Ok(())
 }
 
-fn decode_player_snapshot(
+pub(crate) fn decode_player_snapshot(
     decoder: &mut Decoder<'_>,
 ) -> Result<PlayerSnapshot, ProtocolCodecError> {
     Ok(PlayerSnapshot {
@@ -1299,7 +1327,7 @@ fn decode_player_snapshot(
     })
 }
 
-fn encode_core_command(
+pub(crate) fn encode_core_command(
     encoder: &mut Encoder,
     command: &CoreCommand,
 ) -> Result<(), ProtocolCodecError> {
@@ -1416,7 +1444,9 @@ fn encode_core_command(
     Ok(())
 }
 
-fn decode_core_command(decoder: &mut Decoder<'_>) -> Result<CoreCommand, ProtocolCodecError> {
+pub(crate) fn decode_core_command(
+    decoder: &mut Decoder<'_>,
+) -> Result<CoreCommand, ProtocolCodecError> {
     match decoder.read_u8()? {
         1 => Ok(CoreCommand::LoginStart {
             connection_id: decode_connection_id(decoder)?,
@@ -1471,7 +1501,7 @@ fn decode_core_command(decoder: &mut Decoder<'_>) -> Result<CoreCommand, Protoco
     }
 }
 
-fn encode_core_event(
+pub(crate) fn encode_core_event(
     encoder: &mut Encoder,
     event: &CoreEvent,
 ) -> Result<(), ProtocolCodecError> {
@@ -1561,7 +1591,9 @@ fn encode_core_event(
     Ok(())
 }
 
-fn decode_core_event(decoder: &mut Decoder<'_>) -> Result<CoreEvent, ProtocolCodecError> {
+pub(crate) fn decode_core_event(
+    decoder: &mut Decoder<'_>,
+) -> Result<CoreEvent, ProtocolCodecError> {
     match decoder.read_u8()? {
         1 => Ok(CoreEvent::LoginAccepted {
             player_id: decode_player_id(decoder)?,
@@ -1627,15 +1659,14 @@ fn decode_core_event(decoder: &mut Decoder<'_>) -> Result<CoreEvent, ProtocolCod
 #[cfg(test)]
 mod tests {
     use super::{
-        CURRENT_PLUGIN_ABI, PLUGIN_ENVELOPE_HEADER_LEN, PROTOCOL_FLAG_RESPONSE,
-        ProtocolCodecError, ProtocolRequest, ProtocolResponse, decode_protocol_request,
-        decode_protocol_response, encode_protocol_request, encode_protocol_response,
+        CURRENT_PLUGIN_ABI, PLUGIN_ENVELOPE_HEADER_LEN, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError,
+        ProtocolRequest, ProtocolResponse, decode_protocol_request, decode_protocol_response,
+        encode_protocol_request, encode_protocol_response,
     };
     use mc_core::{
         BlockPos, CapabilitySet, ChunkColumn, ConnectionId, CoreCommand, CoreEvent, EntityId,
-        GameplayProfileId, InventoryContainer, InventorySlot, ItemStack, PlayerId,
-        PlayerInventory, PlayerSnapshot, PluginGenerationId, SessionCapabilitySet, Vec3,
-        WorldMeta,
+        GameplayProfileId, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
+        PlayerSnapshot, PluginGenerationId, SessionCapabilitySet, Vec3, WorldMeta,
     };
     use mc_proto_common::{
         ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, LoginRequest,
@@ -1862,8 +1893,7 @@ mod tests {
         ];
 
         for (request, response) in requests_and_responses {
-            let encoded_request =
-                encode_protocol_request(&request).expect("request should encode");
+            let encoded_request = encode_protocol_request(&request).expect("request should encode");
             let decoded_request =
                 decode_protocol_request(&encoded_request).expect("request should decode");
             assert_eq!(decoded_request, request);
@@ -1918,9 +1948,7 @@ mod tests {
         .expect_err("missing response flag should fail");
         assert!(matches!(
             error,
-            ProtocolCodecError::InvalidEnvelope(
-                "protocol response was missing response flag"
-            )
+            ProtocolCodecError::InvalidEnvelope("protocol response was missing response flag")
         ));
     }
 
@@ -1930,12 +1958,21 @@ mod tests {
         let _ = protocol.insert("protocol.je.1_12_2");
         let capability_set = SessionCapabilitySet {
             protocol,
+            gameplay: CapabilitySet::new(),
             gameplay_profile: GameplayProfileId::new("canonical"),
-            plugin_generation: Some(PluginGenerationId(3)),
+            protocol_generation: Some(PluginGenerationId(3)),
+            gameplay_generation: Some(PluginGenerationId(4)),
         };
         assert!(capability_set.protocol.contains("protocol.je.1_12_2"));
         assert_eq!(capability_set.gameplay_profile.as_str(), "canonical");
-        assert_eq!(capability_set.plugin_generation, Some(PluginGenerationId(3)));
+        assert_eq!(
+            capability_set.protocol_generation,
+            Some(PluginGenerationId(3))
+        );
+        assert_eq!(
+            capability_set.gameplay_generation,
+            Some(PluginGenerationId(4))
+        );
     }
 
     #[test]
@@ -1954,8 +1991,8 @@ mod tests {
         };
         let encoded_request =
             encode_protocol_request(&request).expect("inventory event request should encode");
-        let decoded_request =
-            decode_protocol_request(&encoded_request).expect("inventory event request should decode");
+        let decoded_request = decode_protocol_request(&encoded_request)
+            .expect("inventory event request should decode");
         assert_eq!(decoded_request, request);
 
         let login_command = CoreCommand::LoginStart {
@@ -1970,8 +2007,8 @@ mod tests {
         };
         let encoded_response =
             encode_protocol_response(&decode_play, &response).expect("command should encode");
-        let decoded_response =
-            decode_protocol_response(&decode_play, &encoded_response).expect("command should decode");
+        let decoded_response = decode_protocol_response(&decode_play, &encoded_response)
+            .expect("command should decode");
         assert_eq!(decoded_response, response);
     }
 }

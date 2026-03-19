@@ -1,7 +1,7 @@
 use bytes::BytesMut;
 use mc_core::{
-    CapabilitySet, CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot,
-    PluginGenerationId, WorldSnapshot,
+    CapabilitySet, CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot, PluginGenerationId,
+    WorldSnapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;
