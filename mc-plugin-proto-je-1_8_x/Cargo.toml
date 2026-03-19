@@ -1,5 +1,5 @@
 [package]
-name = "mc-plugin-proto-je-1_7_10"
+name = "mc-plugin-proto-je-1_8_x"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "JE 1.7.10 protocol plugin for the RevyCraft runtime host."
+description = "JE 1.8.x protocol plugin for the RevyCraft runtime host."
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -20,7 +20,7 @@ mc-core = { path = "../mc-core" }
 mc-plugin-api = { path = "../mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../mc-plugin-sdk-rust" }
 mc-proto-common = { path = "../mc-proto-common" }
-mc-proto-je-1_7_10 = { path = "../mc-proto-je-1_7_10" }
+mc-proto-je-1_8_x = { path = "../mc-proto-je-1_8_x" }
 
 [lints]
 workspace = true

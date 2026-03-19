@@ -3196,7 +3196,30 @@ version = "0.1.0"
 dependencies = [
  "mc-core",
  "mc-proto-common",
- "serde",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "mc-plugin-proto-be-placeholder"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-proto-be-placeholder",
+ "mc-proto-common",
+]
+
+[[package]]
+name = "mc-plugin-proto-je-1_12_2"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-proto-common",
+ "mc-proto-je-1_12_2",
 ]
 
 [[package]]
@@ -3211,12 +3234,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-proto-je-1_8_x"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-proto-common",
+ "mc-proto-je-1_8_x",
+]
+
+[[package]]
 name = "mc-plugin-sdk-rust"
 version = "0.1.0"
 dependencies = [
  "mc-plugin-api",
  "mc-proto-common",
- "serde_json",
 ]
 
 [[package]]
@@ -4512,10 +4545,7 @@ dependencies = [
 name = "server-bootstrap"
 version = "0.1.0"
 dependencies = [
- "mc-proto-be-placeholder",
- "mc-proto-je-1_12_2",
  "mc-proto-je-1_7_10",
- "mc-proto-je-1_8_x",
  "server-runtime",
  "tokio",
 ]
@@ -4528,7 +4558,10 @@ dependencies = [
  "libloading 0.9.0",
  "mc-core",
  "mc-plugin-api",
+ "mc-plugin-proto-be-placeholder",
+ "mc-plugin-proto-je-1_12_2",
  "mc-plugin-proto-je-1_7_10",
+ "mc-plugin-proto-je-1_8_x",
  "mc-proto-be-placeholder",
  "mc-proto-common",
  "mc-proto-je-1_12_2",
@@ -4537,7 +4570,6 @@ dependencies = [
  "mc-proto-je-common",
  "md-5",
  "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -6285,6 +6317,10 @@ name = "xml-rs"
 version = "0.8.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
 
 [[package]]
 name = "yazi"

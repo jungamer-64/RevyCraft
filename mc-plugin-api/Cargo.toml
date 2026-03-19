@@ -7,12 +7,13 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Stable C ABI and serde payloads for RevyCraft runtime plugins."
+description = "Stable C ABI and binary envelope contract for RevyCraft runtime plugins."
 
 [dependencies]
 mc-core = { path = "../mc-core" }
 mc-proto-common = { path = "../mc-proto-common" }
-serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

@@ -3,14 +3,14 @@ use mc_proto_common::{
     HandshakeProbe, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor,
     ProtocolError, SessionAdapter, StatusRequest, WireCodec,
 };
-use mc_proto_je_1_7_10::Je1710Adapter;
+use mc_proto_je_1_12_2::Je1122Adapter;
 
 #[derive(Default)]
-pub struct Je1710ProtocolPlugin {
-    adapter: Je1710Adapter,
+pub struct Je1122ProtocolPlugin {
+    adapter: Je1122Adapter,
 }
 
-impl HandshakeProbe for Je1710ProtocolPlugin {
+impl HandshakeProbe for Je1122ProtocolPlugin {
     fn transport_kind(&self) -> mc_proto_common::TransportKind {
         self.adapter.transport_kind()
     }
@@ -27,7 +27,7 @@ impl HandshakeProbe for Je1710ProtocolPlugin {
     }
 }
 
-impl SessionAdapter for Je1710ProtocolPlugin {
+impl SessionAdapter for Je1122ProtocolPlugin {
     fn wire_codec(&self) -> &dyn WireCodec {
         self.adapter.wire_codec()
     }
@@ -67,7 +67,7 @@ impl SessionAdapter for Je1710ProtocolPlugin {
     }
 }
 
-impl PlaySyncAdapter for Je1710ProtocolPlugin {
+impl PlaySyncAdapter for Je1122ProtocolPlugin {
     fn decode_play(
         &self,
         player_id: mc_core::PlayerId,
@@ -85,7 +85,7 @@ impl PlaySyncAdapter for Je1710ProtocolPlugin {
     }
 }
 
-impl ProtocolAdapter for Je1710ProtocolPlugin {
+impl ProtocolAdapter for Je1122ProtocolPlugin {
     fn descriptor(&self) -> ProtocolDescriptor {
         self.adapter.descriptor()
     }
@@ -93,7 +93,7 @@ impl ProtocolAdapter for Je1710ProtocolPlugin {
     fn capability_set(&self) -> mc_core::CapabilitySet {
         let mut capabilities = mc_core::CapabilitySet::new();
         let _ = capabilities.insert("protocol.je");
-        let _ = capabilities.insert("protocol.je.1_7_10");
+        let _ = capabilities.insert("protocol.je.1_12_2");
         let _ = capabilities.insert("runtime.reload.protocol");
         if let Some(build_tag) = option_env!("REVY_PLUGIN_BUILD_TAG") {
             let _ = capabilities.insert(format!("build-tag:{build_tag}"));
@@ -103,6 +103,6 @@ impl ProtocolAdapter for Je1710ProtocolPlugin {
 }
 
 const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::protocol("je-1_7_10", "JE 1.7.10 Protocol Plugin");
+    StaticPluginManifest::protocol("je-1_12_2", "JE 1.12.2 Protocol Plugin");
 
-export_protocol_plugin!(Je1710ProtocolPlugin, MANIFEST);
+export_protocol_plugin!(Je1122ProtocolPlugin, MANIFEST);

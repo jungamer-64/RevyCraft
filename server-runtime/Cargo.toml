@@ -17,14 +17,16 @@ mc-plugin-api = { path = "../mc-plugin-api" }
 mc-proto-common = { path = "../mc-proto-common" }
 md5.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-mc-plugin-proto-je-1_7_10 = { path = "../mc-plugin-proto-je-1_7_10" }
+mc-plugin-proto-be-placeholder = { path = "../mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols"] }
+mc-plugin-proto-je-1_12_2 = { path = "../mc-plugin-proto-je-1_12_2", features = ["disable-exported-symbols"] }
+mc-plugin-proto-je-1_7_10 = { path = "../mc-plugin-proto-je-1_7_10", features = ["disable-exported-symbols"] }
+mc-plugin-proto-je-1_8_x = { path = "../mc-plugin-proto-je-1_8_x", features = ["disable-exported-symbols"] }
 mc-proto-be-placeholder = { path = "../mc-proto-be-placeholder" }
 mc-proto-je-common = { path = "../mc-proto-je-common" }
 mc-proto-je-1_12_2 = { path = "../mc-proto-je-1_12_2" }

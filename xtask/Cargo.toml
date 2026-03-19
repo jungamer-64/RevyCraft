@@ -1,5 +1,5 @@
 [package]
-name = "mc-plugin-sdk-rust"
+name = "xtask"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -7,11 +7,7 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Rust authoring SDK for RevyCraft runtime plugins."
-
-[dependencies]
-mc-plugin-api = { path = "../mc-plugin-api" }
-mc-proto-common = { path = "../mc-proto-common" }
+description = "Workspace automation tasks for packaging RevyCraft protocol plugins."
 
 [lints]
 workspace = true

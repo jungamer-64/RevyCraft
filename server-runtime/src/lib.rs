@@ -143,7 +143,7 @@ impl Default for ServerConfig {
             default_adapter: "je-1_7_10".to_string(),
             enabled_adapters: None,
             storage_profile: "je-anvil-1_7_10".to_string(),
-            plugins_dir: cwd.join("plugins"),
+            plugins_dir: cwd.join("dist").join("plugins"),
             plugin_allowlist: None,
             plugin_failure_policy: PluginFailurePolicy::Quarantine,
             plugin_reload_watch: false,
@@ -1409,7 +1409,7 @@ mod tests {
     use super::{
         LevelType, ProtocolRegistry, RuntimeError, RuntimeRegistries, ServerConfig,
         StorageRegistry, UdpDatagramAction, build_listener_plans, classify_udp_datagram,
-        encode_handshake, spawn_server,
+        encode_handshake, plugin_host_from_config, spawn_server,
     };
     use bytes::BytesMut;
     use mc_core::WorldSnapshot;
@@ -1418,12 +1418,18 @@ mod tests {
         Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, MinecraftWireCodec,
         PacketReader, PacketWriter, StorageAdapter, TransportKind, WireCodec,
     };
-    use mc_proto_je_1_7_10::{JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID, Je1710Adapter};
+    use mc_proto_je_1_7_10::{
+        JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID, Je1710Adapter,
+        Je1710StorageAdapter,
+    };
     use mc_proto_je_1_8_x::JE_1_8_X_ADAPTER_ID;
     use mc_proto_je_1_12_2::JE_1_12_2_ADAPTER_ID;
+    use std::env;
+    use std::ffi::OsString;
     use std::fs;
     use std::net::SocketAddr;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -1461,6 +1467,66 @@ mod tests {
                 next_state: HandshakeNextState::Status,
             }))
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn packaged_protocol_registries(
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<RuntimeRegistries, RuntimeError> {
+        run_xtask_package_plugins(dist_dir, target_dir, build_tag)?;
+        let config = ServerConfig {
+            plugins_dir: dist_dir.to_path_buf(),
+            ..ServerConfig::default()
+        };
+        let plugin_host = plugin_host_from_config(&config)?.ok_or_else(|| {
+            RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
+        })?;
+        let mut registries = RuntimeRegistries::new();
+        registries.register_storage_profile(
+            JE_1_7_10_STORAGE_PROFILE_ID,
+            Arc::new(Je1710StorageAdapter),
+        );
+        plugin_host.load_into_registries(&mut registries)?;
+        Ok(registries)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_xtask_package_plugins(
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), RuntimeError> {
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+        let status = Command::new(cargo)
+            .current_dir(workspace_root())
+            .env("CARGO_TARGET_DIR", target_dir)
+            .env("REVY_PLUGIN_BUILD_TAG", build_tag)
+            .arg("run")
+            .arg("-p")
+            .arg("xtask")
+            .arg("--")
+            .arg("package-plugins")
+            .arg("--dist-dir")
+            .arg(dist_dir)
+            .status()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(RuntimeError::Config(
+                "xtask package-plugins failed".to_string(),
+            ))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("server-runtime crate should live under the workspace root")
+            .to_path_buf()
     }
 
     impl StorageAdapter for RecordingStorageAdapter {
@@ -2459,6 +2525,110 @@ mod tests {
         .await?;
         let addr = listener_addr(&server);
         let codec = MinecraftWireCodec;
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("legacy")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 12).await?;
+
+        let mut modern_18 = connect_tcp(addr).await?;
+        write_packet(&mut modern_18, &codec, &encode_handshake(47, 2)?).await?;
+        write_packet(&mut modern_18, &codec, &login_start("middle")).await?;
+        let mut modern_18_buffer = BytesMut::new();
+        let _ =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x30, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+        let mut modern_112 = connect_tcp(addr).await?;
+        write_packet(&mut modern_112, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern_112, &codec, &login_start("latest")).await?;
+        let mut modern_112_buffer = BytesMut::new();
+        let _ =
+            read_until_packet_id(&mut modern_112, &codec, &mut modern_112_buffer, 0x14, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+        let _ =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x0c, 12).await?;
+
+        write_packet(
+            &mut modern_18,
+            &codec,
+            &player_position_look_1_8(32.5, 4.0, 0.5, 90.0, 0.0),
+        )
+        .await?;
+        let legacy_teleport =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x18, 16).await?;
+        let modern_112_teleport =
+            read_until_packet_id(&mut modern_112, &codec, &mut modern_112_buffer, 0x4c, 16).await?;
+        assert_eq!(packet_id(&legacy_teleport), 0x18);
+        assert_eq!(packet_id(&modern_112_teleport), 0x4c);
+
+        write_packet(
+            &mut modern_112,
+            &codec,
+            &player_block_placement_1_12(2, 3, 0, 1, 0),
+        )
+        .await?;
+        let legacy_block_change =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x23, 16).await?;
+        let modern_18_block_change =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x23, 16).await?;
+        assert_eq!(
+            block_change_from_packet(&legacy_block_change)?,
+            (2, 4, 0, 1, 0)
+        );
+        assert_eq!(
+            block_change_from_packet_1_8(&modern_18_block_change)?,
+            (2, 4, 0, 16)
+        );
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("dist").join("plugins");
+        let target_dir = temp_dir.path().join("target");
+        let registries = packaged_protocol_registries(&dist_dir, &target_dir, "plugin-only")?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                be_enabled: true,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                    BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                plugins_dir: dist_dir,
+                ..ServerConfig::default()
+            },
+            registries,
+        )
+        .await?;
+
+        let udp_addr = udp_listener_addr(&server);
+        let udp_client = UdpSocket::bind("127.0.0.1:0").await?;
+        udp_client
+            .send_to(&raknet_unconnected_ping(), udp_addr)
+            .await?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut status_stream = connect_tcp(addr).await?;
+        write_packet(&mut status_stream, &codec, &encode_handshake(5, 1)?).await?;
+        write_packet(&mut status_stream, &codec, &[0x00]).await?;
+        let mut status_buffer = BytesMut::new();
+        let status = read_packet(&mut status_stream, &codec, &mut status_buffer).await?;
+        assert_eq!(packet_id(&status), 0x00);
 
         let mut legacy = connect_tcp(addr).await?;
         write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;

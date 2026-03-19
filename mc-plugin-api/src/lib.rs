@@ -1,10 +1,12 @@
-use mc_core::{CapabilitySet, CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot};
-use mc_proto_common::{
-    ConnectionPhase, HandshakeIntent, LoginRequest, PlayEncodingContext, ProtocolDescriptor,
-    ServerListStatus, StatusRequest,
-};
-use serde::{Deserialize, Serialize};
+mod protocol_codec;
+
 use std::fmt;
+
+pub use protocol_codec::{
+    PLUGIN_ENVELOPE_HEADER_LEN, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, ProtocolOpCode,
+    ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, decode_protocol_request,
+    decode_protocol_response, encode_protocol_request, encode_protocol_response,
+};
 
 pub const PLUGIN_MANIFEST_SYMBOL_V1: &[u8] = b"mc_plugin_manifest_v1\0";
 pub const PLUGIN_PROTOCOL_API_SYMBOL_V1: &[u8] = b"mc_plugin_protocol_api_v1\0";
@@ -34,6 +36,20 @@ pub enum PluginKind {
     Storage = 2,
     Auth = 3,
     Gameplay = 4,
+}
+
+impl TryFrom<u8> for PluginKind {
+    type Error = ProtocolCodecError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Protocol),
+            2 => Ok(Self::Storage),
+            3 => Ok(Self::Auth),
+            4 => Ok(Self::Gameplay),
+            _ => Err(ProtocolCodecError::InvalidPluginKind(value)),
+        }
+    }
 }
 
 #[repr(C)]
@@ -175,96 +191,32 @@ pub struct GameplayPluginApiV1 {
     pub free_buffer: PluginFreeBufferFn,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProtocolSessionSnapshot {
-    pub phase: ConnectionPhase,
-    pub player_id: Option<PlayerId>,
-    pub entity_id: Option<EntityId>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ProtocolRequest {
-    Describe,
-    CapabilitySet,
-    TryRoute {
-        frame: Vec<u8>,
-    },
-    DecodeStatus {
-        frame: Vec<u8>,
-    },
-    DecodeLogin {
-        frame: Vec<u8>,
-    },
-    EncodeStatusResponse {
-        status: ServerListStatus,
-    },
-    EncodeStatusPong {
-        payload: i64,
-    },
-    EncodeDisconnect {
-        phase: ConnectionPhase,
-        reason: String,
-    },
-    EncodeLoginSuccess {
-        player: PlayerSnapshot,
-    },
-    DecodePlay {
-        player_id: PlayerId,
-        frame: Vec<u8>,
-    },
-    EncodePlayEvent {
-        event: CoreEvent,
-        context: PlayEncodingContext,
-    },
-    ExportSessionState {
-        session: ProtocolSessionSnapshot,
-    },
-    ImportSessionState {
-        session: ProtocolSessionSnapshot,
-        blob: Vec<u8>,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ProtocolResponse {
-    Descriptor(ProtocolDescriptor),
-    CapabilitySet(CapabilitySet),
-    HandshakeIntent(Option<HandshakeIntent>),
-    StatusRequest(StatusRequest),
-    LoginRequest(LoginRequest),
-    Frame(Vec<u8>),
-    Frames(Vec<Vec<u8>>),
-    CoreCommand(Option<CoreCommand>),
-    SessionTransferBlob(Vec<u8>),
-    Empty,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StorageRequest {
     Describe,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StorageResponse {
     Empty,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthRequest {
     Describe,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthResponse {
     Empty,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GameplayRequest {
     Describe,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GameplayResponse {
     Empty,
 }

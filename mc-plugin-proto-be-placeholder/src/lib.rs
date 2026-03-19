@@ -1,16 +1,16 @@
 use mc_plugin_sdk_rust::{StaticPluginManifest, export_protocol_plugin};
+use mc_proto_be_placeholder::BePlaceholderAdapter;
 use mc_proto_common::{
     HandshakeProbe, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor,
     ProtocolError, SessionAdapter, StatusRequest, WireCodec,
 };
-use mc_proto_je_1_7_10::Je1710Adapter;
 
 #[derive(Default)]
-pub struct Je1710ProtocolPlugin {
-    adapter: Je1710Adapter,
+pub struct BePlaceholderProtocolPlugin {
+    adapter: BePlaceholderAdapter,
 }
 
-impl HandshakeProbe for Je1710ProtocolPlugin {
+impl HandshakeProbe for BePlaceholderProtocolPlugin {
     fn transport_kind(&self) -> mc_proto_common::TransportKind {
         self.adapter.transport_kind()
     }
@@ -27,7 +27,7 @@ impl HandshakeProbe for Je1710ProtocolPlugin {
     }
 }
 
-impl SessionAdapter for Je1710ProtocolPlugin {
+impl SessionAdapter for BePlaceholderProtocolPlugin {
     fn wire_codec(&self) -> &dyn WireCodec {
         self.adapter.wire_codec()
     }
@@ -67,7 +67,7 @@ impl SessionAdapter for Je1710ProtocolPlugin {
     }
 }
 
-impl PlaySyncAdapter for Je1710ProtocolPlugin {
+impl PlaySyncAdapter for BePlaceholderProtocolPlugin {
     fn decode_play(
         &self,
         player_id: mc_core::PlayerId,
@@ -85,15 +85,15 @@ impl PlaySyncAdapter for Je1710ProtocolPlugin {
     }
 }
 
-impl ProtocolAdapter for Je1710ProtocolPlugin {
+impl ProtocolAdapter for BePlaceholderProtocolPlugin {
     fn descriptor(&self) -> ProtocolDescriptor {
         self.adapter.descriptor()
     }
 
     fn capability_set(&self) -> mc_core::CapabilitySet {
         let mut capabilities = mc_core::CapabilitySet::new();
-        let _ = capabilities.insert("protocol.je");
-        let _ = capabilities.insert("protocol.je.1_7_10");
+        let _ = capabilities.insert("protocol.be");
+        let _ = capabilities.insert("protocol.be.placeholder");
         let _ = capabilities.insert("runtime.reload.protocol");
         if let Some(build_tag) = option_env!("REVY_PLUGIN_BUILD_TAG") {
             let _ = capabilities.insert(format!("build-tag:{build_tag}"));
@@ -103,6 +103,6 @@ impl ProtocolAdapter for Je1710ProtocolPlugin {
 }
 
 const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::protocol("je-1_7_10", "JE 1.7.10 Protocol Plugin");
+    StaticPluginManifest::protocol("be-placeholder", "Bedrock Placeholder Protocol Plugin");
 
-export_protocol_plugin!(Je1710ProtocolPlugin, MANIFEST);
+export_protocol_plugin!(BePlaceholderProtocolPlugin, MANIFEST);

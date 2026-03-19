@@ -4,7 +4,10 @@ members = [
     "mc-core",
     "mc-plugin-api",
     "mc-plugin-sdk-rust",
+    "mc-plugin-proto-be-placeholder",
+    "mc-plugin-proto-je-1_12_2",
     "mc-plugin-proto-je-1_7_10",
+    "mc-plugin-proto-je-1_8_x",
     "mc-proto-common",
     "mc-proto-be-placeholder",
     "mc-proto-je-common",
@@ -13,6 +16,7 @@ members = [
     "mc-proto-je-1_12_2",
     "server-runtime",
     "server-bootstrap",
+    "xtask",
 ]
 resolver = "3"
 

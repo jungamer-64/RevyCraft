@@ -4,7 +4,7 @@ use mc_core::{CapabilitySet, PluginGenerationId};
 use mc_plugin_api::{
     CURRENT_PLUGIN_ABI, OwnedBuffer, PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1,
     PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1, ProtocolPluginApiV1,
-    ProtocolRequest, ProtocolResponse,
+    ProtocolRequest, ProtocolResponse, decode_protocol_response, encode_protocol_request,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
@@ -110,6 +110,51 @@ impl PluginPackage {
             ),
             PluginSource::InProcess(_) => Ok(SystemTime::UNIX_EPOCH),
         }
+    }
+
+    fn refresh_dynamic_manifest(&mut self) -> Result<(), RuntimeError> {
+        let PluginSource::DynamicLibrary {
+            manifest_path,
+            library_path,
+        } = &mut self.source
+        else {
+            return Ok(());
+        };
+        let document: PluginPackageDocument =
+            toml::from_str(&fs::read_to_string(&*manifest_path)?).map_err(|error| {
+                RuntimeError::Config(format!(
+                    "failed to parse plugin manifest {}: {error}",
+                    manifest_path.display()
+                ))
+            })?;
+        let plugin_kind = parse_plugin_kind(&document.plugin.kind)?;
+        if document.plugin.id != self.plugin_id {
+            return Err(RuntimeError::Config(format!(
+                "plugin manifest id `{}` does not match package id `{}`",
+                document.plugin.id, self.plugin_id
+            )));
+        }
+        if plugin_kind != self.plugin_kind {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` manifest kind mismatch",
+                self.plugin_id
+            )));
+        }
+        let relative_library_path = document
+            .artifacts
+            .get(&current_artifact_key())
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "plugin `{}` does not provide an artifact for {}",
+                    self.plugin_id,
+                    current_artifact_key()
+                ))
+            })?;
+        *library_path = manifest_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(relative_library_path);
+        Ok(())
     }
 }
 
@@ -276,8 +321,8 @@ struct ProtocolGeneration {
 
 impl ProtocolGeneration {
     fn invoke(&self, request: ProtocolRequest) -> Result<ProtocolResponse, ProtocolError> {
-        let request_bytes = serde_json::to_vec(&request)
-            .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
+        let request_bytes =
+            encode_protocol_request(&request).map_err(|error| ProtocolError::Plugin(error.to_string()))?;
         let mut output = OwnedBuffer::empty();
         let mut error = OwnedBuffer::empty();
         let status = unsafe {
@@ -308,7 +353,8 @@ impl ProtocolGeneration {
         unsafe {
             (self.free_buffer)(output);
         }
-        serde_json::from_slice(&response_bytes).map_err(|error| ProtocolError::Plugin(error.to_string()))
+        decode_protocol_response(&request, &response_bytes)
+            .map_err(|error| ProtocolError::Plugin(error.to_string()))
     }
 }
 
@@ -345,7 +391,6 @@ impl PluginLoader {
         };
         let capabilities = match invoke_protocol(&api, ProtocolRequest::CapabilitySet)? {
             ProtocolResponse::CapabilitySet(capabilities) => capabilities,
-            ProtocolResponse::Empty => CapabilitySet::default(),
             other => {
                 return Err(RuntimeError::Config(format!(
                     "plugin `{}` returned unexpected capability payload: {other:?}",
@@ -478,8 +523,8 @@ fn invoke_protocol(
     api: &ProtocolPluginApiV1,
     request: ProtocolRequest,
 ) -> Result<ProtocolResponse, RuntimeError> {
-    let request_bytes = serde_json::to_vec(&request)
-        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let request_bytes =
+        encode_protocol_request(&request).map_err(|error| RuntimeError::Config(error.to_string()))?;
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
@@ -509,7 +554,8 @@ fn invoke_protocol(
     unsafe {
         (api.free_buffer)(output);
     }
-    serde_json::from_slice(&response_bytes).map_err(|error| RuntimeError::Config(error.to_string()))
+    decode_protocol_response(&request, &response_bytes)
+        .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
 struct HotSwappableProtocolAdapter {
@@ -823,6 +869,7 @@ impl PluginHost {
             if managed.package.plugin_kind != PluginKind::Protocol {
                 continue;
             }
+            managed.package.refresh_dynamic_manifest()?;
             let modified_at = managed.package.modified_at()?;
             if modified_at <= managed.loaded_at {
                 continue;
@@ -899,10 +946,21 @@ mod tests {
         InProcessProtocolPlugin, PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost,
         PluginPackage, PluginSource,
     };
-    use crate::RuntimeRegistries;
+    use crate::{RuntimeRegistries, ServerConfig, plugin_host_from_config};
     use mc_plugin_api::{CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind, PluginManifestV1, Utf8Slice};
+    use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
+    use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
     use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints;
+    use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entrypoints;
+    use mc_proto_common::{Edition, PacketWriter, TransportKind};
+    use std::env;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::sync::Arc;
+    use std::time::Duration;
+    use tempfile::tempdir;
 
     fn manifest_with_abi(
         plugin_id: &'static str,
@@ -964,6 +1022,55 @@ mod tests {
     }
 
     #[test]
+    fn all_protocol_plugins_register_and_resolve() {
+        let mut catalog = PluginCatalog::default();
+        for (plugin_id, entrypoints) in [
+            ("je-1_7_10", in_process_protocol_entrypoints()),
+            ("je-1_8_x", je_1_8_x_entrypoints()),
+            ("je-1_12_2", je_1_12_2_entrypoints()),
+            ("be-placeholder", be_placeholder_entrypoints()),
+        ] {
+            catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                plugin_id: plugin_id.to_string(),
+                manifest: entrypoints.manifest,
+                api: entrypoints.api,
+            });
+        }
+
+        let host = Arc::new(PluginHost::new(
+            catalog,
+            PluginAbiRange::default(),
+            PluginFailurePolicy::Quarantine,
+        ));
+        let mut registries = RuntimeRegistries::new();
+        host.load_into_registries(&mut registries)
+            .expect("protocol plugins should load");
+
+        for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
+            assert!(
+                registries.protocols().resolve_adapter(adapter_id).is_some(),
+                "adapter `{adapter_id}` should resolve"
+            );
+        }
+
+        let je_handshake = je_handshake_frame(340);
+        let je_intent = registries
+            .protocols()
+            .route_handshake(TransportKind::Tcp, &je_handshake)
+            .expect("tcp probe should not fail")
+            .expect("tcp handshake should resolve");
+        assert_eq!(je_intent.edition, Edition::Je);
+        assert_eq!(je_intent.protocol_number, 340);
+
+        let be_intent = registries
+            .protocols()
+            .route_handshake(TransportKind::Udp, &raknet_unconnected_ping())
+            .expect("udp probe should not fail")
+            .expect("udp datagram should resolve");
+        assert_eq!(be_intent.edition, Edition::Be);
+    }
+
+    #[test]
     fn abi_mismatch_is_rejected_before_registration() {
         let entrypoints = in_process_protocol_entrypoints();
         let mut catalog = PluginCatalog::default();
@@ -1021,5 +1128,209 @@ mod tests {
             .quarantine_reason("future-storage")
             .expect("phase-gated plugin should be quarantined");
         assert!(reason.contains("deferred"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), crate::RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("dist").join("plugins");
+        let target_dir = temp_dir.path().join("target");
+        run_xtask_package_plugins(&dist_dir, &target_dir, "dynamic-load-v1")?;
+
+        let config = ServerConfig {
+            plugins_dir: dist_dir,
+            ..ServerConfig::default()
+        };
+        let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+        let mut registries = RuntimeRegistries::new();
+        host.load_into_registries(&mut registries)?;
+
+        for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
+            let adapter = registries
+                .protocols()
+                .resolve_adapter(adapter_id)
+                .expect("packaged plugin adapter should resolve");
+            assert!(
+                adapter.capability_set().contains("build-tag:dynamic-load-v1"),
+                "adapter `{adapter_id}` should expose build tag capability"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn packaged_protocol_reload_replaces_generation() -> Result<(), crate::RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("dist").join("plugins");
+        let target_dir = temp_dir.path().join("target");
+        run_xtask_package_plugins(&dist_dir, &target_dir, "reload-v1")?;
+
+        let config = ServerConfig {
+            plugins_dir: dist_dir.clone(),
+            ..ServerConfig::default()
+        };
+        let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+        let mut registries = RuntimeRegistries::new();
+        host.load_into_registries(&mut registries)?;
+
+        let adapter = registries
+            .protocols()
+            .resolve_adapter("je-1_7_10")
+            .expect("packaged je-1_7_10 adapter should resolve");
+        let first_generation = adapter
+            .plugin_generation_id()
+            .expect("packaged adapter should report plugin generation");
+        assert!(adapter.capability_set().contains("build-tag:reload-v1"));
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10",
+            "je-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "reload-v2",
+        )?;
+
+        let reloaded = host.reload_modified()?;
+        assert_eq!(reloaded, vec!["je-1_7_10".to_string()]);
+
+        let adapter = registries
+            .protocols()
+            .resolve_adapter("je-1_7_10")
+            .expect("reloaded adapter should resolve");
+        let next_generation = adapter
+            .plugin_generation_id()
+            .expect("reloaded adapter should report plugin generation");
+        assert_ne!(first_generation, next_generation);
+        assert!(adapter.capability_set().contains("build-tag:reload-v2"));
+        Ok(())
+    }
+
+    fn je_handshake_frame(protocol_version: i32) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0);
+        writer.write_varint(protocol_version);
+        writer
+            .write_string("localhost")
+            .expect("handshake host should encode");
+        writer.write_u16(25565);
+        writer.write_varint(2);
+        writer.into_inner()
+    }
+
+    fn raknet_unconnected_ping() -> Vec<u8> {
+        let mut frame = Vec::with_capacity(33);
+        frame.push(0x01);
+        frame.extend_from_slice(&123_i64.to_be_bytes());
+        frame.extend_from_slice(&[
+            0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12,
+            0x34, 0x56, 0x78,
+        ]);
+        frame.extend_from_slice(&456_i64.to_be_bytes());
+        frame
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_xtask_package_plugins(
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), crate::RuntimeError> {
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+        let status = Command::new(cargo)
+            .current_dir(workspace_root())
+            .env("CARGO_TARGET_DIR", target_dir)
+            .env("REVY_PLUGIN_BUILD_TAG", build_tag)
+            .arg("run")
+            .arg("-p")
+            .arg("xtask")
+            .arg("--")
+            .arg("package-plugins")
+            .arg("--dist-dir")
+            .arg(dist_dir)
+            .status()
+            .map_err(|error| crate::RuntimeError::Config(error.to_string()))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(crate::RuntimeError::Config(
+                "xtask package-plugins failed".to_string(),
+            ))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn package_single_protocol_plugin(
+        cargo_package: &str,
+        plugin_id: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), crate::RuntimeError> {
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+        let status = Command::new(cargo)
+            .current_dir(workspace_root())
+            .env("CARGO_TARGET_DIR", target_dir)
+            .env("REVY_PLUGIN_BUILD_TAG", build_tag)
+            .arg("build")
+            .arg("-p")
+            .arg(cargo_package)
+            .status()
+            .map_err(|error| crate::RuntimeError::Config(error.to_string()))?;
+        if !status.success() {
+            return Err(crate::RuntimeError::Config(format!(
+                "cargo build failed for `{cargo_package}`"
+            )));
+        }
+
+        let artifact_name = dynamic_library_filename(cargo_package);
+        let source = target_dir.join("debug").join(&artifact_name);
+        let plugin_dir = dist_dir.join(plugin_id);
+        fs::create_dir_all(&plugin_dir)?;
+        let packaged_artifact = packaged_artifact_name(&artifact_name, build_tag);
+        let destination = plugin_dir.join(&packaged_artifact);
+        let staging = plugin_dir.join(format!(".{packaged_artifact}.tmp"));
+        fs::copy(&source, &staging)?;
+        if destination.exists() {
+            fs::remove_file(&destination)?;
+        }
+        fs::rename(&staging, &destination)?;
+        let manifest = format!(
+            "[plugin]\nid = \"{plugin_id}\"\nkind = \"protocol\"\n\n[artifacts]\n\"{}-{}\" = \"{packaged_artifact}\"\n",
+            env::consts::OS,
+            env::consts::ARCH
+        );
+        fs::write(plugin_dir.join("plugin.toml"), manifest)?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dynamic_library_filename(package: &str) -> String {
+        let crate_name = package.replace('-', "_");
+        match env::consts::OS {
+            "windows" => format!("{crate_name}.dll"),
+            "macos" => format!("lib{crate_name}.dylib"),
+            _ => format!("lib{crate_name}.so"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn packaged_artifact_name(base_name: &str, build_tag: &str) -> String {
+        if let Some((stem, extension)) = base_name.rsplit_once('.') {
+            format!("{stem}-{build_tag}.{extension}")
+        } else {
+            format!("{base_name}-{build_tag}")
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("server-runtime crate should live under the workspace root")
+            .to_path_buf()
     }
 }

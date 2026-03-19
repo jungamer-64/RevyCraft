@@ -4,8 +4,6 @@ use mc_plugin_api::{
 };
 use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError};
 
-pub use serde_json;
-
 pub struct StaticPluginManifest {
     pub plugin_id: &'static str,
     pub display_name: &'static str,
@@ -122,11 +120,6 @@ pub fn write_output_buffer(output: *mut OwnedBuffer, bytes: Vec<u8>) {
 }
 
 #[doc(hidden)]
-pub fn encode_response(response: ProtocolResponse) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(&response).map_err(|error| error.to_string())
-}
-
-#[doc(hidden)]
 pub fn handle_protocol_request<P: RustProtocolPlugin>(
     plugin: &P,
     request: ProtocolRequest,
@@ -205,7 +198,7 @@ macro_rules! export_protocol_plugin {
                 let request_bytes =
                     // SAFETY: Host provides a valid request slice for the duration of this call.
                     unsafe { $crate::byte_slice_as_bytes(request) };
-                $crate::serde_json::from_slice::<mc_plugin_api::ProtocolRequest>(request_bytes)
+                mc_plugin_api::decode_protocol_request(request_bytes)
             })) {
                 Ok(Ok(request)) => request,
                 Ok(Err(error)) => {
@@ -222,7 +215,7 @@ macro_rules! export_protocol_plugin {
             };
 
             let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                $crate::handle_protocol_request(mc_plugin_instance(), request)
+                $crate::handle_protocol_request(mc_plugin_instance(), request.clone())
             })) {
                 Ok(Ok(response)) => response,
                 Ok(Err(message)) => {
@@ -238,13 +231,13 @@ macro_rules! export_protocol_plugin {
                 }
             };
 
-            match $crate::encode_response(response) {
+            match mc_plugin_api::encode_protocol_response(&request, &response) {
                 Ok(bytes) => {
                     $crate::write_output_buffer(output, bytes);
                     mc_plugin_api::PluginErrorCode::Ok
                 }
                 Err(message) => {
-                    $crate::write_error_buffer(error_out, message);
+                    $crate::write_error_buffer(error_out, message.to_string());
                     mc_plugin_api::PluginErrorCode::Internal
                 }
             }
@@ -257,14 +250,14 @@ macro_rules! export_protocol_plugin {
             }
         }
 
-        #[unsafe(no_mangle)]
+        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
         pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
             MC_PLUGIN_MANIFEST
                 .get_or_init(|| $crate::manifest_from_static(&$manifest))
                 as *const mc_plugin_api::PluginManifestV1
         }
 
-        #[unsafe(no_mangle)]
+        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
         pub extern "C" fn mc_plugin_protocol_api_v1() -> *const mc_plugin_api::ProtocolPluginApiV1
         {
             MC_PLUGIN_API.get_or_init(|| mc_plugin_api::ProtocolPluginApiV1 {
