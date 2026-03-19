@@ -3,6 +3,7 @@ use mc_core::{
     ConnectionId, CoreCommand, CoreConfig, CoreEvent, EventTarget, PlayerId, PlayerSummary,
     ServerCore, TargetedEvent,
 };
+use mc_proto_be_placeholder::BePlaceholderAdapter;
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeNextState, HandshakeProbe, LoginRequest, MinecraftWireCodec,
     PacketWriter, PlayEncodingContext, ProtocolAdapter, ProtocolError, ServerListStatus,
@@ -20,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -96,6 +97,7 @@ impl LevelType {
 pub struct ServerConfig {
     pub server_ip: Option<IpAddr>,
     pub server_port: u16,
+    pub be_enabled: bool,
     pub motd: String,
     pub max_players: u8,
     pub online_mode: bool,
@@ -115,6 +117,7 @@ impl Default for ServerConfig {
         Self {
             server_ip: None,
             server_port: 25565,
+            be_enabled: false,
             motd: "Multi-version Rust server".to_string(),
             max_players: 20,
             online_mode: false,
@@ -162,6 +165,9 @@ impl ServerConfig {
                         config.server_port = value
                             .parse()
                             .map_err(|_| RuntimeError::Config("invalid server-port".to_string()))?;
+                    }
+                    "be-enabled" => {
+                        config.be_enabled = value.eq_ignore_ascii_case("true");
                     }
                     "motd" => config.motd = value.to_string(),
                     "max-players" => {
@@ -376,12 +382,21 @@ impl RuntimeRegistries {
     }
 
     #[must_use]
-    pub fn protocols(&self) -> &ProtocolRegistry {
+    pub fn with_je_and_be_placeholder() -> Self {
+        let mut registries = Self::with_je_1_7_10();
+        let adapter = Arc::new(BePlaceholderAdapter::new());
+        registries.register_adapter(adapter.clone());
+        registries.register_probe(adapter);
+        registries
+    }
+
+    #[must_use]
+    pub const fn protocols(&self) -> &ProtocolRegistry {
         &self.protocols
     }
 
     #[must_use]
-    pub fn storage(&self) -> &StorageRegistry {
+    pub const fn storage(&self) -> &StorageRegistry {
         &self.storage
     }
 }
@@ -444,6 +459,10 @@ enum BoundTransportListener {
         listener: TcpListener,
         adapter_ids: Vec<String>,
     },
+    Udp {
+        socket: UdpSocket,
+        adapter_ids: Vec<String>,
+    },
 }
 
 impl BoundTransportListener {
@@ -457,18 +476,14 @@ impl BoundTransportListener {
                 local_addr: listener.local_addr()?,
                 adapter_ids: adapter_ids.clone(),
             }),
-        }
-    }
-
-    async fn accept(&self) -> Result<AcceptedTransportSession, std::io::Error> {
-        match self {
-            Self::Tcp { listener, .. } => {
-                let (stream, _) = listener.accept().await?;
-                Ok(AcceptedTransportSession {
-                    transport: TransportKind::Tcp,
-                    io: TransportSessionIo::Tcp(stream),
-                })
-            }
+            Self::Udp {
+                socket,
+                adapter_ids,
+            } => Ok(ListenerBinding {
+                transport: TransportKind::Udp,
+                local_addr: socket.local_addr()?,
+                adapter_ids: adapter_ids.clone(),
+            }),
         }
     }
 }
@@ -506,6 +521,22 @@ struct RuntimeServer {
     state: Mutex<RuntimeState>,
     sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
     next_connection_id: Mutex<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UdpDatagramAction {
+    Ignore,
+    UnsupportedBedrock,
+}
+
+fn classify_udp_datagram(
+    protocol_registry: &ProtocolRegistry,
+    datagram: &[u8],
+) -> Result<UdpDatagramAction, ProtocolError> {
+    match protocol_registry.route_handshake(TransportKind::Udp, datagram)? {
+        Some(intent) if intent.edition == Edition::Be => Ok(UdpDatagramAction::UnsupportedBedrock),
+        Some(_) | None => Ok(UdpDatagramAction::Ignore),
+    }
 }
 
 impl RuntimeServer {
@@ -624,7 +655,10 @@ impl RuntimeServer {
                 self.handle_handshake_frame(transport_io, session, &frame)
                     .await
             }
-            ConnectionPhase::Status => self.handle_status_frame(transport_io, session, &frame).await,
+            ConnectionPhase::Status => {
+                self.handle_status_frame(transport_io, session, &frame)
+                    .await
+            }
             ConnectionPhase::Login => {
                 self.handle_login_frame(connection_id, transport_io, session, &frame)
                     .await
@@ -649,10 +683,11 @@ impl RuntimeServer {
             HandshakeNextState::Status => ConnectionPhase::Status,
             HandshakeNextState::Login => ConnectionPhase::Login,
         };
-        if let Some(next_adapter) = self
-            .protocol_registry
-            .resolve_route(session.transport, intent.edition, intent.protocol_number)
-        {
+        if let Some(next_adapter) = self.protocol_registry.resolve_route(
+            session.transport,
+            intent.edition,
+            intent.protocol_number,
+        ) {
             session.adapter = Some(next_adapter);
             session.phase = next_phase;
             return Ok(false);
@@ -922,17 +957,31 @@ fn build_listener_plans(
     config: &ServerConfig,
     protocols: &ProtocolRegistry,
 ) -> Result<Vec<ListenerPlan>, RuntimeError> {
-    let adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Tcp);
-    if adapter_ids.is_empty() {
+    let tcp_adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Tcp);
+    if tcp_adapter_ids.is_empty() {
         return Err(RuntimeError::Config(
             "no tcp protocol adapters registered".to_string(),
         ));
     }
-    Ok(vec![ListenerPlan {
+    let mut plans = vec![ListenerPlan {
         transport: TransportKind::Tcp,
         bind_addr: config.bind_addr(),
-        adapter_ids,
-    }])
+        adapter_ids: tcp_adapter_ids,
+    }];
+    if config.be_enabled {
+        let udp_adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Udp);
+        if udp_adapter_ids.is_empty() {
+            return Err(RuntimeError::Config(
+                "be-enabled=true requires at least one udp protocol adapter".to_string(),
+            ));
+        }
+        plans.push(ListenerPlan {
+            transport: TransportKind::Udp,
+            bind_addr: config.bind_addr(),
+            adapter_ids: udp_adapter_ids,
+        });
+    }
+    Ok(plans)
 }
 
 async fn bind_transport_listener(
@@ -943,9 +992,10 @@ async fn bind_transport_listener(
             listener: TcpListener::bind(plan.bind_addr).await?,
             adapter_ids: plan.adapter_ids,
         }),
-        TransportKind::Udp => Err(RuntimeError::Unsupported(
-            "udp transport is not implemented yet".to_string(),
-        )),
+        TransportKind::Udp => Ok(BoundTransportListener::Udp {
+            socket: UdpSocket::bind(plan.bind_addr).await?,
+            adapter_ids: plan.adapter_ids,
+        }),
     }
 }
 
@@ -1012,10 +1062,28 @@ pub async fn spawn_server(
         .iter()
         .map(BoundTransportListener::listener_binding)
         .collect::<Result<Vec<_>, _>>()?;
-    let mut listeners = bound_listeners.into_iter();
-    let listener = listeners
-        .next()
-        .ok_or_else(|| RuntimeError::Config("no transport listeners were bound".to_string()))?;
+    let mut tcp_listener = None;
+    let mut udp_socket = None;
+    for listener in bound_listeners {
+        match listener {
+            BoundTransportListener::Tcp { listener, .. } => {
+                if tcp_listener.replace(listener).is_some() {
+                    return Err(RuntimeError::Config(
+                        "multiple tcp listeners are not supported".to_string(),
+                    ));
+                }
+            }
+            BoundTransportListener::Udp { socket, .. } => {
+                if udp_socket.replace(socket).is_some() {
+                    return Err(RuntimeError::Config(
+                        "multiple udp listeners are not supported".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    let tcp_listener = tcp_listener
+        .ok_or_else(|| RuntimeError::Config("no tcp transport listeners were bound".to_string()))?;
 
     let server = Arc::new(RuntimeServer {
         config,
@@ -1033,15 +1101,47 @@ pub async fn spawn_server(
     let join_handle = tokio::spawn(async move {
         let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
         let mut save_interval = tokio::time::interval(Duration::from_secs(2));
+        let mut udp_buffer = [0_u8; 2048];
         loop {
             tokio::select! {
                 _ = &mut shutdown_rx => {
                     run_server.maybe_save().await?;
                     return Ok(());
                 }
-                accepted = listener.accept() => {
-                    let session = accepted?;
+                accepted = tcp_listener.accept() => {
+                    let (stream, _) = accepted?;
+                    let session = AcceptedTransportSession {
+                        transport: TransportKind::Tcp,
+                        io: TransportSessionIo::Tcp(stream),
+                    };
                     run_server.spawn_session(session).await;
+                }
+                udp_recv = async {
+                    let socket = udp_socket
+                        .as_ref()
+                        .expect("udp socket branch should only run when configured");
+                    socket.recv_from(&mut udp_buffer).await
+                }, if udp_socket.is_some() => {
+                    match udp_recv {
+                        Ok((bytes_read, peer_addr)) => {
+                            match classify_udp_datagram(&run_server.protocol_registry, &udp_buffer[..bytes_read]) {
+                                Ok(UdpDatagramAction::Ignore) => {}
+                                Ok(UdpDatagramAction::UnsupportedBedrock) => {
+                                    eprintln!(
+                                        "received unsupported bedrock datagram from {peer_addr}; bedrock support is not implemented yet"
+                                    );
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "failed to classify udp datagram from {peer_addr}: {error}"
+                                    );
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("udp receive failed: {error}");
+                        }
+                    }
                 }
                 _ = tick_interval.tick() => {
                     run_server.tick().await?;
@@ -1097,10 +1197,12 @@ pub fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8
 mod tests {
     use super::{
         LevelType, ProtocolRegistry, RuntimeError, RuntimeRegistries, ServerConfig,
-        StorageRegistry, build_listener_plans, encode_handshake, spawn_server,
+        StorageRegistry, UdpDatagramAction, build_listener_plans, classify_udp_datagram,
+        encode_handshake, spawn_server,
     };
     use bytes::BytesMut;
     use mc_core::WorldSnapshot;
+    use mc_proto_be_placeholder::BE_PLACEHOLDER_ADAPTER_ID;
     use mc_proto_common::{
         Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, MinecraftWireCodec,
         PacketReader, PacketWriter, StorageAdapter, TransportKind, WireCodec,
@@ -1114,6 +1216,12 @@ mod tests {
     use std::time::Duration;
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UdpSocket;
+
+    const RAKNET_MAGIC: [u8; 16] = [
+        0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34, 0x56,
+        0x78,
+    ];
 
     #[derive(Default)]
     struct RecordingStorageAdapter {
@@ -1128,7 +1236,10 @@ mod tests {
             TransportKind::Udp
         }
 
-        fn try_route(&self, _frame: &[u8]) -> Result<Option<HandshakeIntent>, mc_proto_common::ProtocolError> {
+        fn try_route(
+            &self,
+            _frame: &[u8],
+        ) -> Result<Option<HandshakeIntent>, mc_proto_common::ProtocolError> {
             Ok(Some(HandshakeIntent {
                 edition: Edition::Be,
                 protocol_number: 999,
@@ -1175,8 +1286,18 @@ mod tests {
     fn listener_addr(server: &super::RunningServer) -> SocketAddr {
         server
             .listener_bindings()
-            .first()
+            .iter()
+            .find(|binding| binding.transport == TransportKind::Tcp)
             .expect("tcp listener binding should exist")
+            .local_addr
+    }
+
+    fn udp_listener_addr(server: &super::RunningServer) -> SocketAddr {
+        server
+            .listener_bindings()
+            .iter()
+            .find(|binding| binding.transport == TransportKind::Udp)
+            .expect("udp listener binding should exist")
             .local_addr
     }
 
@@ -1271,10 +1392,34 @@ mod tests {
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].transport, TransportKind::Tcp);
-        assert!(plans[0]
-            .adapter_ids
-            .iter()
-            .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID));
+        assert!(
+            plans[0]
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn listener_plan_includes_udp_binding_when_bedrock_is_enabled() -> Result<(), RuntimeError> {
+        let registries = RuntimeRegistries::with_je_and_be_placeholder();
+        let plans = build_listener_plans(
+            &ServerConfig {
+                be_enabled: true,
+                ..ServerConfig::default()
+            },
+            registries.protocols(),
+        )?;
+
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[1].transport, TransportKind::Udp);
+        assert!(
+            plans[1]
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == BE_PLACEHOLDER_ADAPTER_ID)
+        );
         Ok(())
     }
 
@@ -1299,10 +1444,45 @@ mod tests {
             .clone();
         assert_eq!(binding.transport, TransportKind::Tcp);
         assert!(binding.local_addr.port() > 0);
-        assert!(binding
-            .adapter_ids
+        assert!(
+            binding
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID)
+        );
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn running_server_exposes_udp_listener_binding_when_enabled() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                be_enabled: true,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_je_and_be_placeholder(),
+        )
+        .await?;
+
+        assert_eq!(server.listener_bindings().len(), 2);
+        let binding = server
+            .listener_bindings()
             .iter()
-            .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID));
+            .find(|binding| binding.transport == TransportKind::Udp)
+            .expect("udp listener binding should exist");
+        assert!(binding.local_addr.port() > 0);
+        assert!(
+            binding
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == BE_PLACEHOLDER_ADAPTER_ID)
+        );
 
         server.shutdown().await
     }
@@ -1313,13 +1493,14 @@ mod tests {
         let path = temp_dir.path().join("server.properties");
         fs::write(
             &path,
-            "level-name=flatland\nlevel-type=FLAT\nonline-mode=false\ndefault-adapter=je-1_7_10\nstorage-profile=je-anvil-1_7_10\n",
+            "level-name=flatland\nlevel-type=FLAT\nbe-enabled=true\nonline-mode=false\ndefault-adapter=je-1_7_10\nstorage-profile=je-anvil-1_7_10\n",
         )?;
 
         let config = ServerConfig::from_properties(&path)?;
 
         assert_eq!(config.level_name, "flatland");
         assert_eq!(config.level_type, LevelType::Flat);
+        assert!(config.be_enabled);
         assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
         assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
         assert_eq!(config.world_dir, temp_dir.path().join("flatland"));
@@ -1334,6 +1515,7 @@ mod tests {
 
         let config = ServerConfig::from_properties(&path)?;
 
+        assert!(!config.be_enabled);
         assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
         assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
         Ok(())
@@ -1352,6 +1534,23 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn be_enabled_requires_udp_adapter() {
+        let registry = RuntimeRegistries::with_je_1_7_10();
+        let error = build_listener_plans(
+            &ServerConfig {
+                be_enabled: true,
+                ..ServerConfig::default()
+            },
+            registry.protocols(),
+        )
+        .expect_err("be-enabled should require udp adapter");
+        assert!(matches!(
+            error,
+            RuntimeError::Config(message) if message.contains("be-enabled=true")
+        ));
+    }
+
     fn login_start(username: &str) -> Vec<u8> {
         let mut writer = PacketWriter::default();
         writer.write_varint(0x00);
@@ -1368,6 +1567,15 @@ mod tests {
         writer.write_varint(0x01);
         writer.write_i64(value);
         writer.into_inner()
+    }
+
+    fn raknet_unconnected_ping() -> Vec<u8> {
+        let mut frame = Vec::with_capacity(33);
+        frame.push(0x01);
+        frame.extend_from_slice(&123_i64.to_be_bytes());
+        frame.extend_from_slice(&RAKNET_MAGIC);
+        frame.extend_from_slice(&456_i64.to_be_bytes());
+        frame
     }
 
     fn player_position_look(x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
@@ -1642,6 +1850,61 @@ mod tests {
         write_packet(&mut stream, &codec, &status_ping(99)).await?;
         let pong = read_packet(&mut stream, &codec, &mut buffer).await?;
         assert_eq!(packet_id(&pong), 0x01);
+
+        server.shutdown().await
+    }
+
+    #[test]
+    fn udp_bedrock_probe_classifies_placeholder_datagram() -> Result<(), RuntimeError> {
+        let registry = RuntimeRegistries::with_je_and_be_placeholder();
+        let action = classify_udp_datagram(registry.protocols(), &raknet_unconnected_ping())?;
+        assert_eq!(action, UdpDatagramAction::UnsupportedBedrock);
+        Ok(())
+    }
+
+    #[test]
+    fn udp_unknown_datagram_is_ignored() -> Result<(), RuntimeError> {
+        let registry = RuntimeRegistries::with_je_and_be_placeholder();
+        let action = classify_udp_datagram(registry.protocols(), &[0xde, 0xad, 0xbe, 0xef])?;
+        assert_eq!(action, UdpDatagramAction::Ignore);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn udp_bedrock_probe_does_not_block_je_status() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                be_enabled: true,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_je_and_be_placeholder(),
+        )
+        .await?;
+
+        let udp_addr = udp_listener_addr(&server);
+        let udp_client = UdpSocket::bind("127.0.0.1:0").await?;
+        udp_client
+            .send_to(&raknet_unconnected_ping(), udp_addr)
+            .await?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 1)?).await?;
+        write_packet(&mut stream, &codec, &status_request()).await?;
+        let mut buffer = BytesMut::new();
+        let status_response = read_packet(&mut stream, &codec, &mut buffer).await?;
+        let mut reader = PacketReader::new(&status_response);
+        assert_eq!(reader.read_varint().expect("packet id should decode"), 0x00);
+        let payload = reader
+            .read_string(32767)
+            .expect("status json should decode");
+        assert!(payload.contains("\"online\":0"));
 
         server.shutdown().await
     }

@@ -3181,6 +3181,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-proto-be-placeholder"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "mc-core",
+ "mc-proto-common",
+]
+
+[[package]]
 name = "mc-proto-common"
 version = "0.1.0"
 dependencies = [
@@ -4424,6 +4433,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "mc-core",
+ "mc-proto-be-placeholder",
  "mc-proto-common",
  "mc-proto-je-1_7_10",
  "md-5",

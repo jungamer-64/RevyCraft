@@ -4,7 +4,7 @@ use std::path::Path;
 #[tokio::main]
 async fn main() -> Result<(), RuntimeError> {
     let config = ServerConfig::from_properties(Path::new("server.properties"))?;
-    let server = spawn_server(config, RuntimeRegistries::with_je_1_7_10()).await?;
+    let server = spawn_server(config, RuntimeRegistries::with_je_and_be_placeholder()).await?;
     for binding in server.listener_bindings() {
         println!(
             "server listening on {} via {:?} for {:?}",

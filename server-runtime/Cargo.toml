@@ -12,6 +12,7 @@ description = "Protocol-agnostic dedicated server runtime for the RevyCraft work
 [dependencies]
 bytes.workspace = true
 mc-core = { path = "../mc-core" }
+mc-proto-be-placeholder = { path = "../mc-proto-be-placeholder" }
 mc-proto-common = { path = "../mc-proto-common" }
 mc-proto-je-1_7_10 = { path = "../mc-proto-je-1_7_10" }
 md5.workspace = true

@@ -28,7 +28,7 @@ cargo run -p revycraft-client
 現在のワールド生成は `level-type=FLAT` のみ対応です。
 creative-style block editing を使う場合は `gamemode=1` にしてください。
 `default-adapter=je-1_7_10` と `storage-profile=je-anvil-1_7_10` で既定 protocol adapter / 永続化 backend を明示できます。
-runtime は transport-aware な listener binding API に移行済みですが、現在 bind する transport は TCP 1 本のみです。
+`be-enabled=true` を指定すると、同じ `server-port` 番号で `TCP(JE)` と `UDP(BE placeholder)` を同時 bind します。Bedrock 側は現段階では listener と検知だけで、クライアント向け応答や login/play はまだ未実装です。
 
 ## Server Features
 
@@ -46,6 +46,7 @@ runtime は transport-aware な listener binding API に移行済みですが、
 - `level.dat`, `playerdata/*.dat`, `region/*.mca` の read/write
 - 将来の multi-version 対応を見据えた core / protocol 分離
 - edition-aware handshake routing, adapter registry, storage registry
+- 同一プロセスでの shared-port `TCP(JE)` + `UDP(BE placeholder)` 待受
 
 ## Tests
 
@@ -69,9 +70,10 @@ cargo test --workspace
 - `online-mode=true` は未実装です。現在は fail fast します。
 - `level-type` は `FLAT` のみ対応です。その他の値は起動時に reject します。
 - 現在の登録 adapter / storage profile は `je-1_7_10` / `je-anvil-1_7_10` のみです。
+- `be-enabled=true` にすると `be-placeholder` adapter を持つ UDP listener も起動しますが、Bedrock は operator-visible placeholder のみで、検知時に `not implemented` を stderr に出して datagram を破棄します。
 - handshake probe が edition を認識して未対応 protocol 番号だった場合、status は `default-adapter` で応答し、login はその adapter の codec で disconnect を返します。
 - どの handshake probe にも一致しない接続には誤った codec で応答せず、そのまま切断します。
-- BE 向けの registry / edition / transport 識別は入りましたが、UDP、RakNet、BE status/login/play packet 自体はまだ未実装です。
+- BE 向けの registry / edition / transport 識別に加えて UDP listener までは入りましたが、RakNet/BE status/login/play packet 自体はまだ未実装です。
 - 現在の network editing は creative 前提です。survival の採掘時間、消費、drop は未実装です。
 - player inventory window 0 だけを扱います。containers、crafting、一般 window 操作は未実装です。
 - whitelist block/item: `stone`, `dirt`, `grass_block`, `cobblestone`, `oak_planks`, `sand`, `sandstone`, `glass`, `bricks`
