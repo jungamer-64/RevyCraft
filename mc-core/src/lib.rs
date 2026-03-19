@@ -18,9 +18,6 @@ const PLAYER_HEIGHT: f64 = 1.8;
 const BLOCK_EDIT_REACH: f64 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct ProtocolVersion(pub i32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ConnectionId(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -583,7 +580,6 @@ impl Default for CoreConfig {
 pub enum CoreCommand {
     LoginStart {
         connection_id: ConnectionId,
-        protocol_version: ProtocolVersion,
         username: String,
         player_id: PlayerId,
     },
@@ -792,7 +788,6 @@ impl ServerCore {
         match command {
             CoreCommand::LoginStart {
                 connection_id,
-                protocol_version: _,
                 username,
                 player_id,
             } => self.login_player(connection_id, username, player_id, now_ms),
@@ -1540,7 +1535,6 @@ mod tests {
         let events = core.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(1),
-                protocol_version: ProtocolVersion(5),
                 username: "first".to_string(),
                 player_id: first,
             },
@@ -1582,7 +1576,6 @@ mod tests {
         let events = core.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(2),
-                protocol_version: ProtocolVersion(5),
                 username: "second".to_string(),
                 player_id: second,
             },
@@ -1619,7 +1612,6 @@ mod tests {
         let _ = core.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(1),
-                protocol_version: ProtocolVersion(5),
                 username: "first".to_string(),
                 player_id: first,
             },
@@ -1628,7 +1620,6 @@ mod tests {
         let _ = core.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(2),
-                protocol_version: ProtocolVersion(5),
                 username: "second".to_string(),
                 player_id: second,
             },
@@ -1679,7 +1670,6 @@ mod tests {
         let _ = core.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(1),
-                protocol_version: ProtocolVersion(5),
                 username: "first".to_string(),
                 player_id: first,
             },
@@ -1702,7 +1692,6 @@ mod tests {
         let _ = core.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(1),
-                protocol_version: ProtocolVersion(5),
                 username: "first".to_string(),
                 player_id: first,
             },
@@ -1750,7 +1739,6 @@ mod tests {
         let _ = core.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(1),
-                protocol_version: ProtocolVersion(5),
                 username: "first".to_string(),
                 player_id: first,
             },
@@ -1820,7 +1808,6 @@ mod tests {
         let _ = core.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(1),
-                protocol_version: ProtocolVersion(5),
                 username: "first".to_string(),
                 player_id: first,
             },
@@ -1871,7 +1858,6 @@ mod tests {
         let _ = creative.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(1),
-                protocol_version: ProtocolVersion(5),
                 username: "first".to_string(),
                 player_id: first,
             },
@@ -1880,7 +1866,6 @@ mod tests {
         let _ = creative.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(2),
-                protocol_version: ProtocolVersion(5),
                 username: "second".to_string(),
                 player_id: second,
             },
@@ -1941,7 +1926,6 @@ mod tests {
         let _ = survival.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(3),
-                protocol_version: ProtocolVersion(5),
                 username: "lone".to_string(),
                 player_id: lone,
             },

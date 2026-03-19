@@ -928,7 +928,6 @@ mod tests {
         let _ = core.apply_command(
             mc_core::CoreCommand::LoginStart {
                 connection_id: mc_core::ConnectionId(1),
-                protocol_version: mc_core::ProtocolVersion(5),
                 username: "alpha".to_string(),
                 player_id,
             },

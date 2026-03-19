@@ -9,3 +9,5 @@ level-type=FLAT
 gamemode=0
 difficulty=1
 view-distance=2
+default-adapter=je-1_7_10
+storage-profile=je-anvil-1_7_10

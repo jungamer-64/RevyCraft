@@ -1,14 +1,16 @@
 use bytes::BytesMut;
 use mc_core::{
     ConnectionId, CoreCommand, CoreConfig, CoreEvent, EventTarget, PlayerId, PlayerSummary,
-    ProtocolVersion, ServerCore, TargetedEvent,
+    ServerCore, TargetedEvent,
 };
 use mc_proto_common::{
-    ConnectionPhase, HandshakeNextState, LoginRequest, MinecraftWireCodec, PacketWriter,
-    PlayEncodingContext, ProtocolAdapter, ProtocolError, ServerListStatus, SessionAdapter,
-    StatusRequest, WireCodec,
+    ConnectionPhase, Edition, HandshakeNextState, HandshakeProbe, LoginRequest, MinecraftWireCodec,
+    PacketWriter, PlayEncodingContext, ProtocolAdapter, ProtocolError, ServerListStatus,
+    StatusRequest, StorageAdapter, TransportKind, WireCodec,
 };
-use mc_proto_je_1_7_10::Je1710Adapter;
+use mc_proto_je_1_7_10::{
+    JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID, Je1710Adapter, Je1710StorageAdapter,
+};
 use md5::{Digest, Md5};
 use std::collections::HashMap;
 use std::fs;
@@ -102,6 +104,8 @@ pub struct ServerConfig {
     pub game_mode: u8,
     pub difficulty: u8,
     pub view_distance: u8,
+    pub default_adapter: String,
+    pub storage_profile: String,
     pub world_dir: PathBuf,
 }
 
@@ -119,6 +123,8 @@ impl Default for ServerConfig {
             game_mode: 0,
             difficulty: 1,
             view_distance: 2,
+            default_adapter: JE_1_7_10_ADAPTER_ID.to_string(),
+            storage_profile: JE_1_7_10_STORAGE_PROFILE_ID.to_string(),
             world_dir: cwd.join("world"),
         }
     }
@@ -185,6 +191,12 @@ impl ServerConfig {
                             RuntimeError::Config("invalid view-distance".to_string())
                         })?;
                     }
+                    "default-adapter" => {
+                        config.default_adapter = value.to_string();
+                    }
+                    "storage-profile" => {
+                        config.storage_profile = value.to_string();
+                    }
                     unknown => {
                         eprintln!("warning: ignoring unknown server.properties key `{unknown}`");
                     }
@@ -205,57 +217,185 @@ impl ServerConfig {
     }
 }
 
-#[derive(Clone, Default)]
-pub struct VersionRegistry {
-    adapters: HashMap<i32, Arc<dyn ProtocolAdapter>>,
-    primary_protocol: Option<ProtocolVersion>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListenerBinding {
+    pub transport: TransportKind,
+    pub local_addr: SocketAddr,
+    pub adapter_ids: Vec<String>,
 }
 
-impl VersionRegistry {
+#[derive(Clone, Default)]
+pub struct ProtocolRegistry {
+    adapters_by_id: HashMap<String, Arc<dyn ProtocolAdapter>>,
+    adapters_by_route: HashMap<(TransportKind, Edition, i32), Arc<dyn ProtocolAdapter>>,
+    probes: Vec<Arc<dyn HandshakeProbe>>,
+}
+
+impl ProtocolRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn register_adapter(&mut self, adapter: Arc<dyn ProtocolAdapter>) -> &mut Self {
-        let protocol_version = adapter.protocol_version();
-        self.primary_protocol.get_or_insert(protocol_version);
-        self.adapters.insert(protocol_version.0, adapter);
+        let descriptor = adapter.descriptor();
+        self.adapters_by_route.insert(
+            (
+                descriptor.transport,
+                descriptor.edition,
+                descriptor.protocol_number,
+            ),
+            Arc::clone(&adapter),
+        );
+        self.adapters_by_id
+            .insert(descriptor.adapter_id.to_string(), adapter);
+        self
+    }
+
+    pub fn register_probe(&mut self, probe: Arc<dyn HandshakeProbe>) -> &mut Self {
+        self.probes.push(probe);
+        self
+    }
+
+    #[must_use]
+    pub fn resolve_adapter(&self, adapter_id: &str) -> Option<Arc<dyn ProtocolAdapter>> {
+        self.adapters_by_id.get(adapter_id).cloned()
+    }
+
+    #[must_use]
+    pub fn resolve_route(
+        &self,
+        transport_kind: TransportKind,
+        edition: Edition,
+        protocol_number: i32,
+    ) -> Option<Arc<dyn ProtocolAdapter>> {
+        self.adapters_by_route
+            .get(&(transport_kind, edition, protocol_number))
+            .cloned()
+    }
+
+    #[must_use]
+    pub fn adapter_ids_for_transport(&self, transport_kind: TransportKind) -> Vec<String> {
+        let mut adapter_ids = self
+            .adapters_by_id
+            .iter()
+            .filter(|(_, adapter)| adapter.descriptor().transport == transport_kind)
+            .map(|(adapter_id, _)| adapter_id.clone())
+            .collect::<Vec<_>>();
+        adapter_ids.sort();
+        adapter_ids
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when a registered probe matches the frame's
+    /// protocol family but the payload is malformed for that family.
+    pub fn route_handshake(
+        &self,
+        transport_kind: TransportKind,
+        frame: &[u8],
+    ) -> Result<Option<mc_proto_common::HandshakeIntent>, ProtocolError> {
+        for probe in &self.probes {
+            if probe.transport_kind() != transport_kind {
+                continue;
+            }
+            if let Some(intent) = probe.try_route(frame)? {
+                return Ok(Some(intent));
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct StorageRegistry {
+    profiles: HashMap<String, Arc<dyn StorageAdapter>>,
+}
+
+impl StorageRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register_profile(
+        &mut self,
+        storage_profile: impl Into<String>,
+        adapter: Arc<dyn StorageAdapter>,
+    ) -> &mut Self {
+        self.profiles.insert(storage_profile.into(), adapter);
+        self
+    }
+
+    #[must_use]
+    pub fn resolve(&self, storage_profile: &str) -> Option<Arc<dyn StorageAdapter>> {
+        self.profiles.get(storage_profile).cloned()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct RuntimeRegistries {
+    protocols: ProtocolRegistry,
+    storage: StorageRegistry,
+}
+
+impl RuntimeRegistries {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register_adapter(&mut self, adapter: Arc<dyn ProtocolAdapter>) -> &mut Self {
+        self.protocols.register_adapter(adapter);
+        self
+    }
+
+    pub fn register_probe(&mut self, probe: Arc<dyn HandshakeProbe>) -> &mut Self {
+        self.protocols.register_probe(probe);
+        self
+    }
+
+    pub fn register_storage_profile(
+        &mut self,
+        storage_profile: impl Into<String>,
+        adapter: Arc<dyn StorageAdapter>,
+    ) -> &mut Self {
+        self.storage.register_profile(storage_profile, adapter);
         self
     }
 
     #[must_use]
     pub fn with_je_1_7_10() -> Self {
-        let mut registry = Self::new();
-        let adapter: Arc<dyn ProtocolAdapter> = Arc::new(Je1710Adapter::new());
-        registry.register_adapter(adapter);
-        registry
+        let mut registries = Self::new();
+        let adapter = Arc::new(Je1710Adapter::new());
+        registries.register_adapter(adapter.clone());
+        registries.register_probe(adapter);
+        registries
+            .register_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID, Arc::new(Je1710StorageAdapter));
+        registries
     }
 
     #[must_use]
-    pub fn resolve(&self, version: ProtocolVersion) -> Option<Arc<dyn ProtocolAdapter>> {
-        self.adapters.get(&version.0).cloned()
+    pub fn protocols(&self) -> &ProtocolRegistry {
+        &self.protocols
     }
 
-    fn primary_adapter(&self) -> Result<Arc<dyn ProtocolAdapter>, RuntimeError> {
-        let protocol = self
-            .primary_protocol
-            .ok_or_else(|| RuntimeError::Config("no protocol adapters registered".to_string()))?;
-        self.resolve(protocol)
-            .ok_or_else(|| RuntimeError::Config("primary protocol adapter is missing".to_string()))
+    #[must_use]
+    pub fn storage(&self) -> &StorageRegistry {
+        &self.storage
     }
 }
 
 pub struct RunningServer {
-    local_addr: SocketAddr,
+    listener_bindings: Vec<ListenerBinding>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     join_handle: JoinHandle<Result<(), RuntimeError>>,
 }
 
 impl RunningServer {
     #[must_use]
-    pub const fn local_addr(&self) -> SocketAddr {
-        self.local_addr
+    pub fn listener_bindings(&self) -> &[ListenerBinding] {
+        &self.listener_bindings
     }
 
     /// # Errors
@@ -266,6 +406,70 @@ impl RunningServer {
             let _ = shutdown_tx.send(());
         }
         self.join_handle.await?
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ListenerPlan {
+    transport: TransportKind,
+    bind_addr: SocketAddr,
+    adapter_ids: Vec<String>,
+}
+
+struct AcceptedTransportSession {
+    transport: TransportKind,
+    io: TransportSessionIo,
+}
+
+enum TransportSessionIo {
+    Tcp(TcpStream),
+}
+
+impl TransportSessionIo {
+    async fn read_into(&mut self, buffer: &mut BytesMut) -> Result<usize, std::io::Error> {
+        match self {
+            Self::Tcp(stream) => stream.read_buf(buffer).await,
+        }
+    }
+
+    async fn write_all(&mut self, bytes: &[u8]) -> Result<(), std::io::Error> {
+        match self {
+            Self::Tcp(stream) => stream.write_all(bytes).await,
+        }
+    }
+}
+
+enum BoundTransportListener {
+    Tcp {
+        listener: TcpListener,
+        adapter_ids: Vec<String>,
+    },
+}
+
+impl BoundTransportListener {
+    fn listener_binding(&self) -> Result<ListenerBinding, std::io::Error> {
+        match self {
+            Self::Tcp {
+                listener,
+                adapter_ids,
+            } => Ok(ListenerBinding {
+                transport: TransportKind::Tcp,
+                local_addr: listener.local_addr()?,
+                adapter_ids: adapter_ids.clone(),
+            }),
+        }
+    }
+
+    async fn accept(&self) -> Result<AcceptedTransportSession, std::io::Error> {
+        match self {
+            Self::Tcp { listener, .. } => {
+                let (stream, _) = listener.accept().await?;
+                Ok(AcceptedTransportSession {
+                    transport: TransportKind::Tcp,
+                    io: TransportSessionIo::Tcp(stream),
+                })
+            }
+        }
     }
 }
 
@@ -281,6 +485,7 @@ enum SessionMessage {
 }
 
 struct SessionState {
+    transport: TransportKind,
     phase: ConnectionPhase,
     adapter: Option<Arc<dyn ProtocolAdapter>>,
     player_id: Option<PlayerId>,
@@ -294,16 +499,17 @@ struct RuntimeState {
 
 struct RuntimeServer {
     config: ServerConfig,
-    registry: VersionRegistry,
+    protocol_registry: ProtocolRegistry,
+    default_adapter: Arc<dyn ProtocolAdapter>,
     authenticator: Arc<dyn Authenticator>,
-    storage_adapter: Arc<dyn ProtocolAdapter>,
+    storage_adapter: Arc<dyn StorageAdapter>,
     state: Mutex<RuntimeState>,
     sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
     next_connection_id: Mutex<u64>,
 }
 
 impl RuntimeServer {
-    async fn spawn_session(self: &Arc<Self>, stream: TcpStream) {
+    async fn spawn_session(self: &Arc<Self>, transport_session: AcceptedTransportSession) {
         let connection_id = {
             let mut next_connection_id = self.next_connection_id.lock().await;
             let connection_id = ConnectionId(*next_connection_id);
@@ -322,7 +528,15 @@ impl RuntimeServer {
 
         let server = Arc::clone(self);
         tokio::spawn(async move {
-            if let Err(error) = server.run_session(connection_id, stream, rx).await {
+            if let Err(error) = server
+                .run_session(
+                    connection_id,
+                    transport_session.io,
+                    transport_session.transport,
+                    rx,
+                )
+                .await
+            {
                 eprintln!("session {connection_id:?} ended with error: {error}");
             }
         });
@@ -331,13 +545,13 @@ impl RuntimeServer {
     async fn run_session(
         self: Arc<Self>,
         connection_id: ConnectionId,
-        stream: TcpStream,
+        mut transport_io: TransportSessionIo,
+        transport: TransportKind,
         mut rx: mpsc::UnboundedReceiver<SessionMessage>,
     ) -> Result<(), RuntimeError> {
-        let (mut reader, mut writer) = stream.into_split();
-        let default_codec = MinecraftWireCodec;
         let mut read_buffer = BytesMut::with_capacity(8192);
         let mut session = SessionState {
+            transport,
             phase: ConnectionPhase::Handshaking,
             adapter: None,
             player_id: None,
@@ -346,7 +560,7 @@ impl RuntimeServer {
 
         loop {
             tokio::select! {
-            read = reader.read_buf(&mut read_buffer) => {
+            read = transport_io.read_into(&mut read_buffer) => {
                 let bytes_read = read?;
                 if bytes_read == 0 {
                     break;
@@ -355,14 +569,14 @@ impl RuntimeServer {
                     let codec: &dyn WireCodec = session
                         .adapter
                         .as_ref()
-                        .map_or(&default_codec, |current| current.wire_codec());
+                        .map_or(default_wire_codec(session.transport), |current| current.wire_codec());
                     let Some(frame) = codec.try_decode_frame(&mut read_buffer)? else {
                         break;
                     };
                     let should_close = self
                         .handle_incoming_frame(
                             connection_id,
-                            &mut writer,
+                            &mut transport_io,
                             &mut session,
                             frame,
                         )
@@ -380,7 +594,7 @@ impl RuntimeServer {
                     let should_close = self
                         .handle_outgoing_message(
                             connection_id,
-                            &mut writer,
+                            &mut transport_io,
                             &mut session,
                             message,
                         )
@@ -401,17 +615,18 @@ impl RuntimeServer {
     async fn handle_incoming_frame(
         &self,
         connection_id: ConnectionId,
-        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        transport_io: &mut TransportSessionIo,
         session: &mut SessionState,
         frame: Vec<u8>,
     ) -> Result<bool, RuntimeError> {
         match session.phase {
             ConnectionPhase::Handshaking => {
-                self.handle_handshake_frame(writer, session, &frame).await
+                self.handle_handshake_frame(transport_io, session, &frame)
+                    .await
             }
-            ConnectionPhase::Status => self.handle_status_frame(writer, session, &frame).await,
+            ConnectionPhase::Status => self.handle_status_frame(transport_io, session, &frame).await,
             ConnectionPhase::Login => {
-                self.handle_login_frame(connection_id, writer, session, &frame)
+                self.handle_login_frame(connection_id, transport_io, session, &frame)
                     .await
             }
             ConnectionPhase::Play => self.handle_play_frame(session, &frame).await,
@@ -420,22 +635,31 @@ impl RuntimeServer {
 
     async fn handle_handshake_frame(
         &self,
-        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        transport_io: &mut TransportSessionIo,
         session: &mut SessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let intent = handshake_adapter().decode_handshake(frame)?;
+        let Some(intent) = self
+            .protocol_registry
+            .route_handshake(session.transport, frame)?
+        else {
+            return Ok(true);
+        };
         let next_phase = match intent.next_state {
             HandshakeNextState::Status => ConnectionPhase::Status,
             HandshakeNextState::Login => ConnectionPhase::Login,
         };
-        if let Some(next_adapter) = self.registry.resolve(intent.protocol_version) {
+        if let Some(next_adapter) = self
+            .protocol_registry
+            .resolve_route(session.transport, intent.edition, intent.protocol_number)
+        {
             session.adapter = Some(next_adapter);
             session.phase = next_phase;
             return Ok(false);
         }
 
-        let fallback = self.registry.primary_adapter()?;
+        let fallback = Arc::clone(&self.default_adapter);
+        let descriptor = fallback.descriptor();
         match next_phase {
             ConnectionPhase::Status => {
                 session.adapter = Some(fallback);
@@ -447,12 +671,10 @@ impl RuntimeServer {
                     ConnectionPhase::Login,
                     &format!(
                         "Unsupported protocol {}. This server supports {} (protocol {}).",
-                        intent.protocol_version.0,
-                        fallback.version_name(),
-                        fallback.protocol_version().0
+                        intent.protocol_number, descriptor.version_name, descriptor.protocol_number
                     ),
                 )?;
-                write_payload(writer, fallback.wire_codec(), &disconnect).await?;
+                write_payload(transport_io, fallback.wire_codec(), &disconnect).await?;
                 Ok(true)
             }
             _ => Ok(true),
@@ -461,7 +683,7 @@ impl RuntimeServer {
 
     async fn handle_status_frame(
         &self,
-        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        transport_io: &mut TransportSessionIo,
         session: &SessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
@@ -473,18 +695,17 @@ impl RuntimeServer {
             StatusRequest::Query => {
                 let summary = self.player_summary().await;
                 let response = current.encode_status_response(&ServerListStatus {
-                    version_name: current.version_name().to_string(),
-                    protocol: current.protocol_version(),
+                    version: current.descriptor(),
                     players_online: summary.online_players,
                     max_players: usize::from(summary.max_players),
                     description: self.config.motd.clone(),
                 })?;
-                write_payload(writer, current.wire_codec(), &response).await?;
+                write_payload(transport_io, current.wire_codec(), &response).await?;
                 Ok(false)
             }
             StatusRequest::Ping { payload } => {
                 let response = current.encode_status_pong(payload)?;
-                write_payload(writer, current.wire_codec(), &response).await?;
+                write_payload(transport_io, current.wire_codec(), &response).await?;
                 Ok(true)
             }
         }
@@ -493,7 +714,7 @@ impl RuntimeServer {
     async fn handle_login_frame(
         &self,
         connection_id: ConnectionId,
-        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        transport_io: &mut TransportSessionIo,
         session: &SessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
@@ -506,7 +727,6 @@ impl RuntimeServer {
                 let authenticated = self.authenticator.authenticate(&username)?;
                 self.apply_command(CoreCommand::LoginStart {
                     connection_id,
-                    protocol_version: current.protocol_version(),
                     username,
                     player_id: authenticated,
                 })
@@ -516,7 +736,7 @@ impl RuntimeServer {
             LoginRequest::EncryptionResponse => {
                 let disconnect = current
                     .encode_disconnect(ConnectionPhase::Login, "online-mode is not implemented")?;
-                write_payload(writer, current.wire_codec(), &disconnect).await?;
+                write_payload(transport_io, current.wire_codec(), &disconnect).await?;
                 Ok(true)
             }
         }
@@ -543,7 +763,7 @@ impl RuntimeServer {
     async fn handle_outgoing_message(
         &self,
         _connection_id: ConnectionId,
-        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        transport_io: &mut TransportSessionIo,
         session: &mut SessionState,
         message: SessionMessage,
     ) -> Result<bool, RuntimeError> {
@@ -574,7 +794,7 @@ impl RuntimeServer {
             }
         };
         for packet in packets {
-            write_payload(writer, current.wire_codec(), &packet).await?;
+            write_payload(transport_io, current.wire_codec(), &packet).await?;
         }
 
         match event {
@@ -635,7 +855,6 @@ impl RuntimeServer {
             state.core.snapshot()
         };
         self.storage_adapter
-            .storage_adapter()
             .save_snapshot(&self.config.world_dir, &snapshot)?;
         Ok(())
     }
@@ -699,8 +918,43 @@ impl RuntimeServer {
     }
 }
 
-fn handshake_adapter() -> impl SessionAdapter {
-    Je1710Adapter::new()
+fn build_listener_plans(
+    config: &ServerConfig,
+    protocols: &ProtocolRegistry,
+) -> Result<Vec<ListenerPlan>, RuntimeError> {
+    let adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Tcp);
+    if adapter_ids.is_empty() {
+        return Err(RuntimeError::Config(
+            "no tcp protocol adapters registered".to_string(),
+        ));
+    }
+    Ok(vec![ListenerPlan {
+        transport: TransportKind::Tcp,
+        bind_addr: config.bind_addr(),
+        adapter_ids,
+    }])
+}
+
+async fn bind_transport_listener(
+    plan: ListenerPlan,
+) -> Result<BoundTransportListener, RuntimeError> {
+    match plan.transport {
+        TransportKind::Tcp => Ok(BoundTransportListener::Tcp {
+            listener: TcpListener::bind(plan.bind_addr).await?,
+            adapter_ids: plan.adapter_ids,
+        }),
+        TransportKind::Udp => Err(RuntimeError::Unsupported(
+            "udp transport is not implemented yet".to_string(),
+        )),
+    }
+}
+
+fn default_wire_codec(transport: TransportKind) -> &'static dyn WireCodec {
+    static TCP_CODEC: MinecraftWireCodec = MinecraftWireCodec;
+    match transport {
+        TransportKind::Tcp => &TCP_CODEC,
+        TransportKind::Udp => unreachable!("udp transport sessions are not implemented"),
+    }
 }
 
 /// # Errors
@@ -710,19 +964,32 @@ fn handshake_adapter() -> impl SessionAdapter {
 /// `online-mode=true`.
 pub async fn spawn_server(
     config: ServerConfig,
-    registry: VersionRegistry,
+    registries: RuntimeRegistries,
 ) -> Result<RunningServer, RuntimeError> {
     if config.online_mode {
         return Err(RuntimeError::Unsupported(
             "online-mode=true is not implemented".to_string(),
         ));
     }
-    let listener = TcpListener::bind(config.bind_addr()).await?;
-    let local_addr = listener.local_addr()?;
-    let storage_adapter = registry.primary_adapter()?;
-    let snapshot = storage_adapter
-        .storage_adapter()
-        .load_snapshot(&config.world_dir)?;
+    let default_adapter = registries
+        .protocols()
+        .resolve_adapter(&config.default_adapter)
+        .ok_or_else(|| {
+            RuntimeError::Config(format!(
+                "unknown default-adapter `{}`",
+                config.default_adapter
+            ))
+        })?;
+    let storage_adapter = registries
+        .storage()
+        .resolve(&config.storage_profile)
+        .ok_or_else(|| {
+            RuntimeError::Config(format!(
+                "unknown storage-profile `{}`",
+                config.storage_profile
+            ))
+        })?;
+    let snapshot = storage_adapter.load_snapshot(&config.world_dir)?;
     let core_config = CoreConfig {
         level_name: config.level_name.clone(),
         seed: 0,
@@ -736,10 +1003,24 @@ pub async fn spawn_server(
         Some(snapshot) => ServerCore::from_snapshot(core_config, snapshot),
         None => ServerCore::new(core_config),
     };
+    let listener_plans = build_listener_plans(&config, registries.protocols())?;
+    let mut bound_listeners = Vec::with_capacity(listener_plans.len());
+    for plan in listener_plans {
+        bound_listeners.push(bind_transport_listener(plan).await?);
+    }
+    let listener_bindings = bound_listeners
+        .iter()
+        .map(BoundTransportListener::listener_binding)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut listeners = bound_listeners.into_iter();
+    let listener = listeners
+        .next()
+        .ok_or_else(|| RuntimeError::Config("no transport listeners were bound".to_string()))?;
 
     let server = Arc::new(RuntimeServer {
         config,
-        registry,
+        protocol_registry: registries.protocols().clone(),
+        default_adapter,
         authenticator: Arc::new(OfflineAuthenticator),
         storage_adapter,
         state: Mutex::new(RuntimeState { core, dirty: false }),
@@ -759,8 +1040,8 @@ pub async fn spawn_server(
                     return Ok(());
                 }
                 accepted = listener.accept() => {
-                    let (stream, _) = accepted?;
-                    run_server.spawn_session(stream).await;
+                    let session = accepted?;
+                    run_server.spawn_session(session).await;
                 }
                 _ = tick_interval.tick() => {
                     run_server.tick().await?;
@@ -773,19 +1054,19 @@ pub async fn spawn_server(
     });
 
     Ok(RunningServer {
-        local_addr,
+        listener_bindings,
         shutdown_tx: Some(shutdown_tx),
         join_handle,
     })
 }
 
 async fn write_payload(
-    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+    transport_io: &mut TransportSessionIo,
     codec: &dyn WireCodec,
     payload: &[u8],
 ) -> Result<(), RuntimeError> {
     let frame = codec.encode_frame(payload)?;
-    writer.write_all(&frame).await?;
+    transport_io.write_all(&frame).await?;
     Ok(())
 }
 
@@ -812,24 +1093,70 @@ pub fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8
     Ok(writer.into_inner())
 }
 
-/// # Errors
-///
-/// Returns [`RuntimeError`] when the TCP connection cannot be established.
-pub async fn connect(addr: SocketAddr) -> Result<TcpStream, RuntimeError> {
-    Ok(TcpStream::connect(addr).await?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        LevelType, RuntimeError, ServerConfig, VersionRegistry, connect, encode_handshake,
-        spawn_server,
+        LevelType, ProtocolRegistry, RuntimeError, RuntimeRegistries, ServerConfig,
+        StorageRegistry, build_listener_plans, encode_handshake, spawn_server,
     };
     use bytes::BytesMut;
-    use mc_proto_common::{MinecraftWireCodec, PacketReader, PacketWriter, WireCodec};
+    use mc_core::WorldSnapshot;
+    use mc_proto_common::{
+        Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, MinecraftWireCodec,
+        PacketReader, PacketWriter, StorageAdapter, TransportKind, WireCodec,
+    };
+    use mc_proto_je_1_7_10::{JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID, Je1710Adapter};
     use std::fs;
+    use std::net::SocketAddr;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[derive(Default)]
+    struct RecordingStorageAdapter {
+        load_calls: AtomicUsize,
+        save_calls: AtomicUsize,
+    }
+
+    struct FakeUdpProbe;
+
+    impl HandshakeProbe for FakeUdpProbe {
+        fn transport_kind(&self) -> TransportKind {
+            TransportKind::Udp
+        }
+
+        fn try_route(&self, _frame: &[u8]) -> Result<Option<HandshakeIntent>, mc_proto_common::ProtocolError> {
+            Ok(Some(HandshakeIntent {
+                edition: Edition::Be,
+                protocol_number: 999,
+                server_host: "localhost".to_string(),
+                server_port: 19132,
+                next_state: HandshakeNextState::Status,
+            }))
+        }
+    }
+
+    impl StorageAdapter for RecordingStorageAdapter {
+        fn load_snapshot(
+            &self,
+            _world_dir: &Path,
+        ) -> Result<Option<WorldSnapshot>, mc_proto_common::StorageError> {
+            self.load_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+
+        fn save_snapshot(
+            &self,
+            _world_dir: &Path,
+            _snapshot: &WorldSnapshot,
+        ) -> Result<(), mc_proto_common::StorageError> {
+            self.save_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
 
     async fn write_packet(
         stream: &mut tokio::net::TcpStream,
@@ -839,6 +1166,18 @@ mod tests {
         let frame = codec.encode_frame(payload)?;
         stream.write_all(&frame).await?;
         Ok(())
+    }
+
+    async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStream, RuntimeError> {
+        Ok(tokio::net::TcpStream::connect(addr).await?)
+    }
+
+    fn listener_addr(server: &super::RunningServer) -> SocketAddr {
+        server
+            .listener_bindings()
+            .first()
+            .expect("tcp listener binding should exist")
+            .local_addr
     }
 
     async fn read_packet(
@@ -881,19 +1220,91 @@ mod tests {
     }
 
     #[test]
-    fn version_registry_resolves_registered_adapter() {
-        let registry = VersionRegistry::with_je_1_7_10();
-        let adapter = registry
-            .resolve(mc_core::ProtocolVersion(5))
-            .expect("registered adapter should resolve");
-        assert_eq!(adapter.version_name(), "1.7.10");
-        assert_eq!(
-            registry
-                .primary_adapter()
-                .expect("primary adapter should be available")
-                .protocol_version(),
-            mc_core::ProtocolVersion(5)
-        );
+    fn protocol_registry_resolves_registered_adapter() {
+        let mut registry = ProtocolRegistry::new();
+        let adapter = Arc::new(Je1710Adapter::new());
+        registry.register_adapter(adapter.clone());
+        registry.register_probe(adapter);
+
+        let by_id = registry
+            .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+            .expect("registered adapter should resolve by id");
+        let by_route = registry
+            .resolve_route(TransportKind::Tcp, Edition::Je, 5)
+            .expect("registered adapter should resolve by route");
+
+        assert_eq!(by_id.descriptor().adapter_id, JE_1_7_10_ADAPTER_ID);
+        assert_eq!(by_id.descriptor().transport, TransportKind::Tcp);
+        assert_eq!(by_route.descriptor().version_name, "1.7.10");
+    }
+
+    #[test]
+    fn storage_registry_resolves_registered_profile() {
+        let mut registry = StorageRegistry::new();
+        let storage = Arc::new(RecordingStorageAdapter::default());
+        registry.register_profile("recording", storage);
+
+        assert!(registry.resolve("recording").is_some());
+        assert!(registry.resolve("missing").is_none());
+    }
+
+    #[test]
+    fn handshake_probe_transport_kind_filters_routing() {
+        let mut registry = ProtocolRegistry::new();
+        registry.register_probe(Arc::new(FakeUdpProbe));
+
+        let tcp_route = registry
+            .route_handshake(TransportKind::Tcp, &[0x00])
+            .expect("tcp routing should not fail");
+        let udp_route = registry
+            .route_handshake(TransportKind::Udp, &[0x00])
+            .expect("udp routing should not fail");
+
+        assert!(tcp_route.is_none());
+        assert!(udp_route.is_some());
+    }
+
+    #[test]
+    fn listener_plan_includes_tcp_binding_and_registered_adapter() -> Result<(), RuntimeError> {
+        let registries = RuntimeRegistries::with_je_1_7_10();
+        let plans = build_listener_plans(&ServerConfig::default(), registries.protocols())?;
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].transport, TransportKind::Tcp);
+        assert!(plans[0]
+            .adapter_ids
+            .iter()
+            .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn running_server_exposes_listener_bindings() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_je_1_7_10(),
+        )
+        .await?;
+
+        let binding = server
+            .listener_bindings()
+            .first()
+            .expect("tcp listener binding should exist")
+            .clone();
+        assert_eq!(binding.transport, TransportKind::Tcp);
+        assert!(binding.local_addr.port() > 0);
+        assert!(binding
+            .adapter_ids
+            .iter()
+            .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID));
+
+        server.shutdown().await
     }
 
     #[test]
@@ -902,14 +1313,29 @@ mod tests {
         let path = temp_dir.path().join("server.properties");
         fs::write(
             &path,
-            "level-name=flatland\nlevel-type=FLAT\nonline-mode=false\n",
+            "level-name=flatland\nlevel-type=FLAT\nonline-mode=false\ndefault-adapter=je-1_7_10\nstorage-profile=je-anvil-1_7_10\n",
         )?;
 
         let config = ServerConfig::from_properties(&path)?;
 
         assert_eq!(config.level_name, "flatland");
         assert_eq!(config.level_type, LevelType::Flat);
+        assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
+        assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
         assert_eq!(config.world_dir, temp_dir.path().join("flatland"));
+        Ok(())
+    }
+
+    #[test]
+    fn server_properties_use_default_adapter_and_storage_profile() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(&path, "level-name=flatland\nlevel-type=FLAT\n")?;
+
+        let config = ServerConfig::from_properties(&path)?;
+
+        assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
+        assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
         Ok(())
     }
 
@@ -1099,13 +1525,13 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = server.local_addr();
+        let addr = listener_addr(&server);
         let codec = MinecraftWireCodec;
 
-        let mut status_stream = connect(addr).await?;
+        let mut status_stream = connect_tcp(addr).await?;
         write_packet(&mut status_stream, &codec, &encode_handshake(5, 1)?).await?;
         write_packet(&mut status_stream, &codec, &status_request()).await?;
         let mut buffer = BytesMut::new();
@@ -1115,7 +1541,7 @@ mod tests {
         let pong = read_packet(&mut status_stream, &codec, &mut buffer).await?;
         assert_eq!(packet_id(&pong), 0x01);
 
-        let mut login_stream = connect(addr).await?;
+        let mut login_stream = connect_tcp(addr).await?;
         write_packet(&mut login_stream, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut login_stream, &codec, &login_start("alpha")).await?;
         let mut login_buffer = BytesMut::new();
@@ -1142,13 +1568,13 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = server.local_addr();
+        let addr = listener_addr(&server);
         let codec = MinecraftWireCodec;
 
-        let mut stream = connect(addr).await?;
+        let mut stream = connect_tcp(addr).await?;
         write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut stream, &codec, &login_start("creative")).await?;
         let mut buffer = BytesMut::new();
@@ -1193,13 +1619,13 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = server.local_addr();
+        let addr = listener_addr(&server);
         let codec = MinecraftWireCodec;
 
-        let mut stream = connect(addr).await?;
+        let mut stream = connect_tcp(addr).await?;
         write_packet(&mut stream, &codec, &encode_handshake(47, 1)?).await?;
         write_packet(&mut stream, &codec, &status_request()).await?;
         let mut buffer = BytesMut::new();
@@ -1229,7 +1655,7 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await;
         let Err(error) = result else {
@@ -1242,6 +1668,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unknown_default_adapter_fails_fast() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                default_adapter: "missing".to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_je_1_7_10(),
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("unknown default adapter should fail fast");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("unknown default-adapter"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unknown_storage_profile_fails_fast() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                storage_profile: "missing".to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_je_1_7_10(),
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("unknown storage profile should fail fast");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("unknown storage-profile"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unmatched_probe_closes_without_response() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            RuntimeRegistries::with_je_1_7_10(),
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &[0x01]).await?;
+
+        let mut bytes = [0_u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(1), stream.read(&mut bytes))
+            .await
+            .map_err(|_| RuntimeError::Config("probe mismatch did not close".to_string()))??;
+        assert_eq!(read, 0);
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
     async fn unsupported_login_protocol_receives_disconnect() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let server = spawn_server(
@@ -1251,13 +1747,13 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = server.local_addr();
+        let addr = listener_addr(&server);
         let codec = MinecraftWireCodec;
 
-        let mut stream = connect(addr).await?;
+        let mut stream = connect_tcp(addr).await?;
         write_packet(&mut stream, &codec, &encode_handshake(47, 2)?).await?;
         let mut buffer = BytesMut::new();
         let disconnect = read_packet(&mut stream, &codec, &mut buffer).await?;
@@ -1283,19 +1779,19 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = server.local_addr();
+        let addr = listener_addr(&server);
         let codec = MinecraftWireCodec;
 
-        let mut first = connect(addr).await?;
+        let mut first = connect_tcp(addr).await?;
         write_packet(&mut first, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut first, &codec, &login_start("alpha")).await?;
         let mut first_buffer = BytesMut::new();
         let _ = read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x30, 12).await?;
 
-        let mut second = connect(addr).await?;
+        let mut second = connect_tcp(addr).await?;
         write_packet(&mut second, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut second, &codec, &login_start("beta")).await?;
         let mut second_buffer = BytesMut::new();
@@ -1335,12 +1831,12 @@ mod tests {
                 world_dir: world_dir.clone(),
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = server.local_addr();
+        let addr = listener_addr(&server);
 
-        let mut stream = connect(addr).await?;
+        let mut stream = connect_tcp(addr).await?;
         write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut stream, &codec, &login_start("alpha")).await?;
         let mut buffer = BytesMut::new();
@@ -1375,11 +1871,11 @@ mod tests {
                 world_dir,
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = restarted.local_addr();
-        let mut stream = connect(addr).await?;
+        let addr = listener_addr(&restarted);
+        let mut stream = connect_tcp(addr).await?;
         write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut stream, &codec, &login_start("alpha")).await?;
         let mut buffer = BytesMut::new();
@@ -1393,6 +1889,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn storage_profile_is_selected_independently_from_default_adapter()
+    -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let codec = MinecraftWireCodec;
+        let storage = Arc::new(RecordingStorageAdapter::default());
+        let mut registries = RuntimeRegistries::new();
+        let adapter = Arc::new(Je1710Adapter::new());
+        registries.register_adapter(adapter.clone());
+        registries.register_probe(adapter);
+        registries.register_storage_profile("recording", storage.clone());
+
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                storage_profile: "recording".to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            registries,
+        )
+        .await?;
+        assert_eq!(storage.load_calls.load(Ordering::SeqCst), 1);
+
+        let addr = listener_addr(&server);
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x02, 8).await?;
+
+        server.shutdown().await?;
+
+        assert!(storage.save_calls.load(Ordering::SeqCst) >= 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn unsupported_creative_inventory_action_is_corrected() -> Result<(), RuntimeError> {
         let temp_dir = tempdir()?;
         let server = spawn_server(
@@ -1403,13 +1937,13 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = server.local_addr();
+        let addr = listener_addr(&server);
         let codec = MinecraftWireCodec;
 
-        let mut stream = connect(addr).await?;
+        let mut stream = connect_tcp(addr).await?;
         write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut stream, &codec, &login_start("alpha")).await?;
         let mut buffer = BytesMut::new();
@@ -1442,13 +1976,13 @@ mod tests {
                 world_dir: temp_dir.path().join("world"),
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = server.local_addr();
+        let addr = listener_addr(&server);
         let codec = MinecraftWireCodec;
 
-        let mut stream = connect(addr).await?;
+        let mut stream = connect_tcp(addr).await?;
         write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut stream, &codec, &login_start("alpha")).await?;
         let mut buffer = BytesMut::new();
@@ -1487,18 +2021,18 @@ mod tests {
                 world_dir: world_dir.clone(),
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = server.local_addr();
+        let addr = listener_addr(&server);
 
-        let mut first = connect(addr).await?;
+        let mut first = connect_tcp(addr).await?;
         write_packet(&mut first, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut first, &codec, &login_start("alpha")).await?;
         let mut first_buffer = BytesMut::new();
         let _ = read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x08, 8).await?;
 
-        let mut second = connect(addr).await?;
+        let mut second = connect_tcp(addr).await?;
         write_packet(&mut second, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut second, &codec, &login_start("beta")).await?;
         let mut second_buffer = BytesMut::new();
@@ -1533,11 +2067,11 @@ mod tests {
                 world_dir,
                 ..ServerConfig::default()
             },
-            VersionRegistry::with_je_1_7_10(),
+            RuntimeRegistries::with_je_1_7_10(),
         )
         .await?;
-        let addr = restarted.local_addr();
-        let mut alpha = connect(addr).await?;
+        let addr = listener_addr(&restarted);
+        let mut alpha = connect_tcp(addr).await?;
         write_packet(&mut alpha, &codec, &encode_handshake(5, 2)?).await?;
         write_packet(&mut alpha, &codec, &login_start("beta")).await?;
         let mut alpha_buffer = BytesMut::new();

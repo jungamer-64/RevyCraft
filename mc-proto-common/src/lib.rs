@@ -1,7 +1,5 @@
 use bytes::BytesMut;
-use mc_core::{
-    CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot, ProtocolVersion, WorldSnapshot,
-};
+use mc_core::{CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot, WorldSnapshot};
 use std::path::Path;
 use thiserror::Error;
 
@@ -19,9 +17,31 @@ pub enum HandshakeNextState {
     Login,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TransportKind {
+    Tcp,
+    Udp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Edition {
+    Je,
+    Be,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ProtocolDescriptor {
+    pub adapter_id: &'static str,
+    pub transport: TransportKind,
+    pub edition: Edition,
+    pub version_name: &'static str,
+    pub protocol_number: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandshakeIntent {
-    pub protocol_version: ProtocolVersion,
+    pub edition: Edition,
+    pub protocol_number: i32,
     pub server_host: String,
     pub server_port: u16,
     pub next_state: HandshakeNextState,
@@ -41,8 +61,7 @@ pub enum LoginRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerListStatus {
-    pub version_name: String,
-    pub protocol: ProtocolVersion,
+    pub version: ProtocolDescriptor,
     pub players_online: usize,
     pub max_players: usize,
     pub description: String,
@@ -109,14 +128,19 @@ pub trait StorageAdapter: Send + Sync {
     -> Result<(), StorageError>;
 }
 
-pub trait SessionAdapter: Send + Sync {
-    fn wire_codec(&self) -> &dyn WireCodec;
+pub trait HandshakeProbe: Send + Sync {
+    fn transport_kind(&self) -> TransportKind;
 
     /// # Errors
     ///
-    /// Returns [`ProtocolError`] when the frame is malformed or unsupported for
-    /// the adapter's handshake phase.
-    fn decode_handshake(&self, frame: &[u8]) -> Result<HandshakeIntent, ProtocolError>;
+    /// Returns [`ProtocolError`] when the payload matches the probe's protocol
+    /// family but is malformed. Returns `Ok(None)` when the payload does not
+    /// belong to this probe.
+    fn try_route(&self, frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError>;
+}
+
+pub trait SessionAdapter: Send + Sync {
+    fn wire_codec(&self) -> &dyn WireCodec;
 
     /// # Errors
     ///
@@ -183,9 +207,7 @@ pub trait PlaySyncAdapter: Send + Sync {
 }
 
 pub trait ProtocolAdapter: SessionAdapter + PlaySyncAdapter + Send + Sync {
-    fn protocol_version(&self) -> ProtocolVersion;
-    fn version_name(&self) -> &'static str;
-    fn storage_adapter(&self) -> &dyn StorageAdapter;
+    fn descriptor(&self) -> ProtocolDescriptor;
 }
 
 #[derive(Default)]

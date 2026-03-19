@@ -7,13 +7,13 @@ use mc_core::catalog::{
 };
 use mc_core::{
     BlockFace, BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DimensionId, EntityId,
-    InventoryContainer, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, ProtocolVersion,
-    Vec3, WorldMeta,
+    InventoryContainer, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3, WorldMeta,
 };
 use mc_proto_common::{
-    ConnectionPhase, HandshakeIntent, HandshakeNextState, LoginRequest, MinecraftWireCodec,
-    PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter,
-    ProtocolError, ServerListStatus, SessionAdapter, StatusRequest, StorageAdapter, WireCodec,
+    ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, LoginRequest,
+    MinecraftWireCodec, PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter,
+    ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
+    StatusRequest, TransportKind, WireCodec,
 };
 use num_traits::ToPrimitive;
 use serde_json::json;
@@ -23,6 +23,8 @@ pub use self::storage::Je1710StorageAdapter;
 
 const PROTOCOL_VERSION_1_7_10: i32 = 5;
 const VERSION_NAME_1_7_10: &str = "1.7.10";
+pub const JE_1_7_10_ADAPTER_ID: &str = "je-1_7_10";
+pub const JE_1_7_10_STORAGE_PROFILE_ID: &str = "je-anvil-1_7_10";
 
 const PACKET_HANDSHAKE: i32 = 0x00;
 const PACKET_STATUS_REQUEST: i32 = 0x00;
@@ -69,7 +71,6 @@ const PACKET_SB_CLIENT_COMMAND: i32 = 0x16;
 #[derive(Default)]
 pub struct Je1710Adapter {
     codec: MinecraftWireCodec,
-    storage: Je1710StorageAdapter,
 }
 
 impl Je1710Adapter {
@@ -79,35 +80,46 @@ impl Je1710Adapter {
     }
 }
 
+fn decode_handshake_frame(frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
+    let mut reader = PacketReader::new(frame);
+    let packet_id = reader.read_varint()?;
+    if packet_id != PACKET_HANDSHAKE {
+        return Ok(None);
+    }
+    let protocol_number = reader.read_varint()?;
+    let server_host = reader.read_string(255)?;
+    let server_port = reader.read_u16()?;
+    let next_state = match reader.read_varint()? {
+        1 => HandshakeNextState::Status,
+        2 => HandshakeNextState::Login,
+        _ => {
+            return Err(ProtocolError::InvalidPacket(
+                "unsupported handshake next state",
+            ));
+        }
+    };
+    Ok(Some(HandshakeIntent {
+        edition: Edition::Je,
+        protocol_number,
+        server_host,
+        server_port,
+        next_state,
+    }))
+}
+
+impl HandshakeProbe for Je1710Adapter {
+    fn transport_kind(&self) -> TransportKind {
+        TransportKind::Tcp
+    }
+
+    fn try_route(&self, frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
+        decode_handshake_frame(frame)
+    }
+}
+
 impl SessionAdapter for Je1710Adapter {
     fn wire_codec(&self) -> &dyn WireCodec {
         &self.codec
-    }
-
-    fn decode_handshake(&self, frame: &[u8]) -> Result<HandshakeIntent, ProtocolError> {
-        let mut reader = PacketReader::new(frame);
-        let packet_id = reader.read_varint()?;
-        if packet_id != PACKET_HANDSHAKE {
-            return Err(ProtocolError::UnsupportedPacket(packet_id));
-        }
-        let protocol_version = ProtocolVersion(reader.read_varint()?);
-        let server_host = reader.read_string(255)?;
-        let server_port = reader.read_u16()?;
-        let next_state = match reader.read_varint()? {
-            1 => HandshakeNextState::Status,
-            2 => HandshakeNextState::Login,
-            _ => {
-                return Err(ProtocolError::InvalidPacket(
-                    "unsupported handshake next state",
-                ));
-            }
-        };
-        Ok(HandshakeIntent {
-            protocol_version,
-            server_host,
-            server_port,
-            next_state,
-        })
     }
 
     fn decode_status(&self, frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
@@ -135,8 +147,8 @@ impl SessionAdapter for Je1710Adapter {
     fn encode_status_response(&self, status: &ServerListStatus) -> Result<Vec<u8>, ProtocolError> {
         let payload = json!({
             "version": {
-                "name": status.version_name,
-                "protocol": status.protocol.0,
+                "name": status.version.version_name,
+                "protocol": status.version.protocol_number,
             },
             "players": {
                 "max": status.max_players,
@@ -301,16 +313,14 @@ impl PlaySyncAdapter for Je1710Adapter {
 }
 
 impl ProtocolAdapter for Je1710Adapter {
-    fn protocol_version(&self) -> ProtocolVersion {
-        ProtocolVersion(PROTOCOL_VERSION_1_7_10)
-    }
-
-    fn version_name(&self) -> &'static str {
-        VERSION_NAME_1_7_10
-    }
-
-    fn storage_adapter(&self) -> &dyn StorageAdapter {
-        &self.storage
+    fn descriptor(&self) -> ProtocolDescriptor {
+        ProtocolDescriptor {
+            adapter_id: JE_1_7_10_ADAPTER_ID,
+            transport: TransportKind::Tcp,
+            edition: Edition::Je,
+            version_name: VERSION_NAME_1_7_10,
+            protocol_number: PROTOCOL_VERSION_1_7_10,
+        }
     }
 }
 
@@ -843,15 +853,18 @@ fn skip_slot_nbt(reader: &mut PacketReader<'_>) -> Result<(), ProtocolError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Je1710Adapter, PROTOCOL_VERSION_1_7_10, get_nibble, legacy_block};
+    use super::{
+        JE_1_7_10_ADAPTER_ID, Je1710Adapter, PROTOCOL_VERSION_1_7_10, VERSION_NAME_1_7_10,
+        get_nibble, legacy_block,
+    };
     use mc_core::{
         BlockState, ChunkColumn, ChunkPos, ConnectionId, CoreCommand, CoreConfig, CoreEvent,
-        InventoryContainer, PlayerId, PlayerInventory, PlayerSnapshot, ProtocolVersion, ServerCore,
-        Vec3,
+        InventoryContainer, PlayerId, PlayerInventory, PlayerSnapshot, ServerCore, Vec3,
     };
     use mc_proto_common::{
-        LoginRequest, PacketWriter, PlayEncodingContext, PlaySyncAdapter, ServerListStatus,
-        SessionAdapter, StatusRequest,
+        Edition, HandshakeProbe, LoginRequest, PacketWriter, PlayEncodingContext, PlaySyncAdapter,
+        ProtocolAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter, StatusRequest,
+        TransportKind,
     };
     use uuid::Uuid;
 
@@ -881,12 +894,14 @@ mod tests {
             0x02,
         ];
         let intent = adapter
-            .decode_handshake(&handshake)
+            .try_route(&handshake)
             .expect("handshake should decode");
+        let intent = intent.expect("handshake should match JE");
         assert_eq!(
-            intent.protocol_version,
-            ProtocolVersion(PROTOCOL_VERSION_1_7_10)
+            intent.protocol_number,
+            PROTOCOL_VERSION_1_7_10
         );
+        assert_eq!(intent.edition, Edition::Je);
 
         let status = adapter
             .decode_status(&[0x00])
@@ -907,10 +922,17 @@ mod tests {
     #[test]
     fn encodes_status_and_login_events() {
         let adapter = Je1710Adapter::new();
+        assert_eq!(adapter.descriptor().adapter_id, JE_1_7_10_ADAPTER_ID);
+        assert_eq!(adapter.transport_kind(), TransportKind::Tcp);
         let status_packet = adapter
             .encode_status_response(&ServerListStatus {
-                version_name: "1.7.10".to_string(),
-                protocol: ProtocolVersion(5),
+                version: ProtocolDescriptor {
+                    adapter_id: JE_1_7_10_ADAPTER_ID,
+                    transport: TransportKind::Tcp,
+                    edition: Edition::Je,
+                    version_name: VERSION_NAME_1_7_10,
+                    protocol_number: PROTOCOL_VERSION_1_7_10,
+                },
                 players_online: 1,
                 max_players: 20,
                 description: "hello".to_string(),
@@ -1049,7 +1071,6 @@ mod tests {
         let events = core.apply_command(
             CoreCommand::LoginStart {
                 connection_id: ConnectionId(1),
-                protocol_version: ProtocolVersion(5),
                 username: "alpha".to_string(),
                 player_id,
             },
