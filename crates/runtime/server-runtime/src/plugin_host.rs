@@ -1,4 +1,7 @@
-use crate::{RuntimeError, RuntimeRegistries, RuntimeServer, ServerConfig};
+use crate::RuntimeError;
+use crate::config::ServerConfig;
+use crate::registry::RuntimeRegistries;
+use crate::runtime::RuntimeReloadContext;
 use libloading::Library;
 use mc_core::{
     CapabilitySet, GameplayEffect, GameplayJoinEffect, GameplayPolicyResolver, GameplayProfileId,
@@ -2581,20 +2584,11 @@ impl PluginHost {
         Ok(reloaded)
     }
 
-    pub(crate) async fn reload_modified_with_runtime(
+    pub(crate) async fn reload_modified_with_context(
         &self,
-        runtime: &RuntimeServer,
+        runtime: &RuntimeReloadContext,
     ) -> Result<Vec<String>, RuntimeError> {
         let mut reloaded = self.reload_modified()?;
-        let session_snapshots = {
-            runtime
-                .sessions
-                .lock()
-                .await
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
         {
             let mut gameplay = self
                 .gameplay
@@ -2639,11 +2633,13 @@ impl PluginHost {
                     .profile
                     .current_generation()
                     .map_err(RuntimeError::Config)?;
-                let relevant_sessions = session_snapshots
+                let relevant_sessions = runtime
+                    .gameplay_sessions
                     .iter()
-                    .filter_map(|handle| {
-                        gameplay_session_snapshot_from_handle(handle, &managed.profile_id)
+                    .filter(|session| {
+                        session.gameplay_profile.as_str() == managed.profile_id.as_str()
                     })
+                    .cloned()
                     .collect::<Vec<_>>();
                 let mut migration_failed = false;
                 for session in &relevant_sessions {
@@ -2702,7 +2698,6 @@ impl PluginHost {
             }
         }
 
-        let runtime_snapshot = { runtime.state.lock().await.core.snapshot() };
         let mut storage = self
             .storage
             .lock()
@@ -2741,8 +2736,8 @@ impl PluginHost {
                 .write()
                 .expect("storage reload gate should not be poisoned");
             match generation.invoke(StorageRequest::ImportRuntimeState {
-                world_dir: runtime.config.world_dir.display().to_string(),
-                snapshot: runtime_snapshot.clone(),
+                world_dir: runtime.world_dir.display().to_string(),
+                snapshot: runtime.snapshot.clone(),
             }) {
                 Ok(StorageResponse::Empty) => {
                     managed.profile.swap_generation(generation);
@@ -2861,28 +2856,15 @@ pub const fn plugin_reload_poll_interval_ms() -> u64 {
     PLUGIN_RELOAD_POLL_INTERVAL_MS
 }
 
-fn gameplay_session_snapshot_from_handle(
-    handle: &crate::SessionHandle,
-    profile_id: &GameplayProfileId,
-) -> Option<GameplaySessionSnapshot> {
-    if handle.player_id.is_none() || handle.gameplay_profile.as_ref()? != profile_id {
-        return None;
-    }
-    Some(GameplaySessionSnapshot {
-        phase: handle.phase,
-        player_id: handle.player_id,
-        entity_id: handle.entity_id,
-        gameplay_profile: handle.gameplay_profile.clone()?,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
         InProcessStoragePlugin, PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost,
     };
-    use crate::{RuntimeRegistries, ServerConfig, plugin_host_from_config};
+    use crate::config::ServerConfig;
+    use crate::host::plugin_host_from_config;
+    use crate::registry::RuntimeRegistries;
     use mc_plugin_api::{
         CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind, PluginManifestV1, Utf8Slice,
     };
