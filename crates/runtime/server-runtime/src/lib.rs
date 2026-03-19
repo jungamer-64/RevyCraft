@@ -1,0 +1,5486 @@
+mod plugin_host;
+
+use aes::Aes128;
+use aes::cipher::{BlockEncrypt, KeyInit};
+use bedrockrs_network::connection::Connection as BedrockConnection;
+use bedrockrs_network::listener::Listener as BedrockListener;
+use bedrockrs_proto::ProtoVersion;
+use bedrockrs_proto::V924;
+use bedrockrs_proto::compression::Compression as BedrockCompression;
+use bytes::BytesMut;
+use mc_core::{
+    ConnectionId, CoreCommand, CoreConfig, CoreEvent, EventTarget, PlayerId, PlayerSummary,
+    ServerCore, SessionCapabilitySet, TargetedEvent,
+};
+use mc_plugin_api::{AuthMode, BedrockAuthResult, GameplaySessionSnapshot, PluginAbiVersion};
+use mc_proto_common::{
+    ConnectionPhase, Edition, HandshakeNextState, HandshakeProbe, LoginRequest, MinecraftWireCodec,
+    PacketWriter, PlayEncodingContext, ProtocolAdapter, ProtocolError, ServerListStatus,
+    StatusRequest, StorageAdapter, TransportKind, WireCodec,
+};
+use num_bigint::BigInt;
+use plugin_host::{
+    AuthGeneration, HotSwappableAuthProfile, HotSwappableGameplayProfile,
+    HotSwappableStorageProfile,
+};
+pub use plugin_host::{
+    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost, plugin_host_from_config,
+    plugin_reload_poll_interval_ms,
+};
+use rand::RngCore;
+use rsa::pkcs8::EncodePublicKey;
+use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
+use sha1::{Digest, Sha1};
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::task::JoinHandle;
+
+const BEDROCK_BASELINE_ADAPTER_ID: &str = "be-26_3";
+const BEDROCK_OFFLINE_AUTH_PROFILE_ID: &str = "bedrock-offline-v1";
+const LOGIN_SERVER_ID: &str = "";
+const LOGIN_VERIFY_TOKEN_LEN: usize = 4;
+
+#[cfg(test)]
+pub(crate) fn packaged_plugin_test_build_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+#[cfg(test)]
+pub(crate) fn packaged_plugin_test_workspace_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for ancestor in manifest_dir.ancestors() {
+        let manifest = ancestor.join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&manifest) else {
+            continue;
+        };
+        if contents.contains("[workspace]") {
+            return ancestor.to_path_buf();
+        }
+    }
+    panic!(
+        "server-runtime crate should live under the workspace root: {}",
+        manifest_dir.display()
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn packaged_plugin_test_target_dir(_scope: &str) -> PathBuf {
+    // Reuse one cargo target directory across packaged-plugin tests so cargo can
+    // keep dependency and plugin builds incremental across test cases and reruns.
+    packaged_plugin_test_workspace_root()
+        .join("target")
+        .join("server-runtime-packaged-plugin-builds")
+        .join("cargo-target")
+}
+
+#[cfg(test)]
+static PACKAGED_PLUGIN_TEST_HARNESS_BUILDS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+static PACKAGED_PLUGIN_TEST_HARNESS: std::sync::OnceLock<Result<PathBuf, String>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+pub(crate) const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
+
+#[cfg(test)]
+pub(crate) fn packaged_plugin_test_harness_build_count() -> usize {
+    PACKAGED_PLUGIN_TEST_HARNESS_BUILDS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(test)]
+fn packaged_plugin_test_run_xtask_package_plugins(
+    dist_dir: &Path,
+    target_dir: &Path,
+    build_tag: &str,
+) -> Result<(), String> {
+    let _guard = packaged_plugin_test_build_lock()
+        .lock()
+        .expect("packaged plugin build lock should not be poisoned");
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo"));
+    let status = std::process::Command::new(cargo)
+        .current_dir(packaged_plugin_test_workspace_root())
+        .env("CARGO_TARGET_DIR", target_dir)
+        .env("REVY_PLUGIN_BUILD_TAG", build_tag)
+        .arg("run")
+        .arg("-p")
+        .arg("xtask")
+        .arg("--")
+        .arg("package-plugins")
+        .arg("--dist-dir")
+        .arg(dist_dir)
+        .status()
+        .map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("xtask package-plugins failed".to_string())
+    }
+}
+
+#[cfg(test)]
+fn packaged_plugin_test_harness_stamp() -> Result<String, String> {
+    let mut newest_ms = 0_u128;
+    let mut file_count = 0_u64;
+    for relative in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "tools/xtask",
+        "plugins",
+        "crates/core",
+        "crates/plugin",
+        "crates/protocol",
+    ] {
+        accumulate_packaged_plugin_test_stamp(
+            &packaged_plugin_test_workspace_root().join(relative),
+            &mut newest_ms,
+            &mut file_count,
+        )?;
+    }
+    Ok(format!("{newest_ms}-{file_count}"))
+}
+
+#[cfg(test)]
+fn accumulate_packaged_plugin_test_stamp(
+    path: &Path,
+    newest_ms: &mut u128,
+    file_count: &mut u64,
+) -> Result<(), String> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect packaged plugin test input {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path).map_err(|error| {
+            format!(
+                "failed to read packaged plugin test input directory {}: {error}",
+                path.display()
+            )
+        })? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            accumulate_packaged_plugin_test_stamp(&entry.path(), newest_ms, file_count)?;
+        }
+        return Ok(());
+    }
+
+    *file_count += 1;
+    let modified_ms = metadata
+        .modified()
+        .map_err(|error| {
+            format!(
+                "failed to read modification time for {}: {error}",
+                path.display()
+            )
+        })?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| {
+            format!(
+                "modification time for {} predates unix epoch: {error}",
+                path.display()
+            )
+        })?
+        .as_millis();
+    *newest_ms = (*newest_ms).max(modified_ms);
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn packaged_plugin_test_harness_dist_dir() -> Result<&'static PathBuf, String> {
+    match PACKAGED_PLUGIN_TEST_HARNESS
+        .get_or_init(|| {
+            PACKAGED_PLUGIN_TEST_HARNESS_BUILDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let root_dir = packaged_plugin_test_workspace_root()
+                .join("target")
+                .join("server-runtime-plugin-test-harness");
+            let dist_dir = root_dir.join("runtime").join("plugins");
+            let stamp_path = root_dir.join("stamp.txt");
+            let stamp = packaged_plugin_test_harness_stamp()?;
+            if dist_dir.is_dir()
+                && stamp_path.is_file()
+                && fs::read_to_string(&stamp_path)
+                    .map(|current| current == stamp)
+                    .unwrap_or(false)
+            {
+                return Ok(dist_dir);
+            }
+            if root_dir.exists() {
+                fs::remove_dir_all(&root_dir).map_err(|error| error.to_string())?;
+            }
+            let target_dir = packaged_plugin_test_target_dir("runtime-test-harness");
+            fs::create_dir_all(&dist_dir).map_err(|error| error.to_string())?;
+            packaged_plugin_test_run_xtask_package_plugins(
+                &dist_dir,
+                &target_dir,
+                PACKAGED_PLUGIN_TEST_HARNESS_TAG,
+            )?;
+            fs::write(&stamp_path, stamp).map_err(|error| error.to_string())?;
+            Ok(dist_dir)
+        })
+        .as_ref()
+    {
+        Ok(dist_dir) => Ok(dist_dir),
+        Err(error) => Err(error.clone()),
+    }
+}
+
+#[cfg(test)]
+fn copy_packaged_plugin_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let entry_type = entry.file_type()?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if entry_type.is_dir() {
+            copy_packaged_plugin_tree(&source_path, &destination_path)?;
+            continue;
+        }
+        if destination_path.exists() {
+            fs::remove_file(&destination_path)?;
+        }
+        if fs::hard_link(&source_path, &destination_path).is_err() {
+            fs::copy(&source_path, &destination_path)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn seed_packaged_plugins_from_test_harness(dist_dir: &Path) -> Result<(), RuntimeError> {
+    let harness_dist_dir = packaged_plugin_test_harness_dist_dir().map_err(RuntimeError::Config)?;
+    if dist_dir.exists() {
+        fs::remove_dir_all(dist_dir)?;
+    }
+    copy_packaged_plugin_tree(harness_dist_dir, dist_dir)?;
+    Ok(())
+}
+
+#[derive(Debug, Error)]
+pub enum RuntimeError {
+    #[error("i/o error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("plugin load error: {0}")]
+    PluginLoad(#[from] libloading::Error),
+    #[error("protocol error: {0}")]
+    Protocol(#[from] ProtocolError),
+    #[error("storage error: {0}")]
+    Storage(#[from] mc_proto_common::StorageError),
+    #[error("auth error: {0}")]
+    Auth(String),
+    #[error("unsupported configuration: {0}")]
+    Unsupported(String),
+    #[error("configuration error: {0}")]
+    Config(String),
+    #[error("task join error: {0}")]
+    Join(#[from] tokio::task::JoinError),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LevelType {
+    Flat,
+}
+
+impl LevelType {
+    fn parse(value: &str) -> Result<Self, RuntimeError> {
+        if value.eq_ignore_ascii_case("flat") {
+            Ok(Self::Flat)
+        } else {
+            Err(RuntimeError::Unsupported(format!(
+                "level-type={value} is not supported; only FLAT is implemented"
+            )))
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerConfig {
+    pub server_ip: Option<IpAddr>,
+    pub server_port: u16,
+    pub be_enabled: bool,
+    pub motd: String,
+    pub max_players: u8,
+    pub online_mode: bool,
+    pub level_name: String,
+    pub level_type: LevelType,
+    pub game_mode: u8,
+    pub difficulty: u8,
+    pub view_distance: u8,
+    pub default_adapter: String,
+    pub enabled_adapters: Option<Vec<String>>,
+    pub default_bedrock_adapter: String,
+    pub enabled_bedrock_adapters: Option<Vec<String>>,
+    pub storage_profile: String,
+    pub auth_profile: String,
+    pub bedrock_auth_profile: String,
+    pub default_gameplay_profile: String,
+    pub gameplay_profile_map: HashMap<String, String>,
+    pub plugins_dir: PathBuf,
+    pub plugin_allowlist: Option<Vec<String>>,
+    pub plugin_failure_policy: PluginFailurePolicy,
+    pub plugin_reload_watch: bool,
+    pub plugin_abi_min: PluginAbiVersion,
+    pub plugin_abi_max: PluginAbiVersion,
+    pub world_dir: PathBuf,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self {
+            server_ip: None,
+            server_port: 25565,
+            be_enabled: false,
+            motd: "Multi-version Rust server".to_string(),
+            max_players: 20,
+            online_mode: false,
+            level_name: "world".to_string(),
+            level_type: LevelType::Flat,
+            game_mode: 0,
+            difficulty: 1,
+            view_distance: 2,
+            default_adapter: "je-1_7_10".to_string(),
+            enabled_adapters: None,
+            default_bedrock_adapter: BEDROCK_BASELINE_ADAPTER_ID.to_string(),
+            enabled_bedrock_adapters: None,
+            storage_profile: "je-anvil-1_7_10".to_string(),
+            auth_profile: "offline-v1".to_string(),
+            bedrock_auth_profile: BEDROCK_OFFLINE_AUTH_PROFILE_ID.to_string(),
+            default_gameplay_profile: "canonical".to_string(),
+            gameplay_profile_map: HashMap::new(),
+            plugins_dir: cwd.join("runtime").join("plugins"),
+            plugin_allowlist: None,
+            plugin_failure_policy: PluginFailurePolicy::Quarantine,
+            plugin_reload_watch: false,
+            plugin_abi_min: PluginAbiVersion { major: 1, minor: 0 },
+            plugin_abi_max: PluginAbiVersion { major: 1, minor: 0 },
+            world_dir: cwd.join("runtime").join("world"),
+        }
+    }
+}
+
+impl ServerConfig {
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when `server.properties` cannot be read or
+    /// parsed, or when it contains unsupported configuration values.
+    pub fn from_properties(path: &Path) -> Result<Self, RuntimeError> {
+        let mut config = Self::default();
+        if path.exists() {
+            let contents = fs::read_to_string(path)?;
+            for raw_line in contents.lines() {
+                let line = raw_line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let Some((key, value)) = line.split_once('=') else {
+                    continue;
+                };
+                let value = value.trim();
+                match key.trim() {
+                    "server-ip" => {
+                        if value.is_empty() {
+                            config.server_ip = None;
+                        } else {
+                            config.server_ip = Some(value.parse().map_err(|_| {
+                                RuntimeError::Config("invalid server-ip".to_string())
+                            })?);
+                        }
+                    }
+                    "server-port" => {
+                        config.server_port = value
+                            .parse()
+                            .map_err(|_| RuntimeError::Config("invalid server-port".to_string()))?;
+                    }
+                    "be-enabled" => {
+                        config.be_enabled = value.eq_ignore_ascii_case("true");
+                    }
+                    "motd" => config.motd = value.to_string(),
+                    "max-players" => {
+                        config.max_players = value
+                            .parse()
+                            .map_err(|_| RuntimeError::Config("invalid max-players".to_string()))?;
+                    }
+                    "online-mode" => {
+                        config.online_mode = value.eq_ignore_ascii_case("true");
+                    }
+                    "level-name" => config.level_name = value.to_string(),
+                    "level-type" => {
+                        config.level_type = LevelType::parse(value)?;
+                    }
+                    "gamemode" => {
+                        config.game_mode = value
+                            .parse()
+                            .map_err(|_| RuntimeError::Config("invalid gamemode".to_string()))?;
+                    }
+                    "difficulty" => {
+                        config.difficulty = value
+                            .parse()
+                            .map_err(|_| RuntimeError::Config("invalid difficulty".to_string()))?;
+                    }
+                    "view-distance" => {
+                        config.view_distance = value.parse().map_err(|_| {
+                            RuntimeError::Config("invalid view-distance".to_string())
+                        })?;
+                    }
+                    "default-adapter" => {
+                        config.default_adapter = value.to_string();
+                    }
+                    "enabled-adapters" => {
+                        config.enabled_adapters = parse_enabled_adapters(value)?;
+                    }
+                    "default-bedrock-adapter" => {
+                        config.default_bedrock_adapter = value.to_string();
+                    }
+                    "enabled-bedrock-adapters" => {
+                        config.enabled_bedrock_adapters = parse_enabled_adapters(value)?;
+                    }
+                    "storage-profile" => {
+                        config.storage_profile = value.to_string();
+                    }
+                    "auth-profile" => {
+                        config.auth_profile = value.to_string();
+                    }
+                    "bedrock-auth-profile" => {
+                        config.bedrock_auth_profile = value.to_string();
+                    }
+                    "default-gameplay-profile" => {
+                        config.default_gameplay_profile = value.to_string();
+                    }
+                    "gameplay-profile-map" => {
+                        config.gameplay_profile_map = parse_gameplay_profile_map(value)?;
+                    }
+                    "plugins-dir" => {
+                        config.plugins_dir = PathBuf::from(value);
+                    }
+                    "plugin-allowlist" => {
+                        config.plugin_allowlist = parse_enabled_adapters(value)?;
+                    }
+                    "plugin-failure-policy" => {
+                        config.plugin_failure_policy = PluginFailurePolicy::parse(value)?;
+                    }
+                    "plugin-reload-watch" => {
+                        config.plugin_reload_watch = value.eq_ignore_ascii_case("true");
+                    }
+                    "plugin-abi-min" => {
+                        config.plugin_abi_min = PluginAbiRange::parse_version(value)?;
+                    }
+                    "plugin-abi-max" => {
+                        config.plugin_abi_max = PluginAbiRange::parse_version(value)?;
+                    }
+                    unknown => {
+                        eprintln!("warning: ignoring unknown server.properties key `{unknown}`");
+                    }
+                }
+            }
+        }
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        config.world_dir = parent.join(&config.level_name);
+        if config.plugins_dir.is_relative() {
+            config.plugins_dir = parent.join(&config.plugins_dir);
+        }
+        Ok(config)
+    }
+
+    #[must_use]
+    pub fn bind_addr(&self) -> SocketAddr {
+        SocketAddr::new(
+            self.server_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            self.server_port,
+        )
+    }
+
+    fn effective_enabled_adapters(&self) -> Vec<String> {
+        match &self.enabled_adapters {
+            Some(enabled_adapters) => enabled_adapters.clone(),
+            None => vec![self.default_adapter.clone()],
+        }
+    }
+
+    fn effective_enabled_bedrock_adapters(&self) -> Vec<String> {
+        match &self.enabled_bedrock_adapters {
+            Some(enabled_adapters) => enabled_adapters.clone(),
+            None => vec![self.default_bedrock_adapter.clone()],
+        }
+    }
+}
+
+fn parse_enabled_adapters(value: &str) -> Result<Option<Vec<String>>, RuntimeError> {
+    let adapters = value
+        .split(',')
+        .map(str::trim)
+        .filter(|adapter_id| !adapter_id.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if adapters.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(adapters))
+}
+
+fn parse_gameplay_profile_map(value: &str) -> Result<HashMap<String, String>, RuntimeError> {
+    let mut map = HashMap::new();
+    for entry in value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some((adapter_id, profile_id)) = entry.split_once(':') else {
+            return Err(RuntimeError::Config(format!(
+                "invalid gameplay-profile-map entry `{entry}`"
+            )));
+        };
+        let adapter_id = adapter_id.trim();
+        let profile_id = profile_id.trim();
+        if adapter_id.is_empty() || profile_id.is_empty() {
+            return Err(RuntimeError::Config(format!(
+                "invalid gameplay-profile-map entry `{entry}`"
+            )));
+        }
+        if map
+            .insert(adapter_id.to_string(), profile_id.to_string())
+            .is_some()
+        {
+            return Err(RuntimeError::Config(format!(
+                "duplicate gameplay profile mapping for adapter `{adapter_id}`"
+            )));
+        }
+    }
+    Ok(map)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListenerBinding {
+    pub transport: TransportKind,
+    pub local_addr: SocketAddr,
+    pub adapter_ids: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+pub struct ProtocolRegistry {
+    adapters_by_id: HashMap<String, Arc<dyn ProtocolAdapter>>,
+    adapters_by_route: HashMap<(TransportKind, Edition, i32), Arc<dyn ProtocolAdapter>>,
+    probes: Vec<Arc<dyn HandshakeProbe>>,
+}
+
+impl ProtocolRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register_adapter(&mut self, adapter: Arc<dyn ProtocolAdapter>) -> &mut Self {
+        let descriptor = adapter.descriptor();
+        self.adapters_by_route.insert(
+            (
+                descriptor.transport,
+                descriptor.edition,
+                descriptor.protocol_number,
+            ),
+            Arc::clone(&adapter),
+        );
+        self.adapters_by_id
+            .insert(descriptor.adapter_id.to_string(), adapter);
+        self
+    }
+
+    pub fn register_probe(&mut self, probe: Arc<dyn HandshakeProbe>) -> &mut Self {
+        self.probes.push(probe);
+        self
+    }
+
+    #[must_use]
+    pub fn resolve_adapter(&self, adapter_id: &str) -> Option<Arc<dyn ProtocolAdapter>> {
+        self.adapters_by_id.get(adapter_id).cloned()
+    }
+
+    #[must_use]
+    pub fn resolve_route(
+        &self,
+        transport_kind: TransportKind,
+        edition: Edition,
+        protocol_number: i32,
+    ) -> Option<Arc<dyn ProtocolAdapter>> {
+        self.adapters_by_route
+            .get(&(transport_kind, edition, protocol_number))
+            .cloned()
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when `enabled_adapters` contains duplicates or
+    /// unknown adapter identifiers.
+    pub fn filter_enabled(&self, enabled_adapters: &[String]) -> Result<Self, RuntimeError> {
+        let mut filtered = Self::new();
+        let mut seen = HashSet::new();
+        for adapter_id in enabled_adapters {
+            if !seen.insert(adapter_id.clone()) {
+                return Err(RuntimeError::Config(format!(
+                    "enabled-adapters contains duplicate adapter `{adapter_id}`"
+                )));
+            }
+            let Some(adapter) = self.resolve_adapter(adapter_id) else {
+                return Err(RuntimeError::Config(format!(
+                    "enabled-adapters contains unknown adapter `{adapter_id}`"
+                )));
+            };
+            filtered.register_adapter(adapter);
+        }
+        filtered.probes = self.probes.clone();
+        Ok(filtered)
+    }
+
+    #[must_use]
+    pub fn adapter_ids_for_transport(&self, transport_kind: TransportKind) -> Vec<String> {
+        let mut adapter_ids = self
+            .adapters_by_id
+            .iter()
+            .filter(|(_, adapter)| adapter.descriptor().transport == transport_kind)
+            .map(|(adapter_id, _)| adapter_id.clone())
+            .collect::<Vec<_>>();
+        adapter_ids.sort();
+        adapter_ids
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when a registered probe matches the frame's
+    /// protocol family but the payload is malformed for that family.
+    pub fn route_handshake(
+        &self,
+        transport_kind: TransportKind,
+        frame: &[u8],
+    ) -> Result<Option<mc_proto_common::HandshakeIntent>, ProtocolError> {
+        for probe in &self.probes {
+            if probe.transport_kind() != transport_kind {
+                continue;
+            }
+            if let Some(intent) = probe.try_route(frame)? {
+                return Ok(Some(intent));
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct StorageRegistry {
+    profiles: HashMap<String, Arc<dyn StorageAdapter>>,
+}
+
+impl StorageRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register_profile(
+        &mut self,
+        storage_profile: impl Into<String>,
+        adapter: Arc<dyn StorageAdapter>,
+    ) -> &mut Self {
+        self.profiles.insert(storage_profile.into(), adapter);
+        self
+    }
+
+    #[must_use]
+    pub fn resolve(&self, storage_profile: &str) -> Option<Arc<dyn StorageAdapter>> {
+        self.profiles.get(storage_profile).cloned()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct RuntimeRegistries {
+    protocols: ProtocolRegistry,
+    storage: StorageRegistry,
+    plugin_host: Option<Arc<PluginHost>>,
+}
+
+impl RuntimeRegistries {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register_adapter(&mut self, adapter: Arc<dyn ProtocolAdapter>) -> &mut Self {
+        self.protocols.register_adapter(adapter);
+        self
+    }
+
+    pub fn register_probe(&mut self, probe: Arc<dyn HandshakeProbe>) -> &mut Self {
+        self.protocols.register_probe(probe);
+        self
+    }
+
+    pub fn register_storage_profile(
+        &mut self,
+        storage_profile: impl Into<String>,
+        adapter: Arc<dyn StorageAdapter>,
+    ) -> &mut Self {
+        self.storage.register_profile(storage_profile, adapter);
+        self
+    }
+
+    pub fn attach_plugin_host(&mut self, plugin_host: Arc<PluginHost>) -> &mut Self {
+        self.plugin_host = Some(plugin_host);
+        self
+    }
+
+    #[must_use]
+    pub fn plugin_host(&self) -> Option<Arc<PluginHost>> {
+        self.plugin_host.clone()
+    }
+
+    #[must_use]
+    pub const fn protocols(&self) -> &ProtocolRegistry {
+        &self.protocols
+    }
+
+    #[must_use]
+    pub const fn storage(&self) -> &StorageRegistry {
+        &self.storage
+    }
+}
+
+pub struct RunningServer {
+    listener_bindings: Vec<ListenerBinding>,
+    plugin_host: Option<Arc<PluginHost>>,
+    runtime: Arc<RuntimeServer>,
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    join_handle: JoinHandle<Result<(), RuntimeError>>,
+}
+
+impl RunningServer {
+    #[must_use]
+    pub fn listener_bindings(&self) -> &[ListenerBinding] {
+        &self.listener_bindings
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when a loaded protocol plugin cannot be
+    /// reloaded successfully.
+    pub async fn reload_plugins(&self) -> Result<Vec<String>, RuntimeError> {
+        match &self.plugin_host {
+            Some(plugin_host) => {
+                plugin_host
+                    .reload_modified_with_runtime(&self.runtime)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the server task fails while shutting down.
+    pub async fn shutdown(mut self) -> Result<(), RuntimeError> {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        self.join_handle.await?
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ListenerPlan {
+    transport: TransportKind,
+    bind_addr: SocketAddr,
+    adapter_ids: Vec<String>,
+}
+
+struct AcceptedTransportSession {
+    transport: TransportKind,
+    io: TransportSessionIo,
+}
+
+enum TransportSessionIo {
+    Tcp {
+        stream: TcpStream,
+        encryption: Option<TransportEncryptionState>,
+    },
+    Bedrock {
+        connection: BedrockConnection,
+        compression: Option<BedrockCompression>,
+    },
+}
+
+impl TransportSessionIo {
+    async fn read_into(&mut self, buffer: &mut BytesMut) -> Result<usize, std::io::Error> {
+        match self {
+            Self::Tcp { stream, encryption } => {
+                let mut chunk = [0_u8; 8192];
+                let bytes_read = stream.read(&mut chunk).await?;
+                if bytes_read == 0 {
+                    return Ok(0);
+                }
+                let bytes = &mut chunk[..bytes_read];
+                if let Some(encryption) = encryption.as_mut() {
+                    encryption.decrypt.apply_decrypt(bytes);
+                }
+                buffer.extend_from_slice(bytes);
+                Ok(bytes_read)
+            }
+            Self::Bedrock {
+                connection,
+                compression,
+            } => {
+                let mut packet_stream =
+                    connection.recv_raw().await.map_err(std::io::Error::other)?;
+                if let Some(compression) = compression.as_ref() {
+                    packet_stream = compression
+                        .decompress(packet_stream)
+                        .map_err(std::io::Error::other)?;
+                }
+                let bytes_read = packet_stream.len();
+                buffer.extend_from_slice(&packet_stream);
+                Ok(bytes_read)
+            }
+        }
+    }
+
+    async fn write_all(&mut self, bytes: &[u8]) -> Result<(), std::io::Error> {
+        match self {
+            Self::Tcp { stream, encryption } => {
+                let mut encrypted = bytes.to_vec();
+                if let Some(encryption) = encryption.as_mut() {
+                    encryption.encrypt.apply_encrypt(&mut encrypted);
+                }
+                stream.write_all(&encrypted).await
+            }
+            Self::Bedrock {
+                connection,
+                compression,
+            } => {
+                let packet_stream = if let Some(compression) = compression.as_ref() {
+                    compression
+                        .compress(bytes.to_vec())
+                        .map_err(std::io::Error::other)?
+                } else {
+                    bytes.to_vec()
+                };
+                connection
+                    .send_raw(&packet_stream)
+                    .await
+                    .map_err(std::io::Error::other)
+            }
+        }
+    }
+
+    fn enable_encryption(&mut self, shared_secret: [u8; 16]) {
+        match self {
+            Self::Tcp { encryption, .. } => {
+                *encryption = Some(TransportEncryptionState::new(shared_secret));
+            }
+            Self::Bedrock { .. } => {}
+        }
+    }
+
+    fn enable_bedrock_compression(&mut self, compression_threshold: u16) {
+        if let Self::Bedrock { compression, .. } = self {
+            *compression = Some(BedrockCompression::Zlib {
+                threshold: compression_threshold,
+                compression_level: 6,
+            });
+        }
+    }
+}
+
+enum BoundTransportListener {
+    Tcp {
+        listener: TcpListener,
+        adapter_ids: Vec<String>,
+    },
+    Bedrock {
+        listener: BedrockListener,
+        adapter_ids: Vec<String>,
+        bind_addr: SocketAddr,
+    },
+}
+
+impl BoundTransportListener {
+    fn listener_binding(&self) -> Result<ListenerBinding, RuntimeError> {
+        match self {
+            Self::Tcp {
+                listener,
+                adapter_ids,
+            } => Ok(ListenerBinding {
+                transport: TransportKind::Tcp,
+                local_addr: listener.local_addr()?,
+                adapter_ids: adapter_ids.clone(),
+            }),
+            Self::Bedrock {
+                adapter_ids,
+                bind_addr,
+                ..
+            } => Ok(ListenerBinding {
+                transport: TransportKind::Udp,
+                local_addr: *bind_addr,
+                adapter_ids: adapter_ids.clone(),
+            }),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SessionHandle {
+    tx: mpsc::UnboundedSender<SessionMessage>,
+    phase: ConnectionPhase,
+    player_id: Option<PlayerId>,
+    entity_id: Option<mc_core::EntityId>,
+    gameplay_profile: Option<mc_core::GameplayProfileId>,
+    session_capabilities: Option<SessionCapabilitySet>,
+}
+
+#[derive(Clone, Debug)]
+enum SessionMessage {
+    Event(CoreEvent),
+}
+
+struct SessionState {
+    transport: TransportKind,
+    phase: ConnectionPhase,
+    adapter: Option<Arc<dyn ProtocolAdapter>>,
+    gameplay: Option<Arc<HotSwappableGameplayProfile>>,
+    login_challenge: Option<LoginChallengeState>,
+    player_id: Option<PlayerId>,
+    entity_id: Option<mc_core::EntityId>,
+    session_capabilities: Option<SessionCapabilitySet>,
+}
+
+struct RuntimeState {
+    core: ServerCore,
+    dirty: bool,
+}
+
+struct RuntimeServer {
+    config: ServerConfig,
+    protocol_registry: ProtocolRegistry,
+    plugin_host: Option<Arc<PluginHost>>,
+    default_adapter: Arc<dyn ProtocolAdapter>,
+    default_bedrock_adapter: Option<Arc<dyn ProtocolAdapter>>,
+    auth_profile: Arc<HotSwappableAuthProfile>,
+    bedrock_auth_profile: Option<Arc<HotSwappableAuthProfile>>,
+    online_auth_keys: Option<Arc<OnlineAuthKeys>>,
+    storage_profile: Arc<HotSwappableStorageProfile>,
+    state: Mutex<RuntimeState>,
+    sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
+    next_connection_id: Mutex<u64>,
+}
+
+struct OnlineAuthKeys {
+    private_key: RsaPrivateKey,
+    public_key_der: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct LoginChallengeState {
+    username: String,
+    verify_token: [u8; LOGIN_VERIFY_TOKEN_LEN],
+    auth_generation: Arc<AuthGeneration>,
+    #[allow(dead_code)]
+    challenge_started_at: u64,
+}
+
+struct TransportEncryptionState {
+    encrypt: MinecraftStreamCipher,
+    decrypt: MinecraftStreamCipher,
+}
+
+impl TransportEncryptionState {
+    fn new(shared_secret: [u8; 16]) -> Self {
+        Self {
+            encrypt: MinecraftStreamCipher::new(shared_secret),
+            decrypt: MinecraftStreamCipher::new(shared_secret),
+        }
+    }
+}
+
+struct MinecraftStreamCipher {
+    cipher: Aes128,
+    shift_register: [u8; 16],
+}
+
+impl MinecraftStreamCipher {
+    fn new(shared_secret: [u8; 16]) -> Self {
+        Self {
+            cipher: Aes128::new_from_slice(&shared_secret)
+                .expect("AES-128 key length should be exactly 16 bytes"),
+            shift_register: shared_secret,
+        }
+    }
+
+    fn apply_encrypt(&mut self, bytes: &mut [u8]) {
+        for byte in bytes {
+            let mut block = aes::Block::default();
+            block.copy_from_slice(&self.shift_register);
+            self.cipher.encrypt_block(&mut block);
+            let ciphertext = *byte ^ block[0];
+            self.shift_register.copy_within(1.., 0);
+            self.shift_register[15] = ciphertext;
+            *byte = ciphertext;
+        }
+    }
+
+    fn apply_decrypt(&mut self, bytes: &mut [u8]) {
+        for byte in bytes {
+            let ciphertext = *byte;
+            let mut block = aes::Block::default();
+            block.copy_from_slice(&self.shift_register);
+            self.cipher.encrypt_block(&mut block);
+            let plaintext = ciphertext ^ block[0];
+            self.shift_register.copy_within(1.., 0);
+            self.shift_register[15] = ciphertext;
+            *byte = plaintext;
+        }
+    }
+}
+
+impl OnlineAuthKeys {
+    fn generate() -> Result<Self, RuntimeError> {
+        let mut rng = rand::rngs::OsRng;
+        let private_key = RsaPrivateKey::new(&mut rng, 1024).map_err(|error| {
+            RuntimeError::Auth(format!("failed to generate RSA keypair: {error}"))
+        })?;
+        let public_key_der = RsaPublicKey::from(&private_key)
+            .to_public_key_der()
+            .map_err(|error| {
+                RuntimeError::Auth(format!("failed to encode RSA public key: {error}"))
+            })?
+            .as_bytes()
+            .to_vec();
+        Ok(Self {
+            private_key,
+            public_key_der,
+        })
+    }
+}
+
+fn random_verify_token() -> [u8; LOGIN_VERIFY_TOKEN_LEN] {
+    let mut verify_token = [0_u8; LOGIN_VERIFY_TOKEN_LEN];
+    rand::rngs::OsRng.fill_bytes(&mut verify_token);
+    verify_token
+}
+
+fn decrypt_login_blob(private_key: &RsaPrivateKey, bytes: &[u8]) -> Result<Vec<u8>, RuntimeError> {
+    private_key
+        .decrypt(Pkcs1v15Encrypt, bytes)
+        .map_err(|error| RuntimeError::Auth(format!("failed to decrypt login blob: {error}")))
+}
+
+fn minecraft_server_hash(
+    server_id: &str,
+    shared_secret: &[u8; 16],
+    public_key_der: &[u8],
+) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(server_id.as_bytes());
+    hasher.update(shared_secret);
+    hasher.update(public_key_der);
+    let digest = hasher.finalize();
+    BigInt::from_signed_bytes_be(&digest).to_str_radix(16)
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UdpDatagramAction {
+    Ignore,
+    UnsupportedBedrock,
+}
+
+#[cfg(test)]
+fn classify_udp_datagram(
+    protocol_registry: &ProtocolRegistry,
+    datagram: &[u8],
+) -> Result<UdpDatagramAction, ProtocolError> {
+    match protocol_registry.route_handshake(TransportKind::Udp, datagram)? {
+        Some(intent) if intent.edition == Edition::Be => Ok(UdpDatagramAction::UnsupportedBedrock),
+        Some(_) | None => Ok(UdpDatagramAction::Ignore),
+    }
+}
+
+impl RuntimeServer {
+    fn refresh_session_capabilities(session: &mut SessionState) {
+        let Some(adapter) = session.adapter.as_ref() else {
+            session.session_capabilities = None;
+            return;
+        };
+        let Some(gameplay) = session.gameplay.as_ref() else {
+            session.session_capabilities = None;
+            return;
+        };
+        session.session_capabilities = Some(SessionCapabilitySet {
+            protocol: adapter.capability_set(),
+            gameplay: gameplay.capability_set(),
+            gameplay_profile: gameplay.profile_id(),
+            protocol_generation: adapter.plugin_generation_id(),
+            gameplay_generation: gameplay.plugin_generation_id(),
+        });
+    }
+
+    fn gameplay_profile_for_adapter(&self, adapter_id: &str) -> &str {
+        self.config
+            .gameplay_profile_map
+            .get(adapter_id)
+            .map(String::as_str)
+            .unwrap_or(&self.config.default_gameplay_profile)
+    }
+
+    fn resolve_gameplay_for_adapter(
+        &self,
+        adapter_id: &str,
+    ) -> Result<Arc<HotSwappableGameplayProfile>, RuntimeError> {
+        let profile_id = self.gameplay_profile_for_adapter(adapter_id);
+        self.plugin_host
+            .as_ref()
+            .and_then(|plugin_host| plugin_host.resolve_gameplay_profile(profile_id))
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "gameplay profile `{profile_id}` for adapter `{adapter_id}` is not active"
+                ))
+            })
+    }
+
+    fn resolve_bedrock_auth_profile(&self) -> Result<Arc<HotSwappableAuthProfile>, RuntimeError> {
+        self.bedrock_auth_profile
+            .clone()
+            .ok_or_else(|| RuntimeError::Config("bedrock auth profile is not active".to_string()))
+    }
+
+    async fn sync_session_handle(&self, connection_id: ConnectionId, session: &SessionState) {
+        if let Some(handle) = self.sessions.lock().await.get_mut(&connection_id) {
+            handle.phase = session.phase;
+            handle.player_id = session.player_id;
+            handle.entity_id = session.entity_id;
+            handle.gameplay_profile = session
+                .session_capabilities
+                .as_ref()
+                .map(|capabilities| capabilities.gameplay_profile.clone());
+            handle.session_capabilities = session.session_capabilities.clone();
+        }
+    }
+
+    async fn spawn_session(self: &Arc<Self>, transport_session: AcceptedTransportSession) {
+        let session = SessionState {
+            transport: transport_session.transport,
+            phase: ConnectionPhase::Handshaking,
+            adapter: None,
+            gameplay: None,
+            login_challenge: None,
+            player_id: None,
+            entity_id: None,
+            session_capabilities: None,
+        };
+        self.spawn_session_with_state(transport_session, session)
+            .await;
+    }
+
+    async fn spawn_bedrock_session(self: &Arc<Self>, connection: BedrockConnection) {
+        let Some(adapter) = self.default_bedrock_adapter.clone() else {
+            eprintln!("dropping bedrock session because no default bedrock adapter is active");
+            return;
+        };
+        let gameplay = match self.resolve_gameplay_for_adapter(&adapter.descriptor().adapter_id) {
+            Ok(gameplay) => gameplay,
+            Err(error) => {
+                eprintln!(
+                    "dropping bedrock session because gameplay profile could not resolve: {error}"
+                );
+                return;
+            }
+        };
+        let mut session = SessionState {
+            transport: TransportKind::Udp,
+            phase: ConnectionPhase::Login,
+            adapter: Some(adapter),
+            gameplay: Some(gameplay),
+            login_challenge: None,
+            player_id: None,
+            entity_id: None,
+            session_capabilities: None,
+        };
+        Self::refresh_session_capabilities(&mut session);
+        self.spawn_session_with_state(
+            AcceptedTransportSession {
+                transport: TransportKind::Udp,
+                io: TransportSessionIo::Bedrock {
+                    connection,
+                    compression: None,
+                },
+            },
+            session,
+        )
+        .await;
+    }
+
+    async fn spawn_session_with_state(
+        self: &Arc<Self>,
+        transport_session: AcceptedTransportSession,
+        session: SessionState,
+    ) {
+        let connection_id = {
+            let mut next_connection_id = self.next_connection_id.lock().await;
+            let connection_id = ConnectionId(*next_connection_id);
+            *next_connection_id = next_connection_id.saturating_add(1);
+            connection_id
+        };
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.sessions.lock().await.insert(
+            connection_id,
+            SessionHandle {
+                tx,
+                phase: session.phase,
+                player_id: session.player_id,
+                entity_id: session.entity_id,
+                gameplay_profile: session
+                    .session_capabilities
+                    .as_ref()
+                    .map(|capabilities| capabilities.gameplay_profile.clone()),
+                session_capabilities: session.session_capabilities.clone(),
+            },
+        );
+
+        let server = Arc::clone(self);
+        tokio::spawn(async move {
+            if let Err(error) = server
+                .run_session(connection_id, transport_session.io, session, rx)
+                .await
+            {
+                eprintln!("session {connection_id:?} ended with error: {error}");
+            }
+        });
+    }
+
+    async fn run_session(
+        self: Arc<Self>,
+        connection_id: ConnectionId,
+        mut transport_io: TransportSessionIo,
+        mut session: SessionState,
+        mut rx: mpsc::UnboundedReceiver<SessionMessage>,
+    ) -> Result<(), RuntimeError> {
+        let mut read_buffer = BytesMut::with_capacity(8192);
+
+        loop {
+            tokio::select! {
+            read = transport_io.read_into(&mut read_buffer) => {
+                let bytes_read = read?;
+                if bytes_read == 0 {
+                    break;
+                }
+                loop {
+                    let codec: &dyn WireCodec = session
+                        .adapter
+                        .as_ref()
+                        .map_or(default_wire_codec(session.transport), |current| current.wire_codec());
+                    let Some(frame) = codec.try_decode_frame(&mut read_buffer)? else {
+                        break;
+                    };
+                    let should_close = self
+                        .handle_incoming_frame(
+                            connection_id,
+                            &mut transport_io,
+                            &mut session,
+                            frame,
+                        )
+                        .await?;
+                    if should_close {
+                        self.unregister_session(connection_id, &session).await?;
+                        return Ok(());
+                    }
+                }
+            }
+            maybe_message = rx.recv() => {
+                    let Some(message) = maybe_message else {
+                        break;
+                    };
+                    let should_close = self
+                        .handle_outgoing_message(
+                            connection_id,
+                            &mut transport_io,
+                            &mut session,
+                            message,
+                        )
+                        .await?;
+                    if should_close {
+                        self.unregister_session(connection_id, &session).await?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        self.unregister_session(connection_id, &session).await?;
+        Ok(())
+    }
+
+    async fn handle_incoming_frame(
+        &self,
+        connection_id: ConnectionId,
+        transport_io: &mut TransportSessionIo,
+        session: &mut SessionState,
+        frame: Vec<u8>,
+    ) -> Result<bool, RuntimeError> {
+        Self::refresh_session_capabilities(session);
+        match session.phase {
+            ConnectionPhase::Handshaking => {
+                self.handle_handshake_frame(connection_id, transport_io, session, &frame)
+                    .await
+            }
+            ConnectionPhase::Status => {
+                self.handle_status_frame(transport_io, session, &frame)
+                    .await
+            }
+            ConnectionPhase::Login => {
+                self.handle_login_frame(connection_id, transport_io, session, &frame)
+                    .await
+            }
+            ConnectionPhase::Play => self.handle_play_frame(session, &frame).await,
+        }
+    }
+
+    async fn handle_handshake_frame(
+        &self,
+        connection_id: ConnectionId,
+        transport_io: &mut TransportSessionIo,
+        session: &mut SessionState,
+        frame: &[u8],
+    ) -> Result<bool, RuntimeError> {
+        let Some(intent) = self
+            .protocol_registry
+            .route_handshake(session.transport, frame)?
+        else {
+            return Ok(true);
+        };
+        let next_phase = match intent.next_state {
+            HandshakeNextState::Status => ConnectionPhase::Status,
+            HandshakeNextState::Login => ConnectionPhase::Login,
+        };
+        if let Some(next_adapter) = self.protocol_registry.resolve_route(
+            session.transport,
+            intent.edition,
+            intent.protocol_number,
+        ) {
+            let gameplay =
+                self.resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)?;
+            session.adapter = Some(next_adapter);
+            session.gameplay = Some(gameplay);
+            session.phase = next_phase;
+            Self::refresh_session_capabilities(session);
+            self.sync_session_handle(connection_id, session).await;
+            return Ok(false);
+        }
+
+        let fallback = Arc::clone(&self.default_adapter);
+        let descriptor = fallback.descriptor();
+        match next_phase {
+            ConnectionPhase::Status => {
+                let gameplay =
+                    self.resolve_gameplay_for_adapter(&fallback.descriptor().adapter_id)?;
+                session.adapter = Some(fallback);
+                session.gameplay = Some(gameplay);
+                session.phase = ConnectionPhase::Status;
+                Self::refresh_session_capabilities(session);
+                self.sync_session_handle(connection_id, session).await;
+                Ok(false)
+            }
+            ConnectionPhase::Login => {
+                let disconnect = fallback.encode_disconnect(
+                    ConnectionPhase::Login,
+                    &format!(
+                        "Unsupported protocol {}. This server supports {} (protocol {}).",
+                        intent.protocol_number, descriptor.version_name, descriptor.protocol_number
+                    ),
+                )?;
+                write_payload(transport_io, fallback.wire_codec(), &disconnect).await?;
+                Ok(true)
+            }
+            _ => Ok(true),
+        }
+    }
+
+    async fn handle_status_frame(
+        &self,
+        transport_io: &mut TransportSessionIo,
+        session: &SessionState,
+        frame: &[u8],
+    ) -> Result<bool, RuntimeError> {
+        let current = session
+            .adapter
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
+        match current.decode_status(frame)? {
+            StatusRequest::Query => {
+                let summary = self.player_summary().await;
+                let response = current.encode_status_response(&ServerListStatus {
+                    version: current.descriptor(),
+                    players_online: summary.online_players,
+                    max_players: usize::from(summary.max_players),
+                    description: self.config.motd.clone(),
+                })?;
+                write_payload(transport_io, current.wire_codec(), &response).await?;
+                Ok(false)
+            }
+            StatusRequest::Ping { payload } => {
+                let response = current.encode_status_pong(payload)?;
+                write_payload(transport_io, current.wire_codec(), &response).await?;
+                Ok(true)
+            }
+        }
+    }
+
+    async fn handle_login_frame(
+        &self,
+        connection_id: ConnectionId,
+        transport_io: &mut TransportSessionIo,
+        session: &mut SessionState,
+        frame: &[u8],
+    ) -> Result<bool, RuntimeError> {
+        let current = Arc::clone(
+            session
+                .adapter
+                .as_ref()
+                .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?,
+        );
+        match current.decode_login(frame)? {
+            LoginRequest::BedrockNetworkSettingsRequest { protocol_number } => {
+                let Some(next_adapter) = self.protocol_registry.resolve_route(
+                    TransportKind::Udp,
+                    Edition::Be,
+                    protocol_number,
+                ) else {
+                    let disconnect = current.encode_disconnect(
+                        ConnectionPhase::Login,
+                        &format!("Unsupported Bedrock protocol {protocol_number}"),
+                    )?;
+                    write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                    return Ok(true);
+                };
+                let gameplay =
+                    self.resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)?;
+                session.adapter = Some(next_adapter.clone());
+                session.gameplay = Some(gameplay);
+                Self::refresh_session_capabilities(session);
+                self.sync_session_handle(connection_id, session).await;
+
+                let response = next_adapter.encode_network_settings(1)?;
+                write_payload(transport_io, next_adapter.wire_codec(), &response).await?;
+                transport_io.enable_bedrock_compression(1);
+                Ok(false)
+            }
+            LoginRequest::BedrockLogin {
+                protocol_number,
+                display_name,
+                chain_jwts,
+                client_data_jwt,
+            } => {
+                let next_adapter = if current.descriptor().edition == Edition::Be
+                    && current.descriptor().protocol_number == protocol_number
+                {
+                    Arc::clone(&current)
+                } else {
+                    self.protocol_registry
+                        .resolve_route(TransportKind::Udp, Edition::Be, protocol_number)
+                        .ok_or_else(|| {
+                            RuntimeError::Config(format!(
+                                "no active bedrock adapter for protocol {protocol_number}"
+                            ))
+                        })?
+                };
+                let gameplay =
+                    self.resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)?;
+                session.adapter = Some(next_adapter);
+                session.gameplay = Some(gameplay);
+                Self::refresh_session_capabilities(session);
+                self.sync_session_handle(connection_id, session).await;
+
+                let auth_profile = self.resolve_bedrock_auth_profile()?;
+                let authenticated = match auth_profile.mode()? {
+                    AuthMode::BedrockOffline => {
+                        auth_profile.authenticate_bedrock_offline(&display_name)?
+                    }
+                    AuthMode::BedrockXbl => {
+                        auth_profile.authenticate_bedrock_xbl(&chain_jwts, &client_data_jwt)?
+                    }
+                    mode => {
+                        return Err(RuntimeError::Config(format!(
+                            "bedrock listener requires a bedrock auth profile, got {mode:?}"
+                        )));
+                    }
+                };
+                self.apply_bedrock_login(connection_id, session, authenticated, display_name)
+                    .await?;
+                Ok(false)
+            }
+            LoginRequest::LoginStart { username } => {
+                if self.config.online_mode {
+                    if session.login_challenge.is_some() {
+                        let disconnect = current.encode_disconnect(
+                            ConnectionPhase::Login,
+                            "Login encryption is already in progress",
+                        )?;
+                        write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                        return Ok(true);
+                    }
+                    let Some(online_auth_keys) = self.online_auth_keys.as_ref() else {
+                        return Err(RuntimeError::Config(
+                            "online-mode=true requires generated auth keys".to_string(),
+                        ));
+                    };
+                    let verify_token = random_verify_token();
+                    let auth_generation = self.auth_profile.capture_generation()?;
+                    let encryption_request = current.encode_encryption_request(
+                        LOGIN_SERVER_ID,
+                        &online_auth_keys.public_key_der,
+                        &verify_token,
+                    )?;
+                    session.login_challenge = Some(LoginChallengeState {
+                        username,
+                        verify_token,
+                        auth_generation,
+                        challenge_started_at: now_ms(),
+                    });
+                    write_payload(transport_io, current.wire_codec(), &encryption_request).await?;
+                    return Ok(false);
+                }
+
+                let authenticated = self.auth_profile.authenticate_offline(&username)?;
+                self.apply_command(
+                    CoreCommand::LoginStart {
+                        connection_id,
+                        username,
+                        player_id: authenticated,
+                    },
+                    Some(session),
+                )
+                .await?;
+                Ok(false)
+            }
+            LoginRequest::EncryptionResponse {
+                shared_secret_encrypted,
+                verify_token_encrypted,
+            } => {
+                if !self.config.online_mode {
+                    let disconnect = current.encode_disconnect(
+                        ConnectionPhase::Login,
+                        "Encryption response is not valid in offline mode",
+                    )?;
+                    write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                    return Ok(true);
+                }
+
+                let Some(challenge) = session.login_challenge.take() else {
+                    let disconnect = current.encode_disconnect(
+                        ConnectionPhase::Login,
+                        "Unexpected encryption response",
+                    )?;
+                    write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                    return Ok(true);
+                };
+
+                let Some(online_auth_keys) = self.online_auth_keys.as_ref() else {
+                    return Err(RuntimeError::Config(
+                        "online-mode=true requires generated auth keys".to_string(),
+                    ));
+                };
+                let shared_secret = match decrypt_login_blob(
+                    &online_auth_keys.private_key,
+                    &shared_secret_encrypted,
+                ) {
+                    Ok(shared_secret) => shared_secret,
+                    Err(_) => {
+                        let disconnect = current.encode_disconnect(
+                            ConnectionPhase::Login,
+                            "Invalid encryption response",
+                        )?;
+                        write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                        return Ok(true);
+                    }
+                };
+                let verify_token = match decrypt_login_blob(
+                    &online_auth_keys.private_key,
+                    &verify_token_encrypted,
+                ) {
+                    Ok(verify_token) => verify_token,
+                    Err(_) => {
+                        let disconnect = current.encode_disconnect(
+                            ConnectionPhase::Login,
+                            "Invalid encryption response",
+                        )?;
+                        write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                        return Ok(true);
+                    }
+                };
+                let shared_secret: [u8; 16] = match shared_secret.try_into() {
+                    Ok(shared_secret) => shared_secret,
+                    Err(_) => {
+                        let disconnect = current.encode_disconnect(
+                            ConnectionPhase::Login,
+                            "Invalid shared secret length",
+                        )?;
+                        write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                        return Ok(true);
+                    }
+                };
+                transport_io.enable_encryption(shared_secret);
+                if verify_token.as_slice() != challenge.verify_token {
+                    let disconnect = current.encode_disconnect(
+                        ConnectionPhase::Login,
+                        "Encryption verification failed",
+                    )?;
+                    write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                    return Ok(true);
+                }
+                let server_hash = minecraft_server_hash(
+                    LOGIN_SERVER_ID,
+                    &shared_secret,
+                    &online_auth_keys.public_key_der,
+                );
+                let username = challenge.username.clone();
+                let login_username = challenge.username;
+                let auth_generation = Arc::clone(&challenge.auth_generation);
+                let captured_generation_id = auth_generation.generation_id;
+                let auth_profile = Arc::clone(&self.auth_profile);
+                let authenticated = match tokio::task::spawn_blocking(move || {
+                    let current_generation_id =
+                        auth_profile.plugin_generation_id().ok_or_else(|| {
+                            RuntimeError::Config("missing auth generation".to_string())
+                        })?;
+                    if current_generation_id != captured_generation_id {
+                        auth_generation.authenticate_online(&username, &server_hash)
+                    } else {
+                        auth_profile.authenticate_online(&username, &server_hash)
+                    }
+                })
+                .await
+                {
+                    Ok(Ok(player_id)) => player_id,
+                    Ok(Err(error)) => {
+                        let disconnect = current.encode_disconnect(
+                            ConnectionPhase::Login,
+                            &format!("Authentication failed: {error}"),
+                        )?;
+                        write_payload(transport_io, current.wire_codec(), &disconnect).await?;
+                        return Ok(true);
+                    }
+                    Err(error) => return Err(RuntimeError::Join(error)),
+                };
+                self.apply_command(
+                    CoreCommand::LoginStart {
+                        connection_id,
+                        username: login_username,
+                        player_id: authenticated,
+                    },
+                    Some(session),
+                )
+                .await?;
+                Ok(false)
+            }
+        }
+    }
+
+    async fn handle_play_frame(
+        &self,
+        session: &SessionState,
+        frame: &[u8],
+    ) -> Result<bool, RuntimeError> {
+        let current = session
+            .adapter
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
+        let Some(current_player_id) = session.player_id else {
+            return Ok(true);
+        };
+        if let Some(command) = current.decode_play(current_player_id, frame)? {
+            self.apply_command(command, Some(session)).await?;
+        }
+        Ok(false)
+    }
+
+    async fn apply_bedrock_login(
+        &self,
+        connection_id: ConnectionId,
+        session: &SessionState,
+        authenticated: BedrockAuthResult,
+        fallback_display_name: String,
+    ) -> Result<(), RuntimeError> {
+        self.apply_command(
+            CoreCommand::LoginStart {
+                connection_id,
+                username: if authenticated.display_name.is_empty() {
+                    fallback_display_name
+                } else {
+                    authenticated.display_name
+                },
+                player_id: authenticated.player_id,
+            },
+            Some(session),
+        )
+        .await
+    }
+
+    async fn handle_outgoing_message(
+        &self,
+        connection_id: ConnectionId,
+        transport_io: &mut TransportSessionIo,
+        session: &mut SessionState,
+        message: SessionMessage,
+    ) -> Result<bool, RuntimeError> {
+        let SessionMessage::Event(event) = message;
+        Self::refresh_session_capabilities(session);
+        let current = session
+            .adapter
+            .as_ref()
+            .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
+        let packets = match &event {
+            CoreEvent::LoginAccepted { player, .. } => vec![current.encode_login_success(player)?],
+            CoreEvent::Disconnect { reason } => {
+                vec![current.encode_disconnect(session.phase, reason)?]
+            }
+            _ => {
+                let player_id = session.player_id.ok_or_else(|| {
+                    RuntimeError::Config("missing player id for play event encoding".to_string())
+                })?;
+                let entity_id = session.entity_id.ok_or_else(|| {
+                    RuntimeError::Config("missing entity id for play event encoding".to_string())
+                })?;
+                current.encode_play_event(
+                    &event,
+                    &PlayEncodingContext {
+                        player_id,
+                        entity_id,
+                    },
+                )?
+            }
+        };
+        for packet in packets {
+            write_payload(transport_io, current.wire_codec(), &packet).await?;
+        }
+
+        match event {
+            CoreEvent::LoginAccepted {
+                player_id: accepted_player_id,
+                entity_id: accepted_entity_id,
+                ..
+            } => {
+                session.player_id = Some(accepted_player_id);
+                session.entity_id = Some(accepted_entity_id);
+                session.phase = ConnectionPhase::Play;
+                Self::refresh_session_capabilities(session);
+                self.sync_session_handle(connection_id, session).await;
+            }
+            CoreEvent::Disconnect { .. } => return Ok(true),
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    async fn apply_command(
+        &self,
+        command: CoreCommand,
+        session: Option<&SessionState>,
+    ) -> Result<(), RuntimeError> {
+        let should_persist = matches!(
+            command,
+            CoreCommand::LoginStart { .. }
+                | CoreCommand::MoveIntent { .. }
+                | CoreCommand::SetHeldSlot { .. }
+                | CoreCommand::CreativeInventorySet { .. }
+                | CoreCommand::DigBlock { .. }
+                | CoreCommand::PlaceBlock { .. }
+                | CoreCommand::Disconnect { .. }
+        );
+        let session_capabilities = session.and_then(|session| session.session_capabilities.clone());
+        let gameplay = session.and_then(|session| session.gameplay.clone());
+        let events = {
+            let mut state = self.state.lock().await;
+            let events = if let (Some(session_capabilities), Some(gameplay)) =
+                (session_capabilities.as_ref(), gameplay.as_ref())
+            {
+                state
+                    .core
+                    .apply_command_with_policy(
+                        command,
+                        now_ms(),
+                        Some(session_capabilities),
+                        gameplay.as_ref(),
+                    )
+                    .map_err(RuntimeError::Config)?
+            } else {
+                state.core.apply_command(command, now_ms())
+            };
+            if should_persist {
+                state.dirty = true;
+            }
+            events
+        };
+        self.dispatch_events(events).await;
+        Ok(())
+    }
+
+    async fn tick(&self) -> Result<(), RuntimeError> {
+        let gameplay_sessions = {
+            self.sessions
+                .lock()
+                .await
+                .values()
+                .filter_map(|handle| {
+                    let player_id = handle.player_id?;
+                    let session_capabilities = handle.session_capabilities.clone()?;
+                    let gameplay_profile = handle.gameplay_profile.clone()?;
+                    Some((player_id, session_capabilities, gameplay_profile))
+                })
+                .collect::<Vec<_>>()
+        };
+        let events = {
+            let mut state = self.state.lock().await;
+            let now = now_ms();
+            let mut events = state.core.tick(now);
+            for (player_id, session_capabilities, gameplay_profile) in &gameplay_sessions {
+                let Some(gameplay) = self.plugin_host.as_ref().and_then(|plugin_host| {
+                    plugin_host.resolve_gameplay_profile(gameplay_profile.as_str())
+                }) else {
+                    continue;
+                };
+                events.extend(
+                    state
+                        .core
+                        .tick_player_with_policy(
+                            *player_id,
+                            now,
+                            session_capabilities,
+                            gameplay.as_ref(),
+                        )
+                        .map_err(RuntimeError::Config)?,
+                );
+            }
+            events
+        };
+        self.dispatch_events(events).await;
+        Ok(())
+    }
+
+    async fn maybe_save(&self) -> Result<(), RuntimeError> {
+        let snapshot = {
+            let mut state = self.state.lock().await;
+            if !state.dirty {
+                return Ok(());
+            }
+            state.dirty = false;
+            state.core.snapshot()
+        };
+        self.storage_profile
+            .save_snapshot(&self.config.world_dir, &snapshot)?;
+        Ok(())
+    }
+
+    async fn dispatch_events(&self, events: Vec<TargetedEvent>) {
+        for event in events {
+            let target = event.target.clone();
+            let payload = event.event.clone();
+            if let EventTarget::Connection(connection_id) = target
+                && let CoreEvent::LoginAccepted { player_id, .. } = payload
+                && let Some(session) = self.sessions.lock().await.get_mut(&connection_id)
+            {
+                session.player_id = Some(player_id);
+            }
+
+            let recipients = {
+                let sessions = self.sessions.lock().await;
+                match target {
+                    EventTarget::Connection(connection_id) => sessions
+                        .get(&connection_id)
+                        .into_iter()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    EventTarget::Player(target_player_id) => sessions
+                        .values()
+                        .filter(|session| session.player_id == Some(target_player_id))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    EventTarget::EveryoneExcept(excluded_player_id) => sessions
+                        .values()
+                        .filter(|session| {
+                            session.player_id.is_some()
+                                && session.player_id != Some(excluded_player_id)
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                }
+            };
+
+            for recipient in recipients {
+                let _ = recipient.tx.send(SessionMessage::Event(payload.clone()));
+            }
+        }
+    }
+
+    async fn unregister_session(
+        &self,
+        connection_id: ConnectionId,
+        session: &SessionState,
+    ) -> Result<(), RuntimeError> {
+        if let (Some(gameplay), Some(gameplay_profile), Some(player_id)) = (
+            session.gameplay.as_ref(),
+            session
+                .session_capabilities
+                .as_ref()
+                .map(|capabilities| capabilities.gameplay_profile.clone()),
+            session.player_id,
+        ) {
+            gameplay.session_closed(&GameplaySessionSnapshot {
+                phase: session.phase,
+                player_id: Some(player_id),
+                entity_id: session.entity_id,
+                gameplay_profile,
+            })?;
+        }
+        self.sessions.lock().await.remove(&connection_id);
+        if let Some(player_id) = session.player_id {
+            self.apply_command(CoreCommand::Disconnect { player_id }, None)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn player_summary(&self) -> PlayerSummary {
+        self.state.lock().await.core.player_summary()
+    }
+}
+
+fn build_listener_plans(
+    config: &ServerConfig,
+    protocols: &ProtocolRegistry,
+) -> Result<Vec<ListenerPlan>, RuntimeError> {
+    let tcp_adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Tcp);
+    if tcp_adapter_ids.is_empty() {
+        return Err(RuntimeError::Config(
+            "no tcp protocol adapters registered".to_string(),
+        ));
+    }
+    let mut plans = vec![ListenerPlan {
+        transport: TransportKind::Tcp,
+        bind_addr: config.bind_addr(),
+        adapter_ids: tcp_adapter_ids,
+    }];
+    if config.be_enabled {
+        let udp_adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Udp);
+        if udp_adapter_ids.is_empty() {
+            return Err(RuntimeError::Config(
+                "be-enabled=true requires at least one udp protocol adapter".to_string(),
+            ));
+        }
+        plans.push(ListenerPlan {
+            transport: TransportKind::Udp,
+            bind_addr: config.bind_addr(),
+            adapter_ids: udp_adapter_ids,
+        });
+    }
+    Ok(plans)
+}
+
+async fn bind_transport_listener(
+    plan: ListenerPlan,
+    config: &ServerConfig,
+) -> Result<BoundTransportListener, RuntimeError> {
+    match plan.transport {
+        TransportKind::Tcp => Ok(BoundTransportListener::Tcp {
+            listener: TcpListener::bind(plan.bind_addr).await?,
+            adapter_ids: plan.adapter_ids,
+        }),
+        TransportKind::Udp => {
+            let mut listener = BedrockListener::new_raknet(
+                plan.bind_addr,
+                config.motd.clone(),
+                "RevyCraft".to_string(),
+                V924::GAME_VERSION.to_string(),
+                V924::PROTOCOL_VERSION,
+                V924::RAKNET_VERSION,
+                u32::from(config.max_players),
+                0,
+                false,
+            )
+            .await
+            .map_err(|error| {
+                RuntimeError::Unsupported(format!("failed to bind bedrock listener: {error}"))
+            })?;
+            listener.start().await.map_err(|error| {
+                RuntimeError::Unsupported(format!("failed to start bedrock listener: {error}"))
+            })?;
+            Ok(BoundTransportListener::Bedrock {
+                listener,
+                bind_addr: plan.bind_addr,
+                adapter_ids: plan.adapter_ids,
+            })
+        }
+    }
+}
+
+fn default_wire_codec(transport: TransportKind) -> &'static dyn WireCodec {
+    static TCP_CODEC: MinecraftWireCodec = MinecraftWireCodec;
+    match transport {
+        TransportKind::Tcp => &TCP_CODEC,
+        TransportKind::Udp => unreachable!("udp transport sessions are not implemented"),
+    }
+}
+
+/// # Errors
+///
+/// Returns [`RuntimeError`] when the server cannot bind, load its persisted
+/// world state, or starts with unsupported configuration such as
+/// an auth profile mode mismatch.
+pub async fn spawn_server(
+    config: ServerConfig,
+    registries: RuntimeRegistries,
+) -> Result<RunningServer, RuntimeError> {
+    let plugin_host = registries.plugin_host().ok_or_else(|| {
+        RuntimeError::Config(format!(
+            "no plugins discovered under `{}`",
+            config.plugins_dir.display()
+        ))
+    })?;
+    if registries
+        .protocols()
+        .resolve_adapter(&config.default_adapter)
+        .is_none()
+    {
+        return Err(RuntimeError::Config(format!(
+            "unknown default-adapter `{}`",
+            config.default_adapter
+        )));
+    }
+    if config.be_enabled
+        && registries
+            .protocols()
+            .resolve_adapter(&config.default_bedrock_adapter)
+            .is_none()
+    {
+        return Err(RuntimeError::Config(format!(
+            "unknown default-bedrock-adapter `{}`",
+            config.default_bedrock_adapter
+        )));
+    }
+
+    let mut enabled_adapter_ids = config.effective_enabled_adapters();
+    if !enabled_adapter_ids
+        .iter()
+        .any(|adapter_id| adapter_id == &config.default_adapter)
+    {
+        return Err(RuntimeError::Config(format!(
+            "default-adapter `{}` must be included in enabled-adapters",
+            config.default_adapter
+        )));
+    }
+    let enabled_bedrock_adapter_ids = if config.be_enabled {
+        let enabled = config.effective_enabled_bedrock_adapters();
+        if !enabled
+            .iter()
+            .any(|adapter_id| adapter_id == &config.default_bedrock_adapter)
+        {
+            return Err(RuntimeError::Config(format!(
+                "default-bedrock-adapter `{}` must be included in enabled-bedrock-adapters",
+                config.default_bedrock_adapter
+            )));
+        }
+        enabled
+    } else {
+        Vec::new()
+    };
+    enabled_adapter_ids.extend(enabled_bedrock_adapter_ids.iter().cloned());
+    let active_protocols = registries
+        .protocols()
+        .filter_enabled(&enabled_adapter_ids)?;
+    plugin_host.activate_gameplay_profiles(&config)?;
+    plugin_host.activate_storage_profile(&config.storage_profile)?;
+    let mut auth_profiles = vec![config.auth_profile.clone()];
+    if config.be_enabled && !auth_profiles.contains(&config.bedrock_auth_profile) {
+        auth_profiles.push(config.bedrock_auth_profile.clone());
+    }
+    plugin_host.activate_auth_profiles(&auth_profiles)?;
+    if !config.be_enabled
+        && !active_protocols
+            .adapter_ids_for_transport(TransportKind::Udp)
+            .is_empty()
+    {
+        return Err(RuntimeError::Config(
+            "enabled-adapters contains udp adapters but be-enabled=false".to_string(),
+        ));
+    }
+
+    let default_adapter = active_protocols
+        .resolve_adapter(&config.default_adapter)
+        .ok_or_else(|| {
+            RuntimeError::Config(format!(
+                "default-adapter `{}` is not active",
+                config.default_adapter
+            ))
+        })?;
+    if default_adapter.descriptor().transport != TransportKind::Tcp {
+        return Err(RuntimeError::Config(format!(
+            "default-adapter `{}` must be a tcp adapter",
+            config.default_adapter
+        )));
+    }
+    let default_bedrock_adapter = if config.be_enabled {
+        let adapter = active_protocols
+            .resolve_adapter(&config.default_bedrock_adapter)
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "default-bedrock-adapter `{}` is not active",
+                    config.default_bedrock_adapter
+                ))
+            })?;
+        let descriptor = adapter.descriptor();
+        if descriptor.transport != TransportKind::Udp || descriptor.edition != Edition::Be {
+            return Err(RuntimeError::Config(format!(
+                "default-bedrock-adapter `{}` must be a bedrock udp adapter",
+                config.default_bedrock_adapter
+            )));
+        }
+        Some(adapter)
+    } else {
+        None
+    };
+    let storage_profile = plugin_host
+        .resolve_storage_profile(&config.storage_profile)
+        .ok_or_else(|| {
+            RuntimeError::Config(format!(
+                "unknown storage-profile `{}`",
+                config.storage_profile
+            ))
+        })?;
+    let auth_profile = plugin_host
+        .resolve_auth_profile(&config.auth_profile)
+        .ok_or_else(|| {
+            RuntimeError::Config(format!("unknown auth-profile `{}`", config.auth_profile))
+        })?;
+    let bedrock_auth_profile = if config.be_enabled {
+        Some(
+            plugin_host
+                .resolve_auth_profile(&config.bedrock_auth_profile)
+                .ok_or_else(|| {
+                    RuntimeError::Config(format!(
+                        "unknown bedrock-auth-profile `{}`",
+                        config.bedrock_auth_profile
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
+    let auth_mode = auth_profile.mode()?;
+    match (config.online_mode, auth_mode) {
+        (true, AuthMode::Online) | (false, AuthMode::Offline) => {}
+        (true, mode) => {
+            return Err(RuntimeError::Config(format!(
+                "online-mode=true requires an online auth profile, got {mode:?}"
+            )));
+        }
+        (false, mode) => {
+            return Err(RuntimeError::Config(format!(
+                "online-mode=false requires an offline auth profile, got {mode:?}"
+            )));
+        }
+    }
+    if let Some(profile) = &bedrock_auth_profile {
+        match profile.mode()? {
+            AuthMode::BedrockOffline | AuthMode::BedrockXbl => {}
+            mode => {
+                return Err(RuntimeError::Config(format!(
+                    "bedrock-auth-profile requires a bedrock auth mode, got {mode:?}"
+                )));
+            }
+        }
+    }
+    let online_auth_keys = if config.online_mode {
+        Some(Arc::new(OnlineAuthKeys::generate()?))
+    } else {
+        None
+    };
+    let snapshot = storage_profile.load_snapshot(&config.world_dir)?;
+    let core_config = CoreConfig {
+        level_name: config.level_name.clone(),
+        seed: 0,
+        max_players: config.max_players,
+        view_distance: config.view_distance,
+        game_mode: config.game_mode,
+        difficulty: config.difficulty,
+        ..CoreConfig::default()
+    };
+    let core = match snapshot {
+        Some(snapshot) => ServerCore::from_snapshot(core_config, snapshot),
+        None => ServerCore::new(core_config),
+    };
+    let listener_plans = build_listener_plans(&config, &active_protocols)?;
+    let mut tcp_plan = None;
+    let mut udp_plan = None;
+    for plan in listener_plans {
+        match plan.transport {
+            TransportKind::Tcp => tcp_plan = Some(plan),
+            TransportKind::Udp => udp_plan = Some(plan),
+        }
+    }
+
+    let tcp_plan = tcp_plan
+        .ok_or_else(|| RuntimeError::Config("no tcp listener plan was generated".to_string()))?;
+    let tcp_listener = bind_transport_listener(tcp_plan, &config).await?;
+    let tcp_local_addr = match &tcp_listener {
+        BoundTransportListener::Tcp { listener, .. } => listener.local_addr()?,
+        BoundTransportListener::Bedrock { .. } => {
+            return Err(RuntimeError::Config(
+                "tcp listener plan resolved to a non-tcp listener".to_string(),
+            ));
+        }
+    };
+
+    let mut bound_listeners = vec![tcp_listener];
+    if let Some(mut udp_plan) = udp_plan {
+        if udp_plan.bind_addr.port() == 0 {
+            udp_plan.bind_addr = SocketAddr::new(tcp_local_addr.ip(), tcp_local_addr.port());
+        }
+        bound_listeners.push(bind_transport_listener(udp_plan, &config).await?);
+    }
+
+    let listener_bindings = bound_listeners
+        .iter()
+        .map(BoundTransportListener::listener_binding)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut tcp_listener = None;
+    let mut bedrock_listener = None;
+    for listener in bound_listeners {
+        match listener {
+            BoundTransportListener::Tcp { listener, .. } => {
+                if tcp_listener.replace(listener).is_some() {
+                    return Err(RuntimeError::Config(
+                        "multiple tcp listeners are not supported".to_string(),
+                    ));
+                }
+            }
+            BoundTransportListener::Bedrock { listener, .. } => {
+                if bedrock_listener.replace(listener).is_some() {
+                    return Err(RuntimeError::Config(
+                        "multiple udp listeners are not supported".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    let tcp_listener = tcp_listener
+        .ok_or_else(|| RuntimeError::Config("no tcp transport listeners were bound".to_string()))?;
+
+    let server = Arc::new(RuntimeServer {
+        config,
+        protocol_registry: active_protocols,
+        plugin_host: Some(plugin_host.clone()),
+        default_adapter,
+        default_bedrock_adapter,
+        auth_profile,
+        bedrock_auth_profile,
+        online_auth_keys,
+        storage_profile,
+        state: Mutex::new(RuntimeState { core, dirty: false }),
+        sessions: Mutex::new(HashMap::new()),
+        next_connection_id: Mutex::new(1),
+    });
+
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+    let run_server = Arc::clone(&server);
+    let join_handle = tokio::spawn(async move {
+        let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
+        let mut save_interval = tokio::time::interval(Duration::from_secs(2));
+        let mut plugin_reload_interval =
+            tokio::time::interval(Duration::from_millis(plugin_reload_poll_interval_ms()));
+        loop {
+            tokio::select! {
+                _ = &mut shutdown_rx => {
+                    run_server.maybe_save().await?;
+                    return Ok(());
+                }
+                accepted = tcp_listener.accept() => {
+                    let (stream, _) = accepted?;
+                    let session = AcceptedTransportSession {
+                        transport: TransportKind::Tcp,
+                        io: TransportSessionIo::Tcp {
+                            stream,
+                            encryption: None,
+                        },
+                    };
+                    run_server.spawn_session(session).await;
+                }
+                accepted = async {
+                    bedrock_listener
+                        .as_mut()
+                        .expect("bedrock listener branch should only run when configured")
+                        .accept()
+                        .await
+                }, if bedrock_listener.is_some() => {
+                    match accepted {
+                        Ok(connection) => {
+                            run_server.spawn_bedrock_session(connection).await;
+                        }
+                        Err(error) => {
+                            eprintln!("bedrock accept failed: {error}");
+                        }
+                    }
+                }
+                _ = tick_interval.tick() => {
+                    run_server.tick().await?;
+                }
+                _ = plugin_reload_interval.tick(), if run_server.config.plugin_reload_watch && run_server.plugin_host.is_some() => {
+                    if let Some(plugin_host) = &run_server.plugin_host
+                        && let Err(error) = plugin_host.reload_modified_with_runtime(&run_server).await
+                    {
+                        eprintln!("plugin reload failed: {error}");
+                    }
+                }
+                _ = save_interval.tick() => {
+                    run_server.maybe_save().await?;
+                }
+            }
+        }
+    });
+
+    Ok(RunningServer {
+        listener_bindings,
+        plugin_host: Some(plugin_host),
+        runtime: server,
+        shutdown_tx: Some(shutdown_tx),
+        join_handle,
+    })
+}
+
+async fn write_payload(
+    transport_io: &mut TransportSessionIo,
+    codec: &dyn WireCodec,
+    payload: &[u8],
+) -> Result<(), RuntimeError> {
+    let frame = codec.encode_frame(payload)?;
+    transport_io.write_all(&frame).await?;
+    Ok(())
+}
+
+fn now_ms() -> u64 {
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .expect("current unix time in milliseconds should fit into u64")
+}
+
+/// # Errors
+///
+/// Returns [`RuntimeError`] when the handshake payload cannot be encoded.
+pub fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8>, RuntimeError> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x00);
+    writer.write_varint(protocol_version);
+    writer.write_string("localhost")?;
+    writer.write_u16(25565);
+    writer.write_varint(next_state);
+    Ok(writer.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BEDROCK_OFFLINE_AUTH_PROFILE_ID, InProcessAuthPlugin, InProcessGameplayPlugin,
+        InProcessProtocolPlugin, InProcessStoragePlugin, LevelType, PluginAbiRange, PluginCatalog,
+        PluginFailurePolicy, PluginHost, RuntimeError, RuntimeRegistries, ServerConfig,
+        UdpDatagramAction, build_listener_plans, classify_udp_datagram, encode_handshake,
+        plugin_host_from_config, spawn_server,
+    };
+    use bytes::BytesMut;
+    use mc_plugin_auth_offline::OFFLINE_AUTH_PROFILE_ID;
+    use mc_plugin_auth_online_stub::{
+        ONLINE_STUB_AUTH_PLUGIN_ID, ONLINE_STUB_AUTH_PROFILE_ID,
+        in_process_auth_entrypoints as online_stub_auth_entrypoints,
+    };
+    use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
+    use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
+    use mc_plugin_proto_be_26_3::in_process_protocol_entrypoints as be_26_3_entrypoints;
+    use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
+    use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints as je_1_7_10_entrypoints;
+    use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entrypoints;
+    use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
+    use mc_plugin_storage_je_anvil_1_7_10::in_process_storage_entrypoints as storage_entrypoints;
+    use mc_proto_be_26_3::BE_26_3_ADAPTER_ID;
+    use mc_proto_be_placeholder::BE_PLACEHOLDER_ADAPTER_ID;
+    use mc_proto_common::{
+        Edition, MinecraftWireCodec, PacketReader, PacketWriter, TransportKind, WireCodec,
+    };
+    use mc_proto_je_1_7_10::{JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID};
+    use mc_proto_je_1_8_x::JE_1_8_X_ADAPTER_ID;
+    use mc_proto_je_1_12_2::JE_1_12_2_ADAPTER_ID;
+    use rand::RngCore;
+    use rsa::pkcs8::DecodePublicKey;
+    use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
+    use std::collections::HashMap;
+    use std::env;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::net::SocketAddr;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UdpSocket;
+
+    const RAKNET_MAGIC: [u8; 16] = [
+        0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34, 0x56,
+        0x78,
+    ];
+
+    const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
+        JE_1_7_10_ADAPTER_ID,
+        JE_1_8_X_ADAPTER_ID,
+        JE_1_12_2_ADAPTER_ID,
+        BE_26_3_ADAPTER_ID,
+        BE_PLACEHOLDER_ADAPTER_ID,
+    ];
+    const TCP_ONLY_PROTOCOL_PLUGIN_IDS: &[&str] = &[JE_1_7_10_ADAPTER_ID];
+    const GAMEPLAY_PLUGIN_IDS: &[&str] = &["gameplay-canonical", "gameplay-readonly"];
+    const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &[
+        "storage-je-anvil-1_7_10",
+        "auth-offline",
+        "auth-bedrock-offline",
+        "auth-bedrock-xbl",
+    ];
+
+    fn plugin_test_registries_with_allowlist(
+        allowlist: &[&str],
+    ) -> Result<RuntimeRegistries, RuntimeError> {
+        let dist_dir = crate::packaged_plugin_test_harness_dist_dir()
+            .map_err(RuntimeError::Config)?
+            .clone();
+        plugin_test_registries_from_dist(dist_dir, allowlist)
+    }
+
+    fn plugin_allowlist_with_supporting_plugins(
+        allowlist: &[&str],
+        supporting_plugin_ids: &[&str],
+    ) -> Vec<String> {
+        let mut plugin_allowlist = allowlist
+            .iter()
+            .map(|entry| (*entry).to_string())
+            .collect::<Vec<_>>();
+        plugin_allowlist.extend(
+            GAMEPLAY_PLUGIN_IDS
+                .iter()
+                .map(|plugin_id| (*plugin_id).to_string()),
+        );
+        plugin_allowlist.extend(
+            supporting_plugin_ids
+                .iter()
+                .map(|plugin_id| (*plugin_id).to_string()),
+        );
+        plugin_allowlist
+    }
+
+    fn plugin_test_registries_from_dist(
+        dist_dir: PathBuf,
+        allowlist: &[&str],
+    ) -> Result<RuntimeRegistries, RuntimeError> {
+        plugin_test_registries_from_dist_with_supporting_plugins(
+            dist_dir,
+            allowlist,
+            STORAGE_AND_AUTH_PLUGIN_IDS,
+        )
+    }
+
+    fn plugin_test_registries_from_dist_with_supporting_plugins(
+        dist_dir: PathBuf,
+        allowlist: &[&str],
+        supporting_plugin_ids: &[&str],
+    ) -> Result<RuntimeRegistries, RuntimeError> {
+        let config = ServerConfig {
+            plugins_dir: dist_dir,
+            plugin_allowlist: Some(plugin_allowlist_with_supporting_plugins(
+                allowlist,
+                supporting_plugin_ids,
+            )),
+            ..ServerConfig::default()
+        };
+        let plugin_host = plugin_host_from_config(&config)?.ok_or_else(|| {
+            RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
+        })?;
+        let mut registries = RuntimeRegistries::new();
+        plugin_host.load_into_registries(&mut registries)?;
+        Ok(registries)
+    }
+
+    fn plugin_test_registries_tcp_only() -> Result<RuntimeRegistries, RuntimeError> {
+        plugin_test_registries_with_allowlist(TCP_ONLY_PROTOCOL_PLUGIN_IDS)
+    }
+
+    fn plugin_test_registries_all() -> Result<RuntimeRegistries, RuntimeError> {
+        plugin_test_registries_with_allowlist(ALL_PROTOCOL_PLUGIN_IDS)
+    }
+
+    fn in_process_online_auth_registries(
+        allowlist: &[&str],
+    ) -> Result<RuntimeRegistries, RuntimeError> {
+        let mut catalog = PluginCatalog::default();
+        for adapter_id in allowlist {
+            match *adapter_id {
+                JE_1_7_10_ADAPTER_ID => {
+                    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                        plugin_id: JE_1_7_10_ADAPTER_ID.to_string(),
+                        manifest: je_1_7_10_entrypoints().manifest,
+                        api: je_1_7_10_entrypoints().api,
+                    })
+                }
+                JE_1_8_X_ADAPTER_ID => {
+                    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                        plugin_id: JE_1_8_X_ADAPTER_ID.to_string(),
+                        manifest: je_1_8_x_entrypoints().manifest,
+                        api: je_1_8_x_entrypoints().api,
+                    })
+                }
+                JE_1_12_2_ADAPTER_ID => {
+                    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                        plugin_id: JE_1_12_2_ADAPTER_ID.to_string(),
+                        manifest: je_1_12_2_entrypoints().manifest,
+                        api: je_1_12_2_entrypoints().api,
+                    })
+                }
+                BE_26_3_ADAPTER_ID => {
+                    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                        plugin_id: BE_26_3_ADAPTER_ID.to_string(),
+                        manifest: be_26_3_entrypoints().manifest,
+                        api: be_26_3_entrypoints().api,
+                    })
+                }
+                BE_PLACEHOLDER_ADAPTER_ID => {
+                    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+                        plugin_id: BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+                        manifest: be_placeholder_entrypoints().manifest,
+                        api: be_placeholder_entrypoints().api,
+                    })
+                }
+                other => {
+                    return Err(RuntimeError::Config(format!(
+                        "unknown in-process adapter `{other}`"
+                    )));
+                }
+            }
+        }
+        catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+            plugin_id: "gameplay-canonical".to_string(),
+            manifest: canonical_gameplay_entrypoints().manifest,
+            api: canonical_gameplay_entrypoints().api,
+        });
+        catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+            plugin_id: "gameplay-readonly".to_string(),
+            manifest: readonly_gameplay_entrypoints().manifest,
+            api: readonly_gameplay_entrypoints().api,
+        });
+        catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
+            plugin_id: "storage-je-anvil-1_7_10".to_string(),
+            manifest: storage_entrypoints().manifest,
+            api: storage_entrypoints().api,
+        });
+        catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
+            plugin_id: ONLINE_STUB_AUTH_PLUGIN_ID.to_string(),
+            manifest: online_stub_auth_entrypoints().manifest,
+            api: online_stub_auth_entrypoints().api,
+        });
+
+        let plugin_host = Arc::new(PluginHost::new(
+            catalog,
+            PluginAbiRange::default(),
+            PluginFailurePolicy::Quarantine,
+        ));
+        let mut registries = RuntimeRegistries::new();
+        plugin_host.load_into_registries(&mut registries)?;
+        Ok(registries)
+    }
+
+    fn gameplay_profile_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(adapter_id, profile_id)| ((*adapter_id).to_string(), (*profile_id).to_string()))
+            .collect()
+    }
+
+    fn workspace_root() -> PathBuf {
+        crate::packaged_plugin_test_workspace_root()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn package_single_plugin(
+        cargo_package: &str,
+        plugin_id: &str,
+        plugin_kind: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), RuntimeError> {
+        let _guard = crate::packaged_plugin_test_build_lock()
+            .lock()
+            .expect("packaged plugin build lock should not be poisoned");
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+        let status = Command::new(cargo)
+            .current_dir(workspace_root())
+            .env("CARGO_TARGET_DIR", target_dir)
+            .env("REVY_PLUGIN_BUILD_TAG", build_tag)
+            .arg("build")
+            .arg("-p")
+            .arg(cargo_package)
+            .status()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        if !status.success() {
+            return Err(RuntimeError::Config(format!(
+                "cargo build failed for `{cargo_package}`"
+            )));
+        }
+
+        let artifact_name = dynamic_library_filename(cargo_package);
+        let source = target_dir.join("debug").join(&artifact_name);
+        let plugin_dir = dist_dir.join(plugin_id);
+        fs::create_dir_all(&plugin_dir)?;
+        let packaged_artifact = packaged_artifact_name(&artifact_name, build_tag);
+        let destination = plugin_dir.join(&packaged_artifact);
+        let staging = plugin_dir.join(format!(".{packaged_artifact}.tmp"));
+        fs::copy(&source, &staging)?;
+        if destination.exists() {
+            fs::remove_file(&destination)?;
+        }
+        fs::rename(&staging, &destination)?;
+        let manifest = format!(
+            "[plugin]\nid = \"{plugin_id}\"\nkind = \"{plugin_kind}\"\n\n[artifacts]\n\"{}-{}\" = \"{packaged_artifact}\"\n",
+            env::consts::OS,
+            env::consts::ARCH
+        );
+        fs::write(plugin_dir.join("plugin.toml"), manifest)?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn package_single_gameplay_plugin(
+        cargo_package: &str,
+        plugin_id: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), RuntimeError> {
+        package_single_plugin(
+            cargo_package,
+            plugin_id,
+            "gameplay",
+            dist_dir,
+            target_dir,
+            build_tag,
+        )
+    }
+
+    #[cfg(target_os = "linux")]
+    fn dynamic_library_filename(package: &str) -> String {
+        let crate_name = package.replace('-', "_");
+        match env::consts::OS {
+            "windows" => format!("{crate_name}.dll"),
+            "macos" => format!("lib{crate_name}.dylib"),
+            _ => format!("lib{crate_name}.so"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn packaged_artifact_name(base_name: &str, build_tag: &str) -> String {
+        if let Some((stem, extension)) = base_name.rsplit_once('.') {
+            format!("{stem}-{build_tag}.{extension}")
+        } else {
+            format!("{base_name}-{build_tag}")
+        }
+    }
+
+    async fn write_packet(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        payload: &[u8],
+    ) -> Result<(), RuntimeError> {
+        let frame = codec.encode_frame(payload)?;
+        stream.write_all(&frame).await?;
+        Ok(())
+    }
+
+    async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStream, RuntimeError> {
+        Ok(tokio::net::TcpStream::connect(addr).await?)
+    }
+
+    fn listener_addr(server: &super::RunningServer) -> SocketAddr {
+        server
+            .listener_bindings()
+            .iter()
+            .find(|binding| binding.transport == TransportKind::Tcp)
+            .expect("tcp listener binding should exist")
+            .local_addr
+    }
+
+    fn udp_listener_addr(server: &super::RunningServer) -> SocketAddr {
+        server
+            .listener_bindings()
+            .iter()
+            .find(|binding| binding.transport == TransportKind::Udp)
+            .expect("udp listener binding should exist")
+            .local_addr
+    }
+
+    async fn read_packet(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        buffer: &mut BytesMut,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        loop {
+            if let Some(frame) = codec.try_decode_frame(buffer)? {
+                return Ok(frame);
+            }
+            let bytes_read = stream.read_buf(buffer).await?;
+            if bytes_read == 0 {
+                return Err(RuntimeError::Config("connection closed".to_string()));
+            }
+        }
+    }
+
+    async fn read_until_packet_id(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        buffer: &mut BytesMut,
+        wanted_packet_id: i32,
+        max_attempts: usize,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let max_attempts = max_attempts.max(64);
+        for _ in 0..max_attempts {
+            let packet = tokio::time::timeout(
+                Duration::from_millis(250),
+                read_packet(stream, codec, buffer),
+            )
+            .await
+            .map_err(|_| {
+                RuntimeError::Config(format!(
+                    "timed out waiting for packet id 0x{wanted_packet_id:02x}"
+                ))
+            })??;
+            if packet_id(&packet) == wanted_packet_id {
+                return Ok(packet);
+            }
+        }
+        Err(RuntimeError::Config(format!(
+            "did not receive packet id 0x{wanted_packet_id:02x}"
+        )))
+    }
+
+    async fn assert_no_packet_id(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        buffer: &mut BytesMut,
+        wanted_packet_id: i32,
+    ) -> Result<(), RuntimeError> {
+        match tokio::time::timeout(
+            Duration::from_millis(200),
+            read_until_packet_id(stream, codec, buffer, wanted_packet_id, 2),
+        )
+        .await
+        {
+            Err(_) => Ok(()),
+            Ok(Err(RuntimeError::Config(_))) => Ok(()),
+            Ok(Err(error)) => Err(error),
+            Ok(Ok(packet)) => Err(RuntimeError::Config(format!(
+                "unexpected packet id 0x{wanted_packet_id:02x}: got 0x{:02x}",
+                packet_id(&packet),
+            ))),
+        }
+    }
+
+    fn packet_id(frame: &[u8]) -> i32 {
+        let mut reader = PacketReader::new(frame);
+        reader.read_varint().expect("packet id should decode")
+    }
+
+    struct TestClientEncryptionState {
+        encrypt: super::MinecraftStreamCipher,
+        decrypt: super::MinecraftStreamCipher,
+    }
+
+    impl TestClientEncryptionState {
+        fn new(shared_secret: [u8; 16]) -> Self {
+            Self {
+                encrypt: super::MinecraftStreamCipher::new(shared_secret),
+                decrypt: super::MinecraftStreamCipher::new(shared_secret),
+            }
+        }
+    }
+
+    fn login_encryption_response(
+        shared_secret_encrypted: &[u8],
+        verify_token_encrypted: &[u8],
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x01);
+        writer.write_varint(
+            i32::try_from(shared_secret_encrypted.len()).map_err(|_| {
+                RuntimeError::Config("encrypted shared secret too large".to_string())
+            })?,
+        );
+        writer.write_bytes(shared_secret_encrypted);
+        writer.write_varint(
+            i32::try_from(verify_token_encrypted.len()).map_err(|_| {
+                RuntimeError::Config("encrypted verify token too large".to_string())
+            })?,
+        );
+        writer.write_bytes(verify_token_encrypted);
+        Ok(writer.into_inner())
+    }
+
+    fn parse_encryption_request(packet: &[u8]) -> Result<(String, Vec<u8>, Vec<u8>), RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x01 {
+            return Err(RuntimeError::Config(
+                "expected login encryption request packet".to_string(),
+            ));
+        }
+        let server_id = reader.read_string(20)?;
+        let public_key_len = usize::try_from(reader.read_varint()?)
+            .map_err(|_| RuntimeError::Config("negative public key length".to_string()))?;
+        let public_key_der = reader.read_bytes(public_key_len)?.to_vec();
+        let verify_token_len = usize::try_from(reader.read_varint()?)
+            .map_err(|_| RuntimeError::Config("negative verify token length".to_string()))?;
+        let verify_token = reader.read_bytes(verify_token_len)?.to_vec();
+        Ok((server_id, public_key_der, verify_token))
+    }
+
+    async fn write_packet_encrypted(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        payload: &[u8],
+        encryption: &mut TestClientEncryptionState,
+    ) -> Result<(), RuntimeError> {
+        let mut frame = codec.encode_frame(payload)?;
+        encryption.encrypt.apply_encrypt(&mut frame);
+        stream.write_all(&frame).await?;
+        Ok(())
+    }
+
+    async fn read_packet_encrypted(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        buffer: &mut BytesMut,
+        encryption: &mut TestClientEncryptionState,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        loop {
+            if let Some(frame) = codec.try_decode_frame(buffer)? {
+                return Ok(frame);
+            }
+            let mut chunk = [0_u8; 8192];
+            let bytes_read = stream.read(&mut chunk).await?;
+            if bytes_read == 0 {
+                return Err(RuntimeError::Config("connection closed".to_string()));
+            }
+            let bytes = &mut chunk[..bytes_read];
+            encryption.decrypt.apply_decrypt(bytes);
+            buffer.extend_from_slice(bytes);
+        }
+    }
+
+    async fn read_until_packet_id_encrypted(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        buffer: &mut BytesMut,
+        wanted_packet_id: i32,
+        max_attempts: usize,
+        encryption: &mut TestClientEncryptionState,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        let max_attempts = max_attempts.max(64);
+        for _ in 0..max_attempts {
+            let packet = tokio::time::timeout(
+                Duration::from_millis(250),
+                read_packet_encrypted(stream, codec, buffer, encryption),
+            )
+            .await
+            .map_err(|_| {
+                RuntimeError::Config(format!(
+                    "timed out waiting for encrypted packet id 0x{wanted_packet_id:02x}"
+                ))
+            })??;
+            if packet_id(&packet) == wanted_packet_id {
+                return Ok(packet);
+            }
+        }
+        Err(RuntimeError::Config(format!(
+            "did not receive encrypted packet id 0x{wanted_packet_id:02x}"
+        )))
+    }
+
+    async fn perform_online_login(
+        stream: &mut tokio::net::TcpStream,
+        codec: &MinecraftWireCodec,
+        protocol_version: i32,
+        username: &str,
+    ) -> Result<(TestClientEncryptionState, BytesMut), RuntimeError> {
+        let mut buffer = BytesMut::new();
+        write_packet(stream, codec, &encode_handshake(protocol_version, 2)?).await?;
+        write_packet(stream, codec, &login_start(username)).await?;
+        let request = read_packet(stream, codec, &mut buffer).await?;
+        let (server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;
+        assert_eq!(server_id, super::LOGIN_SERVER_ID);
+        let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
+            .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
+        let mut shared_secret = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut shared_secret);
+        let shared_secret_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
+            })?;
+        let verify_token_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &verify_token)
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
+            })?;
+        let response =
+            login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
+        write_packet(stream, codec, &response).await?;
+        Ok((TestClientEncryptionState::new(shared_secret), buffer))
+    }
+
+    #[test]
+    fn plugin_test_harness_is_packaged_once_per_process() -> Result<(), RuntimeError> {
+        let _ = plugin_test_registries_tcp_only()?;
+        let _ = plugin_test_registries_all()?;
+        assert_eq!(crate::packaged_plugin_test_harness_build_count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_registry_resolves_registered_adapter() -> Result<(), RuntimeError> {
+        let registry = plugin_test_registries_tcp_only()?;
+        let by_id = registry
+            .protocols()
+            .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+            .expect("registered adapter should resolve by id");
+        let by_route = registry
+            .protocols()
+            .resolve_route(TransportKind::Tcp, Edition::Je, 5)
+            .expect("registered adapter should resolve by route");
+
+        assert_eq!(by_id.descriptor().adapter_id, JE_1_7_10_ADAPTER_ID);
+        assert_eq!(by_id.descriptor().transport, TransportKind::Tcp);
+        assert_eq!(by_route.descriptor().version_name, "1.7.10");
+        Ok(())
+    }
+
+    #[test]
+    fn handshake_probe_transport_kind_filters_routing() -> Result<(), RuntimeError> {
+        let registry = plugin_test_registries_all()?;
+        let tcp_route = registry
+            .protocols()
+            .route_handshake(TransportKind::Tcp, &raknet_unconnected_ping())
+            .expect("tcp routing should not fail");
+        let udp_route = registry
+            .protocols()
+            .route_handshake(TransportKind::Udp, &raknet_unconnected_ping())
+            .expect("udp routing should not fail");
+
+        assert!(tcp_route.is_none());
+        assert!(udp_route.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn listener_plan_includes_tcp_binding_and_registered_adapter() -> Result<(), RuntimeError> {
+        let registries = plugin_test_registries_tcp_only()?;
+        let plans = build_listener_plans(&ServerConfig::default(), registries.protocols())?;
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].transport, TransportKind::Tcp);
+        assert!(
+            plans[0]
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn listener_plan_includes_udp_binding_when_bedrock_is_enabled() -> Result<(), RuntimeError> {
+        let registries = plugin_test_registries_all()?;
+        let plans = build_listener_plans(
+            &ServerConfig {
+                be_enabled: true,
+                ..ServerConfig::default()
+            },
+            registries.protocols(),
+        )?;
+
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[1].transport, TransportKind::Udp);
+        assert!(
+            plans[1]
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == BE_26_3_ADAPTER_ID)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn running_server_exposes_listener_bindings() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+
+        let binding = server
+            .listener_bindings()
+            .first()
+            .expect("tcp listener binding should exist")
+            .clone();
+        assert_eq!(binding.transport, TransportKind::Tcp);
+        assert!(binding.local_addr.port() > 0);
+        assert!(
+            binding
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID)
+        );
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn running_server_exposes_udp_listener_binding_when_enabled() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                be_enabled: true,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_all()?,
+        )
+        .await?;
+
+        assert_eq!(server.listener_bindings().len(), 2);
+        let binding = server
+            .listener_bindings()
+            .iter()
+            .find(|binding| binding.transport == TransportKind::Udp)
+            .expect("udp listener binding should exist");
+        assert!(binding.local_addr.port() > 0);
+        assert!(
+            binding
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == BE_26_3_ADAPTER_ID)
+        );
+
+        server.shutdown().await
+    }
+
+    #[test]
+    fn server_properties_accept_flat_level_type() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(
+            &path,
+            "level-name=flatland\nlevel-type=FLAT\nbe-enabled=true\nonline-mode=false\ndefault-adapter=je-1_7_10\nstorage-profile=je-anvil-1_7_10\nauth-profile=offline-v1\n",
+        )?;
+
+        let config = ServerConfig::from_properties(&path)?;
+
+        assert_eq!(config.level_name, "flatland");
+        assert_eq!(config.level_type, LevelType::Flat);
+        assert!(config.be_enabled);
+        assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
+        assert_eq!(config.default_bedrock_adapter, BE_26_3_ADAPTER_ID);
+        assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
+        assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
+        assert_eq!(config.bedrock_auth_profile, BEDROCK_OFFLINE_AUTH_PROFILE_ID);
+        assert_eq!(config.world_dir, temp_dir.path().join("flatland"));
+        Ok(())
+    }
+
+    #[test]
+    fn server_properties_use_default_adapter_and_storage_profile() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(&path, "level-name=flatland\nlevel-type=FLAT\n")?;
+
+        let config = ServerConfig::from_properties(&path)?;
+
+        assert!(!config.be_enabled);
+        assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
+        assert_eq!(config.default_bedrock_adapter, BE_26_3_ADAPTER_ID);
+        assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
+        assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
+        assert_eq!(config.bedrock_auth_profile, BEDROCK_OFFLINE_AUTH_PROFILE_ID);
+        Ok(())
+    }
+
+    #[test]
+    fn server_properties_parse_enabled_adapters() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(&path, "enabled-adapters=je-1_7_10, je-1_8_x,je-1_12_2\n")?;
+
+        let config = ServerConfig::from_properties(&path)?;
+        assert_eq!(
+            config.enabled_adapters,
+            Some(vec![
+                JE_1_7_10_ADAPTER_ID.to_string(),
+                JE_1_8_X_ADAPTER_ID.to_string(),
+                JE_1_12_2_ADAPTER_ID.to_string(),
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn server_properties_parse_bedrock_adapter_and_auth_profile() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(
+            &path,
+            "be-enabled=true\ndefault-bedrock-adapter=be-26_3\nenabled-bedrock-adapters=be-26_3,be-placeholder\nbedrock-auth-profile=bedrock-xbl-v1\n",
+        )?;
+
+        let config = ServerConfig::from_properties(&path)?;
+        assert!(config.be_enabled);
+        assert_eq!(config.default_bedrock_adapter, BE_26_3_ADAPTER_ID);
+        assert_eq!(
+            config.enabled_bedrock_adapters,
+            Some(vec![
+                BE_26_3_ADAPTER_ID.to_string(),
+                BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+            ])
+        );
+        assert_eq!(config.bedrock_auth_profile, "bedrock-xbl-v1");
+        Ok(())
+    }
+
+    #[test]
+    fn server_properties_parse_gameplay_profile_configuration() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(
+            &path,
+            "default-gameplay-profile=canonical\ngameplay-profile-map=je-1_7_10:readonly,je-1_12_2:canonical\n",
+        )?;
+
+        let config = ServerConfig::from_properties(&path)?;
+        assert_eq!(config.default_gameplay_profile, "canonical");
+        assert_eq!(
+            config.gameplay_profile_map,
+            gameplay_profile_map(&[
+                (JE_1_7_10_ADAPTER_ID, "readonly"),
+                (JE_1_12_2_ADAPTER_ID, "canonical"),
+            ])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn server_properties_parse_auth_profile() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(&path, "auth-profile=offline-v1\n")?;
+
+        let config = ServerConfig::from_properties(&path)?;
+        assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
+        Ok(())
+    }
+
+    #[test]
+    fn server_properties_reject_non_flat_level_type() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let path = temp_dir.path().join("server.properties");
+        fs::write(&path, "level-type=DEFAULT\n")?;
+
+        let error = ServerConfig::from_properties(&path).expect_err("DEFAULT should be rejected");
+        assert!(
+            matches!(error, RuntimeError::Unsupported(message) if message.contains("only FLAT"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn be_enabled_requires_udp_adapter() {
+        let registry = plugin_test_registries_tcp_only()
+            .expect("tcp-only plugin registry should be available");
+        let error = build_listener_plans(
+            &ServerConfig {
+                be_enabled: true,
+                ..ServerConfig::default()
+            },
+            registry.protocols(),
+        )
+        .expect_err("be-enabled should require udp adapter");
+        assert!(matches!(
+            error,
+            RuntimeError::Config(message) if message.contains("be-enabled=true")
+        ));
+    }
+
+    #[tokio::test]
+    async fn enabled_adapters_must_include_default_adapter() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                enabled_adapters: Some(vec![JE_1_8_X_ADAPTER_ID.to_string()]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_all()?,
+        )
+        .await;
+
+        let Err(error) = result else {
+            panic!("default adapter missing from enabled list should fail");
+        };
+        assert!(matches!(
+            error,
+            RuntimeError::Config(message) if message.contains("default-adapter")
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_enabled_adapters_fail_fast() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_all()?,
+        )
+        .await;
+
+        let Err(error) = result else {
+            panic!("duplicate enabled adapters should fail");
+        };
+        assert!(matches!(
+            error,
+            RuntimeError::Config(message) if message.contains("duplicate adapter")
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_all()?,
+        )
+        .await?;
+
+        let binding = server
+            .listener_bindings()
+            .iter()
+            .find(|binding| binding.transport == TransportKind::Tcp)
+            .expect("tcp listener binding should exist");
+        assert_eq!(binding.adapter_ids.len(), 3);
+        assert!(
+            binding
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID)
+        );
+        assert!(
+            binding
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == JE_1_8_X_ADAPTER_ID)
+        );
+        assert!(
+            binding
+                .adapter_ids
+                .iter()
+                .any(|adapter_id| adapter_id == JE_1_12_2_ADAPTER_ID)
+        );
+
+        server.shutdown().await
+    }
+
+    fn login_start(username: &str) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x00);
+        let _ = writer.write_string(username);
+        writer.into_inner()
+    }
+
+    fn status_request() -> Vec<u8> {
+        vec![0x00]
+    }
+
+    fn status_ping(value: i64) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x01);
+        writer.write_i64(value);
+        writer.into_inner()
+    }
+
+    fn raknet_unconnected_ping() -> Vec<u8> {
+        let mut frame = Vec::with_capacity(33);
+        frame.push(0x01);
+        frame.extend_from_slice(&123_i64.to_be_bytes());
+        frame.extend_from_slice(&RAKNET_MAGIC);
+        frame.extend_from_slice(&456_i64.to_be_bytes());
+        frame
+    }
+
+    fn player_position_look(x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x06);
+        writer.write_f64(x);
+        writer.write_f64(y + 1.62);
+        writer.write_f64(y);
+        writer.write_f64(z);
+        writer.write_f32(yaw);
+        writer.write_f32(pitch);
+        writer.write_bool(true);
+        writer.into_inner()
+    }
+
+    fn held_item_change(slot: i16) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x09);
+        writer.write_i16(slot);
+        writer.into_inner()
+    }
+
+    fn creative_inventory_action(slot: i16, item_id: i16, count: u8, damage: i16) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x10);
+        writer.write_i16(slot);
+        writer.write_i16(item_id);
+        writer.write_u8(count);
+        writer.write_i16(damage);
+        writer.write_i16(-1);
+        writer.into_inner()
+    }
+
+    fn player_block_placement(
+        x: i32,
+        y: u8,
+        z: i32,
+        face: u8,
+        held_item: Option<(i16, u8, i16)>,
+    ) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x08);
+        writer.write_i32(x);
+        writer.write_u8(y);
+        writer.write_i32(z);
+        writer.write_u8(face);
+        if let Some((item_id, count, damage)) = held_item {
+            writer.write_i16(item_id);
+            writer.write_u8(count);
+            writer.write_i16(damage);
+        }
+        writer.write_i16(-1);
+        writer.write_u8(8);
+        writer.write_u8(8);
+        writer.write_u8(8);
+        writer.into_inner()
+    }
+
+    fn player_digging(status: u8, x: i32, y: u8, z: i32, face: u8) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x07);
+        writer.write_u8(status);
+        writer.write_i32(x);
+        writer.write_u8(y);
+        writer.write_i32(z);
+        writer.write_u8(face);
+        writer.into_inner()
+    }
+
+    fn player_position_look_1_8(x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x06);
+        writer.write_f64(x);
+        writer.write_f64(y);
+        writer.write_f64(z);
+        writer.write_f32(yaw);
+        writer.write_f32(pitch);
+        writer.write_bool(true);
+        writer.into_inner()
+    }
+
+    fn player_position_look_1_12(x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x0e);
+        writer.write_f64(x);
+        writer.write_f64(y);
+        writer.write_f64(z);
+        writer.write_f32(yaw);
+        writer.write_f32(pitch);
+        writer.write_bool(true);
+        writer.into_inner()
+    }
+
+    fn creative_inventory_action_1_12(slot: i16, item_id: i16, count: u8, damage: i16) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x1b);
+        writer.write_i16(slot);
+        writer.write_i16(item_id);
+        writer.write_u8(count);
+        writer.write_i16(damage);
+        writer.write_i16(-1);
+        writer.into_inner()
+    }
+
+    fn player_block_placement_1_12(x: i32, y: i32, z: i32, face: i32, hand: i32) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(0x1f);
+        writer.write_i64(mc_proto_je_common::pack_block_position(
+            mc_core::BlockPos::new(x, y, z),
+        ));
+        writer.write_varint(face);
+        writer.write_varint(hand);
+        writer.write_f32(0.5);
+        writer.write_f32(0.5);
+        writer.write_f32(0.5);
+        writer.into_inner()
+    }
+
+    fn read_slot(reader: &mut PacketReader<'_>) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
+        let item_id = reader.read_i16()?;
+        if item_id < 0 {
+            return Ok(None);
+        }
+        let count = reader.read_u8()?;
+        let damage = reader.read_i16()?;
+        let nbt_length = reader.read_i16()?;
+        if nbt_length != -1 {
+            return Err(RuntimeError::Config(
+                "test helper only supports empty slot nbt".to_string(),
+            ));
+        }
+        Ok(Some((item_id, count, damage)))
+    }
+
+    fn window_items_slot(
+        packet: &[u8],
+        wanted_slot: usize,
+    ) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
+        window_items_slot_with_packet_id(packet, 0x30, wanted_slot)
+    }
+
+    fn window_items_slot_with_packet_id(
+        packet: &[u8],
+        expected_packet_id: i32,
+        wanted_slot: usize,
+    ) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != expected_packet_id {
+            return Err(RuntimeError::Config(
+                "expected window items packet".to_string(),
+            ));
+        }
+        let _window_id = reader.read_u8()?;
+        let count = usize::try_from(reader.read_i16()?)
+            .map_err(|_| RuntimeError::Config("negative window item count".to_string()))?;
+        if wanted_slot >= count {
+            return Err(RuntimeError::Config(
+                "wanted slot out of bounds".to_string(),
+            ));
+        }
+        for slot in 0..count {
+            let item = read_slot(&mut reader)?;
+            if slot == wanted_slot {
+                return Ok(item);
+            }
+        }
+        Err(RuntimeError::Config("wanted slot missing".to_string()))
+    }
+
+    fn set_slot_slot(packet: &[u8], expected_packet_id: i32) -> Result<i16, RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != expected_packet_id {
+            return Err(RuntimeError::Config("expected set slot packet".to_string()));
+        }
+        let _window_id = reader.read_i8()?;
+        reader.read_i16().map_err(RuntimeError::from)
+    }
+
+    fn held_item_from_packet(packet: &[u8]) -> Result<i8, RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x09 {
+            return Err(RuntimeError::Config(
+                "expected held item change packet".to_string(),
+            ));
+        }
+        reader.read_i8().map_err(RuntimeError::from)
+    }
+
+    fn block_change_from_packet(packet: &[u8]) -> Result<(i32, u8, i32, i32, u8), RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x23 {
+            return Err(RuntimeError::Config(
+                "expected block change packet".to_string(),
+            ));
+        }
+        let x = reader.read_i32()?;
+        let y = reader.read_u8()?;
+        let z = reader.read_i32()?;
+        let block_id = reader.read_varint()?;
+        let metadata = reader.read_u8()?;
+        Ok((x, y, z, block_id, metadata))
+    }
+
+    fn block_change_from_packet_1_8(packet: &[u8]) -> Result<(i32, i32, i32, i32), RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x23 {
+            return Err(RuntimeError::Config(
+                "expected 1.8 block change packet".to_string(),
+            ));
+        }
+        let position = mc_proto_je_common::unpack_block_position(reader.read_i64()?);
+        let block_state = reader.read_varint()?;
+        Ok((position.x, position.y, position.z, block_state))
+    }
+
+    fn player_abilities_flags(packet: &[u8]) -> Result<u8, RuntimeError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != 0x39 {
+            return Err(RuntimeError::Config(
+                "expected player abilities packet".to_string(),
+            ));
+        }
+        reader.read_u8().map_err(RuntimeError::from)
+    }
+
+    #[tokio::test]
+    async fn status_ping_login_and_initial_world_work() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut status_stream = connect_tcp(addr).await?;
+        write_packet(&mut status_stream, &codec, &encode_handshake(5, 1)?).await?;
+        write_packet(&mut status_stream, &codec, &status_request()).await?;
+        let mut buffer = BytesMut::new();
+        let status_response = read_packet(&mut status_stream, &codec, &mut buffer).await?;
+        assert_eq!(packet_id(&status_response), 0x00);
+        write_packet(&mut status_stream, &codec, &status_ping(42)).await?;
+        let pong = read_packet(&mut status_stream, &codec, &mut buffer).await?;
+        assert_eq!(packet_id(&pong), 0x01);
+
+        let mut login_stream = connect_tcp(addr).await?;
+        write_packet(&mut login_stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut login_stream, &codec, &login_start("alpha")).await?;
+        let mut login_buffer = BytesMut::new();
+        let login_success = read_packet(&mut login_stream, &codec, &mut login_buffer).await?;
+        assert_eq!(packet_id(&login_success), 0x02);
+        let join_game = read_packet(&mut login_stream, &codec, &mut login_buffer).await?;
+        assert_eq!(packet_id(&join_game), 0x01);
+        let chunk_bulk =
+            read_until_packet_id(&mut login_stream, &codec, &mut login_buffer, 0x26, 8).await?;
+        assert_eq!(packet_id(&chunk_bulk), 0x26);
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn creative_join_sends_inventory_selected_slot_and_abilities() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("creative")).await?;
+        let mut buffer = BytesMut::new();
+        let mut window_items = None;
+        let mut held_item = None;
+        let mut abilities = None;
+        for _ in 0..12 {
+            let packet = read_packet(&mut stream, &codec, &mut buffer).await?;
+            match packet_id(&packet) {
+                0x30 if window_items.is_none() => window_items = Some(packet),
+                0x09 if held_item.is_none() => held_item = Some(packet),
+                0x39 if abilities.is_none() => abilities = Some(packet),
+                _ => {}
+            }
+            if window_items.is_some() && held_item.is_some() && abilities.is_some() {
+                break;
+            }
+        }
+        let window_items = window_items
+            .ok_or_else(|| RuntimeError::Config("window items not received".to_string()))?;
+        let held_item = held_item
+            .ok_or_else(|| RuntimeError::Config("held item change not received".to_string()))?;
+        let abilities = abilities
+            .ok_or_else(|| RuntimeError::Config("player abilities not received".to_string()))?;
+
+        assert_eq!(window_items_slot(&window_items, 36)?, Some((1, 64, 0)));
+        assert_eq!(window_items_slot(&window_items, 44)?, Some((45, 64, 0)));
+        assert_eq!(held_item_from_packet(&held_item)?, 0);
+        assert_eq!(player_abilities_flags(&abilities)? & 0x0d, 0x0d);
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn unsupported_status_protocol_receives_server_list_response() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(47, 1)?).await?;
+        write_packet(&mut stream, &codec, &status_request()).await?;
+        let mut buffer = BytesMut::new();
+        let status_response = read_packet(&mut stream, &codec, &mut buffer).await?;
+        assert_eq!(packet_id(&status_response), 0x00);
+        let mut reader = PacketReader::new(&status_response);
+        assert_eq!(reader.read_varint().expect("packet id should decode"), 0x00);
+        let payload = reader
+            .read_string(32767)
+            .expect("status json should decode");
+        assert!(payload.contains("\"protocol\":5"));
+        assert!(payload.contains("\"name\":\"1.7.10\""));
+
+        write_packet(&mut stream, &codec, &status_ping(99)).await?;
+        let pong = read_packet(&mut stream, &codec, &mut buffer).await?;
+        assert_eq!(packet_id(&pong), 0x01);
+
+        server.shutdown().await
+    }
+
+    #[test]
+    fn udp_bedrock_probe_classifies_placeholder_datagram() -> Result<(), RuntimeError> {
+        let registry = plugin_test_registries_all()?;
+        let action = classify_udp_datagram(registry.protocols(), &raknet_unconnected_ping())?;
+        assert_eq!(action, UdpDatagramAction::UnsupportedBedrock);
+        Ok(())
+    }
+
+    #[test]
+    fn udp_unknown_datagram_is_ignored() -> Result<(), RuntimeError> {
+        let registry = plugin_test_registries_all()?;
+        let action = classify_udp_datagram(registry.protocols(), &[0xde, 0xad, 0xbe, 0xef])?;
+        assert_eq!(action, UdpDatagramAction::Ignore);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn udp_bedrock_probe_does_not_block_je_status() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                be_enabled: true,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_all()?,
+        )
+        .await?;
+
+        let udp_addr = udp_listener_addr(&server);
+        let udp_client = UdpSocket::bind("127.0.0.1:0").await?;
+        udp_client
+            .send_to(&raknet_unconnected_ping(), udp_addr)
+            .await?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 1)?).await?;
+        write_packet(&mut stream, &codec, &status_request()).await?;
+        let mut buffer = BytesMut::new();
+        let status_response = read_packet(&mut stream, &codec, &mut buffer).await?;
+        let mut reader = PacketReader::new(&status_response);
+        assert_eq!(reader.read_varint().expect("packet id should decode"), 0x00);
+        let payload = reader
+            .read_string(32767)
+            .expect("status json should decode");
+        assert!(payload.contains("\"online\":0"));
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn online_mode_requires_online_auth_profile() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                online_mode: true,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("online-mode should require an online auth profile");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("requires an online auth profile"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn offline_mode_rejects_online_auth_profile() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("offline mode should reject online auth profile");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("requires an offline auth profile"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                online_mode: true,
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            in_process_online_auth_registries(&[
+                JE_1_7_10_ADAPTER_ID,
+                JE_1_8_X_ADAPTER_ID,
+                JE_1_12_2_ADAPTER_ID,
+            ])?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        for (protocol_version, username, expected_packet_id) in [
+            (5, "legacy-online", 0x30),
+            (47, "middle-online", 0x30),
+            (340, "latest-online", 0x14),
+        ] {
+            let mut stream = connect_tcp(addr).await?;
+            let (mut encryption, mut buffer) =
+                perform_online_login(&mut stream, &codec, protocol_version, username).await?;
+            let login_success = read_until_packet_id_encrypted(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                0x02,
+                8,
+                &mut encryption,
+            )
+            .await?;
+            assert_eq!(packet_id(&login_success), 0x02);
+
+            let bootstrap = read_until_packet_id_encrypted(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                expected_packet_id,
+                24,
+                &mut encryption,
+            )
+            .await?;
+            assert_eq!(packet_id(&bootstrap), expected_packet_id);
+        }
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                online_mode: true,
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut stream = connect_tcp(addr).await?;
+        let (mut encryption, mut buffer) =
+            perform_online_login(&mut stream, &codec, 5, "encrypted-alpha").await?;
+        let _ = read_until_packet_id_encrypted(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            0x30,
+            16,
+            &mut encryption,
+        )
+        .await?;
+        let _ = read_until_packet_id_encrypted(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            0x09,
+            16,
+            &mut encryption,
+        )
+        .await?;
+
+        write_packet_encrypted(&mut stream, &codec, &held_item_change(4), &mut encryption).await?;
+        let held_item = read_until_packet_id_encrypted(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            0x09,
+            8,
+            &mut encryption,
+        )
+        .await?;
+        assert_eq!(held_item_from_packet(&held_item)?, 4);
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn verify_token_mismatch_disconnects_in_online_mode() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                online_mode: true,
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("mismatch")).await?;
+        let mut buffer = BytesMut::new();
+        let request = read_packet(&mut stream, &codec, &mut buffer).await?;
+        let (_server_id, public_key_der, _verify_token) = parse_encryption_request(&request)?;
+        let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
+            .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
+        let mut shared_secret = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut shared_secret);
+        let shared_secret_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
+            })?;
+        let verify_token_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &[9, 9, 9, 9])
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
+            })?;
+        let response =
+            login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
+        write_packet(&mut stream, &codec, &response).await?;
+
+        let mut encryption = TestClientEncryptionState::new(shared_secret);
+        let disconnect = read_until_packet_id_encrypted(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            0x00,
+            4,
+            &mut encryption,
+        )
+        .await?;
+        assert_eq!(packet_id(&disconnect), 0x00);
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn unknown_default_adapter_fails_fast() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                default_adapter: "missing".to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("unknown default adapter should fail fast");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("unknown default-adapter"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unknown_gameplay_profile_fails_fast() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                default_gameplay_profile: "missing".to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("unknown gameplay profile should fail fast");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("unknown gameplay profile"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unknown_storage_profile_fails_fast() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                storage_profile: "missing".to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("unknown storage profile should fail fast");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("unknown storage profile"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unknown_auth_profile_fails_fast() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let result = spawn_server(
+            ServerConfig {
+                auth_profile: "missing".to_string(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("unknown auth profile should fail fast");
+        };
+        assert!(
+            matches!(error, RuntimeError::Config(message) if message.contains("unknown auth profile"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unmatched_probe_closes_without_response() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &[0x01]).await?;
+
+        let mut bytes = [0_u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(1), stream.read(&mut bytes))
+            .await
+            .map_err(|_| RuntimeError::Config("probe mismatch did not close".to_string()))??;
+        assert_eq!(read, 0);
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn unsupported_login_protocol_receives_disconnect() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(47, 2)?).await?;
+        let mut buffer = BytesMut::new();
+        let disconnect = read_packet(&mut stream, &codec, &mut buffer).await?;
+        let mut reader = PacketReader::new(&disconnect);
+        assert_eq!(reader.read_varint().expect("packet id should decode"), 0x00);
+        let reason = reader
+            .read_string(32767)
+            .expect("disconnect reason should decode");
+        assert!(reason.contains("Unsupported protocol 47"));
+        assert!(reason.contains("1.7.10"));
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_all()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("legacy")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 12).await?;
+
+        let mut modern_18 = connect_tcp(addr).await?;
+        write_packet(&mut modern_18, &codec, &encode_handshake(47, 2)?).await?;
+        write_packet(&mut modern_18, &codec, &login_start("middle")).await?;
+        let mut modern_18_buffer = BytesMut::new();
+        let _ =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x30, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+        let mut modern_112 = connect_tcp(addr).await?;
+        write_packet(&mut modern_112, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern_112, &codec, &login_start("latest")).await?;
+        let mut modern_112_buffer = BytesMut::new();
+        let _ =
+            read_until_packet_id(&mut modern_112, &codec, &mut modern_112_buffer, 0x14, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+        let _ =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x0c, 12).await?;
+
+        write_packet(
+            &mut modern_18,
+            &codec,
+            &player_position_look_1_8(32.5, 4.0, 0.5, 90.0, 0.0),
+        )
+        .await?;
+        let legacy_teleport =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x18, 16).await?;
+        let modern_112_teleport =
+            read_until_packet_id(&mut modern_112, &codec, &mut modern_112_buffer, 0x4c, 16).await?;
+        assert_eq!(packet_id(&legacy_teleport), 0x18);
+        assert_eq!(packet_id(&modern_112_teleport), 0x4c);
+
+        write_packet(
+            &mut modern_112,
+            &codec,
+            &player_block_placement_1_12(2, 3, 0, 1, 0),
+        )
+        .await?;
+        let legacy_block_change =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x23, 16).await?;
+        let modern_18_block_change =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x23, 16).await?;
+        assert_eq!(
+            block_change_from_packet(&legacy_block_change)?,
+            (2, 4, 0, 1, 0)
+        );
+        assert_eq!(
+            block_change_from_packet_1_8(&modern_18_block_change)?,
+            (2, 4, 0, 16)
+        );
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                default_gameplay_profile: "canonical".to_string(),
+                gameplay_profile_map: gameplay_profile_map(&[
+                    (JE_1_7_10_ADAPTER_ID, "readonly"),
+                    (JE_1_12_2_ADAPTER_ID, "canonical"),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_all()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("legacy-readonly")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 12).await?;
+
+        let mut modern = connect_tcp(addr).await?;
+        write_packet(&mut modern, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern, &codec, &login_start("modern-canonical")).await?;
+        let mut modern_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+        write_packet(
+            &mut modern,
+            &codec,
+            &player_block_placement_1_12(2, 3, 0, 1, 0),
+        )
+        .await?;
+        let _ = read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x0b, 16).await?;
+        let legacy_block_change =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x23, 16).await?;
+        assert_eq!(
+            block_change_from_packet(&legacy_block_change)?,
+            (2, 4, 0, 1, 0)
+        );
+
+        write_packet(
+            &mut legacy,
+            &codec,
+            &player_block_placement(3, 3, 0, 1, Some((1, 64, 0))),
+        )
+        .await?;
+        assert_no_packet_id(&mut modern, &codec, &mut modern_buffer, 0x0b).await?;
+
+        write_packet(
+            &mut legacy,
+            &codec,
+            &player_position_look(12.5, 4.0, 0.5, 0.0, 0.0),
+        )
+        .await?;
+        let modern_teleport =
+            read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x4c, 16).await?;
+        assert_eq!(packet_id(&modern_teleport), 0x4c);
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let registries = plugin_test_registries_all()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                be_enabled: true,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                    BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            registries,
+        )
+        .await?;
+
+        let udp_addr = udp_listener_addr(&server);
+        let udp_client = UdpSocket::bind("127.0.0.1:0").await?;
+        udp_client
+            .send_to(&raknet_unconnected_ping(), udp_addr)
+            .await?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut status_stream = connect_tcp(addr).await?;
+        write_packet(&mut status_stream, &codec, &encode_handshake(5, 1)?).await?;
+        write_packet(&mut status_stream, &codec, &[0x00]).await?;
+        let mut status_buffer = BytesMut::new();
+        let status = read_packet(&mut status_stream, &codec, &mut status_buffer).await?;
+        assert_eq!(packet_id(&status), 0x00);
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("legacy")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 12).await?;
+
+        let mut modern_18 = connect_tcp(addr).await?;
+        write_packet(&mut modern_18, &codec, &encode_handshake(47, 2)?).await?;
+        write_packet(&mut modern_18, &codec, &login_start("middle")).await?;
+        let mut modern_18_buffer = BytesMut::new();
+        let _ =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x30, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+        let mut modern_112 = connect_tcp(addr).await?;
+        write_packet(&mut modern_112, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern_112, &codec, &login_start("latest")).await?;
+        let mut modern_112_buffer = BytesMut::new();
+        let _ =
+            read_until_packet_id(&mut modern_112, &codec, &mut modern_112_buffer, 0x14, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+        let _ =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x0c, 12).await?;
+
+        write_packet(
+            &mut modern_18,
+            &codec,
+            &player_position_look_1_8(32.5, 4.0, 0.5, 90.0, 0.0),
+        )
+        .await?;
+        let legacy_teleport =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x18, 16).await?;
+        let modern_112_teleport =
+            read_until_packet_id(&mut modern_112, &codec, &mut modern_112_buffer, 0x4c, 16).await?;
+        assert_eq!(packet_id(&legacy_teleport), 0x18);
+        assert_eq!(packet_id(&modern_112_teleport), 0x4c);
+
+        write_packet(
+            &mut modern_112,
+            &codec,
+            &player_block_placement_1_12(2, 3, 0, 1, 0),
+        )
+        .await?;
+        let legacy_block_change =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x23, 16).await?;
+        let modern_18_block_change =
+            read_until_packet_id(&mut modern_18, &codec, &mut modern_18_buffer, 0x23, 16).await?;
+        assert_eq!(
+            block_change_from_packet(&legacy_block_change)?,
+            (2, 4, 0, 1, 0)
+        );
+        assert_eq!(
+            block_change_from_packet_1_8(&modern_18_block_change)?,
+            (2, 4, 0, 16)
+        );
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("runtime").join("plugins");
+        let target_dir = crate::packaged_plugin_test_target_dir("gameplay-reload-success");
+        crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+        let registries = plugin_test_registries_from_dist(
+            dist_dir.clone(),
+            &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
+        )?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                default_gameplay_profile: "canonical".to_string(),
+                gameplay_profile_map: gameplay_profile_map(&[
+                    (JE_1_7_10_ADAPTER_ID, "readonly"),
+                    (JE_1_12_2_ADAPTER_ID, "canonical"),
+                ]),
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            registries,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let canonical_before = plugin_host
+            .resolve_gameplay_profile("canonical")
+            .expect("canonical gameplay profile should resolve");
+        let readonly_before = plugin_host
+            .resolve_gameplay_profile("readonly")
+            .expect("readonly gameplay profile should resolve");
+        let canonical_generation = canonical_before
+            .plugin_generation_id()
+            .expect("canonical profile should report generation");
+        let readonly_generation = readonly_before
+            .plugin_generation_id()
+            .expect("readonly profile should report generation");
+        assert!(canonical_before.capability_set().contains(&format!(
+            "build-tag:{}",
+            crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
+        )));
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("legacy-observer")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 12).await?;
+
+        let mut modern = connect_tcp(addr).await?;
+        write_packet(&mut modern, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern, &codec, &login_start("modern-reload")).await?;
+        let mut modern_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_gameplay_plugin(
+            "mc-plugin-gameplay-canonical",
+            "gameplay-canonical",
+            &dist_dir,
+            &target_dir,
+            "gameplay-reload-v2",
+        )?;
+
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == "gameplay-canonical"),
+            "gameplay reload should report canonical plugin reload"
+        );
+
+        let canonical_after = plugin_host
+            .resolve_gameplay_profile("canonical")
+            .expect("canonical gameplay profile should still resolve");
+        let readonly_after = plugin_host
+            .resolve_gameplay_profile("readonly")
+            .expect("readonly gameplay profile should still resolve");
+        assert_ne!(
+            canonical_after.plugin_generation_id(),
+            Some(canonical_generation)
+        );
+        assert_eq!(
+            readonly_after.plugin_generation_id(),
+            Some(readonly_generation)
+        );
+        assert!(
+            canonical_after
+                .capability_set()
+                .contains("build-tag:gameplay-reload-v2")
+        );
+
+        write_packet(
+            &mut modern,
+            &codec,
+            &player_position_look_1_12(18.5, 4.0, 0.5, 30.0, 0.0),
+        )
+        .await?;
+        let legacy_teleport =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x18, 16).await?;
+        assert_eq!(packet_id(&legacy_teleport), 0x18);
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("runtime").join("plugins");
+        let target_dir = crate::packaged_plugin_test_target_dir("gameplay-reload-failure");
+        crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+        let registries = plugin_test_registries_from_dist(
+            dist_dir.clone(),
+            &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
+        )?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                default_gameplay_profile: "canonical".to_string(),
+                gameplay_profile_map: gameplay_profile_map(&[
+                    (JE_1_7_10_ADAPTER_ID, "readonly"),
+                    (JE_1_12_2_ADAPTER_ID, "canonical"),
+                ]),
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            registries,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let canonical_before = plugin_host
+            .resolve_gameplay_profile("canonical")
+            .expect("canonical gameplay profile should resolve");
+        let before_generation = canonical_before
+            .plugin_generation_id()
+            .expect("canonical profile should report generation");
+        assert!(canonical_before.capability_set().contains(&format!(
+            "build-tag:{}",
+            crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
+        )));
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("legacy-failure")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 12).await?;
+
+        let mut modern = connect_tcp(addr).await?;
+        write_packet(&mut modern, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern, &codec, &login_start("modern-failure")).await?;
+        let mut modern_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 24).await?;
+        let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_gameplay_plugin(
+            "mc-plugin-gameplay-canonical",
+            "gameplay-canonical",
+            &dist_dir,
+            &target_dir,
+            "gameplay-reload-fail",
+        )?;
+
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            !reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == "gameplay-canonical"),
+            "failed gameplay migration should not swap the canonical generation"
+        );
+
+        let canonical_after = plugin_host
+            .resolve_gameplay_profile("canonical")
+            .expect("canonical gameplay profile should still resolve");
+        assert_eq!(
+            canonical_after.plugin_generation_id(),
+            Some(before_generation)
+        );
+        assert!(canonical_after.capability_set().contains(&format!(
+            "build-tag:{}",
+            crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
+        )));
+
+        write_packet(
+            &mut modern,
+            &codec,
+            &player_position_look_1_12(22.5, 4.0, 0.5, 45.0, 0.0),
+        )
+        .await?;
+        let legacy_teleport =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x18, 16).await?;
+        assert_eq!(packet_id(&legacy_teleport), 0x18);
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn storage_reload_updates_generation_and_preserves_persistence()
+    -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("runtime").join("plugins");
+        let target_dir = crate::packaged_plugin_test_target_dir("storage-reload-success");
+        let world_dir = temp_dir.path().join("world");
+        crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+        let registries =
+            plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                plugins_dir: dist_dir.clone(),
+                world_dir: world_dir.clone(),
+                ..ServerConfig::default()
+            },
+            registries,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let storage_before = plugin_host
+            .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
+            .expect("storage profile should resolve");
+        let before_generation = storage_before
+            .plugin_generation_id()
+            .expect("storage profile should report generation");
+        assert!(storage_before.capability_set().contains(&format!(
+            "build-tag:{}",
+            crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
+        )));
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+        write_packet(
+            &mut stream,
+            &codec,
+            &creative_inventory_action(36, 20, 64, 0),
+        )
+        .await?;
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_plugin(
+            "mc-plugin-storage-je-anvil-1_7_10",
+            "storage-je-anvil-1_7_10",
+            "storage",
+            &dist_dir,
+            &target_dir,
+            "storage-reload-v2",
+        )?;
+
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == "storage-je-anvil-1_7_10"),
+            "storage reload should report generation swap"
+        );
+
+        let storage_after = plugin_host
+            .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
+            .expect("storage profile should still resolve");
+        assert_ne!(
+            storage_after.plugin_generation_id(),
+            Some(before_generation)
+        );
+        assert!(
+            storage_after
+                .capability_set()
+                .contains("build-tag:storage-reload-v2")
+        );
+
+        server.shutdown().await?;
+
+        let restarted = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                plugins_dir: dist_dir.clone(),
+                world_dir: world_dir.clone(),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_from_dist(dist_dir, &[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await?;
+        let addr = listener_addr(&restarted);
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let window_items = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+        assert_eq!(window_items_slot(&window_items, 36)?, Some((20, 64, 0)));
+
+        restarted.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn storage_reload_failure_keeps_existing_generation() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("runtime").join("plugins");
+        let target_dir = crate::packaged_plugin_test_target_dir("storage-reload-failure");
+        crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let storage_before = plugin_host
+            .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
+            .expect("storage profile should resolve");
+        let before_generation = storage_before
+            .plugin_generation_id()
+            .expect("storage profile should report generation");
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_plugin(
+            "mc-plugin-storage-je-anvil-1_7_10",
+            "storage-je-anvil-1_7_10",
+            "storage",
+            &dist_dir,
+            &target_dir,
+            "storage-reload-fail",
+        )?;
+
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            !reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == "storage-je-anvil-1_7_10"),
+            "failed storage migration should not swap the storage generation"
+        );
+
+        let storage_after = plugin_host
+            .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
+            .expect("storage profile should still resolve");
+        assert_eq!(
+            storage_after.plugin_generation_id(),
+            Some(before_generation)
+        );
+        assert!(storage_after.capability_set().contains(&format!(
+            "build-tag:{}",
+            crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
+        )));
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("runtime").join("plugins");
+        let target_dir = crate::packaged_plugin_test_target_dir("auth-reload-offline");
+        crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let auth_before = plugin_host
+            .resolve_auth_profile(OFFLINE_AUTH_PROFILE_ID)
+            .expect("auth profile should resolve");
+        let before_generation = auth_before
+            .plugin_generation_id()
+            .expect("auth profile should report generation");
+        assert!(auth_before.capability_set().contains(&format!(
+            "build-tag:{}",
+            crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
+        )));
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut alpha = connect_tcp(addr).await?;
+        write_packet(&mut alpha, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut alpha, &codec, &login_start("alpha")).await?;
+        let mut alpha_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x30, 12).await?;
+        let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_plugin(
+            "mc-plugin-auth-offline",
+            "auth-offline",
+            "auth",
+            &dist_dir,
+            &target_dir,
+            "auth-reload-v2",
+        )?;
+
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            reloaded.iter().any(|plugin_id| plugin_id == "auth-offline"),
+            "auth reload should report generation swap"
+        );
+
+        let auth_after = plugin_host
+            .resolve_auth_profile(OFFLINE_AUTH_PROFILE_ID)
+            .expect("auth profile should still resolve");
+        assert_ne!(auth_after.plugin_generation_id(), Some(before_generation));
+        assert!(
+            auth_after
+                .capability_set()
+                .contains("build-tag:auth-reload-v2")
+        );
+
+        write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
+        let held_item =
+            read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
+        assert_eq!(held_item_from_packet(&held_item)?, 4);
+
+        let mut beta = connect_tcp(addr).await?;
+        write_packet(&mut beta, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut beta, &codec, &login_start("beta")).await?;
+        let mut beta_buffer = BytesMut::new();
+        let login_success =
+            read_until_packet_id(&mut beta, &codec, &mut beta_buffer, 0x02, 8).await?;
+        assert_eq!(packet_id(&login_success), 0x02);
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("runtime").join("plugins");
+        let target_dir = crate::packaged_plugin_test_target_dir("auth-online-packaged");
+        crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+        package_single_plugin(
+            "mc-plugin-auth-online-stub",
+            ONLINE_STUB_AUTH_PLUGIN_ID,
+            "auth",
+            &dist_dir,
+            &target_dir,
+            "online-stub-v1",
+        )?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                online_mode: true,
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_from_dist_with_supporting_plugins(
+                dist_dir,
+                &[
+                    JE_1_7_10_ADAPTER_ID,
+                    JE_1_8_X_ADAPTER_ID,
+                    JE_1_12_2_ADAPTER_ID,
+                ],
+                &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
+            )?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        for (protocol_version, username, expected_packet_id) in [
+            (5, "packaged-legacy", 0x30),
+            (47, "packaged-middle", 0x30),
+            (340, "packaged-latest", 0x14),
+        ] {
+            let mut stream = connect_tcp(addr).await?;
+            let (mut encryption, mut buffer) =
+                perform_online_login(&mut stream, &codec, protocol_version, username).await?;
+            let login_success = read_until_packet_id_encrypted(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                0x02,
+                8,
+                &mut encryption,
+            )
+            .await?;
+            assert_eq!(packet_id(&login_success), 0x02);
+
+            let bootstrap = read_until_packet_id_encrypted(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                expected_packet_id,
+                24,
+                &mut encryption,
+            )
+            .await?;
+            assert_eq!(packet_id(&bootstrap), expected_packet_id);
+        }
+
+        server.shutdown().await
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("runtime").join("plugins");
+        let target_dir = crate::packaged_plugin_test_target_dir("auth-online-reload");
+        crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+        package_single_plugin(
+            "mc-plugin-auth-online-stub",
+            ONLINE_STUB_AUTH_PLUGIN_ID,
+            "auth",
+            &dist_dir,
+            &target_dir,
+            "online-auth-v1",
+        )?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                online_mode: true,
+                auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+                plugins_dir: dist_dir.clone(),
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_from_dist_with_supporting_plugins(
+                dist_dir.clone(),
+                &[JE_1_7_10_ADAPTER_ID],
+                &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
+            )?,
+        )
+        .await?;
+        let plugin_host = server
+            .plugin_host
+            .as_ref()
+            .expect("runtime should keep plugin host");
+        let auth_before = plugin_host
+            .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
+            .expect("online auth profile should resolve");
+        let before_generation = auth_before
+            .plugin_generation_id()
+            .expect("online auth profile should report generation");
+        assert!(
+            auth_before
+                .capability_set()
+                .contains("build-tag:online-auth-v1")
+        );
+
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+        let mut alpha = connect_tcp(addr).await?;
+        write_packet(&mut alpha, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut alpha, &codec, &login_start("alpha-online")).await?;
+        let mut alpha_buffer = BytesMut::new();
+        let request = read_packet(&mut alpha, &codec, &mut alpha_buffer).await?;
+        let (_server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;
+        let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
+            .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
+
+        std::thread::sleep(Duration::from_secs(1));
+        package_single_plugin(
+            "mc-plugin-auth-online-stub",
+            ONLINE_STUB_AUTH_PLUGIN_ID,
+            "auth",
+            &dist_dir,
+            &target_dir,
+            "online-auth-v2",
+        )?;
+        let reloaded = server.reload_plugins().await?;
+        assert!(
+            reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == ONLINE_STUB_AUTH_PLUGIN_ID)
+        );
+
+        let auth_after = plugin_host
+            .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
+            .expect("online auth profile should still resolve");
+        assert_ne!(auth_after.plugin_generation_id(), Some(before_generation));
+        assert!(
+            auth_after
+                .capability_set()
+                .contains("build-tag:online-auth-v2")
+        );
+
+        let mut shared_secret = [0_u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut shared_secret);
+        let shared_secret_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
+            })?;
+        let verify_token_encrypted = public_key
+            .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &verify_token)
+            .map_err(|error| {
+                RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
+            })?;
+        let response =
+            login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
+        write_packet(&mut alpha, &codec, &response).await?;
+
+        let mut alpha_encryption = TestClientEncryptionState::new(shared_secret);
+        let login_success = read_until_packet_id_encrypted(
+            &mut alpha,
+            &codec,
+            &mut alpha_buffer,
+            0x02,
+            8,
+            &mut alpha_encryption,
+        )
+        .await?;
+        assert_eq!(packet_id(&login_success), 0x02);
+
+        let mut beta = connect_tcp(addr).await?;
+        let (mut beta_encryption, mut beta_buffer) =
+            perform_online_login(&mut beta, &codec, 5, "beta-online").await?;
+        let beta_login_success = read_until_packet_id_encrypted(
+            &mut beta,
+            &codec,
+            &mut beta_buffer,
+            0x02,
+            8,
+            &mut beta_encryption,
+        )
+        .await?;
+        assert_eq!(packet_id(&beta_login_success), 0x02);
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let world_dir = temp_dir.path().join("world");
+        let codec = MinecraftWireCodec;
+
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                world_dir: world_dir.clone(),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_all()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+
+        let mut modern = connect_tcp(addr).await?;
+        write_packet(&mut modern, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern, &codec, &login_start("alpha")).await?;
+        let mut modern_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 24).await?;
+
+        write_packet(
+            &mut modern,
+            &codec,
+            &creative_inventory_action_1_12(45, 20, 64, 0),
+        )
+        .await?;
+        let set_slot =
+            read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x16, 8).await?;
+        assert_eq!(set_slot_slot(&set_slot, 0x16)?, 45);
+
+        server.shutdown().await?;
+
+        let restarted = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                enabled_adapters: Some(vec![
+                    JE_1_7_10_ADAPTER_ID.to_string(),
+                    JE_1_8_X_ADAPTER_ID.to_string(),
+                    JE_1_12_2_ADAPTER_ID.to_string(),
+                ]),
+                world_dir,
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_all()?,
+        )
+        .await?;
+        let addr = listener_addr(&restarted);
+
+        let mut modern = connect_tcp(addr).await?;
+        write_packet(&mut modern, &codec, &encode_handshake(340, 2)?).await?;
+        write_packet(&mut modern, &codec, &login_start("alpha")).await?;
+        let mut modern_buffer = BytesMut::new();
+        let window_items =
+            read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 24).await?;
+        assert_eq!(
+            window_items_slot_with_packet_id(&window_items, 0x14, 45)?,
+            Some((20, 64, 0))
+        );
+
+        let mut legacy = connect_tcp(addr).await?;
+        write_packet(&mut legacy, &codec, &encode_handshake(47, 2)?).await?;
+        write_packet(&mut legacy, &codec, &login_start("beta")).await?;
+        let mut legacy_buffer = BytesMut::new();
+        let legacy_window_items =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x30, 24).await?;
+        assert!(window_items_slot(&legacy_window_items, 45).is_err());
+
+        restarted.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn creative_place_and_break_broadcast_block_changes() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut first = connect_tcp(addr).await?;
+        write_packet(&mut first, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut first, &codec, &login_start("alpha")).await?;
+        let mut first_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x30, 12).await?;
+
+        let mut second = connect_tcp(addr).await?;
+        write_packet(&mut second, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut second, &codec, &login_start("beta")).await?;
+        let mut second_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut second, &codec, &mut second_buffer, 0x30, 12).await?;
+        let _ = read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x0c, 12).await?;
+
+        write_packet(
+            &mut first,
+            &codec,
+            &player_block_placement(2, 3, 0, 1, Some((1, 64, 0))),
+        )
+        .await?;
+        let place_change =
+            read_until_packet_id(&mut second, &codec, &mut second_buffer, 0x23, 8).await?;
+        assert_eq!(block_change_from_packet(&place_change)?, (2, 4, 0, 1, 0));
+
+        write_packet(&mut first, &codec, &player_digging(0, 2, 4, 0, 1)).await?;
+        let break_change =
+            read_until_packet_id(&mut second, &codec, &mut second_buffer, 0x23, 8).await?;
+        assert_eq!(block_change_from_packet(&break_change)?, (2, 4, 0, 0, 0));
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn creative_inventory_and_selected_slot_persist_across_restart()
+    -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let world_dir = temp_dir.path().join("world");
+        let codec = MinecraftWireCodec;
+
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                world_dir: world_dir.clone(),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 12).await?;
+
+        write_packet(
+            &mut stream,
+            &codec,
+            &creative_inventory_action(36, 20, 64, 0),
+        )
+        .await?;
+        let set_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
+        let mut set_slot_reader = PacketReader::new(&set_slot);
+        assert_eq!(set_slot_reader.read_varint()?, 0x2f);
+        assert_eq!(set_slot_reader.read_i8()?, 0);
+        assert_eq!(set_slot_reader.read_i16()?, 36);
+        assert_eq!(read_slot(&mut set_slot_reader)?, Some((20, 64, 0)));
+
+        write_packet(&mut stream, &codec, &held_item_change(4)).await?;
+        let held_slot_packet =
+            read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 8).await?;
+        assert_eq!(held_item_from_packet(&held_slot_packet)?, 4);
+
+        server.shutdown().await?;
+
+        let restarted = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                world_dir,
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&restarted);
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let window_items = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+        let held_item = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 12).await?;
+
+        assert_eq!(window_items_slot(&window_items, 36)?, Some((20, 64, 0)));
+        assert_eq!(held_item_from_packet(&held_item)?, 4);
+
+        restarted.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn plugin_backed_storage_and_auth_profiles_boot_and_persist() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let codec = MinecraftWireCodec;
+        let world_dir = temp_dir.path().join("world");
+
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                storage_profile: JE_1_7_10_STORAGE_PROFILE_ID.to_string(),
+                auth_profile: OFFLINE_AUTH_PROFILE_ID.to_string(),
+                world_dir: world_dir.clone(),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+
+        let addr = listener_addr(&server);
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x02, 8).await?;
+
+        server.shutdown().await?;
+
+        assert!(world_dir.join("level.dat").exists());
+        assert!(fs::read_dir(world_dir.join("playerdata"))?.next().is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsupported_creative_inventory_action_is_corrected() -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                game_mode: 1,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+
+        write_packet(
+            &mut stream,
+            &codec,
+            &creative_inventory_action(36, 999, 64, 0),
+        )
+        .await?;
+        let set_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
+        let mut reader = PacketReader::new(&set_slot);
+        assert_eq!(reader.read_varint()?, 0x2f);
+        assert_eq!(reader.read_i8()?, 0);
+        assert_eq!(reader.read_i16()?, 36);
+        assert_eq!(read_slot(&mut reader)?, Some((1, 64, 0)));
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn survival_place_is_rejected_with_block_and_inventory_correction()
+    -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: temp_dir.path().join("world"),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+        let codec = MinecraftWireCodec;
+
+        let mut stream = connect_tcp(addr).await?;
+        write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut stream, &codec, &login_start("alpha")).await?;
+        let mut buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
+
+        write_packet(
+            &mut stream,
+            &codec,
+            &player_block_placement(2, 3, 0, 1, Some((1, 64, 0))),
+        )
+        .await?;
+        let block_change = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x23, 8).await?;
+        let set_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
+
+        assert_eq!(block_change_from_packet(&block_change)?, (2, 4, 0, 0, 0));
+        let mut reader = PacketReader::new(&set_slot);
+        assert_eq!(reader.read_varint()?, 0x2f);
+        assert_eq!(reader.read_i8()?, 0);
+        assert_eq!(reader.read_i16()?, 36);
+        assert_eq!(read_slot(&mut reader)?, Some((1, 64, 0)));
+
+        server.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn two_players_can_see_movement_and_restart_persists_position() -> Result<(), RuntimeError>
+    {
+        let temp_dir = tempdir()?;
+        let world_dir = temp_dir.path().join("world");
+        let codec = MinecraftWireCodec;
+
+        let server = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir: world_dir.clone(),
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&server);
+
+        let mut first = connect_tcp(addr).await?;
+        write_packet(&mut first, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut first, &codec, &login_start("alpha")).await?;
+        let mut first_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x08, 8).await?;
+
+        let mut second = connect_tcp(addr).await?;
+        write_packet(&mut second, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut second, &codec, &login_start("beta")).await?;
+        let mut second_buffer = BytesMut::new();
+        let _ = read_until_packet_id(&mut second, &codec, &mut second_buffer, 0x08, 8).await?;
+        let spawn_packet =
+            read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x0c, 8).await?;
+        assert_eq!(packet_id(&spawn_packet), 0x0c);
+
+        write_packet(
+            &mut second,
+            &codec,
+            &player_position_look(32.5, 4.0, 0.5, 90.0, 0.0),
+        )
+        .await?;
+        let mut saw_teleport = false;
+        for _ in 0..4 {
+            let packet = read_packet(&mut first, &codec, &mut first_buffer).await?;
+            if packet_id(&packet) == 0x18 {
+                saw_teleport = true;
+                break;
+            }
+        }
+        assert!(saw_teleport);
+        second.shutdown().await.ok();
+        first.shutdown().await.ok();
+        server.shutdown().await?;
+
+        let restarted = spawn_server(
+            ServerConfig {
+                server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+                server_port: 0,
+                world_dir,
+                ..ServerConfig::default()
+            },
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?;
+        let addr = listener_addr(&restarted);
+        let mut alpha = connect_tcp(addr).await?;
+        write_packet(&mut alpha, &codec, &encode_handshake(5, 2)?).await?;
+        write_packet(&mut alpha, &codec, &login_start("beta")).await?;
+        let mut alpha_buffer = BytesMut::new();
+        let position_packet =
+            read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x08, 8).await?;
+        assert_eq!(packet_id(&position_packet), 0x08);
+        let mut reader = PacketReader::new(&position_packet);
+        assert_eq!(reader.read_varint().expect("packet id should decode"), 0x08);
+        let x = reader.read_f64().expect("x should decode");
+        let _y = reader.read_f64().expect("y should decode");
+        let _z = reader.read_f64().expect("z should decode");
+        assert!(x >= 32.0);
+
+        restarted.shutdown().await
+    }
+}

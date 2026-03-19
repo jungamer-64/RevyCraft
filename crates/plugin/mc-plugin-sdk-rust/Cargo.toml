@@ -1,0 +1,18 @@
+[package]
+name = "mc-plugin-sdk-rust"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Rust authoring SDK for RevyCraft runtime plugins."
+
+[dependencies]
+mc-core = { path = "../../core/mc-core" }
+mc-plugin-api = { path = "../mc-plugin-api" }
+mc-proto-common = { path = "../../protocol/mc-proto-common" }
+
+[lints]
+workspace = true

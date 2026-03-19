@@ -1,0 +1,26 @@
+[package]
+name = "mc-plugin-auth-offline"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Offline-mode authentication plugin for the RevyCraft runtime host."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+disable-exported-symbols = []
+
+[dependencies]
+mc-core = { path = "../../../crates/core/mc-core" }
+mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
+mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
+md5.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
