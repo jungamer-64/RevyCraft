@@ -1,6 +1,9 @@
-use super::{OnlineAuthKeys, RunningServer, RuntimeServer, RuntimeState};
+use super::{
+    AcceptedTopologySession, OnlineAuthKeys, RunningServer, RuntimeServer, RuntimeState,
+    RuntimeTopologyGeneration, RuntimeTopologyState, TopologyGenerationId, TopologyListenerWorker,
+};
 use crate::RuntimeError;
-use crate::config::ServerConfig;
+use crate::config::{ServerConfig, ServerConfigSource};
 use crate::host::plugin_reload_poll_interval_ms;
 use crate::plugin_host::{HotSwappableAuthProfile, HotSwappableStorageProfile, PluginHost};
 use crate::registry::{ListenerBinding, ProtocolRegistry, RuntimeRegistries};
@@ -8,7 +11,6 @@ use crate::transport::{
     AcceptedTransportSession, BoundTransportListener, TransportSessionIo, bind_transport_listener,
     build_listener_plans,
 };
-use bedrockrs_network::listener::Listener as BedrockListener;
 use mc_core::{CoreConfig, ServerCore};
 use mc_plugin_api::AuthMode;
 use mc_proto_common::{Edition, ProtocolAdapter, TransportKind};
@@ -16,29 +18,21 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 /// # Errors
 ///
 /// Returns [`RuntimeError`] when the server cannot bind, load its persisted
-/// world state, or starts with unsupported configuration such as
-/// an auth profile mode mismatch.
-///
-/// # Panics
-///
-/// The spawned server task panics if the Bedrock accept branch runs without a
-/// configured Bedrock listener.
+/// world state, or starts with unsupported configuration such as an auth
+/// profile mode mismatch.
 pub async fn spawn_server(
-    config: ServerConfig,
+    config_source: ServerConfigSource,
     registries: RuntimeRegistries,
 ) -> Result<RunningServer, RuntimeError> {
+    let config = config_source.load()?;
     let plugin_host = resolve_plugin_host(&registries, &config)?;
-    let ActiveProtocols {
-        protocols: active_protocols,
-        default_adapter,
-        default_bedrock_adapter,
-    } = activate_protocols(&config, &registries, &plugin_host)?;
+    let active_protocols = activate_protocols(&config, registries.protocols())?;
     let RuntimeProfiles {
         storage_profile,
         auth_profile,
@@ -48,16 +42,31 @@ pub async fn spawn_server(
     } = resolve_runtime_profiles(&config, &plugin_host)?;
     let BoundListeners {
         listener_bindings,
-        tcp_listener,
-        bedrock_listener,
-    } = bind_runtime_listeners(&config, &active_protocols).await?;
+        bound_listeners,
+    } = bind_runtime_listeners(&config, &active_protocols.protocols).await?;
+    let initial_generation_id = TopologyGenerationId(1);
+    let topology_generation = Arc::new(RuntimeTopologyGeneration {
+        generation_id: initial_generation_id,
+        config: config.clone(),
+        protocol_registry: active_protocols.protocols,
+        default_adapter: active_protocols.default_adapter,
+        default_bedrock_adapter: active_protocols.default_bedrock_adapter,
+        listener_bindings: listener_bindings.clone(),
+    });
+    let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
+    let listener_workers =
+        spawn_listener_workers(bound_listeners, initial_generation_id, accepted_tx.clone())?;
 
     let server = Arc::new(RuntimeServer {
         config,
-        protocol_registry: active_protocols,
+        config_source,
         plugin_host: Some(plugin_host.clone()),
-        default_adapter,
-        default_bedrock_adapter,
+        topology: std::sync::RwLock::new(RuntimeTopologyState {
+            active: topology_generation,
+            draining: Vec::new(),
+            listener_workers,
+            next_generation_id: 2,
+        }),
         auth_profile,
         bedrock_auth_profile,
         online_auth_keys,
@@ -65,14 +74,14 @@ pub async fn spawn_server(
         state: Mutex::new(RuntimeState { core, dirty: false }),
         sessions: Mutex::new(HashMap::new()),
         next_connection_id: Mutex::new(1),
+        accepted_tx,
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let run_server = Arc::clone(&server);
-    let join_handle = spawn_runtime_loop(run_server, shutdown_rx, tcp_listener, bedrock_listener);
+    let join_handle = spawn_runtime_loop(run_server, shutdown_rx, accepted_rx);
 
     Ok(RunningServer {
-        listener_bindings,
         plugin_host: Some(plugin_host),
         runtime: server,
         shutdown_tx: Some(shutdown_tx),
@@ -80,10 +89,10 @@ pub async fn spawn_server(
     })
 }
 
-struct ActiveProtocols {
-    protocols: ProtocolRegistry,
-    default_adapter: Arc<dyn ProtocolAdapter>,
-    default_bedrock_adapter: Option<Arc<dyn ProtocolAdapter>>,
+pub(super) struct ActiveProtocols {
+    pub(super) protocols: ProtocolRegistry,
+    pub(super) default_adapter: Arc<dyn ProtocolAdapter>,
+    pub(super) default_bedrock_adapter: Option<Arc<dyn ProtocolAdapter>>,
 }
 
 struct RuntimeProfiles {
@@ -96,8 +105,7 @@ struct RuntimeProfiles {
 
 struct BoundListeners {
     listener_bindings: Vec<ListenerBinding>,
-    tcp_listener: tokio::net::TcpListener,
-    bedrock_listener: Option<Box<BedrockListener>>,
+    bound_listeners: Vec<BoundTransportListener>,
 }
 
 fn resolve_plugin_host(
@@ -112,24 +120,18 @@ fn resolve_plugin_host(
     })
 }
 
-fn activate_protocols(
+pub(super) fn activate_protocols(
     config: &ServerConfig,
-    registries: &RuntimeRegistries,
-    plugin_host: &Arc<PluginHost>,
+    protocols: &ProtocolRegistry,
 ) -> Result<ActiveProtocols, RuntimeError> {
-    if registries
-        .protocols()
-        .resolve_adapter(&config.default_adapter)
-        .is_none()
-    {
+    if protocols.resolve_adapter(&config.default_adapter).is_none() {
         return Err(RuntimeError::Config(format!(
             "unknown default-adapter `{}`",
             config.default_adapter
         )));
     }
     if config.be_enabled
-        && registries
-            .protocols()
+        && protocols
             .resolve_adapter(&config.default_bedrock_adapter)
             .is_none()
     {
@@ -165,10 +167,7 @@ fn activate_protocols(
         Vec::new()
     };
     enabled_adapter_ids.extend(enabled_bedrock_adapter_ids.iter().cloned());
-    let active_protocols = registries
-        .protocols()
-        .filter_enabled(&enabled_adapter_ids)?;
-    plugin_host.activate_runtime_profiles(config)?;
+    let active_protocols = protocols.filter_enabled(&enabled_adapter_ids)?;
     if !config.be_enabled
         && !active_protocols
             .adapter_ids_for_transport(TransportKind::Udp)
@@ -226,6 +225,7 @@ fn resolve_runtime_profiles(
     config: &ServerConfig,
     plugin_host: &Arc<PluginHost>,
 ) -> Result<RuntimeProfiles, RuntimeError> {
+    plugin_host.activate_runtime_profiles(config)?;
     let storage_profile = plugin_host
         .resolve_storage_profile(&config.storage_profile)
         .ok_or_else(|| {
@@ -345,81 +345,135 @@ async fn bind_runtime_listeners(
         .iter()
         .map(BoundTransportListener::listener_binding)
         .collect::<Result<Vec<_>, _>>()?;
-    let mut tcp_listener = None;
-    let mut bedrock_listener = None;
-    for listener in bound_listeners {
-        match listener {
-            BoundTransportListener::Tcp { listener, .. } => {
-                if tcp_listener.replace(listener).is_some() {
-                    return Err(RuntimeError::Config(
-                        "multiple tcp listeners are not supported".to_string(),
-                    ));
-                }
-            }
-            BoundTransportListener::Bedrock { listener, .. } => {
-                if bedrock_listener.replace(listener).is_some() {
-                    return Err(RuntimeError::Config(
-                        "multiple udp listeners are not supported".to_string(),
-                    ));
-                }
-            }
-        }
-    }
-    let tcp_listener = tcp_listener
-        .ok_or_else(|| RuntimeError::Config("no tcp transport listeners were bound".to_string()))?;
 
     Ok(BoundListeners {
         listener_bindings,
-        tcp_listener,
-        bedrock_listener,
+        bound_listeners,
+    })
+}
+
+fn spawn_listener_workers(
+    bound_listeners: Vec<BoundTransportListener>,
+    generation_id: TopologyGenerationId,
+    accepted_tx: mpsc::UnboundedSender<AcceptedTopologySession>,
+) -> Result<HashMap<TransportKind, TopologyListenerWorker>, RuntimeError> {
+    let mut workers = HashMap::new();
+    for listener in bound_listeners {
+        let worker = spawn_listener_worker(listener, generation_id, accepted_tx.clone())?;
+        if workers.insert(worker.transport, worker).is_some() {
+            return Err(RuntimeError::Config(
+                "multiple listener workers for the same transport are not supported".to_string(),
+            ));
+        }
+    }
+    Ok(workers)
+}
+
+pub(super) fn spawn_listener_worker(
+    listener: BoundTransportListener,
+    generation_id: TopologyGenerationId,
+    accepted_tx: mpsc::UnboundedSender<AcceptedTopologySession>,
+) -> Result<TopologyListenerWorker, RuntimeError> {
+    let binding = listener.listener_binding()?;
+    let transport = binding.transport;
+    let (generation_tx, generation_rx) = watch::channel(generation_id);
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+    let join_handle = match listener {
+        BoundTransportListener::Tcp { listener, .. } => tokio::spawn(async move {
+            let generation_rx = generation_rx;
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    accepted = listener.accept() => {
+                        let Ok((stream, _)) = accepted else {
+                            break;
+                        };
+                        let _ = accepted_tx.send(AcceptedTopologySession {
+                            topology_generation_id: *generation_rx.borrow(),
+                            session: AcceptedTransportSession {
+                                transport: TransportKind::Tcp,
+                                io: TransportSessionIo::Tcp {
+                                    stream,
+                                    encryption: Box::default(),
+                                },
+                            },
+                        });
+                    }
+                }
+            }
+        }),
+        BoundTransportListener::Bedrock { mut listener, .. } => tokio::spawn(async move {
+            let generation_rx = generation_rx;
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    accepted = listener.accept() => {
+                        let Ok(connection) = accepted else {
+                            break;
+                        };
+                        let _ = accepted_tx.send(AcceptedTopologySession {
+                            topology_generation_id: *generation_rx.borrow(),
+                            session: AcceptedTransportSession {
+                                transport: TransportKind::Udp,
+                                io: TransportSessionIo::Bedrock {
+                                    connection,
+                                    compression: None,
+                                },
+                            },
+                        });
+                    }
+                }
+            }
+        }),
+    };
+    Ok(TopologyListenerWorker {
+        transport,
+        generation_tx,
+        shutdown_tx: Some(shutdown_tx),
+        join_handle: Some(join_handle),
     })
 }
 
 fn spawn_runtime_loop(
     run_server: Arc<RuntimeServer>,
     mut shutdown_rx: oneshot::Receiver<()>,
-    tcp_listener: tokio::net::TcpListener,
-    mut bedrock_listener: Option<Box<BedrockListener>>,
+    mut accepted_rx: mpsc::UnboundedReceiver<AcceptedTopologySession>,
 ) -> JoinHandle<Result<(), RuntimeError>> {
     tokio::spawn(async move {
         let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
         let mut save_interval = tokio::time::interval(Duration::from_secs(2));
         let mut plugin_reload_interval =
             tokio::time::interval(Duration::from_millis(plugin_reload_poll_interval_ms()));
-        let tcp_listener = tcp_listener;
+        let mut topology_reload_interval =
+            tokio::time::interval(Duration::from_millis(plugin_reload_poll_interval_ms()));
         loop {
             tokio::select! {
                 _ = &mut shutdown_rx => {
+                    run_server.shutdown_listener_workers().await;
                     run_server.maybe_save().await?;
                     return Ok(());
                 }
-                accepted = tcp_listener.accept() => {
-                    let (stream, _) = accepted?;
-                    run_server.spawn_session(AcceptedTransportSession {
-                        transport: TransportKind::Tcp,
-                        io: TransportSessionIo::Tcp {
-                            stream,
-                            encryption: Box::default(),
-                        },
-                    }).await;
-                }
-                accepted = async {
-                    bedrock_listener
-                        .as_mut()
-                        .expect("bedrock listener branch should only run when configured")
-                        .accept()
-                        .await
-                }, if bedrock_listener.is_some() => {
-                    match accepted {
-                        Ok(connection) => run_server.spawn_bedrock_session(connection).await,
-                        Err(error) => eprintln!("bedrock accept failed: {error}"),
-                    }
+                maybe_accepted = accepted_rx.recv() => {
+                    let Some(accepted) = maybe_accepted else {
+                        continue;
+                    };
+                    run_server
+                        .spawn_transport_session(accepted.topology_generation_id, accepted.session)
+                        .await;
                 }
                 _ = tick_interval.tick() => {
                     run_server.tick().await?;
+                    run_server.enforce_topology_drains().await?;
+                }
+                _ = topology_reload_interval.tick(), if run_server.plugin_host.is_some() => {
+                    if let Some(plugin_host) = run_server.plugin_host.as_ref()
+                        && let Err(error) = run_server.maybe_reload_topology_watch(plugin_host).await
+                    {
+                        eprintln!("topology reload failed: {error}");
+                    }
                 }
                 _ = plugin_reload_interval.tick(), if run_server.config.plugin_reload_watch && run_server.plugin_host.is_some() => {
-                    if let Some(plugin_host) = &run_server.plugin_host
+                    if let Some(plugin_host) = run_server.plugin_host.as_ref()
                         && let Err(error) = run_server.reload_plugins(plugin_host).await
                     {
                         eprintln!("plugin reload failed: {error}");

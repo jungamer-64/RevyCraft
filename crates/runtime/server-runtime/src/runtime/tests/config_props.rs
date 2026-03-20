@@ -145,6 +145,21 @@ fn server_properties_parse_auth_profile() -> Result<(), RuntimeError> {
 }
 
 #[test]
+fn server_properties_parse_topology_reload_settings() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let path = temp_dir.path().join("server.properties");
+    fs::write(
+        &path,
+        "topology-reload-watch=true\ntopology-drain-grace-secs=45\n",
+    )?;
+
+    let config = ServerConfig::from_properties(&path)?;
+    assert!(config.topology_reload_watch);
+    assert_eq!(config.topology_drain_grace_secs, 45);
+    Ok(())
+}
+
+#[test]
 fn server_properties_reject_non_flat_level_type() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let path = temp_dir.path().join("server.properties");

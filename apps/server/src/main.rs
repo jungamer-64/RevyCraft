@@ -1,6 +1,6 @@
 #![allow(clippy::multiple_crate_versions)]
 use server_runtime::RuntimeError;
-use server_runtime::config::ServerConfig;
+use server_runtime::config::{ServerConfig, ServerConfigSource};
 use server_runtime::host::plugin_host_from_config;
 use server_runtime::registry::RuntimeRegistries;
 use server_runtime::runtime::spawn_server;
@@ -19,7 +19,11 @@ async fn main() -> Result<(), RuntimeError> {
     })?;
     plugin_host.initialize_runtime_registries(&config, &mut registries)?;
 
-    let server = spawn_server(config, registries).await?;
+    let server = spawn_server(
+        ServerConfigSource::Properties(Path::new("runtime/server.properties").to_path_buf()),
+        registries,
+    )
+    .await?;
     for binding in server.listener_bindings() {
         println!(
             "server listening on {} via {:?} for {:?}",

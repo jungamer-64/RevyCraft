@@ -29,9 +29,9 @@ fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8>, R
     Ok(writer.into_inner())
 }
 
-use super::spawn_server;
+use super::spawn_server as spawn_server_with_source;
 use crate::RuntimeError;
-use crate::config::{BEDROCK_OFFLINE_AUTH_PROFILE_ID, LevelType, ServerConfig};
+use crate::config::{BEDROCK_OFFLINE_AUTH_PROFILE_ID, LevelType, ServerConfig, ServerConfigSource};
 use crate::host::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
     PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost, plugin_host_from_config,
@@ -78,6 +78,24 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
 
 use crate::registry::ProtocolRegistry;
+
+async fn spawn_server(
+    config: ServerConfig,
+    registries: RuntimeRegistries,
+) -> Result<super::RunningServer, RuntimeError> {
+    spawn_server_with_source(ServerConfigSource::Inline(config), registries).await
+}
+
+async fn spawn_server_from_source(
+    source: ServerConfigSource,
+    registries: RuntimeRegistries,
+) -> Result<super::RunningServer, RuntimeError> {
+    spawn_server_with_source(source, registries).await
+}
+
+fn active_protocol_registry(server: &super::RunningServer) -> ProtocolRegistry {
+    server.runtime.active_topology().protocol_registry.clone()
+}
 
 const RAKNET_MAGIC: [u8; 16] = [
     0x00, 0xff, 0xff, 0x00, 0xfe, 0xfe, 0xfe, 0xfe, 0xfd, 0xfd, 0xfd, 0xfd, 0x12, 0x34, 0x56, 0x78,

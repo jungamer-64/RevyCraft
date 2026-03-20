@@ -1,6 +1,6 @@
 use crate::RuntimeError;
 use crate::config::ServerConfig;
-use crate::registry::RuntimeRegistries;
+use crate::registry::{ProtocolRegistry, RuntimeRegistries};
 use crate::runtime::RuntimeReloadContext;
 use bytes::BytesMut;
 use libloading::Library;
@@ -164,6 +164,12 @@ struct PluginPackage {
     plugin_id: String,
     plugin_kind: PluginKind,
     source: PluginSource,
+}
+
+#[derive(Clone, Debug)]
+struct DynamicCatalogSource {
+    root: PathBuf,
+    allowlist: Option<HashSet<String>>,
 }
 
 impl PluginPackage {
@@ -1732,6 +1738,12 @@ struct ManagedProtocolPlugin {
     loaded_at: SystemTime,
 }
 
+pub(crate) struct PreparedProtocolTopology {
+    pub(crate) registry: ProtocolRegistry,
+    pub(crate) adapter_ids: Vec<String>,
+    managed: HashMap<String, ManagedProtocolPlugin>,
+}
+
 struct ManagedGameplayPlugin {
     package: PluginPackage,
     profile_id: GameplayProfileId,
@@ -1755,6 +1767,7 @@ struct ManagedAuthPlugin {
 
 pub struct PluginHost {
     catalog: PluginCatalog,
+    dynamic_catalog_source: Option<DynamicCatalogSource>,
     loader: PluginLoader,
     generations: Arc<GenerationManager>,
     quarantine: Arc<QuarantineManager>,
@@ -1772,8 +1785,20 @@ impl PluginHost {
         abi_range: PluginAbiRange,
         failure_policy: PluginFailurePolicy,
     ) -> Self {
+        Self::new_with_dynamic_catalog_source(catalog, abi_range, failure_policy, None)
+    }
+
+    #[must_use]
+    pub fn new_with_dynamic_catalog_source(
+        catalog: PluginCatalog,
+        abi_range: PluginAbiRange,
+        failure_policy: PluginFailurePolicy,
+        dynamic_catalog_source: Option<(PathBuf, Option<HashSet<String>>)>,
+    ) -> Self {
         Self {
             catalog,
+            dynamic_catalog_source: dynamic_catalog_source
+                .map(|(root, allowlist)| DynamicCatalogSource { root, allowlist }),
             loader: PluginLoader::new(abi_range),
             generations: Arc::new(GenerationManager::default()),
             quarantine: Arc::new(QuarantineManager::default()),
@@ -1783,6 +1808,60 @@ impl PluginHost {
             storage: Mutex::new(HashMap::new()),
             auth: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn protocol_catalog(&self) -> Result<PluginCatalog, RuntimeError> {
+        match &self.dynamic_catalog_source {
+            Some(source) => PluginCatalog::discover(&source.root, source.allowlist.as_ref()),
+            None => Ok(self.catalog.clone()),
+        }
+    }
+
+    pub(crate) fn prepare_protocol_topology(
+        &self,
+    ) -> Result<PreparedProtocolTopology, RuntimeError> {
+        let catalog = self.protocol_catalog()?;
+        let mut registry = ProtocolRegistry::new();
+        let mut managed = HashMap::new();
+        let mut adapter_ids = Vec::new();
+        for package in catalog.packages() {
+            if package.plugin_kind != PluginKind::Protocol {
+                continue;
+            }
+            let generation = Arc::new(
+                self.loader
+                    .load_protocol_generation(package, self.generations.next_generation_id())?,
+            );
+            let adapter = Arc::new(HotSwappableProtocolAdapter::new(
+                package.plugin_id.clone(),
+                generation,
+                Arc::clone(&self.quarantine),
+            ));
+            registry.register_adapter(adapter.clone());
+            registry.register_probe(adapter.clone());
+            adapter_ids.push(package.plugin_id.clone());
+            managed.insert(
+                package.plugin_id.clone(),
+                ManagedProtocolPlugin {
+                    package: package.clone(),
+                    adapter,
+                    loaded_at: package.modified_at()?,
+                },
+            );
+        }
+        adapter_ids.sort();
+        Ok(PreparedProtocolTopology {
+            registry,
+            adapter_ids,
+            managed,
+        })
+    }
+
+    pub(crate) fn activate_protocol_topology(&self, candidate: PreparedProtocolTopology) {
+        *self
+            .protocols
+            .lock()
+            .expect("plugin host mutex should not be poisoned") = candidate.managed;
     }
 
     /// Registers protocol adapters and probes from the plugin catalog.
@@ -1802,36 +1881,9 @@ impl PluginHost {
         self: &Arc<Self>,
         registries: &mut RuntimeRegistries,
     ) -> Result<(), RuntimeError> {
-        for package in self.catalog.packages() {
-            match package.plugin_kind {
-                PluginKind::Protocol => {
-                    let generation = Arc::new(self.loader.load_protocol_generation(
-                        package,
-                        self.generations.next_generation_id(),
-                    )?);
-                    let adapter = Arc::new(HotSwappableProtocolAdapter::new(
-                        package.plugin_id.clone(),
-                        generation,
-                        Arc::clone(&self.quarantine),
-                    ));
-                    registries.register_adapter(adapter.clone());
-                    registries.register_probe(adapter.clone());
-                    let loaded_at = package.modified_at()?;
-                    self.protocols
-                        .lock()
-                        .expect("plugin host mutex should not be poisoned")
-                        .insert(
-                            package.plugin_id.clone(),
-                            ManagedProtocolPlugin {
-                                package: package.clone(),
-                                adapter,
-                                loaded_at,
-                            },
-                        );
-                }
-                PluginKind::Gameplay | PluginKind::Storage | PluginKind::Auth => {}
-            }
-        }
+        let prepared = self.prepare_protocol_topology()?;
+        registries.replace_protocols(prepared.registry.clone());
+        self.activate_protocol_topology(prepared);
         registries.attach_plugin_host(Arc::clone(self));
         Ok(())
     }
@@ -1920,6 +1972,18 @@ impl PluginHost {
     pub fn quarantine_reason(&self, plugin_id: &str) -> Option<String> {
         self.quarantine.reason(plugin_id)
     }
+
+    pub(crate) fn managed_protocol_ids(&self) -> Vec<String> {
+        let mut ids = self
+            .protocols
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
 }
 
 /// Builds a plugin host from the current server configuration.
@@ -1938,13 +2002,14 @@ pub fn plugin_host_from_config(
     if catalog.packages.is_empty() {
         return Ok(None);
     }
-    Ok(Some(Arc::new(PluginHost::new(
+    Ok(Some(Arc::new(PluginHost::new_with_dynamic_catalog_source(
         catalog,
         PluginAbiRange {
             min: config.plugin_abi_min,
             max: config.plugin_abi_max,
         },
         config.plugin_failure_policy,
+        Some((config.plugins_dir.clone(), allowlist)),
     ))))
 }
 

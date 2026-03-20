@@ -5,13 +5,14 @@ mod session;
 mod tests;
 
 use crate::RuntimeError;
-use crate::config::ServerConfig;
+use crate::config::{ServerConfig, ServerConfigSource};
 use crate::host::PluginHost;
 use crate::plugin_host::{
     AuthGeneration, HotSwappableAuthProfile, HotSwappableGameplayProfile,
     HotSwappableStorageProfile,
 };
 use crate::registry::{ListenerBinding, ProtocolRegistry};
+use crate::transport::AcceptedTransportSession;
 use mc_core::{
     ConnectionId, CoreEvent, EntityId, GameplayProfileId, PlayerId, ServerCore,
     SessionCapabilitySet, WorldSnapshot,
@@ -20,9 +21,9 @@ use mc_plugin_api::{GameplaySessionSnapshot, ProtocolSessionSnapshot};
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 pub use self::bootstrap::spawn_server;
@@ -31,7 +32,6 @@ pub(crate) const LOGIN_SERVER_ID: &str = "";
 pub(crate) const LOGIN_VERIFY_TOKEN_LEN: usize = 4;
 
 pub struct RunningServer {
-    listener_bindings: Vec<ListenerBinding>,
     plugin_host: Option<Arc<PluginHost>>,
     runtime: Arc<RuntimeServer>,
     shutdown_tx: Option<oneshot::Sender<()>>,
@@ -40,8 +40,8 @@ pub struct RunningServer {
 
 impl RunningServer {
     #[must_use]
-    pub fn listener_bindings(&self) -> &[ListenerBinding] {
-        &self.listener_bindings
+    pub fn listener_bindings(&self) -> Vec<ListenerBinding> {
+        self.runtime.listener_bindings()
     }
 
     /// # Errors
@@ -52,6 +52,17 @@ impl RunningServer {
         match &self.plugin_host {
             Some(plugin_host) => self.runtime.reload_plugins(plugin_host).await,
             None => Ok(Vec::new()),
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the runtime cannot materialize a candidate
+    /// topology or bind the required listeners.
+    pub async fn reload_topology(&self) -> Result<TopologyReloadResult, RuntimeError> {
+        match &self.plugin_host {
+            Some(plugin_host) => self.runtime.reload_topology(plugin_host).await,
+            None => Ok(self.runtime.noop_topology_reload_result()),
         }
     }
 
@@ -69,6 +80,7 @@ impl RunningServer {
 #[derive(Clone)]
 pub(crate) struct SessionHandle {
     pub(crate) tx: mpsc::UnboundedSender<SessionMessage>,
+    pub(crate) topology_generation_id: TopologyGenerationId,
     pub(crate) phase: ConnectionPhase,
     pub(crate) adapter_id: Option<String>,
     pub(crate) player_id: Option<PlayerId>,
@@ -80,9 +92,11 @@ pub(crate) struct SessionHandle {
 #[derive(Clone, Debug)]
 pub(crate) enum SessionMessage {
     Event(Arc<CoreEvent>),
+    Terminate { reason: String },
 }
 
 pub(crate) struct SessionState {
+    pub(crate) topology_generation_id: TopologyGenerationId,
     pub(crate) transport: TransportKind,
     pub(crate) phase: ConnectionPhase,
     pub(crate) adapter: Option<Arc<dyn ProtocolAdapter>>,
@@ -98,12 +112,55 @@ pub(crate) struct RuntimeState {
     pub(crate) dirty: bool,
 }
 
-pub(crate) struct RuntimeServer {
+pub(crate) struct AcceptedTopologySession {
+    pub(crate) topology_generation_id: TopologyGenerationId,
+    pub(crate) session: AcceptedTransportSession,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TopologyGenerationId(pub u64);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologyReloadResult {
+    pub activated_generation_id: TopologyGenerationId,
+    pub retired_generation_ids: Vec<TopologyGenerationId>,
+    pub applied_config_change: bool,
+    pub reconfigured_adapter_ids: Vec<String>,
+}
+
+pub(crate) struct RuntimeTopologyGeneration {
+    pub(crate) generation_id: TopologyGenerationId,
     pub(crate) config: ServerConfig,
     pub(crate) protocol_registry: ProtocolRegistry,
-    pub(crate) plugin_host: Option<Arc<PluginHost>>,
     pub(crate) default_adapter: Arc<dyn ProtocolAdapter>,
     pub(crate) default_bedrock_adapter: Option<Arc<dyn ProtocolAdapter>>,
+    pub(crate) listener_bindings: Vec<ListenerBinding>,
+}
+
+pub(crate) struct DrainingTopologyGeneration {
+    pub(crate) generation: Arc<RuntimeTopologyGeneration>,
+    pub(crate) drain_deadline_ms: u64,
+}
+
+pub(crate) struct TopologyListenerWorker {
+    pub(crate) transport: TransportKind,
+    pub(crate) generation_tx: watch::Sender<TopologyGenerationId>,
+    pub(crate) shutdown_tx: Option<oneshot::Sender<()>>,
+    pub(crate) join_handle: Option<JoinHandle<()>>,
+}
+
+pub(crate) struct RuntimeTopologyState {
+    pub(crate) active: Arc<RuntimeTopologyGeneration>,
+    pub(crate) draining: Vec<DrainingTopologyGeneration>,
+    pub(crate) listener_workers: HashMap<TransportKind, TopologyListenerWorker>,
+    pub(crate) next_generation_id: u64,
+}
+
+pub(crate) struct RuntimeServer {
+    pub(crate) config: ServerConfig,
+    pub(crate) config_source: ServerConfigSource,
+    pub(crate) plugin_host: Option<Arc<PluginHost>>,
+    pub(crate) topology: RwLock<RuntimeTopologyState>,
     pub(crate) auth_profile: Arc<HotSwappableAuthProfile>,
     pub(crate) bedrock_auth_profile: Option<Arc<HotSwappableAuthProfile>>,
     pub(crate) online_auth_keys: Option<Arc<OnlineAuthKeys>>,
@@ -111,6 +168,7 @@ pub(crate) struct RuntimeServer {
     pub(crate) state: Mutex<RuntimeState>,
     pub(crate) sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
     pub(crate) next_connection_id: Mutex<u64>,
+    pub(crate) accepted_tx: mpsc::UnboundedSender<AcceptedTopologySession>,
 }
 
 pub(crate) struct OnlineAuthKeys {

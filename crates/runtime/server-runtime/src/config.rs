@@ -8,6 +8,26 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const BEDROCK_BASELINE_ADAPTER_ID: &str = "be-26_3";
 pub(crate) const BEDROCK_OFFLINE_AUTH_PROFILE_ID: &str = "bedrock-offline-v1";
+pub(crate) const DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS: u64 = 30;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ServerConfigSource {
+    Inline(ServerConfig),
+    Properties(PathBuf),
+}
+
+impl ServerConfigSource {
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the source cannot be materialized into a
+    /// concrete [`ServerConfig`].
+    pub fn load(&self) -> Result<ServerConfig, RuntimeError> {
+        match self {
+            Self::Inline(config) => Ok(config.clone()),
+            Self::Properties(path) => ServerConfig::from_properties(path),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LevelType {
@@ -52,6 +72,8 @@ pub struct ServerConfig {
     pub plugin_allowlist: Option<Vec<String>>,
     pub plugin_failure_policy: PluginFailurePolicy,
     pub plugin_reload_watch: bool,
+    pub topology_reload_watch: bool,
+    pub topology_drain_grace_secs: u64,
     pub plugin_abi_min: PluginAbiVersion,
     pub plugin_abi_max: PluginAbiVersion,
     pub world_dir: PathBuf,
@@ -84,6 +106,8 @@ impl Default for ServerConfig {
             plugin_allowlist: None,
             plugin_failure_policy: PluginFailurePolicy::Quarantine,
             plugin_reload_watch: false,
+            topology_reload_watch: false,
+            topology_drain_grace_secs: DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS,
             plugin_abi_min: CURRENT_PLUGIN_ABI,
             plugin_abi_max: CURRENT_PLUGIN_ABI,
             world_dir: PathBuf::from("runtime").join("world"),
@@ -126,6 +150,24 @@ impl ServerConfig {
         self.enabled_bedrock_adapters
             .as_ref()
             .map_or_else(|| vec![self.default_bedrock_adapter.clone()], Clone::clone)
+    }
+
+    pub(crate) fn apply_topology_from(&mut self, other: &Self) -> bool {
+        let previous = self.clone();
+        self.server_ip = other.server_ip;
+        self.server_port = other.server_port;
+        self.be_enabled = other.be_enabled;
+        self.motd.clone_from(&other.motd);
+        self.max_players = other.max_players;
+        self.default_adapter.clone_from(&other.default_adapter);
+        self.enabled_adapters.clone_from(&other.enabled_adapters);
+        self.default_bedrock_adapter
+            .clone_from(&other.default_bedrock_adapter);
+        self.enabled_bedrock_adapters
+            .clone_from(&other.enabled_bedrock_adapters);
+        self.topology_reload_watch = other.topology_reload_watch;
+        self.topology_drain_grace_secs = other.topology_drain_grace_secs;
+        previous != *self
     }
 }
 
@@ -174,6 +216,10 @@ fn apply_property(config: &mut ServerConfig, key: &str, value: &str) -> Result<(
             config.plugin_failure_policy = PluginFailurePolicy::parse(value)?;
         }
         "plugin-reload-watch" => config.plugin_reload_watch = parse_bool_flag(value),
+        "topology-reload-watch" => config.topology_reload_watch = parse_bool_flag(value),
+        "topology-drain-grace-secs" => {
+            config.topology_drain_grace_secs = parse_u64(value, "topology-drain-grace-secs")?;
+        }
         "plugin-abi-min" => config.plugin_abi_min = PluginAbiRange::parse_version(value)?,
         "plugin-abi-max" => config.plugin_abi_max = PluginAbiRange::parse_version(value)?,
         unknown => eprintln!("warning: ignoring unknown server.properties key `{unknown}`"),
@@ -208,6 +254,12 @@ fn parse_u8(value: &str, key: &str) -> Result<u8, RuntimeError> {
 }
 
 fn parse_u16(value: &str, key: &str) -> Result<u16, RuntimeError> {
+    value
+        .parse()
+        .map_err(|_| RuntimeError::Config(format!("invalid {key}")))
+}
+
+fn parse_u64(value: &str, key: &str) -> Result<u64, RuntimeError> {
     value
         .parse()
         .map_err(|_| RuntimeError::Config(format!("invalid {key}")))

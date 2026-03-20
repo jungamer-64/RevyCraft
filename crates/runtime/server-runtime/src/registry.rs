@@ -185,6 +185,11 @@ impl RuntimeRegistries {
         self
     }
 
+    pub(crate) fn replace_protocols(&mut self, protocols: ProtocolRegistry) -> &mut Self {
+        self.protocols = protocols;
+        self
+    }
+
     #[must_use]
     pub fn plugin_host(&self) -> Option<Arc<PluginHost>> {
         self.plugin_host.clone()

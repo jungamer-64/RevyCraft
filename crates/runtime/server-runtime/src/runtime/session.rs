@@ -7,7 +7,6 @@ use crate::plugin_host::{HotSwappableAuthProfile, HotSwappableGameplayProfile};
 use crate::transport::{
     AcceptedTransportSession, TransportSessionIo, default_wire_codec, write_payload,
 };
-use bedrockrs_network::connection::Connection as BedrockConnection;
 use bytes::BytesMut;
 use mc_core::{ConnectionId, CoreCommand, CoreEvent, SessionCapabilitySet};
 use mc_plugin_api::{AuthMode, BedrockAuthResult};
@@ -87,10 +86,14 @@ impl RuntimeServer {
         current: &Arc<dyn ProtocolAdapter>,
         protocol_number: i32,
     ) -> Result<bool, RuntimeError> {
-        let Some(next_adapter) =
-            self.protocol_registry
-                .resolve_route(TransportKind::Udp, Edition::Be, protocol_number)
-        else {
+        let topology = self
+            .topology_generation(session.topology_generation_id)
+            .ok_or_else(|| RuntimeError::Config("missing topology generation".to_string()))?;
+        let Some(next_adapter) = topology.protocol_registry.resolve_route(
+            TransportKind::Udp,
+            Edition::Be,
+            protocol_number,
+        ) else {
             return Self::disconnect_login(
                 transport_io,
                 current,
@@ -131,7 +134,11 @@ impl RuntimeServer {
         {
             Arc::clone(current)
         } else {
-            self.protocol_registry
+            let topology = self
+                .topology_generation(session.topology_generation_id)
+                .ok_or_else(|| RuntimeError::Config("missing topology generation".to_string()))?;
+            topology
+                .protocol_registry
                 .resolve_route(TransportKind::Udp, Edition::Be, protocol_number)
                 .ok_or_else(|| {
                     RuntimeError::Config(format!(
@@ -356,6 +363,7 @@ impl RuntimeServer {
 
     async fn sync_session_handle(&self, connection_id: ConnectionId, session: &SessionState) {
         if let Some(handle) = self.sessions.lock().await.get_mut(&connection_id) {
+            handle.topology_generation_id = session.topology_generation_id;
             handle.phase = session.phase;
             handle.adapter_id = session
                 .adapter
@@ -373,60 +381,65 @@ impl RuntimeServer {
         }
     }
 
-    pub(super) async fn spawn_session(
+    pub(super) async fn spawn_transport_session(
         self: &Arc<Self>,
+        topology_generation_id: super::TopologyGenerationId,
         transport_session: AcceptedTransportSession,
     ) {
-        let session = SessionState {
-            transport: transport_session.transport,
-            phase: ConnectionPhase::Handshaking,
-            adapter: None,
-            gameplay: None,
-            login_challenge: None,
-            player_id: None,
-            entity_id: None,
-            session_capabilities: None,
+        let Some(topology) = self.topology_generation(topology_generation_id) else {
+            eprintln!(
+                "dropping transport session because topology generation {:?} is no longer active",
+                topology_generation_id
+            );
+            return;
+        };
+        let session = match transport_session.transport {
+            TransportKind::Tcp => SessionState {
+                topology_generation_id,
+                transport: TransportKind::Tcp,
+                phase: ConnectionPhase::Handshaking,
+                adapter: None,
+                gameplay: None,
+                login_challenge: None,
+                player_id: None,
+                entity_id: None,
+                session_capabilities: None,
+            },
+            TransportKind::Udp => {
+                let Some(adapter) = topology.default_bedrock_adapter.clone() else {
+                    eprintln!(
+                        "dropping bedrock session because no default bedrock adapter is active"
+                    );
+                    return;
+                };
+                let gameplay = match self
+                    .resolve_gameplay_for_adapter(&adapter.descriptor().adapter_id)
+                {
+                    Ok(gameplay) => gameplay,
+                    Err(error) => {
+                        eprintln!(
+                            "dropping bedrock session because gameplay profile could not resolve: {error}"
+                        );
+                        return;
+                    }
+                };
+                let mut session = SessionState {
+                    topology_generation_id,
+                    transport: TransportKind::Udp,
+                    phase: ConnectionPhase::Login,
+                    adapter: Some(adapter),
+                    gameplay: Some(gameplay),
+                    login_challenge: None,
+                    player_id: None,
+                    entity_id: None,
+                    session_capabilities: None,
+                };
+                Self::refresh_session_capabilities(&mut session);
+                session
+            }
         };
         self.spawn_session_with_state(transport_session, session)
             .await;
-    }
-
-    pub(super) async fn spawn_bedrock_session(self: &Arc<Self>, connection: BedrockConnection) {
-        let Some(adapter) = self.default_bedrock_adapter.clone() else {
-            eprintln!("dropping bedrock session because no default bedrock adapter is active");
-            return;
-        };
-        let gameplay = match self.resolve_gameplay_for_adapter(&adapter.descriptor().adapter_id) {
-            Ok(gameplay) => gameplay,
-            Err(error) => {
-                eprintln!(
-                    "dropping bedrock session because gameplay profile could not resolve: {error}"
-                );
-                return;
-            }
-        };
-        let mut session = SessionState {
-            transport: TransportKind::Udp,
-            phase: ConnectionPhase::Login,
-            adapter: Some(adapter),
-            gameplay: Some(gameplay),
-            login_challenge: None,
-            player_id: None,
-            entity_id: None,
-            session_capabilities: None,
-        };
-        Self::refresh_session_capabilities(&mut session);
-        self.spawn_session_with_state(
-            AcceptedTransportSession {
-                transport: TransportKind::Udp,
-                io: TransportSessionIo::Bedrock {
-                    connection,
-                    compression: None,
-                },
-            },
-            session,
-        )
-        .await;
     }
 
     async fn spawn_session_with_state(
@@ -446,6 +459,7 @@ impl RuntimeServer {
             connection_id,
             SessionHandle {
                 tx,
+                topology_generation_id: session.topology_generation_id,
                 phase: session.phase,
                 adapter_id: session
                     .adapter
@@ -566,7 +580,10 @@ impl RuntimeServer {
         session: &mut SessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let Some(intent) = self
+        let topology = self
+            .topology_generation(session.topology_generation_id)
+            .ok_or_else(|| RuntimeError::Config("missing topology generation".to_string()))?;
+        let Some(intent) = topology
             .protocol_registry
             .route_handshake(session.transport, frame)?
         else {
@@ -576,7 +593,7 @@ impl RuntimeServer {
             HandshakeNextState::Status => ConnectionPhase::Status,
             HandshakeNextState::Login => ConnectionPhase::Login,
         };
-        if let Some(next_adapter) = self.protocol_registry.resolve_route(
+        if let Some(next_adapter) = topology.protocol_registry.resolve_route(
             session.transport,
             intent.edition,
             intent.protocol_number,
@@ -591,7 +608,7 @@ impl RuntimeServer {
             return Ok(false);
         }
 
-        let fallback = Arc::clone(&self.default_adapter);
+        let fallback = Arc::clone(&topology.default_adapter);
         let descriptor = fallback.descriptor();
         match next_phase {
             ConnectionPhase::Status => {
@@ -625,6 +642,9 @@ impl RuntimeServer {
         session: &SessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
+        let topology = self
+            .topology_generation(session.topology_generation_id)
+            .ok_or_else(|| RuntimeError::Config("missing topology generation".to_string()))?;
         let current = session
             .adapter
             .as_ref()
@@ -635,8 +655,8 @@ impl RuntimeServer {
                 let response = current.encode_status_response(&ServerListStatus {
                     version: current.descriptor(),
                     players_online: summary.online_players,
-                    max_players: usize::from(summary.max_players),
-                    description: self.config.motd.clone(),
+                    max_players: usize::from(topology.config.max_players),
+                    description: topology.config.motd.clone(),
                 })?;
                 write_payload(transport_io, current.wire_codec(), &response).await?;
                 Ok(false)
@@ -760,52 +780,70 @@ impl RuntimeServer {
         session: &mut SessionState,
         message: SessionMessage,
     ) -> Result<bool, RuntimeError> {
-        let SessionMessage::Event(event) = message;
-        let event = event.as_ref();
-        Self::refresh_session_capabilities(session);
-        let current = session
-            .adapter
-            .as_ref()
-            .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
-        let packets = match &event {
-            CoreEvent::LoginAccepted { player, .. } => vec![current.encode_login_success(player)?],
-            CoreEvent::Disconnect { reason } => {
-                vec![current.encode_disconnect(session.phase, reason)?]
-            }
-            _ => {
-                let player_id = session.player_id.ok_or_else(|| {
-                    RuntimeError::Config("missing player id for play event encoding".to_string())
-                })?;
-                let entity_id = session.entity_id.ok_or_else(|| {
-                    RuntimeError::Config("missing entity id for play event encoding".to_string())
-                })?;
-                current.encode_play_event(
-                    event,
-                    &PlayEncodingContext {
-                        player_id,
-                        entity_id,
-                    },
-                )?
-            }
-        };
-        for packet in packets {
-            write_payload(transport_io, current.wire_codec(), &packet).await?;
-        }
-
-        match event {
-            CoreEvent::LoginAccepted {
-                player_id: accepted_player_id,
-                entity_id: accepted_entity_id,
-                ..
-            } => {
-                session.player_id = Some(*accepted_player_id);
-                session.entity_id = Some(*accepted_entity_id);
-                session.phase = ConnectionPhase::Play;
+        match message {
+            SessionMessage::Event(event) => {
+                let event = event.as_ref();
                 Self::refresh_session_capabilities(session);
-                self.sync_session_handle(connection_id, session).await;
+                let current = session
+                    .adapter
+                    .as_ref()
+                    .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
+                let packets = match &event {
+                    CoreEvent::LoginAccepted { player, .. } => {
+                        vec![current.encode_login_success(player)?]
+                    }
+                    CoreEvent::Disconnect { reason } => {
+                        vec![current.encode_disconnect(session.phase, reason)?]
+                    }
+                    _ => {
+                        let player_id = session.player_id.ok_or_else(|| {
+                            RuntimeError::Config(
+                                "missing player id for play event encoding".to_string(),
+                            )
+                        })?;
+                        let entity_id = session.entity_id.ok_or_else(|| {
+                            RuntimeError::Config(
+                                "missing entity id for play event encoding".to_string(),
+                            )
+                        })?;
+                        current.encode_play_event(
+                            event,
+                            &PlayEncodingContext {
+                                player_id,
+                                entity_id,
+                            },
+                        )?
+                    }
+                };
+                for packet in packets {
+                    write_payload(transport_io, current.wire_codec(), &packet).await?;
+                }
+
+                match event {
+                    CoreEvent::LoginAccepted {
+                        player_id: accepted_player_id,
+                        entity_id: accepted_entity_id,
+                        ..
+                    } => {
+                        session.player_id = Some(*accepted_player_id);
+                        session.entity_id = Some(*accepted_entity_id);
+                        session.phase = ConnectionPhase::Play;
+                        Self::refresh_session_capabilities(session);
+                        self.sync_session_handle(connection_id, session).await;
+                    }
+                    CoreEvent::Disconnect { .. } => return Ok(true),
+                    _ => {}
+                }
             }
-            CoreEvent::Disconnect { .. } => return Ok(true),
-            _ => {}
+            SessionMessage::Terminate { reason } => {
+                if session.phase == ConnectionPhase::Play
+                    && let Some(current) = session.adapter.as_ref()
+                    && let Ok(packet) = current.encode_disconnect(ConnectionPhase::Play, &reason)
+                {
+                    let _ = write_payload(transport_io, current.wire_codec(), &packet).await;
+                }
+                return Ok(true);
+            }
         }
         Ok(false)
     }

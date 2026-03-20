@@ -63,8 +63,8 @@ async fn running_server_exposes_udp_listener_binding_when_enabled() -> Result<()
     .await?;
 
     assert_eq!(server.listener_bindings().len(), 2);
-    let binding = server
-        .listener_bindings()
+    let bindings = server.listener_bindings();
+    let binding = bindings
         .iter()
         .find(|binding| binding.transport == TransportKind::Udp)
         .expect("udp listener binding should exist");
@@ -112,8 +112,8 @@ async fn placeholder_bedrock_adapter_can_remain_enabled_when_not_default()
     )
     .await?;
 
-    let binding = server
-        .listener_bindings()
+    let bindings = server.listener_bindings();
+    let binding = bindings
         .iter()
         .find(|binding| binding.transport == TransportKind::Udp)
         .expect("udp listener binding should exist");
@@ -143,8 +143,8 @@ async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), Runt
     )
     .await?;
 
-    let binding = server
-        .listener_bindings()
+    let bindings = server.listener_bindings();
+    let binding = bindings
         .iter()
         .find(|binding| binding.transport == TransportKind::Tcp)
         .expect("tcp listener binding should exist");
