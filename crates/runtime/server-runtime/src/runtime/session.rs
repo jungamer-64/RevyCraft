@@ -481,12 +481,10 @@ impl RuntimeServer {
                     break;
                 }
                 loop {
-                    let codec: &dyn WireCodec = session
-                        .adapter
-                        .as_ref()
-                        .map_or_else(|| default_wire_codec(session.transport), |current| {
-                            current.wire_codec()
-                        });
+                    let codec: &dyn WireCodec = match session.adapter.as_ref() {
+                        Some(current) => current.wire_codec(),
+                        None => default_wire_codec(session.transport)?,
+                    };
                     let Some(frame) = codec.try_decode_frame(&mut read_buffer)? else {
                         break;
                     };

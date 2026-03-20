@@ -37,7 +37,7 @@ use crate::host::{
     PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost, plugin_host_from_config,
 };
 use crate::registry::RuntimeRegistries;
-use crate::transport::{MinecraftStreamCipher, build_listener_plans};
+use crate::transport::{MinecraftStreamCipher, build_listener_plans, default_wire_codec};
 use bytes::BytesMut;
 use mc_plugin_auth_offline::OFFLINE_AUTH_PROFILE_ID;
 use mc_plugin_auth_online_stub::{
@@ -783,6 +783,15 @@ fn plugin_host_preserves_wire_format_per_adapter() -> Result<(), RuntimeError> {
         vec![1, 2, 3]
     );
     Ok(())
+}
+
+#[test]
+fn default_wire_codec_requires_adapter_for_udp_sessions() {
+    assert!(matches!(
+        default_wire_codec(TransportKind::Udp),
+        Err(RuntimeError::Config(message))
+            if message.contains("udp sessions require an active protocol adapter")
+    ));
 }
 
 fn login_start(username: &str) -> Vec<u8> {

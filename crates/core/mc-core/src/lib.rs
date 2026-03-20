@@ -1707,7 +1707,6 @@ impl CanonicalGameplayPolicy {
         };
         if query.world_meta().game_mode != 1
             || !slot.is_storage_slot()
-            || matches!(slot, InventorySlot::Auxiliary(_))
             || stack.is_some_and(|stack| {
                 !stack.is_supported_placeable() || stack.count == 0 || stack.count > 64
             })

@@ -317,11 +317,15 @@ pub async fn bind_transport_listener(
     }
 }
 
-pub fn default_wire_codec(transport: TransportKind) -> &'static dyn WireCodec {
+pub fn default_wire_codec(
+    transport: TransportKind,
+) -> Result<&'static dyn WireCodec, RuntimeError> {
     static TCP_CODEC: MinecraftWireCodec = MinecraftWireCodec;
     match transport {
-        TransportKind::Tcp => &TCP_CODEC,
-        TransportKind::Udp => unreachable!("udp transport sessions are not implemented"),
+        TransportKind::Tcp => Ok(&TCP_CODEC),
+        TransportKind::Udp => Err(RuntimeError::Config(
+            "udp sessions require an active protocol adapter".to_string(),
+        )),
     }
 }
 

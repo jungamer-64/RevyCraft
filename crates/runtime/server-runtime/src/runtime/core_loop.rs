@@ -25,6 +25,7 @@ impl RuntimeServer {
         let gameplay = session.and_then(|session| session.gameplay.clone());
         let events = {
             let mut state = self.state.lock().await;
+            let now = now_ms();
             let events = if let (Some(session_capabilities), Some(gameplay)) =
                 (session_capabilities.as_ref(), gameplay.as_ref())
             {
@@ -32,13 +33,23 @@ impl RuntimeServer {
                     .core
                     .apply_command_with_policy(
                         command,
-                        now_ms(),
+                        now,
                         Some(session_capabilities),
                         gameplay.as_ref(),
                     )
                     .map_err(RuntimeError::Config)?
             } else {
-                state.core.apply_command(command, now_ms())
+                debug_assert!(
+                    session.is_none()
+                        || matches!(
+                            &command,
+                            CoreCommand::LoginStart { .. } | CoreCommand::Disconnect { .. }
+                        ),
+                    "session-backed command reached core loop without session capabilities"
+                );
+                // Login can arrive before the runtime has published the session's resolved
+                // adapter/gameplay capability set, so keep the canonical fallback explicit here.
+                state.core.apply_command(command, now)
             };
             if should_persist {
                 state.dirty = true;

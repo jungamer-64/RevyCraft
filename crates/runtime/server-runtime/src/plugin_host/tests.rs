@@ -1,6 +1,6 @@
 use super::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
-    PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost,
+    PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost, current_artifact_key,
 };
 use crate::config::ServerConfig;
 use crate::host::plugin_host_from_config;
@@ -298,6 +298,30 @@ fn in_process_protocol_plugin_swaps_generation() {
         .expect("registered plugin adapter should resolve");
     assert_eq!(adapter.plugin_generation_id(), Some(next_generation));
     assert_ne!(first_generation, next_generation);
+}
+
+#[test]
+fn discover_rejects_duplicate_plugin_ids() -> Result<(), crate::RuntimeError> {
+    let temp_dir = tempdir()?;
+    for directory in ["first", "second"] {
+        let plugin_dir = temp_dir.path().join(directory);
+        fs::create_dir_all(&plugin_dir)?;
+        fs::write(
+            plugin_dir.join("plugin.toml"),
+            format!(
+                "[plugin]\nid = \"duplicate-plugin\"\nkind = \"protocol\"\n\n[artifacts]\n\"{}\" = \"libduplicate.so\"\n",
+                current_artifact_key()
+            ),
+        )?;
+    }
+
+    let error = PluginCatalog::discover(temp_dir.path(), None)
+        .expect_err("duplicate plugin ids should fail discovery");
+    assert!(matches!(
+        error,
+        crate::RuntimeError::Config(message) if message.contains("duplicate plugin id `duplicate-plugin`")
+    ));
+    Ok(())
 }
 
 #[test]

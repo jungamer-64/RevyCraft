@@ -26,7 +26,7 @@ use mc_proto_common::{
     StatusRequest, StorageAdapter, StorageError, TransportKind, WireCodec, WireFormatKind,
 };
 use serde::Deserialize;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -253,7 +253,18 @@ impl PluginCatalog {
         for entry in fs::read_dir(root)? {
             let entry = entry?;
             if let Some(package) = discover_dynamic_plugin_package(&entry.path(), allowlist)? {
-                packages.insert(package.plugin_id.clone(), package);
+                let plugin_id = package.plugin_id.clone();
+                match packages.entry(plugin_id.clone()) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(package);
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => {
+                        return Err(RuntimeError::Config(format!(
+                            "duplicate plugin id `{plugin_id}` discovered in {}",
+                            root.display()
+                        )));
+                    }
+                }
             }
         }
 
@@ -491,15 +502,8 @@ impl ProtocolGeneration {
     }
 }
 
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct GameplayQueryHandle {
-    data: *const (),
-    vtable: *const (),
-}
-
 thread_local! {
-    static CURRENT_GAMEPLAY_QUERY: RefCell<Option<GameplayQueryHandle>> = const { RefCell::new(None) };
+    static CURRENT_GAMEPLAY_QUERY: Cell<Option<*const ()>> = const { Cell::new(None) };
 }
 
 fn with_gameplay_query<T>(
@@ -507,10 +511,10 @@ fn with_gameplay_query<T>(
     f: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
     CURRENT_GAMEPLAY_QUERY.with(|slot| {
-        // The pointer never outlives this closure; callbacks run synchronously inside `f`.
-        let query_ptr =
-            unsafe { std::mem::transmute::<&dyn GameplayQuery, GameplayQueryHandle>(query) };
-        let previous = slot.replace(Some(query_ptr));
+        // The pointer targets this stack-local reference and never outlives the closure because
+        // gameplay host callbacks execute synchronously inside `f`.
+        let query_ref = query;
+        let previous = slot.replace(Some((&raw const query_ref).cast::<()>()));
         let result = f();
         let _ = slot.replace(previous);
         result
@@ -521,13 +525,11 @@ fn with_current_gameplay_query<T>(
     f: impl FnOnce(&dyn GameplayQuery) -> Result<T, String>,
 ) -> Result<T, String> {
     CURRENT_GAMEPLAY_QUERY.with(|slot| {
-        let query =
-            slot.borrow().as_ref().copied().ok_or_else(|| {
-                "gameplay host callback invoked without an active query".to_string()
-            })?;
-        let query_ptr =
-            unsafe { std::mem::transmute::<GameplayQueryHandle, *const dyn GameplayQuery>(query) };
-        let query = unsafe { &*query_ptr };
+        let query_ref_ptr = slot
+            .get()
+            .ok_or_else(|| "gameplay host callback invoked without an active query".to_string())?
+            .cast::<&dyn GameplayQuery>();
+        let query = unsafe { *query_ref_ptr };
         f(query)
     })
 }

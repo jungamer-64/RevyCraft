@@ -196,10 +196,10 @@ fn parse_server_ip(value: &str) -> Result<Option<IpAddr>, RuntimeError> {
 const fn parse_bool_flag(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 4
-        && (bytes[0] == b't' || bytes[0] == b'T')
-        && (bytes[1] == b'r' || bytes[1] == b'R')
-        && (bytes[2] == b'u' || bytes[2] == b'U')
-        && (bytes[3] == b'e' || bytes[3] == b'E')
+        && matches!(bytes[0], b't' | b'T')
+        && matches!(bytes[1], b'r' | b'R')
+        && matches!(bytes[2], b'u' | b'U')
+        && matches!(bytes[3], b'e' | b'E')
 }
 
 fn parse_u8(value: &str, key: &str) -> Result<u8, RuntimeError> {
