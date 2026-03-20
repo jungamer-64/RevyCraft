@@ -1,4 +1,4 @@
-use crate::RuntimeError;
+use crate::PluginHostError as RuntimeError;
 use crate::config::ServerConfig;
 use crate::registry::ProtocolRegistry;
 use crate::runtime::RuntimeReloadContext;
@@ -2521,31 +2521,6 @@ impl PluginHost {
             .protocols
             .lock()
             .expect("plugin host mutex should not be poisoned") = candidate.managed;
-    }
-
-    /// Registers protocol adapters and probes from the plugin catalog.
-    ///
-    /// `load_into_registries()` only registers protocol adapters and probes.
-    /// Use `initialize_runtime_registries()` when gameplay, storage, and auth
-    /// profiles also need to be activated from a concrete `ServerConfig`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a protocol plugin cannot be loaded into the runtime registries.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the protocol plugin registry mutex is poisoned.
-    #[cfg(test)]
-    pub(crate) fn load_into_registries(
-        self: &Arc<Self>,
-        registries: &mut crate::registry::LoadedPluginSet,
-    ) -> Result<(), RuntimeError> {
-        let prepared = self.prepare_protocol_topology_for_boot()?;
-        registries.replace_protocols(prepared.registry.clone());
-        self.activate_protocol_topology(prepared);
-        registries.attach_plugin_host(Arc::clone(self));
-        Ok(())
     }
 
     /// Resolves an active gameplay profile by id.

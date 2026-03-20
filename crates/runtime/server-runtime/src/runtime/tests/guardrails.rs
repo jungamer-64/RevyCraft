@@ -4,9 +4,9 @@ async fn assert_spawn_fails_with_message(
     config: ServerConfig,
     expected_fragment: &str,
 ) -> Result<(), RuntimeError> {
-    let result = spawn_server(config, plugin_test_registries_tcp_only()?).await;
+    let result = build_test_server(config, plugin_test_registries_tcp_only()?).await;
     let Err(error) = result else {
-        panic!("spawn_server should have failed");
+        panic!("build_test_server should have failed");
     };
     assert!(
         matches!(error, RuntimeError::Config(ref message) if message.contains(expected_fragment)),
@@ -79,7 +79,7 @@ async fn unknown_auth_profile_fails_fast() -> Result<(), RuntimeError> {
 #[tokio::test]
 async fn unmatched_probe_closes_without_response() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         loopback_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )
@@ -102,7 +102,7 @@ async fn unmatched_probe_closes_without_response() -> Result<(), RuntimeError> {
 #[tokio::test]
 async fn unsupported_login_protocol_receives_disconnect() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         loopback_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )

@@ -1,5 +1,6 @@
 #![allow(clippy::multiple_crate_versions)]
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -30,6 +31,12 @@ struct CargoTarget {
     kind: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PackageArgs {
+    dist_dir: PathBuf,
+    release: bool,
+}
+
 fn main() -> Result<(), String> {
     let mut args = env::args().skip(1);
     let Some(command) = args.next() else {
@@ -37,19 +44,39 @@ fn main() -> Result<(), String> {
     };
 
     match command.as_str() {
-        "package-plugins" => {
-            let remaining_args = args.collect::<Vec<_>>();
-            package_plugins(&remaining_args)
-        }
+        "package-plugins" => package_plugins(&args.collect::<Vec<_>>()),
+        "package-all-plugins" => package_all_plugins(&args.collect::<Vec<_>>()),
         _ => Err(help()),
     }
 }
 
 fn help() -> String {
-    "usage: cargo run -p xtask -- package-plugins [--release] [--dist-dir <path>]".to_string()
+    [
+        "usage:",
+        "  cargo run -p xtask -- package-plugins [--release] [--dist-dir <path>]",
+        "  cargo run -p xtask -- package-all-plugins [--release] [--dist-dir <path>]",
+    ]
+    .join("\n")
 }
 
 fn package_plugins(args: &[String]) -> Result<(), String> {
+    let package_args = parse_package_args(args)?;
+    let workspace_root = workspace_root()?;
+    let plugins = filter_plugins_by_ids(
+        discover_plugins(&workspace_root)?,
+        &sample_plugin_allowlist(&workspace_root)?,
+    )?;
+    package_plugin_specs(&workspace_root, &plugins, &package_args)
+}
+
+fn package_all_plugins(args: &[String]) -> Result<(), String> {
+    let package_args = parse_package_args(args)?;
+    let workspace_root = workspace_root()?;
+    let plugins = discover_plugins(&workspace_root)?;
+    package_plugin_specs(&workspace_root, &plugins, &package_args)
+}
+
+fn parse_package_args(args: &[String]) -> Result<PackageArgs, String> {
     let mut release = false;
     let mut dist_dir = PathBuf::from("runtime/plugins");
     let mut index = 0;
@@ -71,15 +98,28 @@ fn package_plugins(args: &[String]) -> Result<(), String> {
             }
         }
     }
+    Ok(PackageArgs { dist_dir, release })
+}
 
-    let workspace_root = workspace_root()?;
-    let plugins = discover_plugins(&workspace_root)?;
-    let dist_dir = workspace_root.join(dist_dir);
+fn package_plugin_specs(
+    workspace_root: &Path,
+    plugins: &[PluginSpec],
+    package_args: &PackageArgs,
+) -> Result<(), String> {
+    let dist_dir = workspace_root.join(&package_args.dist_dir);
+    if dist_dir.exists() {
+        fs::remove_dir_all(&dist_dir).map_err(|error| {
+            format!(
+                "failed to remove existing plugin dist dir {}: {error}",
+                dist_dir.display()
+            )
+        })?;
+    }
     fs::create_dir_all(&dist_dir).map_err(|error| error.to_string())?;
 
-    for plugin in &plugins {
-        build_plugin(&workspace_root, plugin, release)?;
-        package_plugin(&workspace_root, &dist_dir, plugin, release)?;
+    for plugin in plugins {
+        build_plugin(workspace_root, plugin, package_args.release)?;
+        package_plugin(workspace_root, &dist_dir, plugin, package_args.release)?;
     }
 
     println!("packaged plugins into {}", dist_dir.display());
@@ -135,6 +175,69 @@ fn discover_plugins(workspace_root: &Path) -> Result<Vec<PluginSpec>, String> {
         .collect::<Result<Vec<_>, _>>()?;
     plugins.sort_by(|left, right| left.cargo_package.cmp(&right.cargo_package));
     Ok(plugins)
+}
+
+fn sample_plugin_allowlist(workspace_root: &Path) -> Result<Vec<String>, String> {
+    let properties_path = workspace_root
+        .join("runtime")
+        .join("server.properties.example");
+    let contents = fs::read_to_string(&properties_path).map_err(|error| {
+        format!(
+            "failed to read sample server properties {}: {error}",
+            properties_path.display()
+        )
+    })?;
+    let allowlist_line = contents
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.starts_with('#') && line.starts_with("plugin-allowlist="))
+        .ok_or_else(|| {
+            format!(
+                "sample server properties {} did not define plugin-allowlist",
+                properties_path.display()
+            )
+        })?;
+    let (_, raw_ids) = allowlist_line
+        .split_once('=')
+        .ok_or_else(|| "plugin-allowlist line was malformed".to_string())?;
+    let mut seen = BTreeSet::new();
+    let plugin_ids = raw_ids
+        .split(',')
+        .map(str::trim)
+        .filter(|plugin_id| !plugin_id.is_empty())
+        .filter(|plugin_id| seen.insert((*plugin_id).to_string()))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if plugin_ids.is_empty() {
+        return Err("plugin-allowlist was empty".to_string());
+    }
+    Ok(plugin_ids)
+}
+
+fn filter_plugins_by_ids(
+    plugins: Vec<PluginSpec>,
+    plugin_ids: &[String],
+) -> Result<Vec<PluginSpec>, String> {
+    let requested = plugin_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let filtered = plugins
+        .into_iter()
+        .filter(|plugin| requested.contains(&plugin.plugin_id))
+        .collect::<Vec<_>>();
+    let discovered = filtered
+        .iter()
+        .map(|plugin| plugin.plugin_id.clone())
+        .collect::<BTreeSet<_>>();
+    let missing = requested
+        .difference(&discovered)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(format!(
+            "sample allowlist referenced unknown plugin ids: {}",
+            missing.join(", ")
+        ));
+    }
+    Ok(filtered)
 }
 
 fn is_plugin_package(package: &CargoPackage, plugins_root: &Path) -> bool {
@@ -304,7 +407,11 @@ fn packaged_artifact_name_with_tag(base_name: &str, build_tag: Option<String>) -
 
 #[cfg(test)]
 mod tests {
-    use super::{PluginSpec, packaged_artifact_name_with_tag, plugin_spec_from_package_name};
+    use super::{
+        PackageArgs, PluginSpec, filter_plugins_by_ids, packaged_artifact_name_with_tag,
+        parse_package_args, plugin_spec_from_package_name,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn plugin_spec_maps_protocol_packages_to_adapter_ids() {
@@ -341,5 +448,35 @@ mod tests {
             packaged_artifact_name_with_tag("libmc_plugin.so", Some("reload smoke".to_string())),
             "libmc_plugin-reload_smoke.so"
         );
+    }
+
+    #[test]
+    fn parse_package_args_reads_release_and_dist_dir() {
+        assert_eq!(
+            parse_package_args(&[
+                "--release".to_string(),
+                "--dist-dir".to_string(),
+                "target/plugins".to_string(),
+            ])
+            .expect("xtask args should parse"),
+            PackageArgs {
+                dist_dir: PathBuf::from("target/plugins"),
+                release: true,
+            }
+        );
+    }
+
+    #[test]
+    fn filter_plugins_by_ids_rejects_unknown_sample_plugin() {
+        let error = filter_plugins_by_ids(
+            vec![PluginSpec {
+                cargo_package: "mc-plugin-proto-je-1_7_10".to_string(),
+                plugin_id: "je-1_7_10".to_string(),
+                plugin_kind: "protocol".to_string(),
+            }],
+            &["missing-plugin".to_string()],
+        )
+        .expect_err("unknown sample plugin ids should fail");
+        assert!(error.contains("missing-plugin"));
     }
 }

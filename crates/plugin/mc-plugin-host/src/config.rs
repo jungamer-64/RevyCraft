@@ -1,4 +1,4 @@
-use crate::PluginFailureMatrix;
+use crate::host::{PluginFailureAction, PluginFailureMatrix};
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,10 +13,10 @@ pub struct ServerConfig {
     pub gameplay_profile_map: HashMap<String, String>,
     pub plugins_dir: PathBuf,
     pub plugin_allowlist: Option<Vec<String>>,
-    pub plugin_failure_policy_protocol: crate::PluginFailureAction,
-    pub plugin_failure_policy_gameplay: crate::PluginFailureAction,
-    pub plugin_failure_policy_storage: crate::PluginFailureAction,
-    pub plugin_failure_policy_auth: crate::PluginFailureAction,
+    pub plugin_failure_policy_protocol: PluginFailureAction,
+    pub plugin_failure_policy_gameplay: PluginFailureAction,
+    pub plugin_failure_policy_storage: PluginFailureAction,
+    pub plugin_failure_policy_auth: PluginFailureAction,
     pub plugin_abi_min: PluginAbiVersion,
     pub plugin_abi_max: PluginAbiVersion,
 }

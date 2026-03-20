@@ -74,7 +74,7 @@ pub fn packaged_plugin_test_variant_build_count() -> usize {
 }
 
 #[cfg(test)]
-fn packaged_plugin_test_run_xtask_package_plugins(
+fn packaged_plugin_test_run_xtask_package_all_plugins(
     dist_dir: &Path,
     target_dir: &Path,
     build_tag: &str,
@@ -91,7 +91,7 @@ fn packaged_plugin_test_run_xtask_package_plugins(
         .arg("-p")
         .arg("xtask")
         .arg("--")
-        .arg("package-plugins")
+        .arg("package-all-plugins")
         .arg("--dist-dir")
         .arg(dist_dir)
         .status()
@@ -99,7 +99,7 @@ fn packaged_plugin_test_run_xtask_package_plugins(
     if status.success() {
         Ok(())
     } else {
-        Err("xtask package-plugins failed".to_string())
+        Err("xtask package-all-plugins failed".to_string())
     }
 }
 
@@ -195,7 +195,7 @@ pub fn packaged_plugin_test_harness_dist_dir() -> Result<&'static PathBuf, Strin
             }
             let target_dir = packaged_plugin_test_target_dir("runtime-test-harness");
             fs::create_dir_all(&dist_dir).map_err(|error| error.to_string())?;
-            packaged_plugin_test_run_xtask_package_plugins(
+            packaged_plugin_test_run_xtask_package_all_plugins(
                 &dist_dir,
                 &target_dir,
                 PACKAGED_PLUGIN_TEST_HARNESS_TAG,

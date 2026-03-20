@@ -120,7 +120,7 @@ fn decodes_offhand_block_place() {
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"offhand-1122"));
     let mut writer = PacketWriter::default();
     writer.write_varint(0x1f);
-    writer.write_i64(mc_proto_je_common::pack_block_position(
+    writer.write_i64(mc_proto_je_common::internal::pack_block_position(
         mc_core::BlockPos::new(2, 3, 4),
     ));
     writer.write_varint(1);

@@ -9,10 +9,12 @@ use mc_proto_common::{
     WireFormatKind,
 };
 use mc_proto_je_common::{
-    JavaEditionAdapter, JavaEditionProfile, build_chunk_data_1_8, legacy_block_state_id,
-    legacy_inventory_slot, legacy_window_items, legacy_window_slot, pack_block_position,
-    player_window_id, read_legacy_slot, to_angle_byte, to_fixed_point, unpack_block_position,
-    write_empty_metadata_1_8, write_legacy_slot,
+    JavaEditionAdapter, JavaEditionProfile,
+    internal::{
+        build_chunk_data_1_8, legacy_block_state_id, legacy_inventory_slot, legacy_window_items,
+        legacy_window_slot, pack_block_position, player_window_id, read_legacy_slot, to_angle_byte,
+        to_fixed_point, unpack_block_position, write_empty_metadata_1_8, write_legacy_slot,
+    },
 };
 use serde_json::json;
 

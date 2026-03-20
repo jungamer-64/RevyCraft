@@ -1,6 +1,6 @@
 use crate::RuntimeError;
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
-use mc_plugin_host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
+use mc_plugin_host::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
 use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

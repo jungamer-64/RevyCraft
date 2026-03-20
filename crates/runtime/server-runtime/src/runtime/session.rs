@@ -9,7 +9,7 @@ use crate::transport::{
 use bytes::BytesMut;
 use mc_core::{ConnectionId, CoreCommand, CoreEvent, SessionCapabilitySet};
 use mc_plugin_api::codec::auth::{AuthMode, BedrockAuthResult};
-use mc_plugin_host::{HotSwappableAuthProfile, HotSwappableGameplayProfile};
+use mc_plugin_host::host::{HotSwappableAuthProfile, HotSwappableGameplayProfile};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeNextState, LoginRequest, PlayEncodingContext,
     ProtocolAdapter, ServerListStatus, StatusRequest, TransportKind, WireCodec,

@@ -13,9 +13,9 @@ async fn assert_spawn_fails_with_message(
     config: ServerConfig,
     expected_fragment: &str,
 ) -> Result<(), RuntimeError> {
-    let result = spawn_server(config, plugin_test_registries_all()?).await;
+    let result = build_test_server(config, plugin_test_registries_all()?).await;
     let Err(error) = result else {
-        panic!("spawn_server should have failed");
+        panic!("build_test_server should have failed");
     };
     assert!(
         matches!(error, RuntimeError::Config(ref message) if message.contains(expected_fragment)),

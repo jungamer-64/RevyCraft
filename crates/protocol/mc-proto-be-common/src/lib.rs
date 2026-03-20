@@ -416,6 +416,16 @@ impl<P: BedrockProfile> ProtocolAdapter for BedrockAdapter<P> {
     }
 }
 
+#[doc(hidden)]
+pub mod internal {
+    pub use super::{
+        BedrockLoginError, ParsedBedrockLogin, RAKNET_OPEN_CONNECTION_REQUEST_1,
+        RAKNET_OPEN_CONNECTION_REQUEST_2, RAKNET_UNCONNECTED_PING, bedrock_actor_id,
+        bedrock_probe_intent, block_face_from_i32, block_pos_from_network, block_pos_to_network,
+        detects_bedrock_datagram, parse_bedrock_login_payload, protocol_error, vec3_to_bedrock,
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ParsedBedrockLogin, detects_bedrock_datagram, parse_bedrock_login_payload};

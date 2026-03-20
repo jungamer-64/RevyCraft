@@ -11,7 +11,7 @@ use mc_core::{
     WorldMeta,
 };
 use mc_proto_common::{PacketWriter, ProtocolError};
-use mc_proto_je_common::{
+use mc_proto_je_common::internal::{
     build_chunk_data_1_12, legacy_block_state_id, pack_block_position, to_angle_byte,
     write_empty_metadata_1_12, write_legacy_slot,
 };
@@ -168,7 +168,7 @@ pub fn encode_window_items(
     window_id: u8,
     inventory: &PlayerInventory,
 ) -> Result<Vec<u8>, ProtocolError> {
-    let items = mc_proto_je_common::modern_window_items(inventory);
+    let items = mc_proto_je_common::internal::modern_window_items(inventory);
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_WINDOW_ITEMS);
     writer.write_u8(window_id);

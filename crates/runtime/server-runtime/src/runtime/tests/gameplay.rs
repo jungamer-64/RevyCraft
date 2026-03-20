@@ -97,7 +97,7 @@ async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), Ru
     let world_dir = temp_dir.path().join("world");
     let codec = MinecraftWireCodec;
 
-    let server = spawn_server(
+    let server = build_test_server(
         multi_version_creative_server_config(world_dir.clone()),
         plugin_test_registries_all()?,
     )
@@ -118,7 +118,7 @@ async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), Ru
 
     server.shutdown().await?;
 
-    let restarted = spawn_server(
+    let restarted = build_test_server(
         multi_version_creative_server_config(world_dir),
         plugin_test_registries_all()?,
     )
@@ -140,7 +140,7 @@ async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), Ru
 #[tokio::test]
 async fn creative_join_sends_inventory_selected_slot_and_abilities() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         creative_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )
@@ -185,7 +185,7 @@ async fn creative_join_sends_inventory_selected_slot_and_abilities() -> Result<(
 #[tokio::test]
 async fn creative_place_and_break_broadcast_block_changes() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         creative_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )
@@ -221,7 +221,7 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
     let world_dir = temp_dir.path().join("world");
     let codec = MinecraftWireCodec;
 
-    let server = spawn_server(
+    let server = build_test_server(
         creative_server_config(world_dir.clone()),
         plugin_test_registries_tcp_only()?,
     )
@@ -246,7 +246,7 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
 
     server.shutdown().await?;
 
-    let restarted = spawn_server(
+    let restarted = build_test_server(
         creative_server_config(world_dir),
         plugin_test_registries_tcp_only()?,
     )
@@ -266,7 +266,7 @@ async fn plugin_backed_storage_and_auth_profiles_boot_and_persist() -> Result<()
     let temp_dir = tempdir()?;
     let world_dir = temp_dir.path().join("world");
 
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             storage_profile: JE_1_7_10_STORAGE_PROFILE_ID.to_string(),
             auth_profile: OFFLINE_AUTH_PROFILE_ID.to_string(),
@@ -289,7 +289,7 @@ async fn plugin_backed_storage_and_auth_profiles_boot_and_persist() -> Result<()
 #[tokio::test]
 async fn unsupported_creative_inventory_action_is_corrected() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         creative_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )
@@ -314,7 +314,7 @@ async fn unsupported_creative_inventory_action_is_corrected() -> Result<(), Runt
 async fn survival_place_is_rejected_with_block_and_inventory_correction() -> Result<(), RuntimeError>
 {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         loopback_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )
@@ -344,7 +344,7 @@ async fn two_players_can_see_movement_and_restart_persists_position() -> Result<
     let world_dir = temp_dir.path().join("world");
     let codec = MinecraftWireCodec;
 
-    let server = spawn_server(
+    let server = build_test_server(
         loopback_server_config(world_dir.clone()),
         plugin_test_registries_tcp_only()?,
     )
@@ -375,7 +375,7 @@ async fn two_players_can_see_movement_and_restart_persists_position() -> Result<
     first.shutdown().await.ok();
     server.shutdown().await?;
 
-    let restarted = spawn_server(
+    let restarted = build_test_server(
         loopback_server_config(world_dir),
         plugin_test_registries_tcp_only()?,
     )

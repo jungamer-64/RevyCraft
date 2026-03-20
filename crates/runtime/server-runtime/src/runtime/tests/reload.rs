@@ -48,7 +48,7 @@ async fn spawn_protocol_reload_server(
         &target_dir,
         "protocol-reload-v1",
     )?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -100,7 +100,7 @@ async fn spawn_online_auth_reload_server(
         &target_dir,
         "online-auth-v1",
     )?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -284,7 +284,7 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         dist_dir.clone(),
         &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
     )?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -400,7 +400,7 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         dist_dir.clone(),
         &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
     )?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -500,7 +500,7 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let registries = plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -572,7 +572,7 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
 
     server.shutdown().await?;
 
-    let restarted = spawn_server(
+    let restarted = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -618,7 +618,8 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
         world_dir: temp_dir.path().join("world"),
         ..ServerConfig::default()
     };
-    let server = spawn_server(config.clone(), plugin_test_registries_from_config(&config)?).await?;
+    let server =
+        build_test_server(config.clone(), plugin_test_registries_from_config(&config)?).await?;
     let plugin_host = server
         .plugin_host
         .as_ref()
@@ -674,7 +675,7 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
         &[JE_1_7_10_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -770,7 +771,7 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
         &target_dir,
         "online-stub-v1",
     )?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -927,7 +928,7 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
         &target_dir,
         "protocol-reload-v1",
     )?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -1004,7 +1005,7 @@ async fn topology_reload_properties_source_reads_updated_server_properties()
             "topology-drain-grace-secs=30",
         ],
     )?;
-    let server = spawn_server_from_source(
+    let server = build_test_server_from_source(
         ServerConfigSource::Properties(properties_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),
@@ -1078,7 +1079,7 @@ async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result
             "topology-drain-grace-secs=30",
         ],
     )?;
-    let server = spawn_server_from_source(
+    let server = build_test_server_from_source(
         ServerConfigSource::Properties(properties_path.clone()),
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
     )
@@ -1134,7 +1135,7 @@ async fn topology_reload_status_reports_draining_generation() -> Result<(), Runt
             "topology-drain-grace-secs=30",
         ],
     )?;
-    let server = spawn_server_from_source(
+    let server = build_test_server_from_source(
         ServerConfigSource::Properties(properties_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),
@@ -1214,7 +1215,7 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
             "topology-drain-grace-secs=0",
         ],
     )?;
-    let server = spawn_server_from_source(
+    let server = build_test_server_from_source(
         ServerConfigSource::Properties(properties_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),

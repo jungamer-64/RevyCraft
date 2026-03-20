@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -71,7 +71,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
 #[tokio::test]
 async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -140,7 +140,7 @@ async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), R
 async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let registries = plugin_test_registries_all()?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,

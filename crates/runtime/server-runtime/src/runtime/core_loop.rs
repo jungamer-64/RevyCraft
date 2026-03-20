@@ -9,8 +9,8 @@ use mc_core::{ConnectionId, CoreCommand, CoreEvent, EventTarget, PlayerSummary, 
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_host::host::{PluginFailureAction, PluginHost};
 use mc_plugin_host::registry::{ListenerBinding, ProtocolRegistry};
-use mc_plugin_host::{PluginFailureAction, PluginHost};
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, TransportKind, WireFormatKind,
 };

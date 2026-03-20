@@ -14,9 +14,9 @@ async fn assert_spawn_fails_with_message(
     config: ServerConfig,
     expected_fragment: &str,
 ) -> Result<(), RuntimeError> {
-    let result = spawn_server(config, plugin_test_registries_all()?).await;
+    let result = build_test_server(config, plugin_test_registries_all()?).await;
     let Err(error) = result else {
-        panic!("spawn_server should have failed");
+        panic!("build_test_server should have failed");
     };
     assert!(
         matches!(error, RuntimeError::Config(ref message) if message.contains(expected_fragment)),
@@ -28,7 +28,7 @@ async fn assert_spawn_fails_with_message(
 #[tokio::test]
 async fn running_server_exposes_listener_bindings() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         loopback_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )
@@ -54,7 +54,7 @@ async fn running_server_exposes_listener_bindings() -> Result<(), RuntimeError> 
 #[tokio::test]
 async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         loopback_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )
@@ -104,7 +104,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
 #[tokio::test]
 async fn running_server_exposes_udp_listener_binding_when_enabled() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             be_enabled: true,
             ..loopback_server_config(temp_dir.path().join("world"))
@@ -138,7 +138,7 @@ async fn running_server_session_status_reports_live_sessions() -> Result<(), Run
     }
 
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         loopback_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )
@@ -212,7 +212,7 @@ async fn default_bedrock_adapter_requires_listener_metadata() -> Result<(), Runt
 async fn placeholder_bedrock_adapter_can_remain_enabled_when_not_default()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             be_enabled: true,
             default_bedrock_adapter: BE_26_3_ADAPTER_ID.to_string(),
@@ -244,7 +244,7 @@ async fn placeholder_bedrock_adapter_can_remain_enabled_when_not_default()
 #[tokio::test]
 async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             enabled_adapters: Some(vec![
                 JE_1_7_10_ADAPTER_ID.to_string(),
@@ -288,7 +288,7 @@ async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), Runt
 #[tokio::test]
 async fn status_ping_login_and_initial_world_work() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         loopback_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )
@@ -324,7 +324,7 @@ async fn status_ping_login_and_initial_world_work() -> Result<(), RuntimeError> 
 #[tokio::test]
 async fn unsupported_status_protocol_receives_server_list_response() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         loopback_server_config(temp_dir.path().join("world")),
         plugin_test_registries_tcp_only()?,
     )
@@ -372,7 +372,7 @@ fn udp_unknown_datagram_is_ignored() -> Result<(), RuntimeError> {
 #[tokio::test]
 async fn udp_bedrock_probe_does_not_block_je_status() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         ServerConfig {
             be_enabled: true,
             ..loopback_server_config(temp_dir.path().join("world"))

@@ -3,6 +3,7 @@ use super::{
     PluginAbiRange, PluginCatalog, PluginFailureAction, PluginFailureMatrix, PluginHost,
     current_artifact_key, with_current_gameplay_query, with_gameplay_query,
 };
+use crate::PluginHostError as RuntimeError;
 use crate::config::ServerConfig;
 use crate::host::plugin_host_from_config;
 use crate::registry::LoadedPluginSet;
@@ -583,6 +584,14 @@ impl GameplayQuery for StubGameplayQuery {
     }
 }
 
+fn load_protocol_plugin_set(host: &Arc<PluginHost>) -> Result<LoadedPluginSet, RuntimeError> {
+    let protocols = host.load_protocol_registry()?;
+    let mut loaded_plugins = LoadedPluginSet::new();
+    loaded_plugins.replace_protocols(protocols);
+    loaded_plugins.attach_plugin_host(Arc::clone(host));
+    Ok(loaded_plugins)
+}
+
 #[test]
 fn in_process_protocol_plugin_swaps_generation() {
     let entrypoints = in_process_protocol_entrypoints();
@@ -601,9 +610,7 @@ fn in_process_protocol_plugin_swaps_generation() {
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = LoadedPluginSet::new();
-    host.load_into_registries(&mut registries)
-        .expect("in-process plugin should load");
+    let registries = load_protocol_plugin_set(&host).expect("in-process plugin should load");
 
     let adapter = registries
         .protocols()
@@ -630,7 +637,7 @@ fn in_process_protocol_plugin_swaps_generation() {
 }
 
 #[test]
-fn discover_rejects_duplicate_plugin_ids() -> Result<(), crate::RuntimeError> {
+fn discover_rejects_duplicate_plugin_ids() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     for directory in ["first", "second"] {
         let plugin_dir = temp_dir.path().join(directory);
@@ -648,7 +655,7 @@ fn discover_rejects_duplicate_plugin_ids() -> Result<(), crate::RuntimeError> {
         .expect_err("duplicate plugin ids should fail discovery");
     assert!(matches!(
         error,
-        crate::RuntimeError::Config(message) if message.contains("duplicate plugin id `duplicate-plugin`")
+        RuntimeError::Config(message) if message.contains("duplicate plugin id `duplicate-plugin`")
     ));
     Ok(())
 }
@@ -677,9 +684,7 @@ fn all_protocol_plugins_register_and_resolve() {
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = LoadedPluginSet::new();
-    host.load_into_registries(&mut registries)
-        .expect("protocol plugins should load");
+    let registries = load_protocol_plugin_set(&host).expect("protocol plugins should load");
 
     for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
         assert!(
@@ -728,9 +733,7 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = LoadedPluginSet::new();
-    host.load_into_registries(&mut registries)
-        .expect("protocol plugins should load");
+    let registries = load_protocol_plugin_set(&host).expect("protocol plugins should load");
 
     let je_adapter = registries
         .protocols()
@@ -783,9 +786,7 @@ fn protocol_plugins_can_override_host_wire_codec_framing() {
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = LoadedPluginSet::new();
-    host.load_into_registries(&mut registries)
-        .expect("custom wire codec plugin should load");
+    let registries = load_protocol_plugin_set(&host).expect("custom wire codec plugin should load");
 
     let adapter = registries
         .protocols()
@@ -832,14 +833,13 @@ fn abi_mismatch_is_rejected_before_registration() {
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = LoadedPluginSet::new();
-
-    let error = host
-        .load_into_registries(&mut registries)
-        .expect_err("ABI mismatch should fail before registration");
+    let error = match load_protocol_plugin_set(&host) {
+        Ok(_) => panic!("ABI mismatch should fail before registration"),
+        Err(error) => error,
+    };
     assert!(matches!(
         error,
-        crate::RuntimeError::PluginFatal(message) if message.contains("ABI")
+        RuntimeError::PluginFatal(message) if message.contains("ABI")
     ));
 }
 
@@ -860,14 +860,13 @@ fn protocol_plugins_require_reload_manifest_capability() {
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = LoadedPluginSet::new();
-
-    let error = host
-        .load_into_registries(&mut registries)
-        .expect_err("protocol plugin without runtime.reload.protocol should fail");
+    let error = match load_protocol_plugin_set(&host) {
+        Ok(_) => panic!("protocol plugin without runtime.reload.protocol should fail"),
+        Err(error) => error,
+    };
     assert!(matches!(
         error,
-        crate::RuntimeError::PluginFatal(message) if message.contains("runtime.reload.protocol")
+        RuntimeError::PluginFatal(message) if message.contains("runtime.reload.protocol")
     ));
 }
 
@@ -891,8 +890,7 @@ fn storage_and_auth_plugins_are_managed_without_quarantine() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     ));
-    let mut registries = LoadedPluginSet::new();
-    host.load_into_registries(&mut registries)
+    let _loaded_plugins = load_protocol_plugin_set(&host)
         .expect("storage/auth plugin kinds should register with the host");
 
     assert!(host.quarantine_reason("storage-je-anvil-1_7_10").is_none());
@@ -933,7 +931,7 @@ fn gameplay_profiles_activate_and_resolve() {
 }
 
 #[test]
-fn initialize_runtime_registries_activates_runtime_profiles() {
+fn load_plugin_set_activates_runtime_profiles() {
     let mut catalog = PluginCatalog::default();
     let protocol = in_process_protocol_entrypoints();
     catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
@@ -965,9 +963,9 @@ fn initialize_runtime_registries_activates_runtime_profiles() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     ));
-    let mut registries = LoadedPluginSet::new();
-    host.initialize_runtime_registries(&ServerConfig::default(), &mut registries)
-        .expect("runtime registries should initialize with runtime profiles");
+    let registries = host
+        .load_plugin_set(&ServerConfig::default())
+        .expect("load_plugin_set should initialize runtime profiles");
 
     assert!(
         registries
@@ -1097,9 +1095,8 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
                 ..PluginFailureMatrix::default()
             },
         ));
-        let mut registries = LoadedPluginSet::new();
-        host.load_into_registries(&mut registries)
-            .expect("failing protocol plugin should still register");
+        let registries =
+            load_protocol_plugin_set(&host).expect("failing protocol plugin should still register");
 
         let error = registries
             .protocols()
@@ -1274,7 +1271,7 @@ fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
             .expect_err("failing auth should reject the current login attempt");
         assert!(matches!(
             error,
-            crate::RuntimeError::Config(message) if message.contains("auth runtime failure")
+            RuntimeError::Config(message) if message.contains("auth runtime failure")
         ));
         assert!(host.quarantine_reason("auth-failing").is_none());
         let status = host.status();
@@ -1308,7 +1305,7 @@ fn unknown_gameplay_profile_fails_activation() {
         .expect_err("unknown gameplay profile should fail fast");
     assert!(matches!(
         error,
-        crate::RuntimeError::Config(message) if message.contains("unknown gameplay profile")
+        RuntimeError::Config(message) if message.contains("unknown gameplay profile")
     ));
 }
 
@@ -1354,7 +1351,7 @@ fn unknown_storage_and_auth_profiles_fail_activation() {
         .expect_err("unknown storage profile should fail fast");
     assert!(matches!(
         storage,
-        crate::RuntimeError::Config(message) if message.contains("unknown storage profile")
+        RuntimeError::Config(message) if message.contains("unknown storage profile")
     ));
 
     let auth = host
@@ -1362,13 +1359,13 @@ fn unknown_storage_and_auth_profiles_fail_activation() {
         .expect_err("unknown auth profile should fail fast");
     assert!(matches!(
         auth,
-        crate::RuntimeError::Config(message) if message.contains("unknown auth profile")
+        RuntimeError::Config(message) if message.contains("unknown auth profile")
     ));
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), crate::RuntimeError> {
+fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     crate::seed_packaged_plugins_from_test_harness(
@@ -1381,8 +1378,7 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), crate::RuntimeError
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let mut registries = LoadedPluginSet::new();
-    host.load_into_registries(&mut registries)?;
+    let registries = load_protocol_plugin_set(&host)?;
 
     for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
         let adapter = registries
@@ -1403,7 +1399,7 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), crate::RuntimeError
 
 #[cfg(target_os = "linux")]
 #[test]
-fn packaged_protocol_reload_replaces_generation() -> Result<(), crate::RuntimeError> {
+fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-reload");
@@ -1414,8 +1410,7 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), crate::RuntimeEr
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let mut registries = LoadedPluginSet::new();
-    host.load_into_registries(&mut registries)?;
+    let registries = load_protocol_plugin_set(&host)?;
 
     let adapter = registries
         .protocols()
@@ -1455,8 +1450,7 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), crate::RuntimeEr
 
 #[cfg(target_os = "linux")]
 #[test]
-fn packaged_protocol_reload_with_context_migrates_protocol_sessions()
--> Result<(), crate::RuntimeError> {
+fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-migrate");
@@ -1474,8 +1468,7 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions()
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let mut registries = LoadedPluginSet::new();
-    host.load_into_registries(&mut registries)?;
+    let registries = load_protocol_plugin_set(&host)?;
 
     let adapter = registries
         .protocols()
@@ -1534,7 +1527,7 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions()
 
 #[cfg(target_os = "linux")]
 #[test]
-fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), crate::RuntimeError> {
+fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-all-or-nothing");
@@ -1552,8 +1545,7 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), crate
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let mut registries = LoadedPluginSet::new();
-    host.load_into_registries(&mut registries)?;
+    let registries = load_protocol_plugin_set(&host)?;
 
     let adapter = registries
         .protocols()
@@ -1604,7 +1596,7 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), crate
 
 #[cfg(target_os = "linux")]
 #[test]
-fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), crate::RuntimeError> {
+fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-incompatible");
@@ -1622,8 +1614,7 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), crate
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let mut registries = LoadedPluginSet::new();
-    host.load_into_registries(&mut registries)?;
+    let registries = load_protocol_plugin_set(&host)?;
 
     let adapter = registries
         .protocols()
@@ -1767,7 +1758,7 @@ fn package_single_protocol_plugin(
     dist_dir: &Path,
     target_dir: &Path,
     build_tag: &str,
-) -> Result<(), crate::RuntimeError> {
+) -> Result<(), RuntimeError> {
     crate::install_packaged_plugin_from_test_cache(
         cargo_package,
         plugin_id,

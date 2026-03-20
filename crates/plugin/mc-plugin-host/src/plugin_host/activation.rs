@@ -327,20 +327,4 @@ impl PluginHost {
         self.activate_protocol_topology(prepared);
         Ok(registry)
     }
-
-    /// Registers protocol adapters and activates runtime-selected profiles.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when registries cannot be initialized or required profiles cannot be
-    /// activated.
-    #[cfg(test)]
-    pub(crate) fn initialize_runtime_registries(
-        self: &Arc<Self>,
-        config: &ServerConfig,
-        registries: &mut LoadedPluginSet,
-    ) -> Result<(), RuntimeError> {
-        *registries = self.load_plugin_set(config)?;
-        Ok(())
-    }
 }

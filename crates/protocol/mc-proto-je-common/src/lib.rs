@@ -813,3 +813,17 @@ fn rounded_f32_to_i32(value: f32) -> i32 {
         .to_i32()
         .expect("angle byte intermediate should fit into i32")
 }
+
+#[doc(hidden)]
+pub mod internal {
+    pub use super::{
+        build_chunk_data_1_7, build_chunk_data_1_8, build_chunk_data_1_12, decode_handshake_frame,
+        encode_login_success_packet, encode_status_pong_packet, encode_status_response_packet,
+        get_nibble, legacy_block, legacy_block_state_id, legacy_inventory_slot, legacy_item,
+        legacy_window_items, legacy_window_slot, modern_inventory_slot, modern_window_items,
+        modern_window_slot, pack_block_position, player_window_id, read_legacy_slot,
+        read_login_byte_array, semantic_block, semantic_item, to_angle_byte, to_fixed_point,
+        unpack_block_position, write_empty_metadata_1_8, write_empty_metadata_1_12,
+        write_legacy_slot, write_login_byte_array, zlib_compress,
+    };
+}

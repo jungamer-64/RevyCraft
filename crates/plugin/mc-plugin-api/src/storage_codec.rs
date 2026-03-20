@@ -1,9 +1,9 @@
 use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
-use crate::protocol_codec::{
+use crate::codec::protocol::{
     Decoder, Encoder, EnvelopeHeader, decode_capability_set, decode_envelope,
     decode_world_snapshot, encode_capability_set, encode_envelope, encode_world_snapshot,
 };
-use crate::protocol_codec::{PROTOCOL_FLAG_RESPONSE, ProtocolCodecError};
+use crate::codec::protocol::{PROTOCOL_FLAG_RESPONSE, ProtocolCodecError};
 use mc_core::{CapabilitySet, WorldSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,7 +248,7 @@ fn encode_storage_response_payload(
             StorageOpCode::LoadSnapshot | StorageOpCode::ExportRuntimeState,
             StorageResponse::Snapshot(snapshot),
         ) => {
-            crate::protocol_codec::encode_option(encoder, snapshot.as_ref(), encode_world_snapshot)
+            crate::codec::protocol::encode_option(encoder, snapshot.as_ref(), encode_world_snapshot)
         }
         (
             StorageOpCode::SaveSnapshot | StorageOpCode::ImportRuntimeState,
@@ -273,7 +273,7 @@ fn decode_storage_response_payload(
         )?)),
         StorageOpCode::LoadSnapshot | StorageOpCode::ExportRuntimeState => {
             Ok(StorageResponse::Snapshot(
-                crate::protocol_codec::decode_option(decoder, decode_world_snapshot)?,
+                crate::codec::protocol::decode_option(decoder, decode_world_snapshot)?,
             ))
         }
         StorageOpCode::SaveSnapshot | StorageOpCode::ImportRuntimeState => {

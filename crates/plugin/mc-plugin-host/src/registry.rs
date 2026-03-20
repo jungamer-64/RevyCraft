@@ -1,6 +1,7 @@
-use crate::RuntimeError;
-use crate::host::PluginHost;
-use crate::{HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableStorageProfile};
+use crate::PluginHostError as RuntimeError;
+use crate::host::{
+    HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableStorageProfile, PluginHost,
+};
 use mc_proto_common::{
     Edition, HandshakeIntent, HandshakeProbe, ProtocolAdapter, ProtocolError, StorageAdapter,
     TransportKind,

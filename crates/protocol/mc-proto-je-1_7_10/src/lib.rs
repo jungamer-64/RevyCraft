@@ -11,10 +11,13 @@ use mc_proto_common::{
     WireFormatKind,
 };
 use mc_proto_je_common::{
-    JavaEditionAdapter, JavaEditionProfile, build_chunk_data_1_7, legacy_block,
-    legacy_inventory_slot, legacy_item, legacy_window_items, legacy_window_slot, player_window_id,
-    read_legacy_slot, semantic_block, semantic_item, to_angle_byte, to_fixed_point,
-    write_legacy_slot, zlib_compress,
+    JavaEditionAdapter, JavaEditionProfile,
+    internal::{
+        build_chunk_data_1_7, legacy_block, legacy_inventory_slot, legacy_item,
+        legacy_window_items, legacy_window_slot, player_window_id, read_legacy_slot,
+        semantic_block, semantic_item, to_angle_byte, to_fixed_point, write_legacy_slot,
+        zlib_compress,
+    },
 };
 
 pub use self::storage::Je1710StorageAdapter;
@@ -455,7 +458,7 @@ fn encode_chunk_bulk(chunks: &[ChunkColumn]) -> Result<Vec<u8>, ProtocolError> {
 }
 
 pub(crate) fn get_nibble(source: &[u8], index: usize) -> u8 {
-    mc_proto_je_common::get_nibble(source, index)
+    mc_proto_je_common::internal::get_nibble(source, index)
 }
 
 const fn dimension_to_i8(dimension: DimensionId) -> i8 {

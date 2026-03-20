@@ -10,10 +10,10 @@ use crate::transport::{
 };
 use mc_core::{CoreConfig, ServerCore};
 use mc_plugin_api::codec::auth::AuthMode;
-use mc_plugin_host::registry::{ListenerBinding, LoadedPluginSet, ProtocolRegistry};
-use mc_plugin_host::{
+use mc_plugin_host::host::{
     HotSwappableAuthProfile, HotSwappableStorageProfile, PluginHost, plugin_reload_poll_interval_ms,
 };
+use mc_plugin_host::registry::{ListenerBinding, LoadedPluginSet, ProtocolRegistry};
 use mc_proto_common::{Edition, ProtocolAdapter, TransportKind};
 use std::collections::HashMap;
 use std::net::SocketAddr;

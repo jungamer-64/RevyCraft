@@ -19,12 +19,12 @@ fn online_auth_server_config(world_dir: PathBuf, enabled_adapters: &[&str]) -> S
 
 async fn assert_spawn_fails_with_message(
     config: ServerConfig,
-    registries: PluginTestEnvironment,
+    registries: LoadedPluginTestEnvironment,
     expected_fragment: &str,
 ) -> Result<(), RuntimeError> {
-    let result = spawn_server(config, registries).await;
+    let result = build_test_server(config, registries).await;
     let Err(error) = result else {
-        panic!("spawn_server should have failed");
+        panic!("build_test_server should have failed");
     };
     assert!(
         matches!(error, RuntimeError::Config(ref message) if message.contains(expected_fragment)),
@@ -71,7 +71,7 @@ async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(
         JE_1_8_X_ADAPTER_ID,
         JE_1_12_2_ADAPTER_ID,
     ];
-    let server = spawn_server(
+    let server = build_test_server(
         online_auth_server_config(temp_dir.path().join("world"), &enabled_adapters),
         in_process_online_auth_registries(&enabled_adapters)?,
     )
@@ -116,7 +116,7 @@ async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(
 #[tokio::test]
 async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         online_auth_server_config(temp_dir.path().join("world"), &[JE_1_7_10_ADAPTER_ID]),
         in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
     )
@@ -145,7 +145,7 @@ async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(),
 #[tokio::test]
 async fn verify_token_mismatch_disconnects_in_online_mode() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = spawn_server(
+    let server = build_test_server(
         online_auth_server_config(temp_dir.path().join("world"), &[JE_1_7_10_ADAPTER_ID]),
         in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
     )

@@ -1,5 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_plugin_host::plugin_host_from_config;
+use mc_plugin_host::host::plugin_host_from_config;
 use server_runtime::RuntimeError;
 use server_runtime::config::{ServerConfig, ServerConfigSource};
 use server_runtime::runtime::{ServerBuilder, format_runtime_status_summary};

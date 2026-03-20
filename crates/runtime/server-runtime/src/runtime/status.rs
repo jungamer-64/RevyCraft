@@ -1,6 +1,6 @@
 use super::{RunningServer, RuntimeServer, TopologyGenerationId, now_ms};
 use mc_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
-use mc_plugin_host::PluginHostStatusSnapshot;
+use mc_plugin_host::host::PluginHostStatusSnapshot;
 use mc_plugin_host::registry::ListenerBinding;
 use mc_proto_common::{ConnectionPhase, TransportKind};
 use serde::{Deserialize, Serialize};

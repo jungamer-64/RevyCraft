@@ -1,5 +1,5 @@
 use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
-use crate::protocol_codec::{
+use crate::codec::protocol::{
     Decoder, Encoder, EnvelopeHeader, decode_block_pos, decode_block_state, decode_capability_set,
     decode_connection_phase, decode_core_command, decode_core_event, decode_entity_id,
     decode_envelope, decode_f32_value, decode_inventory_slot, decode_option, decode_player_id,
@@ -8,7 +8,7 @@ use crate::protocol_codec::{
     encode_core_event, encode_entity_id, encode_envelope, encode_inventory_slot, encode_option,
     encode_player_id, encode_player_snapshot, encode_world_meta,
 };
-use crate::protocol_codec::{PROTOCOL_FLAG_RESPONSE, ProtocolCodecError};
+use crate::codec::protocol::{PROTOCOL_FLAG_RESPONSE, ProtocolCodecError};
 use mc_core::{
     CapabilitySet, CoreCommand, EventTarget, GameplayEffect, GameplayJoinEffect, GameplayMutation,
     GameplayProfileId, PlayerId, PlayerInventory, PlayerSnapshot, TargetedEvent, WorldMeta,
@@ -490,7 +490,7 @@ fn encode_gameplay_mutation(
             encode_option(
                 encoder,
                 stack.as_ref(),
-                crate::protocol_codec::encode_item_stack,
+                crate::codec::protocol::encode_item_stack,
             )
         }
         GameplayMutation::Block { position, block } => {
@@ -525,7 +525,7 @@ fn decode_gameplay_mutation(
         3 => Ok(GameplayMutation::InventorySlot {
             player_id: decode_player_id(decoder)?,
             slot: decode_inventory_slot(decoder)?,
-            stack: decode_option(decoder, crate::protocol_codec::decode_item_stack)?,
+            stack: decode_option(decoder, crate::codec::protocol::decode_item_stack)?,
         }),
         4 => Ok(GameplayMutation::Block {
             position: decode_block_pos(decoder)?,
@@ -606,13 +606,13 @@ fn encode_player_inventory_blob_inner(
         encode_option(
             encoder,
             stack.as_ref(),
-            crate::protocol_codec::encode_item_stack,
+            crate::codec::protocol::encode_item_stack,
         )?;
     }
     encode_option(
         encoder,
         inventory.offhand.as_ref(),
-        crate::protocol_codec::encode_item_stack,
+        crate::codec::protocol::encode_item_stack,
     )
 }
 
@@ -624,12 +624,12 @@ fn decode_player_inventory_blob_inner(
     for _ in 0..len {
         slots.push(decode_option(
             decoder,
-            crate::protocol_codec::decode_item_stack,
+            crate::codec::protocol::decode_item_stack,
         )?);
     }
     Ok(PlayerInventory {
         slots,
-        offhand: decode_option(decoder, crate::protocol_codec::decode_item_stack)?,
+        offhand: decode_option(decoder, crate::codec::protocol::decode_item_stack)?,
     })
 }
 

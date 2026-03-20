@@ -12,11 +12,11 @@ use mc_core::{
     ConnectionId, CoreEvent, EntityId, GameplayProfileId, PlayerId, ServerCore,
     SessionCapabilitySet,
 };
-use mc_plugin_host::registry::{ListenerBinding, LoadedPluginSet, ProtocolRegistry};
-use mc_plugin_host::{
+use mc_plugin_host::host::{
     AuthGeneration, HotSwappableAuthProfile, HotSwappableGameplayProfile,
     HotSwappableStorageProfile, PluginHost,
 };
+use mc_plugin_host::registry::{ListenerBinding, LoadedPluginSet, ProtocolRegistry};
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
