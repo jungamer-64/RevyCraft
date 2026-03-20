@@ -893,8 +893,23 @@ fn storage_and_auth_plugins_are_managed_without_quarantine() {
     let _loaded_plugins = load_protocol_plugin_set(&host)
         .expect("storage/auth plugin kinds should register with the host");
 
-    assert!(host.quarantine_reason("storage-je-anvil-1_7_10").is_none());
-    assert!(host.quarantine_reason("auth-offline").is_none());
+    let status = host.status();
+    assert!(
+        status
+            .storage
+            .iter()
+            .find(|plugin| plugin.plugin_id == "storage-je-anvil-1_7_10")
+            .and_then(|plugin| plugin.active_quarantine_reason.as_ref())
+            .is_none()
+    );
+    assert!(
+        status
+            .auth
+            .iter()
+            .find(|plugin| plugin.plugin_id == "auth-offline")
+            .and_then(|plugin| plugin.active_quarantine_reason.as_ref())
+            .is_none()
+    );
 }
 
 #[test]
@@ -1106,11 +1121,6 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
             error,
             mc_proto_common::ProtocolError::Plugin(message) if message.contains("protocol runtime failure")
         ));
-        assert_eq!(
-            host.quarantine_reason(failing_protocol_plugin::PLUGIN_ID)
-                .is_some(),
-            expect_quarantine
-        );
         let status = host.status();
         assert_eq!(status.protocols.len(), 1);
         assert_eq!(status.protocols[0].failure_action, action);
@@ -1197,10 +1207,6 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
                 );
             }
         }
-        assert_eq!(
-            host.quarantine_reason("gameplay-failing").is_some(),
-            expect_quarantine
-        );
         let status = host.status();
         assert_eq!(status.gameplay.len(), 1);
         assert_eq!(status.gameplay[0].failure_action, action);
@@ -1273,10 +1279,10 @@ fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
             error,
             RuntimeError::Config(message) if message.contains("auth runtime failure")
         ));
-        assert!(host.quarantine_reason("auth-failing").is_none());
         let status = host.status();
         assert_eq!(status.auth.len(), 1);
         assert_eq!(status.auth[0].failure_action, action);
+        assert!(status.auth[0].active_quarantine_reason.is_none());
         assert_eq!(status.pending_fatal_error.is_some(), expect_fatal);
         assert_eq!(host.take_pending_fatal_error().is_some(), expect_fatal);
     }

@@ -17,9 +17,9 @@ use serde_json::Value;
 use thiserror::Error;
 use vek::Vec3;
 
-pub const RAKNET_UNCONNECTED_PING: u8 = 0x01;
-pub const RAKNET_OPEN_CONNECTION_REQUEST_1: u8 = 0x05;
-pub const RAKNET_OPEN_CONNECTION_REQUEST_2: u8 = 0x07;
+const RAKNET_UNCONNECTED_PING: u8 = 0x01;
+const RAKNET_OPEN_CONNECTION_REQUEST_1: u8 = 0x05;
+const RAKNET_OPEN_CONNECTION_REQUEST_2: u8 = 0x07;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParsedBedrockLogin {
@@ -56,7 +56,7 @@ fn has_magic_at(frame: &[u8], offset: usize) -> bool {
 }
 
 #[must_use]
-pub fn detects_bedrock_datagram(frame: &[u8]) -> bool {
+fn detects_bedrock_datagram(frame: &[u8]) -> bool {
     let Some(packet_id) = frame.first().copied() else {
         return false;
     };
@@ -70,7 +70,7 @@ pub fn detects_bedrock_datagram(frame: &[u8]) -> bool {
 }
 
 #[must_use]
-pub const fn bedrock_probe_intent() -> HandshakeIntent {
+const fn bedrock_probe_intent() -> HandshakeIntent {
     HandshakeIntent {
         edition: Edition::Be,
         protocol_number: 0,
@@ -86,7 +86,7 @@ pub const fn bedrock_probe_intent() -> HandshakeIntent {
 ///
 /// Returns an error when the payload is truncated, overflows declared lengths, contains
 /// invalid JSON/JWT data, or does not provide the required Bedrock display name fields.
-pub fn parse_bedrock_login_payload(bytes: &[u8]) -> Result<ParsedBedrockLogin, BedrockLoginError> {
+fn parse_bedrock_login_payload(bytes: &[u8]) -> Result<ParsedBedrockLogin, BedrockLoginError> {
     if bytes.len() < 8 {
         return Err(BedrockLoginError::TooShort);
     }
@@ -174,9 +174,7 @@ fn decode_jwt_payload(jwt: &str) -> Result<Value, BedrockLoginError> {
 }
 
 #[must_use]
-pub fn block_pos_to_network(
-    position: BlockPos,
-) -> bedrockrs_proto::v662::types::NetworkBlockPosition {
+fn block_pos_to_network(position: BlockPos) -> bedrockrs_proto::v662::types::NetworkBlockPosition {
     bedrockrs_proto::v662::types::NetworkBlockPosition {
         x: position.x,
         y: position.y.max(0).cast_unsigned(),
@@ -185,7 +183,7 @@ pub fn block_pos_to_network(
 }
 
 #[must_use]
-pub fn block_pos_from_network(
+fn block_pos_from_network(
     position: &bedrockrs_proto::v662::types::NetworkBlockPosition,
 ) -> BlockPos {
     BlockPos::new(
@@ -196,7 +194,7 @@ pub fn block_pos_from_network(
 }
 
 #[must_use]
-pub fn vec3_to_bedrock(position: mc_core::Vec3) -> Vec3<f32> {
+fn vec3_to_bedrock(position: mc_core::Vec3) -> Vec3<f32> {
     Vec3::new(
         f64_to_bedrock_component(position.x),
         f64_to_bedrock_component(position.y),
@@ -205,12 +203,12 @@ pub fn vec3_to_bedrock(position: mc_core::Vec3) -> Vec3<f32> {
 }
 
 #[must_use]
-pub const fn protocol_error(message: &'static str) -> ProtocolError {
+const fn protocol_error(message: &'static str) -> ProtocolError {
     ProtocolError::InvalidPacket(message)
 }
 
 #[must_use]
-pub const fn block_face_from_i32(face: i32) -> Option<BlockFace> {
+const fn block_face_from_i32(face: i32) -> Option<BlockFace> {
     match face {
         0 => Some(BlockFace::Bottom),
         1 => Some(BlockFace::Top),
@@ -223,7 +221,7 @@ pub const fn block_face_from_i32(face: i32) -> Option<BlockFace> {
 }
 
 #[must_use]
-pub fn bedrock_actor_id(entity_id: EntityId) -> u64 {
+fn bedrock_actor_id(entity_id: EntityId) -> u64 {
     u64::try_from(entity_id.0).expect("bedrock entity id should be non-negative")
 }
 
@@ -418,12 +416,55 @@ impl<P: BedrockProfile> ProtocolAdapter for BedrockAdapter<P> {
 
 #[doc(hidden)]
 pub mod internal {
-    pub use super::{
-        BedrockLoginError, ParsedBedrockLogin, RAKNET_OPEN_CONNECTION_REQUEST_1,
-        RAKNET_OPEN_CONNECTION_REQUEST_2, RAKNET_UNCONNECTED_PING, bedrock_actor_id,
-        bedrock_probe_intent, block_face_from_i32, block_pos_from_network, block_pos_to_network,
-        detects_bedrock_datagram, parse_bedrock_login_payload, protocol_error, vec3_to_bedrock,
-    };
+    use super::*;
+
+    pub use super::{BedrockLoginError, ParsedBedrockLogin};
+
+    pub const RAKNET_OPEN_CONNECTION_REQUEST_1: u8 = super::RAKNET_OPEN_CONNECTION_REQUEST_1;
+    pub const RAKNET_OPEN_CONNECTION_REQUEST_2: u8 = super::RAKNET_OPEN_CONNECTION_REQUEST_2;
+    pub const RAKNET_UNCONNECTED_PING: u8 = super::RAKNET_UNCONNECTED_PING;
+
+    pub fn bedrock_actor_id(entity_id: EntityId) -> u64 {
+        super::bedrock_actor_id(entity_id)
+    }
+
+    pub const fn bedrock_probe_intent() -> HandshakeIntent {
+        super::bedrock_probe_intent()
+    }
+
+    pub const fn block_face_from_i32(face: i32) -> Option<BlockFace> {
+        super::block_face_from_i32(face)
+    }
+
+    pub fn block_pos_from_network(
+        position: &bedrockrs_proto::v662::types::NetworkBlockPosition,
+    ) -> BlockPos {
+        super::block_pos_from_network(position)
+    }
+
+    pub fn block_pos_to_network(
+        position: BlockPos,
+    ) -> bedrockrs_proto::v662::types::NetworkBlockPosition {
+        super::block_pos_to_network(position)
+    }
+
+    pub fn detects_bedrock_datagram(frame: &[u8]) -> bool {
+        super::detects_bedrock_datagram(frame)
+    }
+
+    pub fn parse_bedrock_login_payload(
+        bytes: &[u8],
+    ) -> Result<ParsedBedrockLogin, BedrockLoginError> {
+        super::parse_bedrock_login_payload(bytes)
+    }
+
+    pub const fn protocol_error(message: &'static str) -> ProtocolError {
+        super::protocol_error(message)
+    }
+
+    pub fn vec3_to_bedrock(position: mc_core::Vec3) -> Vec3<f32> {
+        super::vec3_to_bedrock(position)
+    }
 }
 
 #[cfg(test)]

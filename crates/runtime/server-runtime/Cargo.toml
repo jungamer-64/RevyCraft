@@ -11,6 +11,7 @@ description = "Protocol-agnostic dedicated server runtime for the RevyCraft work
 
 [features]
 disable-exported-symbols = []
+in-process-testing = []
 
 [dependencies]
 aes.workspace = true
@@ -35,19 +36,20 @@ toml.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-mc-plugin-auth-bedrock-offline = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-offline", features = ["disable-exported-symbols"] }
-mc-plugin-auth-bedrock-xbl = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-xbl", features = ["disable-exported-symbols"] }
-mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline", features = ["disable-exported-symbols"] }
-mc-plugin-auth-online-stub = { path = "../../../plugins/auth/mc-plugin-auth-online-stub", features = ["disable-exported-symbols"] }
-mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gameplay-canonical", features = ["disable-exported-symbols"] }
-mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly", features = ["disable-exported-symbols"] }
-mc-plugin-sdk-rust = { path = "../../plugin/mc-plugin-sdk-rust" }
-mc-plugin-proto-be-26_3 = { path = "../../../plugins/protocol/mc-plugin-proto-be-26_3", features = ["disable-exported-symbols"] }
-mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols"] }
-mc-plugin-proto-je-1_12_2 = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_12_2", features = ["disable-exported-symbols"] }
-mc-plugin-proto-je-1_7_10 = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_7_10", features = ["disable-exported-symbols"] }
-mc-plugin-proto-je-1_8_x = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_8_x", features = ["disable-exported-symbols"] }
-mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10", features = ["disable-exported-symbols"] }
+mc-plugin-auth-bedrock-offline = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-offline", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-auth-bedrock-xbl = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-xbl", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-auth-online-stub = { path = "../../../plugins/auth/mc-plugin-auth-online-stub", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gameplay-canonical", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-host = { path = "../../plugin/mc-plugin-host", features = ["in-process-testing"] }
+mc-plugin-sdk-rust = { path = "../../plugin/mc-plugin-sdk-rust", features = ["in-process-testing"] }
+mc-plugin-proto-be-26_3 = { path = "../../../plugins/protocol/mc-plugin-proto-be-26_3", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-je-1_12_2 = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_12_2", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-je-1_7_10 = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_7_10", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-je-1_8_x = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_8_x", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-proto-be-26_3 = { path = "../../protocol/mc-proto-be-26_3" }
 mc-proto-be-placeholder = { path = "../../protocol/mc-proto-be-placeholder" }
 mc-proto-je-common = { path = "../../protocol/mc-proto-je-common" }

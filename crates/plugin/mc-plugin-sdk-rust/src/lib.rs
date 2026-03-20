@@ -18,19 +18,17 @@ use mc_plugin_api::codec::protocol::{
     ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, WireFrameDecodeResult,
 };
 use mc_plugin_api::codec::storage::{StorageDescriptor, StorageRequest, StorageResponse};
-use mc_plugin_api::host_api::{
-    AuthPluginApiV1, GameplayPluginApiV1, HostApiTableV1, ProtocolPluginApiV1, StoragePluginApiV1,
-};
+use mc_plugin_api::host_api::HostApiTableV1;
 use mc_plugin_api::manifest::PluginManifestV1;
 use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError, StorageError};
 use std::path::Path;
 pub mod auth;
 pub mod buffers;
-pub mod entrypoints;
 pub mod gameplay;
 pub mod manifest;
 pub mod protocol;
 pub mod storage;
+#[cfg(any(test, feature = "in-process-testing"))]
 pub mod test_support;
 
 #[macro_export]
@@ -253,6 +251,7 @@ macro_rules! export_protocol_plugin {
             )
         }
 
+        #[cfg(any(test, feature = "in-process-testing"))]
         #[must_use]
         pub fn in_process_protocol_entrypoints() -> $crate::test_support::InProcessProtocolEntrypoints {
             $crate::test_support::InProcessProtocolEntrypoints {
@@ -391,6 +390,7 @@ macro_rules! export_gameplay_plugin {
             }))
         }
 
+        #[cfg(any(test, feature = "in-process-testing"))]
         #[must_use]
         pub fn in_process_gameplay_entrypoints() -> $crate::test_support::InProcessGameplayEntrypoints {
             $crate::test_support::InProcessGameplayEntrypoints {
@@ -497,6 +497,7 @@ macro_rules! export_storage_plugin {
             }))
         }
 
+        #[cfg(any(test, feature = "in-process-testing"))]
         #[must_use]
         pub fn in_process_storage_entrypoints() -> $crate::test_support::InProcessStorageEntrypoints {
             $crate::test_support::InProcessStorageEntrypoints {
@@ -603,6 +604,7 @@ macro_rules! export_auth_plugin {
             )
         }
 
+        #[cfg(any(test, feature = "in-process-testing"))]
         #[must_use]
         pub fn in_process_auth_entrypoints() -> $crate::test_support::InProcessAuthEntrypoints {
             $crate::test_support::InProcessAuthEntrypoints {

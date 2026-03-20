@@ -11,6 +11,7 @@ description = "Rust authoring SDK for RevyCraft runtime plugins."
 
 [features]
 disable-exported-symbols = []
+in-process-testing = []
 
 [dependencies]
 bytes.workspace = true

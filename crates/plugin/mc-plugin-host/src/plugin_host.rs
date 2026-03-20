@@ -506,6 +506,7 @@ impl PluginCatalog {
         Ok(Self { packages })
     }
 
+    #[cfg(any(test, feature = "in-process-testing"))]
     pub fn register_in_process_protocol_plugin(&mut self, plugin: InProcessProtocolPlugin) {
         self.packages.insert(
             plugin.plugin_id.clone(),
@@ -517,6 +518,7 @@ impl PluginCatalog {
         );
     }
 
+    #[cfg(any(test, feature = "in-process-testing"))]
     pub fn register_in_process_gameplay_plugin(&mut self, plugin: InProcessGameplayPlugin) {
         self.packages.insert(
             plugin.plugin_id.clone(),
@@ -528,6 +530,7 @@ impl PluginCatalog {
         );
     }
 
+    #[cfg(any(test, feature = "in-process-testing"))]
     pub fn register_in_process_storage_plugin(&mut self, plugin: InProcessStoragePlugin) {
         self.packages.insert(
             plugin.plugin_id.clone(),
@@ -539,6 +542,7 @@ impl PluginCatalog {
         );
     }
 
+    #[cfg(any(test, feature = "in-process-testing"))]
     pub fn register_in_process_auth_plugin(&mut self, plugin: InProcessAuthPlugin) {
         self.packages.insert(
             plugin.plugin_id.clone(),
@@ -2734,6 +2738,7 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the protocol plugin registry mutex is poisoned.
+    #[cfg(any(test, feature = "in-process-testing"))]
     pub fn replace_in_process_protocol_plugin(
         &self,
         plugin: InProcessProtocolPlugin,
@@ -2761,10 +2766,6 @@ impl PluginHost {
         managed.active_loaded_at = managed.loaded_at;
         drop(protocols);
         Ok(generation_id)
-    }
-
-    pub fn quarantine_reason(&self, plugin_id: &str) -> Option<String> {
-        self.failures.active_reason(plugin_id)
     }
 
     pub fn take_pending_fatal_error(&self) -> Option<RuntimeError> {

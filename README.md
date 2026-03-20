@@ -102,6 +102,8 @@ cargo test --workspace
 
 `server-runtime` integration tests use the packaged-plugin harness and now package the full plugin set through `xtask package-all-plugins`.
 
+plugin crate の in-process helper は production public surface ではなく、`in-process-testing` feature を有効にした test/dev build でだけ使う前提です。
+
 ## Notes
 
 - 既定の実行時データは `runtime/` 配下に集約されます。

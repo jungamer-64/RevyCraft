@@ -27,7 +27,7 @@ const PACKET_HANDSHAKE: i32 = 0x00;
 ///
 /// Returns an error when the payload identifies itself as a handshake packet but contains an
 /// unsupported next-state value or is otherwise truncated.
-pub fn decode_handshake_frame(frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
+fn decode_handshake_frame(frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
     let mut reader = PacketReader::new(frame);
     let packet_id = reader.read_varint()?;
     if packet_id != PACKET_HANDSHAKE {
@@ -55,7 +55,7 @@ pub fn decode_handshake_frame(frame: &[u8]) -> Result<Option<HandshakeIntent>, P
 }
 
 #[must_use]
-pub fn legacy_block(state: &BlockState) -> (u16, u8) {
+fn legacy_block(state: &BlockState) -> (u16, u8) {
     match state.key.as_str() {
         STONE => (1, 0),
         GRASS_BLOCK => (2, 0),
@@ -72,13 +72,13 @@ pub fn legacy_block(state: &BlockState) -> (u16, u8) {
 }
 
 #[must_use]
-pub fn legacy_block_state_id(state: &BlockState) -> i32 {
+fn legacy_block_state_id(state: &BlockState) -> i32 {
     let (block_id, metadata) = legacy_block(state);
     (i32::from(block_id) << 4) | i32::from(metadata)
 }
 
 #[must_use]
-pub fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
+fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
     match block_id {
         1 => BlockState::stone(),
         2 => BlockState::grass_block(),
@@ -95,7 +95,7 @@ pub fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
 }
 
 #[must_use]
-pub fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
+fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
     let damage = stack.damage;
     match stack.key.as_str() {
         STONE => Some((1, damage)),
@@ -112,7 +112,7 @@ pub fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
 }
 
 #[must_use]
-pub fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
+fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
     let key = match item_id {
         1 => STONE,
         2 => GRASS_BLOCK,
@@ -133,7 +133,7 @@ pub fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
 /// # Errors
 ///
 /// Returns an error when the slot payload is truncated or contains invalid NBT framing.
-pub fn read_legacy_slot(reader: &mut PacketReader<'_>) -> Result<Option<ItemStack>, ProtocolError> {
+fn read_legacy_slot(reader: &mut PacketReader<'_>) -> Result<Option<ItemStack>, ProtocolError> {
     let item_id = reader.read_i16()?;
     if item_id < 0 {
         return Ok(None);
@@ -149,7 +149,7 @@ pub fn read_legacy_slot(reader: &mut PacketReader<'_>) -> Result<Option<ItemStac
 /// # Errors
 ///
 /// Returns an error when the provided item stack cannot be represented in the legacy item table.
-pub fn write_legacy_slot(
+fn write_legacy_slot(
     writer: &mut PacketWriter,
     stack: Option<&ItemStack>,
 ) -> Result<(), ProtocolError> {
@@ -172,7 +172,7 @@ pub fn write_legacy_slot(
 /// # Errors
 ///
 /// Returns an error when the NBT length prefix is invalid or the payload is truncated.
-pub fn skip_slot_nbt(reader: &mut PacketReader<'_>) -> Result<(), ProtocolError> {
+fn skip_slot_nbt(reader: &mut PacketReader<'_>) -> Result<(), ProtocolError> {
     let length = reader.read_i16()?;
     if length < 0 {
         return Ok(());
@@ -184,12 +184,12 @@ pub fn skip_slot_nbt(reader: &mut PacketReader<'_>) -> Result<(), ProtocolError>
 }
 
 #[must_use]
-pub fn legacy_window_slot(slot: InventorySlot) -> Option<i16> {
+fn legacy_window_slot(slot: InventorySlot) -> Option<i16> {
     slot.legacy_window_index().map(i16::from)
 }
 
 #[must_use]
-pub const fn modern_window_slot(slot: InventorySlot) -> Option<i16> {
+const fn modern_window_slot(slot: InventorySlot) -> Option<i16> {
     match slot {
         InventorySlot::Offhand => Some(45),
         _ => match slot.legacy_window_index() {
@@ -200,14 +200,14 @@ pub const fn modern_window_slot(slot: InventorySlot) -> Option<i16> {
 }
 
 #[must_use]
-pub fn legacy_inventory_slot(raw_slot: i16) -> Option<InventorySlot> {
+fn legacy_inventory_slot(raw_slot: i16) -> Option<InventorySlot> {
     u8::try_from(raw_slot)
         .ok()
         .and_then(InventorySlot::from_legacy_window_index)
 }
 
 #[must_use]
-pub fn modern_inventory_slot(raw_slot: i16) -> Option<InventorySlot> {
+fn modern_inventory_slot(raw_slot: i16) -> Option<InventorySlot> {
     if raw_slot == 45 {
         Some(InventorySlot::Offhand)
     } else {
@@ -216,27 +216,27 @@ pub fn modern_inventory_slot(raw_slot: i16) -> Option<InventorySlot> {
 }
 
 #[must_use]
-pub fn legacy_window_items(inventory: &PlayerInventory) -> Vec<Option<ItemStack>> {
+fn legacy_window_items(inventory: &PlayerInventory) -> Vec<Option<ItemStack>> {
     inventory.slots.clone()
 }
 
 #[must_use]
-pub fn modern_window_items(inventory: &PlayerInventory) -> Vec<Option<ItemStack>> {
+fn modern_window_items(inventory: &PlayerInventory) -> Vec<Option<ItemStack>> {
     let mut items = inventory.slots.clone();
     items.push(inventory.offhand.clone());
     items
 }
 
-pub fn write_empty_metadata_1_8(writer: &mut PacketWriter) {
+fn write_empty_metadata_1_8(writer: &mut PacketWriter) {
     writer.write_u8(0x7f);
 }
 
-pub fn write_empty_metadata_1_12(writer: &mut PacketWriter) {
+fn write_empty_metadata_1_12(writer: &mut PacketWriter) {
     writer.write_u8(0xff);
 }
 
 #[must_use]
-pub fn pack_block_position(position: BlockPos) -> i64 {
+fn pack_block_position(position: BlockPos) -> i64 {
     let x = i64::from(position.x) & 0x3ff_ffff;
     let y = i64::from(position.y) & 0xfff;
     let z = i64::from(position.z) & 0x3ff_ffff;
@@ -249,7 +249,7 @@ pub fn pack_block_position(position: BlockPos) -> i64 {
 /// # Panics
 ///
 /// Panics if the unpacked coordinates fall outside the `i32` range expected by `BlockPos`.
-pub fn unpack_block_position(packed: i64) -> BlockPos {
+fn unpack_block_position(packed: i64) -> BlockPos {
     let x = sign_extend((packed >> 38) & 0x3ff_ffff, 26);
     let y = sign_extend((packed >> 26) & 0xfff, 12);
     let z = sign_extend(packed & 0x3ff_ffff, 26);
@@ -261,7 +261,7 @@ pub fn unpack_block_position(packed: i64) -> BlockPos {
 }
 
 #[must_use]
-pub fn to_fixed_point(value: f64) -> i32 {
+fn to_fixed_point(value: f64) -> i32 {
     rounded_f64_to_i32(value * 32.0)
 }
 
@@ -271,7 +271,7 @@ pub fn to_fixed_point(value: f64) -> i32 {
 /// # Panics
 ///
 /// Panics if the rounded angle value cannot be narrowed into a single byte.
-pub fn to_angle_byte(value: f32) -> i8 {
+fn to_angle_byte(value: f32) -> i8 {
     let wrapped = value.rem_euclid(360.0);
     let scaled = rounded_f32_to_i32(wrapped * 256.0 / 360.0);
     let narrowed =
@@ -285,7 +285,7 @@ pub fn to_angle_byte(value: f32) -> i8 {
 /// # Panics
 ///
 /// Panics if a retained section index or legacy block state ID falls outside the encoded range.
-pub fn build_chunk_data_1_8(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
+fn build_chunk_data_1_8(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
     let mut bit_map = 0_u16;
     let mut bytes = Vec::new();
     for (section_y, section) in &chunk.sections {
@@ -318,7 +318,7 @@ pub fn build_chunk_data_1_8(chunk: &ChunkColumn, include_biomes: bool) -> (u16, 
 ///
 /// Panics if section indices, palette sizes, or packed array lengths exceed the legacy codec
 /// limits assumed by this helper.
-pub fn build_chunk_data_1_12(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
+fn build_chunk_data_1_12(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
     let mut bit_map = 0_u16;
     let mut bytes = Vec::new();
     for (section_y, section) in &chunk.sections {
@@ -394,7 +394,7 @@ pub fn build_chunk_data_1_12(chunk: &ChunkColumn, include_biomes: bool) -> (u16,
 /// # Panics
 ///
 /// Panics if a retained section index or legacy block ID falls outside the encoded range.
-pub fn build_chunk_data_1_7(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
+fn build_chunk_data_1_7(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
     let mut bit_map = 0_u16;
     let mut sections = Vec::new();
     for (section_y, section) in &chunk.sections {
@@ -425,7 +425,7 @@ pub fn build_chunk_data_1_7(chunk: &ChunkColumn, include_biomes: bool) -> (u16, 
 }
 
 #[must_use]
-pub fn get_nibble(source: &[u8], index: usize) -> u8 {
+fn get_nibble(source: &[u8], index: usize) -> u8 {
     let byte = source[index / 2];
     if index.is_multiple_of(2) {
         byte & 0x0f
@@ -448,7 +448,7 @@ fn set_nibble(target: &mut [u8], index: usize, value: u8) {
 /// # Errors
 ///
 /// Returns an error when compression fails.
-pub fn zlib_compress(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+fn zlib_compress(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
     encoder
         .write_all(data)
@@ -463,10 +463,7 @@ pub fn zlib_compress(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 /// # Errors
 ///
 /// Returns an error when the byte array length does not fit into a VarInt.
-pub fn write_login_byte_array(
-    writer: &mut PacketWriter,
-    bytes: &[u8],
-) -> Result<(), ProtocolError> {
+fn write_login_byte_array(writer: &mut PacketWriter, bytes: &[u8]) -> Result<(), ProtocolError> {
     writer.write_varint(
         i32::try_from(bytes.len())
             .map_err(|_| ProtocolError::InvalidPacket("login byte array too large"))?,
@@ -480,7 +477,7 @@ pub fn write_login_byte_array(
 /// # Errors
 ///
 /// Returns an error when the length prefix is invalid or the payload is truncated.
-pub fn read_login_byte_array(reader: &mut PacketReader<'_>) -> Result<Vec<u8>, ProtocolError> {
+fn read_login_byte_array(reader: &mut PacketReader<'_>) -> Result<Vec<u8>, ProtocolError> {
     let len = usize::try_from(reader.read_varint()?)
         .map_err(|_| ProtocolError::InvalidPacket("negative login byte array length"))?;
     Ok(reader.read_bytes(len)?.to_vec())
@@ -491,7 +488,7 @@ pub fn read_login_byte_array(reader: &mut PacketReader<'_>) -> Result<Vec<u8>, P
 /// # Errors
 ///
 /// Returns an error when the generated JSON string cannot be encoded as a protocol string.
-pub fn encode_status_response_packet(status: &ServerListStatus) -> Result<Vec<u8>, ProtocolError> {
+fn encode_status_response_packet(status: &ServerListStatus) -> Result<Vec<u8>, ProtocolError> {
     let payload = json!({
         "version": {
             "name": status.version.version_name,
@@ -513,7 +510,7 @@ pub fn encode_status_response_packet(status: &ServerListStatus) -> Result<Vec<u8
 }
 
 /// Encodes the shared JE status pong packet.
-pub fn encode_status_pong_packet(payload: i64) -> Vec<u8> {
+fn encode_status_pong_packet(payload: i64) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(0x01);
     writer.write_i64(payload);
@@ -525,7 +522,7 @@ pub fn encode_status_pong_packet(payload: i64) -> Vec<u8> {
 /// # Errors
 ///
 /// Returns an error when the UUID or username cannot be encoded as protocol strings.
-pub fn encode_login_success_packet(player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
+fn encode_login_success_packet(player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
     let mut writer = PacketWriter::default();
     writer.write_varint(0x02);
     writer.write_string(&player.id.0.hyphenated().to_string())?;
@@ -534,7 +531,7 @@ pub fn encode_login_success_packet(player: &PlayerSnapshot) -> Result<Vec<u8>, P
 }
 
 #[must_use]
-pub const fn player_window_id(container: InventoryContainer) -> u8 {
+const fn player_window_id(container: InventoryContainer) -> u8 {
     match container {
         InventoryContainer::Player => 0,
     }
@@ -816,14 +813,139 @@ fn rounded_f32_to_i32(value: f32) -> i32 {
 
 #[doc(hidden)]
 pub mod internal {
-    pub use super::{
-        build_chunk_data_1_7, build_chunk_data_1_8, build_chunk_data_1_12, decode_handshake_frame,
-        encode_login_success_packet, encode_status_pong_packet, encode_status_response_packet,
-        get_nibble, legacy_block, legacy_block_state_id, legacy_inventory_slot, legacy_item,
-        legacy_window_items, legacy_window_slot, modern_inventory_slot, modern_window_items,
-        modern_window_slot, pack_block_position, player_window_id, read_legacy_slot,
-        read_login_byte_array, semantic_block, semantic_item, to_angle_byte, to_fixed_point,
-        unpack_block_position, write_empty_metadata_1_8, write_empty_metadata_1_12,
-        write_legacy_slot, write_login_byte_array, zlib_compress,
-    };
+    use super::*;
+
+    pub fn build_chunk_data_1_7(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
+        super::build_chunk_data_1_7(chunk, include_biomes)
+    }
+
+    pub fn build_chunk_data_1_8(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
+        super::build_chunk_data_1_8(chunk, include_biomes)
+    }
+
+    pub fn build_chunk_data_1_12(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
+        super::build_chunk_data_1_12(chunk, include_biomes)
+    }
+
+    pub fn decode_handshake_frame(frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
+        super::decode_handshake_frame(frame)
+    }
+
+    pub fn encode_login_success_packet(player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
+        super::encode_login_success_packet(player)
+    }
+
+    pub fn encode_status_pong_packet(payload: i64) -> Vec<u8> {
+        super::encode_status_pong_packet(payload)
+    }
+
+    pub fn encode_status_response_packet(
+        status: &ServerListStatus,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        super::encode_status_response_packet(status)
+    }
+
+    pub fn get_nibble(source: &[u8], index: usize) -> u8 {
+        super::get_nibble(source, index)
+    }
+
+    pub fn legacy_block(state: &BlockState) -> (u16, u8) {
+        super::legacy_block(state)
+    }
+
+    pub fn legacy_block_state_id(state: &BlockState) -> i32 {
+        super::legacy_block_state_id(state)
+    }
+
+    pub fn legacy_inventory_slot(raw_slot: i16) -> Option<InventorySlot> {
+        super::legacy_inventory_slot(raw_slot)
+    }
+
+    pub fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
+        super::legacy_item(stack)
+    }
+
+    pub fn legacy_window_items(inventory: &PlayerInventory) -> Vec<Option<ItemStack>> {
+        super::legacy_window_items(inventory)
+    }
+
+    pub fn legacy_window_slot(slot: InventorySlot) -> Option<i16> {
+        super::legacy_window_slot(slot)
+    }
+
+    pub fn modern_inventory_slot(raw_slot: i16) -> Option<InventorySlot> {
+        super::modern_inventory_slot(raw_slot)
+    }
+
+    pub fn modern_window_items(inventory: &PlayerInventory) -> Vec<Option<ItemStack>> {
+        super::modern_window_items(inventory)
+    }
+
+    pub const fn modern_window_slot(slot: InventorySlot) -> Option<i16> {
+        super::modern_window_slot(slot)
+    }
+
+    pub fn pack_block_position(position: BlockPos) -> i64 {
+        super::pack_block_position(position)
+    }
+
+    pub const fn player_window_id(container: InventoryContainer) -> u8 {
+        super::player_window_id(container)
+    }
+
+    pub fn read_legacy_slot(
+        reader: &mut PacketReader<'_>,
+    ) -> Result<Option<ItemStack>, ProtocolError> {
+        super::read_legacy_slot(reader)
+    }
+
+    pub fn read_login_byte_array(reader: &mut PacketReader<'_>) -> Result<Vec<u8>, ProtocolError> {
+        super::read_login_byte_array(reader)
+    }
+
+    pub fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
+        super::semantic_block(block_id, metadata)
+    }
+
+    pub fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
+        super::semantic_item(item_id, damage, count)
+    }
+
+    pub fn to_angle_byte(value: f32) -> i8 {
+        super::to_angle_byte(value)
+    }
+
+    pub fn to_fixed_point(value: f64) -> i32 {
+        super::to_fixed_point(value)
+    }
+
+    pub fn unpack_block_position(packed: i64) -> BlockPos {
+        super::unpack_block_position(packed)
+    }
+
+    pub fn write_empty_metadata_1_8(writer: &mut PacketWriter) {
+        super::write_empty_metadata_1_8(writer);
+    }
+
+    pub fn write_empty_metadata_1_12(writer: &mut PacketWriter) {
+        super::write_empty_metadata_1_12(writer);
+    }
+
+    pub fn write_legacy_slot(
+        writer: &mut PacketWriter,
+        stack: Option<&ItemStack>,
+    ) -> Result<(), ProtocolError> {
+        super::write_legacy_slot(writer, stack)
+    }
+
+    pub fn write_login_byte_array(
+        writer: &mut PacketWriter,
+        bytes: &[u8],
+    ) -> Result<(), ProtocolError> {
+        super::write_login_byte_array(writer, bytes)
+    }
+
+    pub fn zlib_compress(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+        super::zlib_compress(data)
+    }
 }

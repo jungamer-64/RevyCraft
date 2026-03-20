@@ -7,11 +7,14 @@ pub mod host {
     pub use crate::plugin_host::{
         AuthGeneration, AuthPluginStatusSnapshot, GameplayGeneration, GameplayPluginStatusSnapshot,
         HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableStorageProfile,
+        PluginAbiRange, PluginArtifactStatusSnapshot, PluginCatalog, PluginFailureAction,
+        PluginFailureMatrix, PluginHost, PluginHostStatusSnapshot, ProtocolPluginStatusSnapshot,
+        StoragePluginStatusSnapshot, plugin_host_from_config, plugin_reload_poll_interval_ms,
+    };
+    #[cfg(any(test, feature = "in-process-testing"))]
+    pub use crate::plugin_host::{
         InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
-        InProcessStoragePlugin, PluginAbiRange, PluginArtifactStatusSnapshot, PluginCatalog,
-        PluginFailureAction, PluginFailureMatrix, PluginHost, PluginHostStatusSnapshot,
-        ProtocolPluginStatusSnapshot, StoragePluginStatusSnapshot, plugin_host_from_config,
-        plugin_reload_poll_interval_ms,
+        InProcessStoragePlugin,
     };
 }
 pub mod registry;
