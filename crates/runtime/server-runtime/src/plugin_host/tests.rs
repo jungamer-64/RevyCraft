@@ -529,8 +529,7 @@ fn gameplay_profiles_activate_and_resolve() {
     ));
     host.activate_gameplay_profiles(&ServerConfig {
         default_gameplay_profile: "canonical".to_string(),
-        gameplay_profile_map: [("je-1_7_10".to_string(), "readonly".to_string())]
-            .into_iter()
+        gameplay_profile_map: std::iter::once(("je-1_7_10".to_string(), "readonly".to_string()))
             .collect(),
         ..ServerConfig::default()
     })

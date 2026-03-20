@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 #[cfg(test)]
-pub(crate) fn packaged_plugin_test_build_lock() -> &'static std::sync::Mutex<()> {
+pub fn packaged_plugin_test_build_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
 #[cfg(test)]
-pub(crate) fn packaged_plugin_test_workspace_root() -> PathBuf {
+pub fn packaged_plugin_test_workspace_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for ancestor in manifest_dir.ancestors() {
         let manifest = ancestor.join("Cargo.toml");
@@ -31,7 +31,7 @@ pub(crate) fn packaged_plugin_test_workspace_root() -> PathBuf {
 }
 
 #[cfg(test)]
-pub(crate) fn packaged_plugin_test_target_dir(_scope: &str) -> PathBuf {
+pub fn packaged_plugin_test_target_dir(_scope: &str) -> PathBuf {
     // Reuse one cargo target directory across packaged-plugin tests so cargo can
     // keep dependency and plugin builds incremental across test cases and reruns.
     packaged_plugin_test_workspace_root()
@@ -49,10 +49,10 @@ static PACKAGED_PLUGIN_TEST_HARNESS: std::sync::OnceLock<Result<PathBuf, String>
     std::sync::OnceLock::new();
 
 #[cfg(test)]
-pub(crate) const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
+pub const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
 
 #[cfg(test)]
-pub(crate) fn packaged_plugin_test_harness_build_count() -> usize {
+pub fn packaged_plugin_test_harness_build_count() -> usize {
     PACKAGED_PLUGIN_TEST_HARNESS_BUILDS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
@@ -155,7 +155,7 @@ fn accumulate_packaged_plugin_test_stamp(
 }
 
 #[cfg(test)]
-pub(crate) fn packaged_plugin_test_harness_dist_dir() -> Result<&'static PathBuf, String> {
+pub fn packaged_plugin_test_harness_dist_dir() -> Result<&'static PathBuf, String> {
     match PACKAGED_PLUGIN_TEST_HARNESS
         .get_or_init(|| {
             PACKAGED_PLUGIN_TEST_HARNESS_BUILDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -216,7 +216,7 @@ fn copy_packaged_plugin_tree(source: &Path, destination: &Path) -> std::io::Resu
 }
 
 #[cfg(test)]
-pub(crate) fn seed_packaged_plugins_from_test_harness(dist_dir: &Path) -> Result<(), RuntimeError> {
+pub fn seed_packaged_plugins_from_test_harness(dist_dir: &Path) -> Result<(), RuntimeError> {
     let harness_dist_dir = packaged_plugin_test_harness_dist_dir().map_err(RuntimeError::Config)?;
     if dist_dir.exists() {
         fs::remove_dir_all(dist_dir)?;

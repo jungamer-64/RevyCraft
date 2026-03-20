@@ -487,7 +487,7 @@ mod tests {
     use mc_proto_common::{HandshakeProbe, LoginRequest, SessionAdapter};
     use serde_json::json;
 
-    fn test_jwt(payload: serde_json::Value) -> String {
+    fn test_jwt(payload: &serde_json::Value) -> String {
         let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
         let payload =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
@@ -519,13 +519,16 @@ mod tests {
     #[test]
     fn login_packet_maps_to_bedrock_login_request() {
         let adapter = Bedrock263Adapter::new();
-        let chain_entry = test_jwt(json!({"extraData":{"displayName":"Builder"}}));
+        let chain_entry = test_jwt(&json!({"extraData":{"displayName":"Builder"}}));
         let chain = json!({ "chain": [chain_entry] }).to_string();
-        let client_jwt = test_jwt(json!({"DisplayName":"Builder"}));
+        let client_jwt = test_jwt(&json!({"DisplayName":"Builder"}));
         let mut connection_request = Vec::new();
-        connection_request.extend_from_slice(&(chain.len() as u32).to_le_bytes());
+        let chain_len = u32::try_from(chain.len()).expect("test chain jwt should fit in u32");
+        connection_request.extend_from_slice(&chain_len.to_le_bytes());
         connection_request.extend_from_slice(chain.as_bytes());
-        connection_request.extend_from_slice(&(client_jwt.len() as u32).to_le_bytes());
+        let client_jwt_len =
+            u32::try_from(client_jwt.len()).expect("test client jwt should fit in u32");
+        connection_request.extend_from_slice(&client_jwt_len.to_le_bytes());
         connection_request.extend_from_slice(client_jwt.as_bytes());
         let frame = encode_packets(
             &[V924::LoginPacket(LoginPacket {

@@ -911,8 +911,9 @@ macro_rules! export_protocol_plugin {
             unsafe(no_mangle)
         )]
         pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
-            MC_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest))
-                as *const mc_plugin_api::PluginManifestV1
+            std::ptr::from_ref(
+                MC_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest)),
+            )
         }
 
         #[cfg_attr(
@@ -920,10 +921,12 @@ macro_rules! export_protocol_plugin {
             unsafe(no_mangle)
         )]
         pub extern "C" fn mc_plugin_protocol_api_v1() -> *const mc_plugin_api::ProtocolPluginApiV1 {
-            MC_PLUGIN_API.get_or_init(|| mc_plugin_api::ProtocolPluginApiV1 {
-                invoke: mc_plugin_invoke,
-                free_buffer: mc_plugin_free_buffer,
-            }) as *const mc_plugin_api::ProtocolPluginApiV1
+            std::ptr::from_ref(
+                MC_PLUGIN_API.get_or_init(|| mc_plugin_api::ProtocolPluginApiV1 {
+                    invoke: mc_plugin_invoke,
+                    free_buffer: mc_plugin_free_buffer,
+                }),
+            )
         }
 
         #[must_use]
@@ -1044,8 +1047,10 @@ macro_rules! export_gameplay_plugin {
             unsafe(no_mangle)
         )]
         pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
-            MC_GAMEPLAY_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest))
-                as *const mc_plugin_api::PluginManifestV1
+            std::ptr::from_ref(
+                MC_GAMEPLAY_PLUGIN_MANIFEST
+                    .get_or_init(|| $crate::manifest_from_static(&$manifest)),
+            )
         }
 
         #[cfg_attr(
@@ -1053,11 +1058,13 @@ macro_rules! export_gameplay_plugin {
             unsafe(no_mangle)
         )]
         pub extern "C" fn mc_plugin_gameplay_api_v1() -> *const mc_plugin_api::GameplayPluginApiV1 {
-            MC_GAMEPLAY_PLUGIN_API.get_or_init(|| mc_plugin_api::GameplayPluginApiV1 {
-                set_host_api: mc_gameplay_plugin_set_host_api,
-                invoke: mc_gameplay_plugin_invoke,
-                free_buffer: mc_gameplay_plugin_free_buffer,
-            }) as *const mc_plugin_api::GameplayPluginApiV1
+            std::ptr::from_ref(MC_GAMEPLAY_PLUGIN_API.get_or_init(|| {
+                mc_plugin_api::GameplayPluginApiV1 {
+                    set_host_api: mc_gameplay_plugin_set_host_api,
+                    invoke: mc_gameplay_plugin_invoke,
+                    free_buffer: mc_gameplay_plugin_free_buffer,
+                }
+            }))
         }
 
         #[must_use]
@@ -1065,6 +1072,216 @@ macro_rules! export_gameplay_plugin {
             $crate::InProcessGameplayEntrypoints {
                 manifest: unsafe { &*mc_plugin_manifest_v1() },
                 api: unsafe { &*mc_plugin_gameplay_api_v1() },
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! export_storage_plugin {
+    ($plugin_ty:ty, $manifest:expr) => {
+        static MC_STORAGE_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
+            std::sync::OnceLock::new();
+        static MC_STORAGE_PLUGIN_MANIFEST: std::sync::OnceLock<mc_plugin_api::PluginManifestV1> =
+            std::sync::OnceLock::new();
+        static MC_STORAGE_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::StoragePluginApiV1> =
+            std::sync::OnceLock::new();
+
+        fn mc_storage_plugin_instance() -> &'static $plugin_ty {
+            MC_STORAGE_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
+        }
+
+        unsafe extern "C" fn mc_storage_plugin_invoke(
+            request: mc_plugin_api::ByteSlice,
+            output: *mut mc_plugin_api::OwnedBuffer,
+            error_out: *mut mc_plugin_api::OwnedBuffer,
+        ) -> mc_plugin_api::PluginErrorCode {
+            let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let request_bytes = unsafe { $crate::byte_slice_as_bytes(request) };
+                mc_plugin_api::decode_storage_request(request_bytes)
+            })) {
+                Ok(Ok(request)) => request,
+                Ok(Err(error)) => {
+                    $crate::write_error_buffer(error_out, error.to_string());
+                    return mc_plugin_api::PluginErrorCode::InvalidInput;
+                }
+                Err(_) => {
+                    $crate::write_error_buffer(
+                        error_out,
+                        "storage plugin panicked while decoding request".to_string(),
+                    );
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+            };
+
+            let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                $crate::handle_storage_request(mc_storage_plugin_instance(), request.clone())
+            })) {
+                Ok(Ok(response)) => response,
+                Ok(Err(message)) => {
+                    $crate::write_error_buffer(error_out, message);
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+                Err(_) => {
+                    $crate::write_error_buffer(
+                        error_out,
+                        "storage plugin panicked while handling request".to_string(),
+                    );
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+            };
+
+            match mc_plugin_api::encode_storage_response(&request, &response) {
+                Ok(bytes) => {
+                    $crate::write_output_buffer(output, bytes);
+                    mc_plugin_api::PluginErrorCode::Ok
+                }
+                Err(message) => {
+                    $crate::write_error_buffer(error_out, message.to_string());
+                    mc_plugin_api::PluginErrorCode::Internal
+                }
+            }
+        }
+
+        unsafe extern "C" fn mc_storage_plugin_free_buffer(buffer: mc_plugin_api::OwnedBuffer) {
+            unsafe {
+                $crate::free_owned_buffer(buffer);
+            }
+        }
+
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
+        pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
+            std::ptr::from_ref(
+                MC_STORAGE_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest)),
+            )
+        }
+
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
+        pub extern "C" fn mc_plugin_storage_api_v1() -> *const mc_plugin_api::StoragePluginApiV1 {
+            std::ptr::from_ref(MC_STORAGE_PLUGIN_API.get_or_init(|| {
+                mc_plugin_api::StoragePluginApiV1 {
+                    invoke: mc_storage_plugin_invoke,
+                    free_buffer: mc_storage_plugin_free_buffer,
+                }
+            }))
+        }
+
+        #[must_use]
+        pub fn in_process_storage_entrypoints() -> $crate::InProcessStorageEntrypoints {
+            $crate::InProcessStorageEntrypoints {
+                manifest: unsafe { &*mc_plugin_manifest_v1() },
+                api: unsafe { &*mc_plugin_storage_api_v1() },
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! export_auth_plugin {
+    ($plugin_ty:ty, $manifest:expr) => {
+        static MC_AUTH_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
+            std::sync::OnceLock::new();
+        static MC_AUTH_PLUGIN_MANIFEST: std::sync::OnceLock<mc_plugin_api::PluginManifestV1> =
+            std::sync::OnceLock::new();
+        static MC_AUTH_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::AuthPluginApiV1> =
+            std::sync::OnceLock::new();
+
+        fn mc_auth_plugin_instance() -> &'static $plugin_ty {
+            MC_AUTH_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
+        }
+
+        unsafe extern "C" fn mc_auth_plugin_invoke(
+            request: mc_plugin_api::ByteSlice,
+            output: *mut mc_plugin_api::OwnedBuffer,
+            error_out: *mut mc_plugin_api::OwnedBuffer,
+        ) -> mc_plugin_api::PluginErrorCode {
+            let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let request_bytes = unsafe { $crate::byte_slice_as_bytes(request) };
+                mc_plugin_api::decode_auth_request(request_bytes)
+            })) {
+                Ok(Ok(request)) => request,
+                Ok(Err(error)) => {
+                    $crate::write_error_buffer(error_out, error.to_string());
+                    return mc_plugin_api::PluginErrorCode::InvalidInput;
+                }
+                Err(_) => {
+                    $crate::write_error_buffer(
+                        error_out,
+                        "auth plugin panicked while decoding request".to_string(),
+                    );
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+            };
+
+            let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                $crate::handle_auth_request(mc_auth_plugin_instance(), request.clone())
+            })) {
+                Ok(Ok(response)) => response,
+                Ok(Err(message)) => {
+                    $crate::write_error_buffer(error_out, message);
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+                Err(_) => {
+                    $crate::write_error_buffer(
+                        error_out,
+                        "auth plugin panicked while handling request".to_string(),
+                    );
+                    return mc_plugin_api::PluginErrorCode::Internal;
+                }
+            };
+
+            match mc_plugin_api::encode_auth_response(&request, &response) {
+                Ok(bytes) => {
+                    $crate::write_output_buffer(output, bytes);
+                    mc_plugin_api::PluginErrorCode::Ok
+                }
+                Err(message) => {
+                    $crate::write_error_buffer(error_out, message.to_string());
+                    mc_plugin_api::PluginErrorCode::Internal
+                }
+            }
+        }
+
+        unsafe extern "C" fn mc_auth_plugin_free_buffer(buffer: mc_plugin_api::OwnedBuffer) {
+            unsafe {
+                $crate::free_owned_buffer(buffer);
+            }
+        }
+
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
+        pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
+            std::ptr::from_ref(
+                MC_AUTH_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest)),
+            )
+        }
+
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
+        pub extern "C" fn mc_plugin_auth_api_v1() -> *const mc_plugin_api::AuthPluginApiV1 {
+            std::ptr::from_ref(
+                MC_AUTH_PLUGIN_API.get_or_init(|| mc_plugin_api::AuthPluginApiV1 {
+                    invoke: mc_auth_plugin_invoke,
+                    free_buffer: mc_auth_plugin_free_buffer,
+                }),
+            )
+        }
+
+        #[must_use]
+        pub fn in_process_auth_entrypoints() -> $crate::InProcessAuthEntrypoints {
+            $crate::InProcessAuthEntrypoints {
+                manifest: unsafe { &*mc_plugin_manifest_v1() },
+                api: unsafe { &*mc_plugin_auth_api_v1() },
             }
         }
     };
@@ -1141,7 +1358,7 @@ mod tests {
     fn host_api_for(context: &TestHostContext) -> HostApiTableV1 {
         HostApiTableV1 {
             abi: CURRENT_PLUGIN_ABI,
-            context: (context as *const TestHostContext).cast_mut().cast(),
+            context: std::ptr::from_ref(context).cast_mut().cast(),
             log: None,
             read_player_snapshot: None,
             read_world_meta: Some(host_read_world_meta),
@@ -1461,9 +1678,9 @@ mod tests {
 
     unsafe fn invoke_gameplay(
         api: &mc_plugin_api::GameplayPluginApiV1,
-        request: GameplayRequest,
+        request: &GameplayRequest,
     ) -> GameplayResponse {
-        let payload = encode_gameplay_request(&request).expect("gameplay request should encode");
+        let payload = encode_gameplay_request(request).expect("gameplay request should encode");
         let mut output = OwnedBuffer::empty();
         let mut error = OwnedBuffer::empty();
         let status = unsafe {
@@ -1492,7 +1709,7 @@ mod tests {
         unsafe {
             (api.free_buffer)(output);
         }
-        decode_gameplay_response(&request, &bytes).expect("gameplay response should decode")
+        decode_gameplay_response(request, &bytes).expect("gameplay response should decode")
     }
 
     #[test]
@@ -1510,11 +1727,11 @@ mod tests {
         let entrypoints_b = plugin_b::in_process_gameplay_entrypoints();
 
         assert_eq!(
-            unsafe { (entrypoints_a.api.set_host_api)(&host_api_a) },
+            unsafe { (entrypoints_a.api.set_host_api)(&raw const host_api_a) },
             PluginErrorCode::Ok
         );
         assert_eq!(
-            unsafe { (entrypoints_b.api.set_host_api)(&host_api_b) },
+            unsafe { (entrypoints_b.api.set_host_api)(&raw const host_api_b) },
             PluginErrorCode::Ok
         );
 
@@ -1538,11 +1755,11 @@ mod tests {
         };
 
         assert_eq!(
-            unsafe { invoke_gameplay(entrypoints_a.api, request_a) },
+            unsafe { invoke_gameplay(entrypoints_a.api, &request_a) },
             GameplayResponse::Effect(GameplayEffect::default())
         );
         assert_eq!(
-            unsafe { invoke_gameplay(entrypoints_b.api, request_b) },
+            unsafe { invoke_gameplay(entrypoints_b.api, &request_b) },
             GameplayResponse::Effect(GameplayEffect::default())
         );
         assert_eq!(
@@ -1554,208 +1771,4 @@ mod tests {
             Some("host-b")
         );
     }
-}
-
-#[macro_export]
-macro_rules! export_storage_plugin {
-    ($plugin_ty:ty, $manifest:expr) => {
-        static MC_STORAGE_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
-            std::sync::OnceLock::new();
-        static MC_STORAGE_PLUGIN_MANIFEST: std::sync::OnceLock<mc_plugin_api::PluginManifestV1> =
-            std::sync::OnceLock::new();
-        static MC_STORAGE_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::StoragePluginApiV1> =
-            std::sync::OnceLock::new();
-
-        fn mc_storage_plugin_instance() -> &'static $plugin_ty {
-            MC_STORAGE_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
-        }
-
-        unsafe extern "C" fn mc_storage_plugin_invoke(
-            request: mc_plugin_api::ByteSlice,
-            output: *mut mc_plugin_api::OwnedBuffer,
-            error_out: *mut mc_plugin_api::OwnedBuffer,
-        ) -> mc_plugin_api::PluginErrorCode {
-            let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let request_bytes = unsafe { $crate::byte_slice_as_bytes(request) };
-                mc_plugin_api::decode_storage_request(request_bytes)
-            })) {
-                Ok(Ok(request)) => request,
-                Ok(Err(error)) => {
-                    $crate::write_error_buffer(error_out, error.to_string());
-                    return mc_plugin_api::PluginErrorCode::InvalidInput;
-                }
-                Err(_) => {
-                    $crate::write_error_buffer(
-                        error_out,
-                        "storage plugin panicked while decoding request".to_string(),
-                    );
-                    return mc_plugin_api::PluginErrorCode::Internal;
-                }
-            };
-
-            let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                $crate::handle_storage_request(mc_storage_plugin_instance(), request.clone())
-            })) {
-                Ok(Ok(response)) => response,
-                Ok(Err(message)) => {
-                    $crate::write_error_buffer(error_out, message);
-                    return mc_plugin_api::PluginErrorCode::Internal;
-                }
-                Err(_) => {
-                    $crate::write_error_buffer(
-                        error_out,
-                        "storage plugin panicked while handling request".to_string(),
-                    );
-                    return mc_plugin_api::PluginErrorCode::Internal;
-                }
-            };
-
-            match mc_plugin_api::encode_storage_response(&request, &response) {
-                Ok(bytes) => {
-                    $crate::write_output_buffer(output, bytes);
-                    mc_plugin_api::PluginErrorCode::Ok
-                }
-                Err(message) => {
-                    $crate::write_error_buffer(error_out, message.to_string());
-                    mc_plugin_api::PluginErrorCode::Internal
-                }
-            }
-        }
-
-        unsafe extern "C" fn mc_storage_plugin_free_buffer(buffer: mc_plugin_api::OwnedBuffer) {
-            unsafe {
-                $crate::free_owned_buffer(buffer);
-            }
-        }
-
-        #[cfg_attr(
-            all(not(test), not(feature = "disable-exported-symbols")),
-            unsafe(no_mangle)
-        )]
-        pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
-            MC_STORAGE_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest))
-                as *const mc_plugin_api::PluginManifestV1
-        }
-
-        #[cfg_attr(
-            all(not(test), not(feature = "disable-exported-symbols")),
-            unsafe(no_mangle)
-        )]
-        pub extern "C" fn mc_plugin_storage_api_v1() -> *const mc_plugin_api::StoragePluginApiV1 {
-            MC_STORAGE_PLUGIN_API.get_or_init(|| mc_plugin_api::StoragePluginApiV1 {
-                invoke: mc_storage_plugin_invoke,
-                free_buffer: mc_storage_plugin_free_buffer,
-            }) as *const mc_plugin_api::StoragePluginApiV1
-        }
-
-        #[must_use]
-        pub fn in_process_storage_entrypoints() -> $crate::InProcessStorageEntrypoints {
-            $crate::InProcessStorageEntrypoints {
-                manifest: unsafe { &*mc_plugin_manifest_v1() },
-                api: unsafe { &*mc_plugin_storage_api_v1() },
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! export_auth_plugin {
-    ($plugin_ty:ty, $manifest:expr) => {
-        static MC_AUTH_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
-            std::sync::OnceLock::new();
-        static MC_AUTH_PLUGIN_MANIFEST: std::sync::OnceLock<mc_plugin_api::PluginManifestV1> =
-            std::sync::OnceLock::new();
-        static MC_AUTH_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::AuthPluginApiV1> =
-            std::sync::OnceLock::new();
-
-        fn mc_auth_plugin_instance() -> &'static $plugin_ty {
-            MC_AUTH_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
-        }
-
-        unsafe extern "C" fn mc_auth_plugin_invoke(
-            request: mc_plugin_api::ByteSlice,
-            output: *mut mc_plugin_api::OwnedBuffer,
-            error_out: *mut mc_plugin_api::OwnedBuffer,
-        ) -> mc_plugin_api::PluginErrorCode {
-            let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let request_bytes = unsafe { $crate::byte_slice_as_bytes(request) };
-                mc_plugin_api::decode_auth_request(request_bytes)
-            })) {
-                Ok(Ok(request)) => request,
-                Ok(Err(error)) => {
-                    $crate::write_error_buffer(error_out, error.to_string());
-                    return mc_plugin_api::PluginErrorCode::InvalidInput;
-                }
-                Err(_) => {
-                    $crate::write_error_buffer(
-                        error_out,
-                        "auth plugin panicked while decoding request".to_string(),
-                    );
-                    return mc_plugin_api::PluginErrorCode::Internal;
-                }
-            };
-
-            let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                $crate::handle_auth_request(mc_auth_plugin_instance(), request.clone())
-            })) {
-                Ok(Ok(response)) => response,
-                Ok(Err(message)) => {
-                    $crate::write_error_buffer(error_out, message);
-                    return mc_plugin_api::PluginErrorCode::Internal;
-                }
-                Err(_) => {
-                    $crate::write_error_buffer(
-                        error_out,
-                        "auth plugin panicked while handling request".to_string(),
-                    );
-                    return mc_plugin_api::PluginErrorCode::Internal;
-                }
-            };
-
-            match mc_plugin_api::encode_auth_response(&request, &response) {
-                Ok(bytes) => {
-                    $crate::write_output_buffer(output, bytes);
-                    mc_plugin_api::PluginErrorCode::Ok
-                }
-                Err(message) => {
-                    $crate::write_error_buffer(error_out, message.to_string());
-                    mc_plugin_api::PluginErrorCode::Internal
-                }
-            }
-        }
-
-        unsafe extern "C" fn mc_auth_plugin_free_buffer(buffer: mc_plugin_api::OwnedBuffer) {
-            unsafe {
-                $crate::free_owned_buffer(buffer);
-            }
-        }
-
-        #[cfg_attr(
-            all(not(test), not(feature = "disable-exported-symbols")),
-            unsafe(no_mangle)
-        )]
-        pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
-            MC_AUTH_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest))
-                as *const mc_plugin_api::PluginManifestV1
-        }
-
-        #[cfg_attr(
-            all(not(test), not(feature = "disable-exported-symbols")),
-            unsafe(no_mangle)
-        )]
-        pub extern "C" fn mc_plugin_auth_api_v1() -> *const mc_plugin_api::AuthPluginApiV1 {
-            MC_AUTH_PLUGIN_API.get_or_init(|| mc_plugin_api::AuthPluginApiV1 {
-                invoke: mc_auth_plugin_invoke,
-                free_buffer: mc_auth_plugin_free_buffer,
-            }) as *const mc_plugin_api::AuthPluginApiV1
-        }
-
-        #[must_use]
-        pub fn in_process_auth_entrypoints() -> $crate::InProcessAuthEntrypoints {
-            $crate::InProcessAuthEntrypoints {
-                manifest: unsafe { &*mc_plugin_manifest_v1() },
-                api: unsafe { &*mc_plugin_auth_api_v1() },
-            }
-        }
-    };
 }

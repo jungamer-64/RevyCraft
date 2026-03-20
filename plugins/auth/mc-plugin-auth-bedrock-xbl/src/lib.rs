@@ -142,7 +142,7 @@ mod tests {
     use mc_plugin_sdk_rust::RustAuthPlugin;
     use serde_json::json;
 
-    fn unsigned_jwt(header: serde_json::Value, payload: serde_json::Value) -> String {
+    fn unsigned_jwt(header: &serde_json::Value, payload: &serde_json::Value) -> String {
         let header =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
         let payload =
@@ -154,11 +154,11 @@ mod tests {
     fn rejects_invalid_chain() {
         let plugin = BedrockXblAuthPlugin;
         let chain = vec![unsigned_jwt(
-            json!({"alg":"none"}),
-            json!({"identityPublicKey":"invalid","extraData":{"displayName":"Builder","identity":"00000000-0000-0000-0000-000000000042","XUID":"123"}}),
+            &json!({"alg":"none"}),
+            &json!({"identityPublicKey":"invalid","extraData":{"displayName":"Builder","identity":"00000000-0000-0000-0000-000000000042","XUID":"123"}}),
         )];
         let invalid_client_data =
-            unsigned_jwt(json!({"alg":"none"}), json!({"DisplayName":"Builder"}));
+            unsigned_jwt(&json!({"alg":"none"}), &json!({"DisplayName":"Builder"}));
         let result = plugin.authenticate_bedrock_xbl(&chain, &invalid_client_data);
         assert!(result.is_err());
         let payload = decode_jwt_payload(&invalid_client_data).expect("payload should decode");

@@ -1,4 +1,104 @@
 use super::*;
+use crate::runtime::RunningServer;
+use mc_core::PluginGenerationId;
+
+type EncryptedLoginChallenge = ([u8; 16], Vec<u8>, Vec<u8>);
+
+async fn spawn_online_auth_reload_server(
+    temp_dir: &tempfile::TempDir,
+) -> Result<
+    (
+        RunningServer,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        PluginGenerationId,
+    ),
+    RuntimeError,
+> {
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let target_dir = crate::packaged_plugin_test_target_dir("auth-online-reload");
+    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    package_single_plugin(
+        "mc-plugin-auth-online-stub",
+        ONLINE_STUB_AUTH_PLUGIN_ID,
+        "auth",
+        &dist_dir,
+        &target_dir,
+        "online-auth-v1",
+    )?;
+    let server = spawn_server(
+        ServerConfig {
+            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+            server_port: 0,
+            online_mode: true,
+            auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+            plugins_dir: dist_dir.clone(),
+            world_dir: temp_dir.path().join("world"),
+            ..ServerConfig::default()
+        },
+        plugin_test_registries_from_dist_with_supporting_plugins(
+            dist_dir.clone(),
+            &[JE_1_7_10_ADAPTER_ID],
+            &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
+        )?,
+    )
+    .await?;
+    let plugin_host = server
+        .plugin_host
+        .as_ref()
+        .expect("runtime should keep plugin host");
+    let auth_before = plugin_host
+        .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
+        .expect("online auth profile should resolve");
+    let before_generation = auth_before
+        .plugin_generation_id()
+        .expect("online auth profile should report generation");
+    assert!(
+        auth_before
+            .capability_set()
+            .contains("build-tag:online-auth-v1")
+    );
+    Ok((server, dist_dir, target_dir, before_generation))
+}
+
+async fn begin_online_auth_handshake(
+    server: &RunningServer,
+) -> Result<(tokio::net::TcpStream, BytesMut, RsaPublicKey, Vec<u8>), RuntimeError> {
+    let addr = listener_addr(server);
+    let codec = MinecraftWireCodec;
+    let mut alpha = connect_tcp(addr).await?;
+    write_packet(&mut alpha, &codec, &encode_handshake(5, 2)?).await?;
+    write_packet(&mut alpha, &codec, &login_start("alpha-online")).await?;
+    let mut alpha_buffer = BytesMut::new();
+    let request = read_packet(&mut alpha, &codec, &mut alpha_buffer).await?;
+    let (_server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;
+    let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
+        .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
+    Ok((alpha, alpha_buffer, public_key, verify_token))
+}
+
+fn encrypt_online_login_challenge_response(
+    public_key: &RsaPublicKey,
+    verify_token: &[u8],
+) -> Result<EncryptedLoginChallenge, RuntimeError> {
+    let mut shared_secret = [0_u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut shared_secret);
+    let shared_secret_encrypted = public_key
+        .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
+        .map_err(|error| {
+            RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
+        })?;
+    let verify_token_encrypted = public_key
+        .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, verify_token)
+        .map_err(|error| {
+            RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
+        })?;
+    Ok((
+        shared_secret,
+        shared_secret_encrypted,
+        verify_token_encrypted,
+    ))
+}
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
@@ -538,60 +638,16 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
 #[tokio::test]
 async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("auth-online-reload");
-    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
-    package_single_plugin(
-        "mc-plugin-auth-online-stub",
-        ONLINE_STUB_AUTH_PLUGIN_ID,
-        "auth",
-        &dist_dir,
-        &target_dir,
-        "online-auth-v1",
-    )?;
-    let server = spawn_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            online_mode: true,
-            auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
-            plugins_dir: dist_dir.clone(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
-        plugin_test_registries_from_dist_with_supporting_plugins(
-            dist_dir.clone(),
-            &[JE_1_7_10_ADAPTER_ID],
-            &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
-        )?,
-    )
-    .await?;
+    let (server, dist_dir, target_dir, before_generation) =
+        spawn_online_auth_reload_server(&temp_dir).await?;
     let plugin_host = server
         .plugin_host
         .as_ref()
         .expect("runtime should keep plugin host");
-    let auth_before = plugin_host
-        .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
-        .expect("online auth profile should resolve");
-    let before_generation = auth_before
-        .plugin_generation_id()
-        .expect("online auth profile should report generation");
-    assert!(
-        auth_before
-            .capability_set()
-            .contains("build-tag:online-auth-v1")
-    );
-
-    let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
-    let mut alpha = connect_tcp(addr).await?;
-    write_packet(&mut alpha, &codec, &encode_handshake(5, 2)?).await?;
-    write_packet(&mut alpha, &codec, &login_start("alpha-online")).await?;
-    let mut alpha_buffer = BytesMut::new();
-    let request = read_packet(&mut alpha, &codec, &mut alpha_buffer).await?;
-    let (_server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;
-    let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
-        .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
+    let (mut alpha, mut alpha_buffer, public_key, verify_token) =
+        begin_online_auth_handshake(&server).await?;
+    let addr = listener_addr(&server);
 
     std::thread::sleep(Duration::from_secs(1));
     package_single_plugin(
@@ -619,18 +675,8 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
             .contains("build-tag:online-auth-v2")
     );
 
-    let mut shared_secret = [0_u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut shared_secret);
-    let shared_secret_encrypted = public_key
-        .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
-        .map_err(|error| {
-            RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
-        })?;
-    let verify_token_encrypted = public_key
-        .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &verify_token)
-        .map_err(|error| {
-            RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
-        })?;
+    let (shared_secret, shared_secret_encrypted, verify_token_encrypted) =
+        encrypt_online_login_challenge_response(&public_key, &verify_token)?;
     let response = login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
     write_packet(&mut alpha, &codec, &response).await?;
 

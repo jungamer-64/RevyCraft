@@ -153,10 +153,7 @@ fn plugin_test_registries_from_dist_with_supporting_plugins(
         )),
         ..ServerConfig::default()
     };
-    if supporting_plugin_ids
-        .iter()
-        .any(|plugin_id| *plugin_id == ONLINE_STUB_AUTH_PLUGIN_ID)
-    {
+    if supporting_plugin_ids.contains(&ONLINE_STUB_AUTH_PLUGIN_ID) {
         config.auth_profile = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
     }
     let plugin_host = plugin_host_from_config(&config)?.ok_or_else(|| {
@@ -495,8 +492,7 @@ async fn assert_no_packet_id(
     )
     .await
     {
-        Err(_) => Ok(()),
-        Ok(Err(RuntimeError::Config(_))) => Ok(()),
+        Err(_) | Ok(Err(RuntimeError::Config(_))) => Ok(()),
         Ok(Err(error)) => Err(error),
         Ok(Ok(packet)) => Err(RuntimeError::Config(format!(
             "unexpected packet id 0x{wanted_packet_id:02x}: got 0x{:02x}",
