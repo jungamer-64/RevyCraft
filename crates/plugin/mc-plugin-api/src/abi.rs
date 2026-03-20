@@ -1,4 +1,4 @@
-use crate::ProtocolCodecError;
+use crate::protocol_codec::ProtocolCodecError;
 use std::fmt;
 
 pub const CURRENT_PLUGIN_ABI: PluginAbiVersion = PluginAbiVersion { major: 2, minor: 0 };

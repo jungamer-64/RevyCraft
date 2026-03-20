@@ -1,11 +1,49 @@
 use super::{
     Arc, HashMap, HashSet, HotSwappableAuthProfile, HotSwappableGameplayProfile,
     HotSwappableStorageProfile, ManagedAuthPlugin, ManagedGameplayPlugin, ManagedStoragePlugin,
-    PluginHost, PluginKind, PluginPackage, RuntimeError, RuntimeRegistries, ServerConfig,
-    ensure_known_profiles, ensure_profile_known,
+    PluginHost, PluginKind, PluginPackage, RuntimeError, ServerConfig, ensure_known_profiles,
+    ensure_profile_known,
 };
+use crate::registry::LoadedPluginSet;
 
 impl PluginHost {
+    fn loaded_plugin_set(&self, protocols: super::ProtocolRegistry) -> LoadedPluginSet {
+        let mut loaded = LoadedPluginSet::new();
+        loaded.replace_protocols(protocols);
+
+        {
+            let gameplay = self
+                .gameplay
+                .lock()
+                .expect("plugin host mutex should not be poisoned");
+            for (profile_id, managed) in gameplay.iter() {
+                loaded.register_gameplay_profile(profile_id.clone(), Arc::clone(&managed.profile));
+            }
+        }
+
+        {
+            let storage = self
+                .storage
+                .lock()
+                .expect("plugin host mutex should not be poisoned");
+            for (profile_id, managed) in storage.iter() {
+                loaded.register_storage_profile(profile_id.clone(), Arc::clone(&managed.profile));
+            }
+        }
+
+        {
+            let auth = self
+                .auth
+                .lock()
+                .expect("plugin host mutex should not be poisoned");
+            for (profile_id, managed) in auth.iter() {
+                loaded.register_auth_profile(profile_id.clone(), Arc::clone(&managed.profile));
+            }
+        }
+
+        loaded
+    }
+
     fn required_gameplay_profiles(config: &ServerConfig) -> HashSet<String> {
         let mut required_profiles = HashSet::new();
         required_profiles.insert(config.default_gameplay_profile.clone());
@@ -259,22 +297,50 @@ impl PluginHost {
         self.activate_auth_profiles(&Self::runtime_auth_profiles(config))
     }
 
+    /// Loads protocol adapters and activates runtime-selected profiles, then snapshots the active
+    /// plugin set for server boot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when protocol topology or required runtime profiles cannot be loaded.
+    pub fn load_plugin_set(
+        self: &Arc<Self>,
+        config: &ServerConfig,
+    ) -> Result<LoadedPluginSet, RuntimeError> {
+        let protocols = self.load_protocol_registry()?;
+        self.activate_runtime_profiles(config)?;
+        let mut loaded = self.loaded_plugin_set(protocols);
+        loaded.attach_plugin_host(Arc::clone(self));
+        Ok(loaded)
+    }
+
+    /// Loads and activates the protocol registry snapshot used for initial server boot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the protocol topology cannot be prepared.
+    pub fn load_protocol_registry(
+        self: &Arc<Self>,
+    ) -> Result<super::ProtocolRegistry, RuntimeError> {
+        let prepared = self.prepare_protocol_topology_for_boot()?;
+        let registry = prepared.registry.clone();
+        self.activate_protocol_topology(prepared);
+        Ok(registry)
+    }
+
     /// Registers protocol adapters and activates runtime-selected profiles.
     ///
     /// # Errors
     ///
     /// Returns an error when registries cannot be initialized or required profiles cannot be
     /// activated.
-    pub fn initialize_runtime_registries(
+    #[cfg(test)]
+    pub(crate) fn initialize_runtime_registries(
         self: &Arc<Self>,
         config: &ServerConfig,
-        registries: &mut RuntimeRegistries,
+        registries: &mut LoadedPluginSet,
     ) -> Result<(), RuntimeError> {
-        self.load_into_registries(registries)?;
-        self.activate_runtime_profiles(config)?;
-        if let Some(storage_profile) = self.resolve_storage_profile(&config.storage_profile) {
-            registries.register_storage_profile(config.storage_profile.clone(), storage_profile);
-        }
+        *registries = self.load_plugin_set(config)?;
         Ok(())
     }
 }

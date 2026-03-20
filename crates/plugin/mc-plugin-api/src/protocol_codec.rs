@@ -1,4 +1,4 @@
-use crate::{CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind};
+use crate::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind};
 use mc_core::{
     BlockFace, BlockPos, BlockState, CapabilitySet, ChunkColumn, ChunkSection, ConnectionId,
     CoreCommand, CoreEvent, DimensionId, EntityId, InteractionHand, InventoryContainer,

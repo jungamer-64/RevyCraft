@@ -1,7 +1,7 @@
-use crate::{ByteSlice, OwnedBuffer, PluginAbiVersion, PluginErrorCode};
+use crate::abi::{ByteSlice, OwnedBuffer, PluginAbiVersion, PluginErrorCode, Utf8Slice};
 use std::ffi::c_void;
 
-pub type HostLogFn = unsafe extern "C" fn(level: u32, message: crate::Utf8Slice);
+pub type HostLogFn = unsafe extern "C" fn(level: u32, message: Utf8Slice);
 pub type HostReadPlayerSnapshotFn = unsafe extern "C" fn(
     *mut c_void,
     ByteSlice,

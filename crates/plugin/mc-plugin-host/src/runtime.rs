@@ -1,5 +1,6 @@
 use mc_core::WorldSnapshot;
-use mc_plugin_api::{GameplaySessionSnapshot, ProtocolSessionSnapshot};
+use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

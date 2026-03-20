@@ -19,7 +19,7 @@ fn online_auth_server_config(world_dir: PathBuf, enabled_adapters: &[&str]) -> S
 
 async fn assert_spawn_fails_with_message(
     config: ServerConfig,
-    registries: RuntimeRegistries,
+    registries: PluginTestEnvironment,
     expected_fragment: &str,
 ) -> Result<(), RuntimeError> {
     let result = spawn_server(config, registries).await;

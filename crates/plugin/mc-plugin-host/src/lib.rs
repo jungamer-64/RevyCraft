@@ -17,18 +17,17 @@ pub(crate) use self::test_harness::*;
 
 pub mod registry;
 
-#[path = "../../../runtime/server-runtime/src/plugin_host.rs"]
 mod plugin_host;
 
 pub mod host {
     pub use crate::plugin_host::{
-        AuthGeneration, AuthPluginStatusSnapshot, GameplayGeneration,
-        GameplayPluginStatusSnapshot, HotSwappableAuthProfile, HotSwappableGameplayProfile,
-        HotSwappableStorageProfile, InProcessAuthPlugin, InProcessGameplayPlugin,
-        InProcessProtocolPlugin, InProcessStoragePlugin, PluginAbiRange,
-        PluginArtifactStatusSnapshot, PluginCatalog, PluginFailureAction, PluginFailureMatrix,
-        PluginHost, PluginHostStatusSnapshot, ProtocolPluginStatusSnapshot,
-        StoragePluginStatusSnapshot, plugin_host_from_config, plugin_reload_poll_interval_ms,
+        AuthGeneration, AuthPluginStatusSnapshot, GameplayGeneration, GameplayPluginStatusSnapshot,
+        HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableStorageProfile,
+        InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
+        InProcessStoragePlugin, PluginAbiRange, PluginArtifactStatusSnapshot, PluginCatalog,
+        PluginFailureAction, PluginFailureMatrix, PluginHost, PluginHostStatusSnapshot,
+        ProtocolPluginStatusSnapshot, StoragePluginStatusSnapshot, plugin_host_from_config,
+        plugin_reload_poll_interval_ms,
     };
 }
 

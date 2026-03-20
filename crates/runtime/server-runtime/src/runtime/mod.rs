@@ -7,15 +7,15 @@ mod tests;
 
 use crate::RuntimeError;
 use crate::config::{ServerConfig, ServerConfigSource};
-use crate::host::{
-    AuthGeneration, HotSwappableAuthProfile, HotSwappableGameplayProfile,
-    HotSwappableStorageProfile, PluginHost,
-};
-use crate::registry::{ListenerBinding, ProtocolRegistry};
 use crate::transport::AcceptedTransportSession;
 use mc_core::{
     ConnectionId, CoreEvent, EntityId, GameplayProfileId, PlayerId, ServerCore,
     SessionCapabilitySet,
+};
+use mc_plugin_host::registry::{ListenerBinding, LoadedPluginSet, ProtocolRegistry};
+use mc_plugin_host::{
+    AuthGeneration, HotSwappableAuthProfile, HotSwappableGameplayProfile,
+    HotSwappableStorageProfile, PluginHost,
 };
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,7 @@ use tokio::task::JoinHandle;
 
 pub(crate) use mc_plugin_host::runtime::{ProtocolReloadSession, RuntimeReloadContext};
 
-pub use self::bootstrap::spawn_server;
+pub use self::bootstrap::ServerBuilder;
 pub use self::status::{
     OptionalNamedCountSnapshot, PhaseCountSnapshot, RuntimeStatusSnapshot, SessionStatusSnapshot,
     SessionSummarySnapshot, TopologyGenerationCountSnapshot, TopologyStatusSnapshot,
@@ -176,6 +176,7 @@ pub(crate) struct RuntimeTopologyState {
 pub(crate) struct RuntimeServer {
     pub(crate) config: ServerConfig,
     pub(crate) config_source: ServerConfigSource,
+    pub(crate) loaded_plugins: LoadedPluginSet,
     pub(crate) plugin_host: Option<Arc<PluginHost>>,
     pub(crate) topology: RwLock<RuntimeTopologyState>,
     pub(crate) auth_profile: Arc<HotSwappableAuthProfile>,

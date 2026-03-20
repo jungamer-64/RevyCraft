@@ -3,13 +3,13 @@ use super::{
     SessionHandle, SessionMessage, SessionState, now_ms,
 };
 use crate::RuntimeError;
-use crate::host::{HotSwappableAuthProfile, HotSwappableGameplayProfile};
 use crate::transport::{
     AcceptedTransportSession, TransportSessionIo, default_wire_codec, write_payload,
 };
 use bytes::BytesMut;
 use mc_core::{ConnectionId, CoreCommand, CoreEvent, SessionCapabilitySet};
-use mc_plugin_api::{AuthMode, BedrockAuthResult};
+use mc_plugin_api::codec::auth::{AuthMode, BedrockAuthResult};
+use mc_plugin_host::{HotSwappableAuthProfile, HotSwappableGameplayProfile};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeNextState, LoginRequest, PlayEncodingContext,
     ProtocolAdapter, ServerListStatus, StatusRequest, TransportKind, WireCodec,
@@ -352,6 +352,7 @@ impl RuntimeServer {
         self.plugin_host
             .as_ref()
             .and_then(|plugin_host| plugin_host.resolve_gameplay_profile(profile_id))
+            .or_else(|| self.loaded_plugins.resolve_gameplay_profile(profile_id))
             .ok_or_else(|| {
                 RuntimeError::Config(format!(
                     "gameplay profile `{profile_id}` for adapter `{adapter_id}` is not active"

@@ -3,12 +3,14 @@ use super::{
     SessionMessage, SessionState, TopologyGenerationId, TopologyReloadResult, now_ms,
 };
 use crate::RuntimeError;
-use crate::host::PluginHost;
-use crate::registry::ListenerBinding;
 use crate::runtime::bootstrap::{activate_protocols, spawn_listener_worker};
 use crate::transport::{bind_transport_listener, build_listener_plans};
 use mc_core::{ConnectionId, CoreCommand, CoreEvent, EventTarget, PlayerSummary, TargetedEvent};
-use mc_plugin_api::{GameplaySessionSnapshot, ProtocolSessionSnapshot};
+use mc_plugin_api::abi::PluginKind;
+use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_host::registry::{ListenerBinding, ProtocolRegistry};
+use mc_plugin_host::{PluginFailureAction, PluginHost};
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, TransportKind, WireFormatKind,
 };
@@ -26,9 +28,7 @@ struct ProtocolTopologyEntry {
     bedrock_listener_descriptor: Option<BedrockListenerDescriptor>,
 }
 
-fn protocol_topology_signature(
-    protocols: &crate::registry::ProtocolRegistry,
-) -> Vec<ProtocolTopologyEntry> {
+fn protocol_topology_signature(protocols: &ProtocolRegistry) -> Vec<ProtocolTopologyEntry> {
     let mut adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Tcp);
     adapter_ids.extend(protocols.adapter_ids_for_transport(TransportKind::Udp));
     adapter_ids.sort();
@@ -102,9 +102,11 @@ fn can_reuse_listener(
 
 impl RuntimeServer {
     pub(crate) fn take_pending_plugin_fatal_error(&self) -> Option<RuntimeError> {
-        self.plugin_host
-            .as_ref()
-            .and_then(|plugin_host| plugin_host.take_pending_fatal_error().map(RuntimeError::from))
+        self.plugin_host.as_ref().and_then(|plugin_host| {
+            plugin_host
+                .take_pending_fatal_error()
+                .map(RuntimeError::from)
+        })
     }
 
     pub(crate) async fn finish_with_runtime_error(
@@ -240,9 +242,17 @@ impl RuntimeServer {
             let now = now_ms();
             let mut events = state.core.tick(now);
             for (player_id, session_capabilities, gameplay_profile) in &gameplay_sessions {
-                let Some(gameplay) = self.plugin_host.as_ref().and_then(|plugin_host| {
-                    plugin_host.resolve_gameplay_profile(gameplay_profile.as_str())
-                }) else {
+                let Some(gameplay) = self
+                    .plugin_host
+                    .as_ref()
+                    .and_then(|plugin_host| {
+                        plugin_host.resolve_gameplay_profile(gameplay_profile.as_str())
+                    })
+                    .or_else(|| {
+                        self.loaded_plugins
+                            .resolve_gameplay_profile(gameplay_profile.as_str())
+                    })
+                else {
                     continue;
                 };
                 events.extend(
@@ -282,10 +292,10 @@ impl RuntimeServer {
             }
             Err(mc_proto_common::StorageError::Plugin(message)) => {
                 let action = self.plugin_host.as_ref().map_or(
-                    crate::host::PluginFailureAction::FailFast,
+                    PluginFailureAction::FailFast,
                     |plugin_host| {
                         plugin_host.handle_runtime_failure(
-                            mc_plugin_api::PluginKind::Storage,
+                            PluginKind::Storage,
                             self.storage_profile.plugin_id(),
                             &message,
                         )
@@ -294,20 +304,18 @@ impl RuntimeServer {
                 let mut state = self.state.lock().await;
                 state.dirty = true;
                 match action {
-                    crate::host::PluginFailureAction::Skip => {
+                    PluginFailureAction::Skip => {
                         eprintln!(
                             "storage runtime failure for `{}` skipped: {message}",
                             self.storage_profile.plugin_id()
                         );
                         Ok(())
                     }
-                    crate::host::PluginFailureAction::FailFast => {
-                        Err(RuntimeError::PluginFatal(format!(
-                            "storage plugin `{}` failed during runtime: {message}",
-                            self.storage_profile.plugin_id()
-                        )))
-                    }
-                    crate::host::PluginFailureAction::Quarantine => Err(RuntimeError::Storage(
+                    PluginFailureAction::FailFast => Err(RuntimeError::PluginFatal(format!(
+                        "storage plugin `{}` failed during runtime: {message}",
+                        self.storage_profile.plugin_id()
+                    ))),
+                    PluginFailureAction::Quarantine => Err(RuntimeError::Storage(
                         mc_proto_common::StorageError::Plugin(message),
                     )),
                 }

@@ -266,7 +266,11 @@ pub fn packaged_artifact_name(base_name: &str, build_tag: &str) -> String {
 }
 
 #[cfg(test)]
-pub fn plugin_manifest_contents(plugin_id: &str, plugin_kind: &str, packaged_artifact: &str) -> String {
+pub fn plugin_manifest_contents(
+    plugin_id: &str,
+    plugin_kind: &str,
+    packaged_artifact: &str,
+) -> String {
     format!(
         "[plugin]\nid = \"{plugin_id}\"\nkind = \"{plugin_kind}\"\n\n[artifacts]\n\"{}-{}\" = \"{packaged_artifact}\"\n",
         std::env::consts::OS,
@@ -350,10 +354,7 @@ pub fn seed_packaged_plugins_from_test_harness(
         fs::remove_dir_all(dist_dir)?;
     }
     fs::create_dir_all(dist_dir)?;
-    let requested = plugin_ids
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
+    let requested = plugin_ids.iter().copied().collect::<BTreeSet<_>>();
     for plugin_id in requested {
         let source = harness_dist_dir.join(plugin_id);
         if !source.is_dir() {

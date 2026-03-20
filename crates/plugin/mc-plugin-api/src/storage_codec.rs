@@ -1,8 +1,9 @@
+use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
 use crate::protocol_codec::{
     Decoder, Encoder, EnvelopeHeader, decode_capability_set, decode_envelope,
     decode_world_snapshot, encode_capability_set, encode_envelope, encode_world_snapshot,
 };
-use crate::{CURRENT_PLUGIN_ABI, PROTOCOL_FLAG_RESPONSE, PluginKind, ProtocolCodecError};
+use crate::protocol_codec::{PROTOCOL_FLAG_RESPONSE, ProtocolCodecError};
 use mc_core::{CapabilitySet, WorldSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 use crate::RuntimeError;
 use crate::config::ServerConfig;
-use crate::registry::{ProtocolRegistry, RuntimeRegistries};
+use crate::registry::ProtocolRegistry;
 use crate::runtime::RuntimeReloadContext;
 use bytes::BytesMut;
 use libloading::Library;
@@ -9,16 +9,34 @@ use mc_core::{
     GameplayQuery, PlayerId, PlayerSnapshot, PluginGenerationId, SessionCapabilitySet,
     WorldSnapshot,
 };
-use mc_plugin_api::{
-    AuthMode, AuthPluginApiV1, AuthRequest, AuthResponse, BedrockAuthResult, CURRENT_PLUGIN_ABI,
-    GameplayPluginApiV1, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
-    HostApiTableV1, OwnedBuffer, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1,
-    PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1,
-    PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1, ProtocolPluginApiV1,
-    ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, StoragePluginApiV1, StorageRequest,
-    StorageResponse, WireFrameDecodeResult, decode_auth_response, decode_gameplay_response,
-    decode_protocol_response, decode_storage_response, encode_auth_request,
-    encode_gameplay_request, encode_protocol_request, encode_storage_request,
+use mc_plugin_api::abi::{
+    ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind,
+    Utf8Slice,
+};
+use mc_plugin_api::codec::auth::{
+    AuthMode, AuthRequest, AuthResponse, BedrockAuthResult, decode_auth_response,
+    encode_auth_request,
+};
+use mc_plugin_api::codec::gameplay::{
+    GameplayRequest, GameplayResponse, GameplaySessionSnapshot, decode_gameplay_response,
+    decode_host_block_pos_blob, decode_host_can_edit_block_key, decode_host_player_id_blob,
+    encode_gameplay_request, encode_host_block_state_blob, encode_host_player_snapshot_blob,
+    encode_host_world_meta_blob,
+};
+use mc_plugin_api::codec::protocol::{
+    ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, WireFrameDecodeResult,
+    decode_protocol_response, encode_protocol_request,
+};
+use mc_plugin_api::codec::storage::{
+    StorageRequest, StorageResponse, decode_storage_response, encode_storage_request,
+};
+use mc_plugin_api::host_api::{
+    AuthPluginApiV1, GameplayPluginApiV1, HostApiTableV1, PluginFreeBufferFn, PluginInvokeFn,
+    ProtocolPluginApiV1, StoragePluginApiV1,
+};
+use mc_plugin_api::manifest::{
+    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1, PLUGIN_MANIFEST_SYMBOL_V1,
+    PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1, PluginManifestV1,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
@@ -942,15 +960,15 @@ struct ProtocolGeneration {
     descriptor: ProtocolDescriptor,
     bedrock_listener_descriptor: Option<BedrockListenerDescriptor>,
     capabilities: CapabilitySet,
-    invoke: mc_plugin_api::PluginInvokeFn,
-    free_buffer: mc_plugin_api::PluginFreeBufferFn,
+    invoke: PluginInvokeFn,
+    free_buffer: PluginFreeBufferFn,
     _library_guard: Option<Arc<Mutex<Library>>>,
 }
 
 fn decode_plugin_error(
     plugin_id: &str,
     status: PluginErrorCode,
-    free_buffer: mc_plugin_api::PluginFreeBufferFn,
+    free_buffer: PluginFreeBufferFn,
     error: OwnedBuffer,
 ) -> String {
     if error.ptr.is_null() {
@@ -973,7 +991,7 @@ impl ProtocolGeneration {
         let mut error = OwnedBuffer::empty();
         let status = unsafe {
             (self.invoke)(
-                mc_plugin_api::ByteSlice {
+                ByteSlice {
                     ptr: request_bytes.as_ptr(),
                     len: request_bytes.len(),
                 },
@@ -1052,7 +1070,7 @@ fn with_current_gameplay_query<T>(
     })
 }
 
-unsafe extern "C" fn gameplay_host_log(level: u32, message: mc_plugin_api::Utf8Slice) {
+unsafe extern "C" fn gameplay_host_log(level: u32, message: Utf8Slice) {
     if let Ok(message) = decode_utf8_slice(message) {
         eprintln!("gameplay[{level}]: {message}");
     }
@@ -1060,18 +1078,15 @@ unsafe extern "C" fn gameplay_host_log(level: u32, message: mc_plugin_api::Utf8S
 
 unsafe extern "C" fn gameplay_host_read_player_snapshot(
     _context: *mut std::ffi::c_void,
-    payload: mc_plugin_api::ByteSlice,
+    payload: ByteSlice,
     output: *mut OwnedBuffer,
     error_out: *mut OwnedBuffer,
 ) -> PluginErrorCode {
     let payload = unsafe { std::slice::from_raw_parts(payload.ptr, payload.len) };
     let result = with_current_gameplay_query(|query| {
-        let player_id = mc_plugin_api::decode_host_player_id_blob(payload)
+        let player_id = decode_host_player_id_blob(payload).map_err(|error| error.to_string())?;
+        let bytes = encode_host_player_snapshot_blob(query.player_snapshot(player_id).as_ref())
             .map_err(|error| error.to_string())?;
-        let bytes = mc_plugin_api::encode_host_player_snapshot_blob(
-            query.player_snapshot(player_id).as_ref(),
-        )
-        .map_err(|error| error.to_string())?;
         write_owned_buffer(output, bytes);
         Ok(())
     });
@@ -1091,8 +1106,7 @@ unsafe extern "C" fn gameplay_host_read_world_meta(
 ) -> PluginErrorCode {
     let result = with_current_gameplay_query(|query| {
         let world_meta = query.world_meta();
-        let bytes = mc_plugin_api::encode_host_world_meta_blob(&world_meta)
-            .map_err(|error| error.to_string())?;
+        let bytes = encode_host_world_meta_blob(&world_meta).map_err(|error| error.to_string())?;
         write_owned_buffer(output, bytes);
         Ok(())
     });
@@ -1107,15 +1121,14 @@ unsafe extern "C" fn gameplay_host_read_world_meta(
 
 unsafe extern "C" fn gameplay_host_read_block_state(
     _context: *mut std::ffi::c_void,
-    payload: mc_plugin_api::ByteSlice,
+    payload: ByteSlice,
     output: *mut OwnedBuffer,
     error_out: *mut OwnedBuffer,
 ) -> PluginErrorCode {
     let payload = unsafe { std::slice::from_raw_parts(payload.ptr, payload.len) };
     let result = with_current_gameplay_query(|query| {
-        let position = mc_plugin_api::decode_host_block_pos_blob(payload)
-            .map_err(|error| error.to_string())?;
-        let bytes = mc_plugin_api::encode_host_block_state_blob(&query.block_state(position))
+        let position = decode_host_block_pos_blob(payload).map_err(|error| error.to_string())?;
+        let bytes = encode_host_block_state_blob(&query.block_state(position))
             .map_err(|error| error.to_string())?;
         write_owned_buffer(output, bytes);
         Ok(())
@@ -1131,14 +1144,14 @@ unsafe extern "C" fn gameplay_host_read_block_state(
 
 unsafe extern "C" fn gameplay_host_can_edit_block(
     _context: *mut std::ffi::c_void,
-    payload: mc_plugin_api::ByteSlice,
+    payload: ByteSlice,
     out: *mut bool,
     error_out: *mut OwnedBuffer,
 ) -> PluginErrorCode {
     let payload = unsafe { std::slice::from_raw_parts(payload.ptr, payload.len) };
     let result = with_current_gameplay_query(|query| {
-        let (player_id, position) = mc_plugin_api::decode_host_can_edit_block_key(payload)
-            .map_err(|error| error.to_string())?;
+        let (player_id, position) =
+            decode_host_can_edit_block_key(payload).map_err(|error| error.to_string())?;
         if !out.is_null() {
             unsafe {
                 *out = query.can_edit_block(player_id, position);
@@ -1191,8 +1204,8 @@ pub struct GameplayGeneration {
     plugin_id: String,
     profile_id: GameplayProfileId,
     capabilities: CapabilitySet,
-    invoke: mc_plugin_api::PluginInvokeFn,
-    free_buffer: mc_plugin_api::PluginFreeBufferFn,
+    invoke: PluginInvokeFn,
+    free_buffer: PluginFreeBufferFn,
     _library_guard: Option<Arc<Mutex<Library>>>,
 }
 
@@ -1203,7 +1216,7 @@ impl GameplayGeneration {
         let mut error = OwnedBuffer::empty();
         let status = unsafe {
             (self.invoke)(
-                mc_plugin_api::ByteSlice {
+                ByteSlice {
                     ptr: request_bytes.as_ptr(),
                     len: request_bytes.len(),
                 },
@@ -1235,8 +1248,8 @@ struct StorageGeneration {
     profile_id: String,
     #[allow(dead_code)]
     capabilities: CapabilitySet,
-    invoke: mc_plugin_api::PluginInvokeFn,
-    free_buffer: mc_plugin_api::PluginFreeBufferFn,
+    invoke: PluginInvokeFn,
+    free_buffer: PluginFreeBufferFn,
     _library_guard: Option<Arc<Mutex<Library>>>,
 }
 
@@ -1248,7 +1261,7 @@ impl StorageGeneration {
         let mut error = OwnedBuffer::empty();
         let status = unsafe {
             (self.invoke)(
-                mc_plugin_api::ByteSlice {
+                ByteSlice {
                     ptr: request_bytes.as_ptr(),
                     len: request_bytes.len(),
                 },
@@ -1281,8 +1294,8 @@ pub struct AuthGeneration {
     mode: AuthMode,
     #[allow(dead_code)]
     capabilities: CapabilitySet,
-    invoke: mc_plugin_api::PluginInvokeFn,
-    free_buffer: mc_plugin_api::PluginFreeBufferFn,
+    invoke: PluginInvokeFn,
+    free_buffer: PluginFreeBufferFn,
     _library_guard: Option<Arc<Mutex<Library>>>,
 }
 
@@ -1293,7 +1306,7 @@ impl AuthGeneration {
         let mut error = OwnedBuffer::empty();
         let status = unsafe {
             (self.invoke)(
-                mc_plugin_api::ByteSlice {
+                ByteSlice {
                     ptr: request_bytes.as_ptr(),
                     len: request_bytes.len(),
                 },
@@ -2523,9 +2536,10 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the protocol plugin registry mutex is poisoned.
-    pub fn load_into_registries(
+    #[cfg(test)]
+    pub(crate) fn load_into_registries(
         self: &Arc<Self>,
-        registries: &mut RuntimeRegistries,
+        registries: &mut crate::registry::LoadedPluginSet,
     ) -> Result<(), RuntimeError> {
         let prepared = self.prepare_protocol_topology_for_boot()?;
         registries.replace_protocols(prepared.registry.clone());

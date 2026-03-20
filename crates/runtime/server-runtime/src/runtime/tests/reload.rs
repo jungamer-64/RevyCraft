@@ -35,7 +35,11 @@ async fn spawn_protocol_reload_server(
 > {
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir(scenario);
-    seed_runtime_plugins(&dist_dir, &[JE_1_7_10_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
+    seed_runtime_plugins(
+        &dist_dir,
+        &[JE_1_7_10_ADAPTER_ID],
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+    )?;
     package_single_plugin(
         "mc-plugin-proto-je-1_7_10-reload-test",
         JE_1_7_10_ADAPTER_ID,
@@ -490,7 +494,11 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("storage-reload-success");
     let world_dir = temp_dir.path().join("world");
-    seed_runtime_plugins(&dist_dir, &[JE_1_7_10_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
+    seed_runtime_plugins(
+        &dist_dir,
+        &[JE_1_7_10_ADAPTER_ID],
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+    )?;
     let registries = plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?;
     let server = spawn_server(
         ServerConfig {
@@ -593,7 +601,11 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("storage-reload-failure");
-    seed_runtime_plugins(&dist_dir, &[JE_1_7_10_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
+    seed_runtime_plugins(
+        &dist_dir,
+        &[JE_1_7_10_ADAPTER_ID],
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+    )?;
     let config = ServerConfig {
         server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
         server_port: 0,
@@ -657,7 +669,11 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("auth-reload-offline");
-    seed_runtime_plugins(&dist_dir, &[JE_1_7_10_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
+    seed_runtime_plugins(
+        &dist_dir,
+        &[JE_1_7_10_ADAPTER_ID],
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+    )?;
     let server = spawn_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
@@ -898,7 +914,11 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("topology-inline-manual");
-    seed_runtime_plugins(&dist_dir, &[JE_1_7_10_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
+    seed_runtime_plugins(
+        &dist_dir,
+        &[JE_1_7_10_ADAPTER_ID],
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+    )?;
     package_single_plugin(
         "mc-plugin-proto-je-1_7_10-reload-test",
         JE_1_7_10_ADAPTER_ID,
@@ -1043,7 +1063,11 @@ async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let properties_path = temp_dir.path().join("server.properties");
-    seed_runtime_plugins(&dist_dir, &[JE_1_7_10_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
+    seed_runtime_plugins(
+        &dist_dir,
+        &[JE_1_7_10_ADAPTER_ID],
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+    )?;
     write_topology_properties(
         &properties_path,
         &dist_dir,

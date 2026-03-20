@@ -1,4 +1,4 @@
-use crate::{CapabilityDescriptorV1, PluginAbiVersion, PluginKind, Utf8Slice};
+use crate::abi::{CapabilityDescriptorV1, PluginAbiVersion, PluginKind, Utf8Slice};
 
 pub const PLUGIN_MANIFEST_SYMBOL_V1: &[u8] = b"mc_plugin_manifest_v1\0";
 pub const PLUGIN_PROTOCOL_API_SYMBOL_V1: &[u8] = b"mc_plugin_protocol_api_v1\0";

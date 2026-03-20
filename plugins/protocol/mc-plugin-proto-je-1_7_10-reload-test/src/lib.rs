@@ -1,6 +1,8 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::{CapabilitySet, CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
-use mc_plugin_sdk_rust::{RustProtocolPlugin, StaticPluginManifest, export_protocol_plugin};
+use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+use mc_plugin_sdk_rust::protocol::{RustProtocolPlugin, export_protocol_plugin};
 use mc_proto_common::{
     BedrockListenerDescriptor, HandshakeIntent, HandshakeProbe, LoginRequest, PlayEncodingContext,
     PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus,
@@ -28,14 +30,14 @@ impl Je1710ReloadTestProtocolPlugin {
 impl RustProtocolPlugin for Je1710ReloadTestProtocolPlugin {
     fn export_session_state(
         &self,
-        session: &mc_plugin_api::ProtocolSessionSnapshot,
+        session: &ProtocolSessionSnapshot,
     ) -> Result<Vec<u8>, ProtocolError> {
         Ok(session.connection_id.0.to_le_bytes().to_vec())
     }
 
     fn import_session_state(
         &self,
-        session: &mc_plugin_api::ProtocolSessionSnapshot,
+        session: &ProtocolSessionSnapshot,
         blob: &[u8],
     ) -> Result<(), ProtocolError> {
         if option_env!("REVY_PLUGIN_BUILD_TAG").is_some_and(|tag| tag.contains("reload-fail")) {

@@ -1,5 +1,6 @@
 use crate::RuntimeError;
 use crate::host::PluginHost;
+use crate::{HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableStorageProfile};
 use mc_proto_common::{
     Edition, HandshakeIntent, HandshakeProbe, ProtocolAdapter, ProtocolError, StorageAdapter,
     TransportKind,
@@ -150,13 +151,26 @@ impl StorageRegistry {
 }
 
 #[derive(Clone, Default)]
-pub struct RuntimeRegistries {
+pub struct LoadedPluginSet {
     protocols: ProtocolRegistry,
-    storage: StorageRegistry,
+    gameplay_profiles: HashMap<String, Arc<HotSwappableGameplayProfile>>,
+    storage_profiles: HashMap<String, Arc<HotSwappableStorageProfile>>,
+    auth_profiles: HashMap<String, Arc<HotSwappableAuthProfile>>,
     plugin_host: Option<Arc<PluginHost>>,
 }
 
-impl RuntimeRegistries {
+pub struct LoadedStorageProfiles<'a> {
+    profiles: &'a HashMap<String, Arc<HotSwappableStorageProfile>>,
+}
+
+impl LoadedStorageProfiles<'_> {
+    #[must_use]
+    pub fn resolve(&self, profile_id: &str) -> Option<Arc<HotSwappableStorageProfile>> {
+        self.profiles.get(profile_id).cloned()
+    }
+}
+
+impl LoadedPluginSet {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -172,12 +186,30 @@ impl RuntimeRegistries {
         self
     }
 
+    pub fn register_gameplay_profile(
+        &mut self,
+        profile_id: impl Into<String>,
+        profile: Arc<HotSwappableGameplayProfile>,
+    ) -> &mut Self {
+        self.gameplay_profiles.insert(profile_id.into(), profile);
+        self
+    }
+
     pub fn register_storage_profile(
         &mut self,
-        storage_profile: impl Into<String>,
-        adapter: Arc<dyn StorageAdapter>,
+        profile_id: impl Into<String>,
+        profile: Arc<HotSwappableStorageProfile>,
     ) -> &mut Self {
-        self.storage.register_profile(storage_profile, adapter);
+        self.storage_profiles.insert(profile_id.into(), profile);
+        self
+    }
+
+    pub fn register_auth_profile(
+        &mut self,
+        profile_id: impl Into<String>,
+        profile: Arc<HotSwappableAuthProfile>,
+    ) -> &mut Self {
+        self.auth_profiles.insert(profile_id.into(), profile);
         self
     }
 
@@ -202,7 +234,51 @@ impl RuntimeRegistries {
     }
 
     #[must_use]
-    pub const fn storage(&self) -> &StorageRegistry {
-        &self.storage
+    pub fn resolve_gameplay_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<HotSwappableGameplayProfile>> {
+        self.gameplay_profiles.get(profile_id).cloned()
+    }
+
+    #[must_use]
+    pub fn resolve_storage_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<HotSwappableStorageProfile>> {
+        self.storage_profiles.get(profile_id).cloned()
+    }
+
+    #[must_use]
+    pub fn storage(&self) -> LoadedStorageProfiles<'_> {
+        LoadedStorageProfiles {
+            profiles: &self.storage_profiles,
+        }
+    }
+
+    #[must_use]
+    pub fn resolve_auth_profile(&self, profile_id: &str) -> Option<Arc<HotSwappableAuthProfile>> {
+        self.auth_profiles.get(profile_id).cloned()
+    }
+
+    #[must_use]
+    pub fn gameplay_profile_ids(&self) -> Vec<String> {
+        let mut ids = self.gameplay_profiles.keys().cloned().collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
+    #[must_use]
+    pub fn storage_profile_ids(&self) -> Vec<String> {
+        let mut ids = self.storage_profiles.keys().cloned().collect::<Vec<_>>();
+        ids.sort();
+        ids
+    }
+
+    #[must_use]
+    pub fn auth_profile_ids(&self) -> Vec<String> {
+        let mut ids = self.auth_profiles.keys().cloned().collect::<Vec<_>>();
+        ids.sort();
+        ids
     }
 }

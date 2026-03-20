@@ -1,5 +1,6 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_plugin_sdk_rust::{StaticPluginManifest, delegate_protocol_adapter, export_protocol_plugin};
+use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+use mc_plugin_sdk_rust::protocol::{delegate_protocol_adapter, export_protocol_plugin};
 use mc_proto_je_1_12_2::Je1122Adapter;
 
 #[derive(Default)]

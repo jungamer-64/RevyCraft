@@ -10,6 +10,7 @@ categories.workspace = true
 description = "Standalone server bootstrap that wires the plugin host for RevyCraft."
 
 [dependencies]
+mc-plugin-host = { path = "../../crates/plugin/mc-plugin-host" }
 server-runtime = { path = "../../crates/runtime/server-runtime" }
 tokio.workspace = true
 

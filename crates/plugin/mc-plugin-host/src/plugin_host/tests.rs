@@ -5,16 +5,17 @@ use super::{
 };
 use crate::config::ServerConfig;
 use crate::host::plugin_host_from_config;
-use crate::registry::RuntimeRegistries;
+use crate::registry::LoadedPluginSet;
 use crate::runtime::{ProtocolReloadSession, RuntimeReloadContext};
 use mc_core::{
     BlockPos, BlockState, ConnectionId, CoreConfig, DimensionId, EntityId, GameplayQuery, PlayerId,
     ServerCore, WorldMeta,
 };
-use mc_plugin_api::{
-    CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginAbiVersion, PluginKind, PluginManifestV1,
-    ProtocolSessionSnapshot, Utf8Slice,
+use mc_plugin_api::abi::{
+    CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginAbiVersion, PluginKind, Utf8Slice,
 };
+use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_api::manifest::PluginManifestV1;
 use mc_plugin_auth_offline::in_process_auth_entrypoints as offline_auth_entrypoints;
 use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
 use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
@@ -34,10 +35,9 @@ use uuid::Uuid;
 
 mod entity_id_probe_gameplay_plugin {
     use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
-    use mc_plugin_api::{GameplayDescriptor, GameplaySessionSnapshot};
-    use mc_plugin_sdk_rust::{
-        GameplayHost, RustGameplayPlugin, StaticPluginManifest, export_gameplay_plugin,
-    };
+    use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
+    use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin, export_gameplay_plugin};
+    use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
     use std::sync::{Mutex, OnceLock};
 
     #[derive(Default)]
@@ -103,12 +103,17 @@ mod entity_id_probe_gameplay_plugin {
 
 mod custom_wire_codec_protocol_plugin {
     use mc_core::CapabilitySet;
-    use mc_plugin_api::{
+    use mc_plugin_api::abi::{
         ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
-        PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
-        Utf8Slice, WireFrameDecodeResult, decode_protocol_request, encode_protocol_response,
+        PluginKind, Utf8Slice,
     };
-    use mc_plugin_sdk_rust::InProcessProtocolEntrypoints;
+    use mc_plugin_api::codec::protocol::{
+        ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_protocol_request,
+        encode_protocol_response,
+    };
+    use mc_plugin_api::host_api::ProtocolPluginApiV1;
+    use mc_plugin_api::manifest::PluginManifestV1;
+    use mc_plugin_sdk_rust::test_support::InProcessProtocolEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
     use std::sync::OnceLock;
 
@@ -257,12 +262,16 @@ mod custom_wire_codec_protocol_plugin {
 
 mod failing_protocol_plugin {
     use mc_core::CapabilitySet;
-    use mc_plugin_api::{
+    use mc_plugin_api::abi::{
         ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
-        PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
-        Utf8Slice, decode_protocol_request, encode_protocol_response,
+        PluginKind, Utf8Slice,
     };
-    use mc_plugin_sdk_rust::InProcessProtocolEntrypoints;
+    use mc_plugin_api::codec::protocol::{
+        ProtocolRequest, ProtocolResponse, decode_protocol_request, encode_protocol_response,
+    };
+    use mc_plugin_api::host_api::ProtocolPluginApiV1;
+    use mc_plugin_api::manifest::PluginManifestV1;
+    use mc_plugin_sdk_rust::test_support::InProcessProtocolEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
     use std::sync::OnceLock;
 
@@ -388,10 +397,9 @@ mod failing_protocol_plugin {
 
 mod failing_gameplay_plugin {
     use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
-    use mc_plugin_api::{GameplayDescriptor, GameplaySessionSnapshot};
-    use mc_plugin_sdk_rust::{
-        GameplayHost, RustGameplayPlugin, StaticPluginManifest, export_gameplay_plugin,
-    };
+    use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
+    use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin, export_gameplay_plugin};
+    use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 
     #[derive(Default)]
     pub struct FailingGameplayPlugin;
@@ -440,8 +448,9 @@ mod failing_gameplay_plugin {
 
 mod failing_auth_plugin {
     use mc_core::{CapabilitySet, PlayerId};
-    use mc_plugin_api::{AuthDescriptor, AuthMode};
-    use mc_plugin_sdk_rust::{RustAuthPlugin, StaticPluginManifest, export_auth_plugin};
+    use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode};
+    use mc_plugin_sdk_rust::auth::{RustAuthPlugin, export_auth_plugin};
+    use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 
     pub const PROFILE_ID: &str = "failing-auth";
 
@@ -592,7 +601,7 @@ fn in_process_protocol_plugin_swaps_generation() {
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.load_into_registries(&mut registries)
         .expect("in-process plugin should load");
 
@@ -668,7 +677,7 @@ fn all_protocol_plugins_register_and_resolve() {
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.load_into_registries(&mut registries)
         .expect("protocol plugins should load");
 
@@ -719,7 +728,7 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.load_into_registries(&mut registries)
         .expect("protocol plugins should load");
 
@@ -774,7 +783,7 @@ fn protocol_plugins_can_override_host_wire_codec_framing() {
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.load_into_registries(&mut registries)
         .expect("custom wire codec plugin should load");
 
@@ -823,7 +832,7 @@ fn abi_mismatch_is_rejected_before_registration() {
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
 
     let error = host
         .load_into_registries(&mut registries)
@@ -851,7 +860,7 @@ fn protocol_plugins_require_reload_manifest_capability() {
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
 
     let error = host
         .load_into_registries(&mut registries)
@@ -882,7 +891,7 @@ fn storage_and_auth_plugins_are_managed_without_quarantine() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     ));
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.load_into_registries(&mut registries)
         .expect("storage/auth plugin kinds should register with the host");
 
@@ -956,7 +965,7 @@ fn initialize_runtime_registries_activates_runtime_profiles() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     ));
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.initialize_runtime_registries(&ServerConfig::default(), &mut registries)
         .expect("runtime registries should initialize with runtime profiles");
 
@@ -1088,7 +1097,7 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
                 ..PluginFailureMatrix::default()
             },
         ));
-        let mut registries = RuntimeRegistries::new();
+        let mut registries = LoadedPluginSet::new();
         host.load_into_registries(&mut registries)
             .expect("failing protocol plugin should still register");
 
@@ -1364,12 +1373,7 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), crate::RuntimeError
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     crate::seed_packaged_plugins_from_test_harness(
         &dist_dir,
-        &[
-            "je-1_7_10",
-            "je-1_8_x",
-            "je-1_12_2",
-            "be-placeholder",
-        ],
+        &["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"],
     )?;
 
     let config = ServerConfig {
@@ -1377,7 +1381,7 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), crate::RuntimeError
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.load_into_registries(&mut registries)?;
 
     for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
@@ -1410,7 +1414,7 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), crate::RuntimeEr
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.load_into_registries(&mut registries)?;
 
     let adapter = registries
@@ -1470,7 +1474,7 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions()
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.load_into_registries(&mut registries)?;
 
     let adapter = registries
@@ -1548,7 +1552,7 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), crate
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.load_into_registries(&mut registries)?;
 
     let adapter = registries
@@ -1618,7 +1622,7 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), crate
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let mut registries = RuntimeRegistries::new();
+    let mut registries = LoadedPluginSet::new();
     host.load_into_registries(&mut registries)?;
 
     let adapter = registries

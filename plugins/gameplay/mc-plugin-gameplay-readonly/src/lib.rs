@@ -3,10 +3,9 @@ use mc_core::{
     CapabilitySet, GameplayPolicyResolver, GameplayProfileId, GameplayQuery, PlayerId,
     PlayerSnapshot, ReadonlyGameplayPolicy, SessionCapabilitySet,
 };
-use mc_plugin_api::{GameplayDescriptor, GameplaySessionSnapshot};
-use mc_plugin_sdk_rust::{
-    GameplayHost, RustGameplayPlugin, StaticPluginManifest, export_gameplay_plugin,
-};
+use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
+use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin, export_gameplay_plugin};
+use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 
 #[derive(Default)]
 pub struct ReadonlyGameplayPlugin;

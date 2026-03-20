@@ -10,7 +10,11 @@ use super::{
     encode_gameplay_request, encode_protocol_request, encode_storage_request,
 };
 use crate::runtime::ProtocolReloadSession;
-use mc_plugin_api::ProtocolSessionSnapshot;
+use mc_plugin_api::abi::{ByteSlice, Utf8Slice};
+use mc_plugin_api::codec::auth::AuthDescriptor;
+use mc_plugin_api::codec::gameplay::GameplayDescriptor;
+use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_api::codec::storage::StorageDescriptor;
 
 #[derive(Clone, Debug)]
 pub(super) struct DecodedManifest {
@@ -51,7 +55,7 @@ pub(super) fn decode_manifest(
     })
 }
 
-pub(super) fn decode_utf8_slice(slice: mc_plugin_api::Utf8Slice) -> Result<String, RuntimeError> {
+pub(super) fn decode_utf8_slice(slice: Utf8Slice) -> Result<String, RuntimeError> {
     if slice.ptr.is_null() {
         return Err(RuntimeError::Config(
             "plugin utf8 slice was null".to_string(),
@@ -71,7 +75,7 @@ pub(super) fn invoke_protocol(
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
         (api.invoke)(
-            mc_plugin_api::ByteSlice {
+            ByteSlice {
                 ptr: request_bytes.as_ptr(),
                 len: request_bytes.len(),
             },
@@ -111,7 +115,7 @@ pub(super) fn invoke_gameplay(
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
         (api.invoke)(
-            mc_plugin_api::ByteSlice {
+            ByteSlice {
                 ptr: request_bytes.as_ptr(),
                 len: request_bytes.len(),
             },
@@ -146,7 +150,7 @@ pub(super) fn invoke_storage(
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
         (api.invoke)(
-            mc_plugin_api::ByteSlice {
+            ByteSlice {
                 ptr: request_bytes.as_ptr(),
                 len: request_bytes.len(),
             },
@@ -182,7 +186,7 @@ pub(super) fn invoke_auth(
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
         (api.invoke)(
-            mc_plugin_api::ByteSlice {
+            ByteSlice {
                 ptr: request_bytes.as_ptr(),
                 len: request_bytes.len(),
             },
@@ -295,7 +299,7 @@ pub(super) fn expect_protocol_capabilities(
 pub(super) fn expect_gameplay_descriptor(
     plugin_id: &str,
     response: GameplayResponse,
-) -> Result<mc_plugin_api::GameplayDescriptor, RuntimeError> {
+) -> Result<GameplayDescriptor, RuntimeError> {
     match response {
         GameplayResponse::Descriptor(descriptor) => Ok(descriptor),
         other => Err(RuntimeError::Config(format!(
@@ -319,7 +323,7 @@ pub(super) fn expect_gameplay_capabilities(
 pub(super) fn expect_storage_descriptor(
     plugin_id: &str,
     response: StorageResponse,
-) -> Result<mc_plugin_api::StorageDescriptor, RuntimeError> {
+) -> Result<StorageDescriptor, RuntimeError> {
     match response {
         StorageResponse::Descriptor(descriptor) => Ok(descriptor),
         other => Err(RuntimeError::Config(format!(
@@ -343,7 +347,7 @@ pub(super) fn expect_storage_capabilities(
 pub(super) fn expect_auth_descriptor(
     plugin_id: &str,
     response: AuthResponse,
-) -> Result<mc_plugin_api::AuthDescriptor, RuntimeError> {
+) -> Result<AuthDescriptor, RuntimeError> {
     match response {
         AuthResponse::Descriptor(descriptor) => Ok(descriptor),
         other => Err(RuntimeError::Config(format!(

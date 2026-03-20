@@ -16,8 +16,8 @@ use mc_proto_common::{
 };
 use num_traits::ToPrimitive;
 use serde_json::json;
-use std::io::Write;
 use std::collections::BTreeMap;
+use std::io::Write;
 
 const PACKET_HANDSHAKE: i32 = 0x00;
 
@@ -750,15 +750,15 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
                 .encode_inventory_slot_changed(*container, *slot, stack.as_ref())?
                 .into_iter()
                 .collect()),
-            CoreEvent::SelectedHotbarSlotChanged { slot } => Ok(vec![self
-                .profile
-                .encode_selected_hotbar_slot_changed(*slot)?]),
+            CoreEvent::SelectedHotbarSlotChanged { slot } => Ok(vec![
+                self.profile.encode_selected_hotbar_slot_changed(*slot)?,
+            ]),
             CoreEvent::BlockChanged { position, block } => {
                 Ok(vec![self.profile.encode_block_changed(*position, block)?])
             }
-            CoreEvent::KeepAliveRequested { keep_alive_id } => {
-                Ok(vec![self.profile.encode_keep_alive_requested(*keep_alive_id)?])
-            }
+            CoreEvent::KeepAliveRequested { keep_alive_id } => Ok(vec![
+                self.profile.encode_keep_alive_requested(*keep_alive_id)?,
+            ]),
             CoreEvent::LoginAccepted { .. } | CoreEvent::Disconnect { .. } => Err(
                 ProtocolError::InvalidPacket("session event cannot be encoded as play sync"),
             ),

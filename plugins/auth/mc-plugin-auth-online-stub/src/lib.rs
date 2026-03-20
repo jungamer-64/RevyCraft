@@ -1,7 +1,8 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::{CapabilitySet, PlayerId};
-use mc_plugin_api::{AuthDescriptor, AuthMode};
-use mc_plugin_sdk_rust::{RustAuthPlugin, StaticPluginManifest, export_auth_plugin};
+use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode};
+use mc_plugin_sdk_rust::auth::{RustAuthPlugin, export_auth_plugin};
+use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use uuid::Uuid;
 
 pub const ONLINE_STUB_AUTH_PROFILE_ID: &str = "mojang-online-v1";

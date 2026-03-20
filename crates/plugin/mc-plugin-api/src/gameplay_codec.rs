@@ -1,3 +1,4 @@
+use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
 use crate::protocol_codec::{
     Decoder, Encoder, EnvelopeHeader, decode_block_pos, decode_block_state, decode_capability_set,
     decode_connection_phase, decode_core_command, decode_core_event, decode_entity_id,
@@ -7,7 +8,7 @@ use crate::protocol_codec::{
     encode_core_event, encode_entity_id, encode_envelope, encode_inventory_slot, encode_option,
     encode_player_id, encode_player_snapshot, encode_world_meta,
 };
-use crate::{CURRENT_PLUGIN_ABI, PROTOCOL_FLAG_RESPONSE, PluginKind, ProtocolCodecError};
+use crate::protocol_codec::{PROTOCOL_FLAG_RESPONSE, ProtocolCodecError};
 use mc_core::{
     CapabilitySet, CoreCommand, EventTarget, GameplayEffect, GameplayJoinEffect, GameplayMutation,
     GameplayProfileId, PlayerId, PlayerInventory, PlayerSnapshot, TargetedEvent, WorldMeta,

@@ -3,8 +3,6 @@ mod error;
 mod transport;
 
 pub mod config;
-pub mod host;
-pub mod registry;
 pub mod runtime;
 
 #[cfg(test)]

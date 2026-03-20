@@ -27,12 +27,14 @@ cargo run -p server-bootstrap
 
 `server-bootstrap` は `runtime/server.properties` を読みます。ファイルが無い場合はデフォルト設定で起動します。
 サンプル設定は `runtime/server.properties.example` にあります。
+サンプルの `plugin-allowlist` は最小構成のベースラインです。
 現在のワールド生成は `level-type=FLAT` のみ対応です。
 creative-style block editing を使う場合は `gamemode=1` にしてください。
 `default-adapter=je-1_7_10`、`default-bedrock-adapter=be-26_3`、`storage-profile=je-anvil-1_7_10`、`auth-profile=offline-v1`、`bedrock-auth-profile=bedrock-offline-v1` で既定の JE / BE adapter、永続化 backend、JE / BE auth profile を明示できます。
-`online-mode=true` で起動する場合は `auth-profile=mojang-online-v1` に切り替えてください。phase 5 時点では Mojang sessionserver 固定で、verification failure や HTTP error は fail closed します。
+`online-mode=true` で起動する場合は `plugin-allowlist` に `auth-mojang-online` を追加したうえで `auth-profile=mojang-online-v1` に切り替えてください。phase 5 時点では Mojang sessionserver 固定で、verification failure や HTTP error は fail closed します。
 `enabled-adapters=je-1_7_10,je-1_8_x,je-1_12_2` を設定すると、同じ TCP ポートで複数 JE 版を同時に受け付けます。
 `enabled-bedrock-adapters=be-26_3` を設定すると、同じ `server-port` で Bedrock baseline adapter を受け付けます。
+Bedrock XBL を使う場合は `plugin-allowlist` に `auth-bedrock-xbl` を追加したうえで `bedrock-auth-profile=bedrock-xbl-v1` を指定してください。
 `default-gameplay-profile=canonical` で既定 gameplay profile を選べます。
 `gameplay-profile-map=je-1_7_10:readonly,je-1_12_2:canonical,be-26_3:canonical` のように adapter ごとに gameplay profile を固定できます。
 `enabled-adapters` 未指定時は後方互換のため `default-adapter` だけが有効です。

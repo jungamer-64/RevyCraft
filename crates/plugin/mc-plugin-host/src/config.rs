@@ -1,5 +1,5 @@
 use crate::PluginFailureMatrix;
-use mc_plugin_api::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use std::collections::HashMap;
 use std::path::PathBuf;
 

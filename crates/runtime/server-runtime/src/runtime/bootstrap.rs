@@ -4,17 +4,16 @@ use super::{
 };
 use crate::RuntimeError;
 use crate::config::{ServerConfig, ServerConfigSource};
-use crate::host::{
-    HotSwappableAuthProfile, HotSwappableStorageProfile, PluginHost,
-    activate_runtime_profiles_from_config, plugin_reload_poll_interval_ms,
-};
-use crate::registry::{ListenerBinding, ProtocolRegistry, RuntimeRegistries};
 use crate::transport::{
     AcceptedTransportSession, BoundTransportListener, TransportSessionIo, bind_transport_listener,
     build_listener_plans,
 };
 use mc_core::{CoreConfig, ServerCore};
-use mc_plugin_api::AuthMode;
+use mc_plugin_api::codec::auth::AuthMode;
+use mc_plugin_host::registry::{ListenerBinding, LoadedPluginSet, ProtocolRegistry};
+use mc_plugin_host::{
+    HotSwappableAuthProfile, HotSwappableStorageProfile, PluginHost, plugin_reload_poll_interval_ms,
+};
 use mc_proto_common::{Edition, ProtocolAdapter, TransportKind};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -23,72 +22,98 @@ use std::time::Duration;
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-/// # Errors
-///
-/// Returns [`RuntimeError`] when the server cannot bind, load its persisted
-/// world state, or starts with unsupported configuration such as an auth
-/// profile mode mismatch.
-pub async fn spawn_server(
+pub struct ServerBuilder {
     config_source: ServerConfigSource,
-    registries: RuntimeRegistries,
-) -> Result<RunningServer, RuntimeError> {
-    let config = config_source.load()?;
-    let plugin_host = resolve_plugin_host(&registries, &config)?;
-    let active_protocols = activate_protocols(&config, registries.protocols())?;
-    let RuntimeProfiles {
-        storage_profile,
-        auth_profile,
-        bedrock_auth_profile,
-        online_auth_keys,
-        core,
-    } = resolve_runtime_profiles(&config, &plugin_host)?;
-    let BoundListeners {
-        listener_bindings,
-        bound_listeners,
-    } = bind_runtime_listeners(&config, &active_protocols.protocols).await?;
-    let initial_generation_id = TopologyGenerationId(1);
-    let topology_generation = Arc::new(RuntimeTopologyGeneration {
-        generation_id: initial_generation_id,
-        config: config.clone(),
-        protocol_registry: active_protocols.protocols,
-        default_adapter: active_protocols.default_adapter,
-        default_bedrock_adapter: active_protocols.default_bedrock_adapter,
-        listener_bindings: listener_bindings.clone(),
-    });
-    let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
-    let listener_workers =
-        spawn_listener_workers(bound_listeners, initial_generation_id, accepted_tx.clone())?;
+    loaded_plugins: LoadedPluginSet,
+    plugin_host: Option<Arc<PluginHost>>,
+}
 
-    let server = Arc::new(RuntimeServer {
-        config,
-        config_source,
-        plugin_host: Some(plugin_host.clone()),
-        topology: std::sync::RwLock::new(RuntimeTopologyState {
-            active: topology_generation,
-            draining: Vec::new(),
-            listener_workers,
-            next_generation_id: 2,
-        }),
-        auth_profile,
-        bedrock_auth_profile,
-        online_auth_keys,
-        storage_profile,
-        state: Mutex::new(RuntimeState { core, dirty: false }),
-        sessions: Mutex::new(HashMap::new()),
-        next_connection_id: Mutex::new(1),
-        accepted_tx,
-    });
+impl ServerBuilder {
+    #[must_use]
+    pub fn new(config_source: ServerConfigSource, loaded_plugins: LoadedPluginSet) -> Self {
+        let plugin_host = loaded_plugins.plugin_host();
+        Self {
+            config_source,
+            loaded_plugins,
+            plugin_host,
+        }
+    }
 
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let run_server = Arc::clone(&server);
-    let join_handle = spawn_runtime_loop(run_server, shutdown_rx, accepted_rx);
+    #[must_use]
+    pub fn with_plugin_host(mut self, plugin_host: Arc<PluginHost>) -> Self {
+        self.plugin_host = Some(plugin_host);
+        self
+    }
 
-    Ok(RunningServer {
-        plugin_host: Some(plugin_host),
-        runtime: server,
-        shutdown_tx: Some(shutdown_tx),
-        join_handle,
-    })
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the server cannot bind, load its persisted
+    /// world state, or starts with unsupported configuration such as an auth
+    /// profile mode mismatch.
+    pub async fn build(self) -> Result<RunningServer, RuntimeError> {
+        let Self {
+            config_source,
+            loaded_plugins,
+            plugin_host,
+        } = self;
+        let config = config_source.load()?;
+        let active_protocols = activate_protocols(&config, loaded_plugins.protocols())?;
+        let RuntimeProfiles {
+            storage_profile,
+            auth_profile,
+            bedrock_auth_profile,
+            online_auth_keys,
+            core,
+        } = resolve_runtime_profiles(&config, &loaded_plugins)?;
+        let BoundListeners {
+            listener_bindings,
+            bound_listeners,
+        } = bind_runtime_listeners(&config, &active_protocols.protocols).await?;
+        let initial_generation_id = TopologyGenerationId(1);
+        let topology_generation = Arc::new(RuntimeTopologyGeneration {
+            generation_id: initial_generation_id,
+            config: config.clone(),
+            protocol_registry: active_protocols.protocols,
+            default_adapter: active_protocols.default_adapter,
+            default_bedrock_adapter: active_protocols.default_bedrock_adapter,
+            listener_bindings: listener_bindings.clone(),
+        });
+        let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
+        let listener_workers =
+            spawn_listener_workers(bound_listeners, initial_generation_id, accepted_tx.clone())?;
+
+        let server = Arc::new(RuntimeServer {
+            config,
+            config_source,
+            loaded_plugins,
+            plugin_host: plugin_host.clone(),
+            topology: std::sync::RwLock::new(RuntimeTopologyState {
+                active: topology_generation,
+                draining: Vec::new(),
+                listener_workers,
+                next_generation_id: 2,
+            }),
+            auth_profile,
+            bedrock_auth_profile,
+            online_auth_keys,
+            storage_profile,
+            state: Mutex::new(RuntimeState { core, dirty: false }),
+            sessions: Mutex::new(HashMap::new()),
+            next_connection_id: Mutex::new(1),
+            accepted_tx,
+        });
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let run_server = Arc::clone(&server);
+        let join_handle = spawn_runtime_loop(run_server, shutdown_rx, accepted_rx);
+
+        Ok(RunningServer {
+            plugin_host,
+            runtime: server,
+            shutdown_tx: Some(shutdown_tx),
+            join_handle,
+        })
+    }
 }
 
 pub(super) struct ActiveProtocols {
@@ -108,18 +133,6 @@ struct RuntimeProfiles {
 struct BoundListeners {
     listener_bindings: Vec<ListenerBinding>,
     bound_listeners: Vec<BoundTransportListener>,
-}
-
-fn resolve_plugin_host(
-    registries: &RuntimeRegistries,
-    config: &ServerConfig,
-) -> Result<Arc<PluginHost>, RuntimeError> {
-    registries.plugin_host().ok_or_else(|| {
-        RuntimeError::Config(format!(
-            "no plugins discovered under `{}`",
-            config.plugins_dir.display()
-        ))
-    })
 }
 
 pub(super) fn activate_protocols(
@@ -225,10 +238,9 @@ pub(super) fn activate_protocols(
 
 fn resolve_runtime_profiles(
     config: &ServerConfig,
-    plugin_host: &Arc<PluginHost>,
+    loaded_plugins: &LoadedPluginSet,
 ) -> Result<RuntimeProfiles, RuntimeError> {
-    activate_runtime_profiles_from_config(plugin_host, config)?;
-    let storage_profile = plugin_host
+    let storage_profile = loaded_plugins
         .resolve_storage_profile(&config.storage_profile)
         .ok_or_else(|| {
             RuntimeError::Config(format!(
@@ -236,14 +248,14 @@ fn resolve_runtime_profiles(
                 config.storage_profile
             ))
         })?;
-    let auth_profile = plugin_host
+    let auth_profile = loaded_plugins
         .resolve_auth_profile(&config.auth_profile)
         .ok_or_else(|| {
             RuntimeError::Config(format!("unknown auth-profile `{}`", config.auth_profile))
         })?;
     let bedrock_auth_profile = if config.be_enabled {
         Some(
-            plugin_host
+            loaded_plugins
                 .resolve_auth_profile(&config.bedrock_auth_profile)
                 .ok_or_else(|| {
                     RuntimeError::Config(format!(

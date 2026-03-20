@@ -140,7 +140,10 @@ fn discover_plugins(workspace_root: &Path) -> Result<Vec<PluginSpec>, String> {
 fn is_plugin_package(package: &CargoPackage, plugins_root: &Path) -> bool {
     package.name.starts_with("mc-plugin-")
         && !package.name.ends_with("-reload-test")
-        && package.targets.iter().any(|target| target.kind.iter().any(|kind| kind == "cdylib"))
+        && package
+            .targets
+            .iter()
+            .any(|target| target.kind.iter().any(|kind| kind == "cdylib"))
         && package
             .manifest_path
             .parent()
@@ -160,7 +163,9 @@ fn plugin_spec_from_package_name(package_name: &str) -> Result<PluginSpec, Strin
     } else if rest.starts_with("auth-") {
         ("auth", rest.to_string())
     } else {
-        return Err(format!("unsupported plugin package layout `{package_name}`"));
+        return Err(format!(
+            "unsupported plugin package layout `{package_name}`"
+        ));
     };
     Ok(PluginSpec {
         cargo_package: package_name.to_string(),
@@ -304,7 +309,8 @@ mod tests {
     #[test]
     fn plugin_spec_maps_protocol_packages_to_adapter_ids() {
         assert_eq!(
-            plugin_spec_from_package_name("mc-plugin-proto-je-1_12_2").expect("valid protocol plugin"),
+            plugin_spec_from_package_name("mc-plugin-proto-je-1_12_2")
+                .expect("valid protocol plugin"),
             PluginSpec {
                 cargo_package: "mc-plugin-proto-je-1_12_2".to_string(),
                 plugin_id: "je-1_12_2".to_string(),

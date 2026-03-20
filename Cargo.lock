@@ -2670,6 +2670,7 @@ dependencies = [
 name = "server-bootstrap"
 version = "0.1.0"
 dependencies = [
+ "mc-plugin-host",
  "server-runtime",
  "tokio",
 ]

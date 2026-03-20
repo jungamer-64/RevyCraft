@@ -1,7 +1,8 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::CapabilitySet;
-use mc_plugin_api::StorageDescriptor;
-use mc_plugin_sdk_rust::{RustStoragePlugin, StaticPluginManifest, export_storage_plugin};
+use mc_plugin_api::codec::storage::StorageDescriptor;
+use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+use mc_plugin_sdk_rust::storage::{RustStoragePlugin, export_storage_plugin};
 use mc_proto_common::{StorageAdapter, StorageError};
 use mc_proto_je_1_7_10::{JE_1_7_10_STORAGE_PROFILE_ID, Je1710StorageAdapter};
 use std::path::Path;

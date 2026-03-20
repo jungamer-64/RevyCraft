@@ -1,6 +1,6 @@
 use crate::RuntimeError;
-use crate::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
-use mc_plugin_api::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use mc_plugin_host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
 use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -175,6 +175,26 @@ impl ServerConfig {
         self.topology_reload_watch = other.topology_reload_watch;
         self.topology_drain_grace_secs = other.topology_drain_grace_secs;
         previous != *self
+    }
+
+    #[must_use]
+    pub fn plugin_host_config(&self) -> mc_plugin_host::config::ServerConfig {
+        mc_plugin_host::config::ServerConfig {
+            be_enabled: self.be_enabled,
+            storage_profile: self.storage_profile.clone(),
+            auth_profile: self.auth_profile.clone(),
+            bedrock_auth_profile: self.bedrock_auth_profile.clone(),
+            default_gameplay_profile: self.default_gameplay_profile.clone(),
+            gameplay_profile_map: self.gameplay_profile_map.clone(),
+            plugins_dir: self.plugins_dir.clone(),
+            plugin_allowlist: self.plugin_allowlist.clone(),
+            plugin_failure_policy_protocol: self.plugin_failure_policy_protocol,
+            plugin_failure_policy_gameplay: self.plugin_failure_policy_gameplay,
+            plugin_failure_policy_storage: self.plugin_failure_policy_storage,
+            plugin_failure_policy_auth: self.plugin_failure_policy_auth,
+            plugin_abi_min: self.plugin_abi_min,
+            plugin_abi_max: self.plugin_abi_max,
+        }
     }
 }
 

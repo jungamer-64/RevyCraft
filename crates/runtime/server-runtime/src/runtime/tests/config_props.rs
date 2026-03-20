@@ -145,6 +145,72 @@ fn server_properties_parse_auth_profile() -> Result<(), RuntimeError> {
 }
 
 #[test]
+fn plugin_host_config_copies_all_plugin_host_fields() {
+    let config = ServerConfig {
+        be_enabled: true,
+        storage_profile: "custom-storage".to_string(),
+        auth_profile: "custom-auth".to_string(),
+        bedrock_auth_profile: "custom-bedrock-auth".to_string(),
+        default_gameplay_profile: "readonly".to_string(),
+        gameplay_profile_map: gameplay_profile_map(&[
+            (JE_1_7_10_ADAPTER_ID, "readonly"),
+            (BE_26_3_ADAPTER_ID, "canonical"),
+        ]),
+        plugins_dir: PathBuf::from("custom").join("plugins"),
+        plugin_allowlist: Some(vec![
+            "je-1_7_10".to_string(),
+            "auth-mojang-online".to_string(),
+            "auth-bedrock-xbl".to_string(),
+        ]),
+        plugin_failure_policy_protocol: PluginFailureAction::Skip,
+        plugin_failure_policy_gameplay: PluginFailureAction::FailFast,
+        plugin_failure_policy_storage: PluginFailureAction::Skip,
+        plugin_failure_policy_auth: PluginFailureAction::FailFast,
+        plugin_abi_min: mc_plugin_api::abi::PluginAbiVersion { major: 1, minor: 9 },
+        plugin_abi_max: mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 1 },
+        ..ServerConfig::default()
+    };
+
+    let plugin_host_config = config.plugin_host_config();
+
+    assert_eq!(plugin_host_config.be_enabled, config.be_enabled);
+    assert_eq!(plugin_host_config.storage_profile, config.storage_profile);
+    assert_eq!(plugin_host_config.auth_profile, config.auth_profile);
+    assert_eq!(
+        plugin_host_config.bedrock_auth_profile,
+        config.bedrock_auth_profile
+    );
+    assert_eq!(
+        plugin_host_config.default_gameplay_profile,
+        config.default_gameplay_profile
+    );
+    assert_eq!(
+        plugin_host_config.gameplay_profile_map,
+        config.gameplay_profile_map
+    );
+    assert_eq!(plugin_host_config.plugins_dir, config.plugins_dir);
+    assert_eq!(plugin_host_config.plugin_allowlist, config.plugin_allowlist);
+    assert_eq!(
+        plugin_host_config.plugin_failure_policy_protocol,
+        config.plugin_failure_policy_protocol
+    );
+    assert_eq!(
+        plugin_host_config.plugin_failure_policy_gameplay,
+        config.plugin_failure_policy_gameplay
+    );
+    assert_eq!(
+        plugin_host_config.plugin_failure_policy_storage,
+        config.plugin_failure_policy_storage
+    );
+    assert_eq!(
+        plugin_host_config.plugin_failure_policy_auth,
+        config.plugin_failure_policy_auth
+    );
+    assert_eq!(plugin_host_config.plugin_abi_min, config.plugin_abi_min);
+    assert_eq!(plugin_host_config.plugin_abi_max, config.plugin_abi_max);
+}
+
+#[test]
 fn server_properties_parse_topology_reload_settings() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let path = temp_dir.path().join("server.properties");

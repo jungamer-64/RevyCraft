@@ -1,7 +1,8 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::{CapabilitySet, PlayerId};
-use mc_plugin_api::{AuthDescriptor, AuthMode};
-use mc_plugin_sdk_rust::{RustAuthPlugin, StaticPluginManifest, export_auth_plugin};
+use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode};
+use mc_plugin_sdk_rust::auth::{RustAuthPlugin, export_auth_plugin};
+use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use std::time::Duration;

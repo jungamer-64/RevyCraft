@@ -6,11 +6,15 @@ use mc_core::{
     InteractionHand, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
     PlayerSnapshot, Vec3, WorldMeta,
 };
-use mc_proto_common::{Edition, PacketReader, PacketWriter, ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
+use mc_proto_common::{
+    Edition, PacketReader, PacketWriter, ProtocolDescriptor, ProtocolError, TransportKind,
+    WireFormatKind,
+};
 use mc_proto_je_common::{
-    JavaEditionAdapter, JavaEditionProfile, build_chunk_data_1_7, legacy_block, legacy_inventory_slot,
-    legacy_item, legacy_window_items, legacy_window_slot, player_window_id, read_legacy_slot,
-    semantic_block, semantic_item, to_angle_byte, to_fixed_point, write_legacy_slot, zlib_compress,
+    JavaEditionAdapter, JavaEditionProfile, build_chunk_data_1_7, legacy_block,
+    legacy_inventory_slot, legacy_item, legacy_window_items, legacy_window_slot, player_window_id,
+    read_legacy_slot, semantic_block, semantic_item, to_angle_byte, to_fixed_point,
+    write_legacy_slot, zlib_compress,
 };
 
 pub use self::storage::Je1710StorageAdapter;

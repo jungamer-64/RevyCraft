@@ -7,8 +7,9 @@ enum UdpDatagramAction {
 
 mod failing_storage_plugin {
     use mc_core::{CapabilitySet, WorldSnapshot};
-    use mc_plugin_api::StorageDescriptor;
-    use mc_plugin_sdk_rust::{RustStoragePlugin, StaticPluginManifest, export_storage_plugin};
+    use mc_plugin_api::codec::storage::StorageDescriptor;
+    use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+    use mc_plugin_sdk_rust::storage::{RustStoragePlugin, export_storage_plugin};
     use mc_proto_common::StorageError;
     use std::path::Path;
 
@@ -77,17 +78,9 @@ fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8>, R
     Ok(writer.into_inner())
 }
 
-use super::{
-    TopologyStatusState, format_runtime_status_summary, spawn_server as spawn_server_with_source,
-};
+use super::{ServerBuilder, TopologyStatusState, format_runtime_status_summary};
 use crate::RuntimeError;
 use crate::config::{BEDROCK_OFFLINE_AUTH_PROFILE_ID, LevelType, ServerConfig, ServerConfigSource};
-use crate::host::{
-    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
-    PluginAbiRange, PluginCatalog, PluginFailureAction, PluginFailureMatrix, PluginHost,
-    initialize_runtime_registries_from_config, plugin_host_from_config,
-};
-use crate::registry::RuntimeRegistries;
 use crate::transport::{MinecraftStreamCipher, build_listener_plans, default_wire_codec};
 use bytes::BytesMut;
 use mc_plugin_auth_offline::{
@@ -99,6 +92,12 @@ use mc_plugin_auth_online_stub::{
 };
 use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
 use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
+use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
+use mc_plugin_host::{
+    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    PluginAbiRange, PluginCatalog, PluginFailureAction, PluginFailureMatrix, PluginHost,
+    plugin_host_from_config,
+};
 use mc_plugin_proto_be_26_3::in_process_protocol_entrypoints as be_26_3_entrypoints;
 use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
 use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints as je_1_7_10_entrypoints;
@@ -127,20 +126,38 @@ use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UdpSocket;
 
-use crate::registry::ProtocolRegistry;
+#[derive(Clone)]
+struct PluginTestEnvironment {
+    loaded_plugins: LoadedPluginSet,
+    plugin_host: Option<Arc<PluginHost>>,
+}
+
+impl PluginTestEnvironment {
+    fn protocols(&self) -> &ProtocolRegistry {
+        self.loaded_plugins.protocols()
+    }
+}
 
 async fn spawn_server(
     config: ServerConfig,
-    registries: RuntimeRegistries,
+    registries: PluginTestEnvironment,
 ) -> Result<super::RunningServer, RuntimeError> {
-    spawn_server_with_source(ServerConfigSource::Inline(config), registries).await
+    spawn_server_from_source(ServerConfigSource::Inline(config), registries).await
 }
 
 async fn spawn_server_from_source(
     source: ServerConfigSource,
-    registries: RuntimeRegistries,
+    registries: PluginTestEnvironment,
 ) -> Result<super::RunningServer, RuntimeError> {
-    spawn_server_with_source(source, registries).await
+    let builder = match registries.plugin_host {
+        Some(plugin_host) => {
+            let config = source.load()?;
+            let loaded_plugins = plugin_host.load_plugin_set(&config.plugin_host_config())?;
+            ServerBuilder::new(source, loaded_plugins)
+        }
+        None => ServerBuilder::new(source, registries.loaded_plugins),
+    };
+    builder.build().await
 }
 
 fn active_protocol_registry(server: &super::RunningServer) -> ProtocolRegistry {
@@ -169,7 +186,7 @@ const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &[
 
 fn plugin_test_registries_with_allowlist(
     allowlist: &[&str],
-) -> Result<RuntimeRegistries, RuntimeError> {
+) -> Result<PluginTestEnvironment, RuntimeError> {
     let dist_dir = crate::packaged_plugin_test_harness_dist_dir()
         .map_err(RuntimeError::Config)?
         .clone();
@@ -200,7 +217,7 @@ fn plugin_allowlist_with_supporting_plugins(
 fn plugin_test_registries_from_dist(
     dist_dir: PathBuf,
     allowlist: &[&str],
-) -> Result<RuntimeRegistries, RuntimeError> {
+) -> Result<PluginTestEnvironment, RuntimeError> {
     plugin_test_registries_from_dist_with_supporting_plugins(
         dist_dir,
         allowlist,
@@ -212,7 +229,7 @@ fn plugin_test_registries_from_dist_with_supporting_plugins(
     dist_dir: PathBuf,
     allowlist: &[&str],
     supporting_plugin_ids: &[&str],
-) -> Result<RuntimeRegistries, RuntimeError> {
+) -> Result<PluginTestEnvironment, RuntimeError> {
     let mut config = ServerConfig {
         plugins_dir: dist_dir,
         plugin_allowlist: Some(plugin_allowlist_with_supporting_plugins(
@@ -224,23 +241,25 @@ fn plugin_test_registries_from_dist_with_supporting_plugins(
     if supporting_plugin_ids.contains(&ONLINE_STUB_AUTH_PLUGIN_ID) {
         config.auth_profile = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
     }
-    let plugin_host = plugin_host_from_config(&config)?.ok_or_else(|| {
+    let plugin_host = plugin_host_from_config(&config.plugin_host_config())?.ok_or_else(|| {
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
-    let mut registries = RuntimeRegistries::new();
-    initialize_runtime_registries_from_config(&plugin_host, &config, &mut registries)?;
-    Ok(registries)
+    Ok(PluginTestEnvironment {
+        loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
+        plugin_host: Some(plugin_host),
+    })
 }
 
 fn plugin_test_registries_from_config(
     config: &ServerConfig,
-) -> Result<RuntimeRegistries, RuntimeError> {
-    let plugin_host = plugin_host_from_config(config)?.ok_or_else(|| {
+) -> Result<PluginTestEnvironment, RuntimeError> {
+    let plugin_host = plugin_host_from_config(&config.plugin_host_config())?.ok_or_else(|| {
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
-    let mut registries = RuntimeRegistries::new();
-    initialize_runtime_registries_from_config(&plugin_host, config, &mut registries)?;
-    Ok(registries)
+    Ok(PluginTestEnvironment {
+        loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
+        plugin_host: Some(plugin_host),
+    })
 }
 
 fn seed_runtime_plugins(
@@ -255,11 +274,11 @@ fn seed_runtime_plugins(
     crate::seed_packaged_plugins_from_test_harness(dist_dir, &plugin_ids)
 }
 
-fn plugin_test_registries_tcp_only() -> Result<RuntimeRegistries, RuntimeError> {
+fn plugin_test_registries_tcp_only() -> Result<PluginTestEnvironment, RuntimeError> {
     plugin_test_registries_with_allowlist(TCP_ONLY_PROTOCOL_PLUGIN_IDS)
 }
 
-fn plugin_test_registries_all() -> Result<RuntimeRegistries, RuntimeError> {
+fn plugin_test_registries_all() -> Result<PluginTestEnvironment, RuntimeError> {
     plugin_test_registries_with_allowlist(ALL_PROTOCOL_PLUGIN_IDS)
 }
 
@@ -328,7 +347,7 @@ fn register_in_process_supporting_plugins(catalog: &mut PluginCatalog) {
 
 fn in_process_online_auth_registries(
     allowlist: &[&str],
-) -> Result<RuntimeRegistries, RuntimeError> {
+) -> Result<PluginTestEnvironment, RuntimeError> {
     let mut catalog = PluginCatalog::default();
     for adapter_id in allowlist {
         register_in_process_protocol_adapter(&mut catalog, adapter_id)?;
@@ -340,21 +359,19 @@ fn in_process_online_auth_registries(
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     ));
-    let mut registries = RuntimeRegistries::new();
-    initialize_runtime_registries_from_config(
-        &plugin_host,
-        &ServerConfig {
-            auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
-            ..ServerConfig::default()
-        },
-        &mut registries,
-    )?;
-    Ok(registries)
+    let config = ServerConfig {
+        auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+        ..ServerConfig::default()
+    };
+    Ok(PluginTestEnvironment {
+        loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
+        plugin_host: Some(plugin_host),
+    })
 }
 
 fn in_process_failing_storage_registries(
     failure_action: PluginFailureAction,
-) -> Result<RuntimeRegistries, RuntimeError> {
+) -> Result<PluginTestEnvironment, RuntimeError> {
     let mut catalog = PluginCatalog::default();
     register_in_process_protocol_adapter(&mut catalog, JE_1_7_10_ADAPTER_ID)?;
     catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
@@ -385,16 +402,14 @@ fn in_process_failing_storage_registries(
             ..PluginFailureMatrix::default()
         },
     ));
-    let mut registries = RuntimeRegistries::new();
-    initialize_runtime_registries_from_config(
-        &plugin_host,
-        &ServerConfig {
-            storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
-            ..ServerConfig::default()
-        },
-        &mut registries,
-    )?;
-    Ok(registries)
+    let config = ServerConfig {
+        storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
+        ..ServerConfig::default()
+    };
+    Ok(PluginTestEnvironment {
+        loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
+        plugin_host: Some(plugin_host),
+    })
 }
 
 fn gameplay_profile_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
@@ -430,7 +445,7 @@ fn package_single_gameplay_plugin(
     dist_dir: &Path,
     target_dir: &Path,
     build_tag: &str,
-    ) -> Result<(), RuntimeError> {
+) -> Result<(), RuntimeError> {
     package_single_plugin(
         cargo_package,
         plugin_id,
@@ -763,7 +778,8 @@ fn packaged_plugin_variant_cache_reuses_same_package_and_tag() -> Result<(), Run
     )?;
     let after_second = crate::packaged_plugin_test_variant_build_count();
 
-    let cached_artifact = cache_dir.join(crate::dynamic_library_filename("mc-plugin-proto-je-1_7_10"));
+    let cached_artifact =
+        cache_dir.join(crate::dynamic_library_filename("mc-plugin-proto-je-1_7_10"));
     assert!(cached_artifact.is_file());
     assert!(after_first >= before_builds);
     assert_eq!(after_second, after_first);
@@ -1181,6 +1197,81 @@ async fn storage_skip_keeps_dirty_state_after_runtime_save_failure() -> Result<(
     assert!(server.runtime.state.lock().await.dirty);
 
     server.shutdown().await
+}
+
+#[tokio::test]
+async fn server_builder_auto_adopts_embedded_plugin_host() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let config = ServerConfig {
+        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+        server_port: 0,
+        storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
+        plugin_failure_policy_storage: PluginFailureAction::Skip,
+        world_dir: temp_dir.path().join("world"),
+        ..ServerConfig::default()
+    };
+    let PluginTestEnvironment { loaded_plugins, .. } =
+        in_process_failing_storage_registries(PluginFailureAction::Skip)?;
+    let server = ServerBuilder::new(ServerConfigSource::Inline(config), loaded_plugins)
+        .build()
+        .await?;
+
+    {
+        let mut state = server.runtime.state.lock().await;
+        state.dirty = true;
+    }
+    server.runtime.maybe_save().await?;
+    assert!(server.runtime.state.lock().await.dirty);
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn explicit_plugin_host_overrides_embedded_plugin_host() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let config = ServerConfig {
+        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+        server_port: 0,
+        storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
+        plugin_failure_policy_storage: PluginFailureAction::Skip,
+        world_dir: temp_dir.path().join("world"),
+        ..ServerConfig::default()
+    };
+    let PluginTestEnvironment { loaded_plugins, .. } =
+        in_process_failing_storage_registries(PluginFailureAction::Skip)?;
+    let PluginTestEnvironment {
+        plugin_host: Some(plugin_host),
+        ..
+    } = in_process_failing_storage_registries(PluginFailureAction::FailFast)?
+    else {
+        panic!("failing storage registries should include a plugin host");
+    };
+    let server = ServerBuilder::new(ServerConfigSource::Inline(config), loaded_plugins)
+        .with_plugin_host(plugin_host)
+        .build()
+        .await?;
+
+    {
+        let mut state = server.runtime.state.lock().await;
+        state.dirty = true;
+    }
+    let error = server
+        .runtime
+        .maybe_save()
+        .await
+        .expect_err("explicit plugin host should override embedded host failure policy");
+    assert!(
+        matches!(error, RuntimeError::PluginFatal(message) if message.contains("failed during runtime"))
+    );
+
+    let shutdown_error = server
+        .shutdown()
+        .await
+        .expect_err("fail-fast runtime should surface plugin fatal during shutdown");
+    assert!(
+        matches!(shutdown_error, RuntimeError::PluginFatal(message) if message.contains("failed during runtime"))
+    );
+    Ok(())
 }
 
 #[tokio::test]

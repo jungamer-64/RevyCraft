@@ -1,12 +1,12 @@
 use crate::RuntimeError;
 use crate::config::ServerConfig;
-use crate::registry::{ListenerBinding, ProtocolRegistry};
 use aes::Aes128;
 use aes::cipher::{BlockEncrypt, KeyInit};
 use bedrockrs_network::connection::Connection as BedrockConnection;
 use bedrockrs_network::listener::Listener as BedrockListener;
 use bedrockrs_proto::compression::Compression as BedrockCompression;
 use bytes::BytesMut;
+use mc_plugin_host::registry::{ListenerBinding, ProtocolRegistry};
 use mc_proto_common::{MinecraftWireCodec, TransportKind, WireCodec};
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

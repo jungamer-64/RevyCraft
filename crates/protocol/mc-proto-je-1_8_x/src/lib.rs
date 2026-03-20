@@ -1,10 +1,13 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::{
     BlockFace, BlockPos, ChunkColumn, CoreCommand, DimensionId, EntityId, InteractionHand,
-    InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot,
-    Vec3, WorldMeta,
+    InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3,
+    WorldMeta,
 };
-use mc_proto_common::{Edition, PacketReader, PacketWriter, ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
+use mc_proto_common::{
+    Edition, PacketReader, PacketWriter, ProtocolDescriptor, ProtocolError, TransportKind,
+    WireFormatKind,
+};
 use mc_proto_je_common::{
     JavaEditionAdapter, JavaEditionProfile, build_chunk_data_1_8, legacy_block_state_id,
     legacy_inventory_slot, legacy_window_items, legacy_window_slot, pack_block_position,
