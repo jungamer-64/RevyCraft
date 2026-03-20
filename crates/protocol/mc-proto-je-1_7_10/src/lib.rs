@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 mod storage;
 
 use flate2::Compression;

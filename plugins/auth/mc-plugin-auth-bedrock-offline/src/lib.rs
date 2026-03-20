@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use mc_core::CapabilitySet;
 use mc_plugin_api::{AuthDescriptor, AuthMode, BedrockAuthResult};
 use mc_plugin_sdk_rust::{RustAuthPlugin, StaticPluginManifest, export_auth_plugin};

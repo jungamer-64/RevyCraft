@@ -16,13 +16,13 @@ use mc_proto_je_common::{
     write_empty_metadata_1_12, write_legacy_slot,
 };
 
-pub(super) const fn window_id(container: InventoryContainer) -> u8 {
+pub const fn window_id(container: InventoryContainer) -> u8 {
     match container {
         InventoryContainer::Player => 0,
     }
 }
 
-pub(super) fn encode_join_game(
+pub fn encode_join_game(
     entity_id: EntityId,
     world_meta: &WorldMeta,
     player: &PlayerSnapshot,
@@ -39,14 +39,14 @@ pub(super) fn encode_join_game(
     Ok(writer.into_inner())
 }
 
-pub(super) fn encode_spawn_position(spawn: BlockPos) -> Vec<u8> {
+pub fn encode_spawn_position(spawn: BlockPos) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_SPAWN_POSITION);
     writer.write_i64(pack_block_position(spawn));
     writer.into_inner()
 }
 
-pub(super) fn encode_time_update(age: i64, time: i64) -> Vec<u8> {
+pub fn encode_time_update(age: i64, time: i64) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_TIME_UPDATE);
     writer.write_i64(age);
@@ -54,7 +54,7 @@ pub(super) fn encode_time_update(age: i64, time: i64) -> Vec<u8> {
     writer.into_inner()
 }
 
-pub(super) fn encode_update_health(player: &PlayerSnapshot) -> Vec<u8> {
+pub fn encode_update_health(player: &PlayerSnapshot) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_UPDATE_HEALTH);
     writer.write_f32(player.health);
@@ -63,7 +63,7 @@ pub(super) fn encode_update_health(player: &PlayerSnapshot) -> Vec<u8> {
     writer.into_inner()
 }
 
-pub(super) fn encode_position_and_look(player: &PlayerSnapshot) -> Vec<u8> {
+pub fn encode_position_and_look(player: &PlayerSnapshot) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_PLAYER_POSITION_AND_LOOK);
     writer.write_f64(player.position.x);
@@ -76,14 +76,14 @@ pub(super) fn encode_position_and_look(player: &PlayerSnapshot) -> Vec<u8> {
     writer.into_inner()
 }
 
-pub(super) fn encode_held_item_change(slot: u8) -> Vec<u8> {
+pub fn encode_held_item_change(slot: u8) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_HELD_ITEM_CHANGE);
     writer.write_i8(i8::try_from(slot).expect("held slot should fit into i8"));
     writer.into_inner()
 }
 
-pub(super) fn encode_player_abilities(creative_mode: bool) -> Vec<u8> {
+pub fn encode_player_abilities(creative_mode: bool) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_PLAYER_ABILITIES);
     let flags = if creative_mode { 0x0d } else { 0x00 };
@@ -93,17 +93,14 @@ pub(super) fn encode_player_abilities(creative_mode: bool) -> Vec<u8> {
     writer.into_inner()
 }
 
-pub(super) fn encode_keep_alive(keep_alive_id: i32) -> Vec<u8> {
+pub fn encode_keep_alive(keep_alive_id: i32) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_KEEP_ALIVE);
     writer.write_i64(i64::from(keep_alive_id));
     writer.into_inner()
 }
 
-pub(super) fn encode_named_entity_spawn(
-    entity_id: EntityId,
-    player: &PlayerSnapshot,
-) -> Result<Vec<u8>, ProtocolError> {
+pub fn encode_named_entity_spawn(entity_id: EntityId, player: &PlayerSnapshot) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_NAMED_ENTITY_SPAWN);
     writer.write_varint(entity_id.0);
@@ -114,10 +111,10 @@ pub(super) fn encode_named_entity_spawn(
     writer.write_i8(to_angle_byte(player.yaw));
     writer.write_i8(to_angle_byte(player.pitch));
     write_empty_metadata_1_12(&mut writer);
-    Ok(writer.into_inner())
+    writer.into_inner()
 }
 
-pub(super) fn encode_entity_teleport(entity_id: EntityId, player: &PlayerSnapshot) -> Vec<u8> {
+pub fn encode_entity_teleport(entity_id: EntityId, player: &PlayerSnapshot) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_ENTITY_TELEPORT);
     writer.write_varint(entity_id.0);
@@ -130,7 +127,7 @@ pub(super) fn encode_entity_teleport(entity_id: EntityId, player: &PlayerSnapsho
     writer.into_inner()
 }
 
-pub(super) fn encode_entity_head_rotation(entity_id: EntityId, yaw: f32) -> Vec<u8> {
+pub fn encode_entity_head_rotation(entity_id: EntityId, yaw: f32) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_ENTITY_HEAD_ROTATION);
     writer.write_varint(entity_id.0);
@@ -138,7 +135,7 @@ pub(super) fn encode_entity_head_rotation(entity_id: EntityId, yaw: f32) -> Vec<
     writer.into_inner()
 }
 
-pub(super) fn encode_destroy_entities(entity_ids: &[EntityId]) -> Result<Vec<u8>, ProtocolError> {
+pub fn encode_destroy_entities(entity_ids: &[EntityId]) -> Result<Vec<u8>, ProtocolError> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_DESTROY_ENTITIES);
     writer.write_varint(
@@ -152,7 +149,7 @@ pub(super) fn encode_destroy_entities(entity_ids: &[EntityId]) -> Result<Vec<u8>
     Ok(writer.into_inner())
 }
 
-pub(super) fn encode_block_change(position: BlockPos, block: &mc_core::BlockState) -> Vec<u8> {
+pub fn encode_block_change(position: BlockPos, block: &mc_core::BlockState) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_BLOCK_CHANGE);
     writer.write_i64(pack_block_position(position));
@@ -160,7 +157,7 @@ pub(super) fn encode_block_change(position: BlockPos, block: &mc_core::BlockStat
     writer.into_inner()
 }
 
-pub(super) fn encode_set_slot(
+pub fn encode_set_slot(
     window_id: u8,
     slot: i16,
     stack: Option<&ItemStack>,
@@ -173,7 +170,7 @@ pub(super) fn encode_set_slot(
     Ok(writer.into_inner())
 }
 
-pub(super) fn encode_window_items(
+pub fn encode_window_items(
     window_id: u8,
     inventory: &PlayerInventory,
 ) -> Result<Vec<u8>, ProtocolError> {
@@ -191,7 +188,7 @@ pub(super) fn encode_window_items(
     Ok(writer.into_inner())
 }
 
-pub(super) fn encode_chunk(chunk: &ChunkColumn) -> Result<Vec<u8>, ProtocolError> {
+pub fn encode_chunk(chunk: &ChunkColumn) -> Result<Vec<u8>, ProtocolError> {
     let (bit_map, chunk_data) = build_chunk_data_1_12(chunk, true);
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_MAP_CHUNK);
@@ -208,7 +205,7 @@ pub(super) fn encode_chunk(chunk: &ChunkColumn) -> Result<Vec<u8>, ProtocolError
     Ok(writer.into_inner())
 }
 
-pub(super) fn write_login_byte_array(
+pub fn write_login_byte_array(
     writer: &mut PacketWriter,
     bytes: &[u8],
 ) -> Result<(), ProtocolError> {

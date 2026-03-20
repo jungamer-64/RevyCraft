@@ -1,11 +1,11 @@
 use crate::protocol_codec::{
     Decoder, Encoder, EnvelopeHeader, decode_block_pos, decode_block_state, decode_capability_set,
     decode_connection_phase, decode_core_command, decode_core_event, decode_entity_id,
-    decode_envelope, decode_inventory_slot, decode_option, decode_player_id,
-    decode_player_snapshot, decode_world_meta, encode_block_pos, encode_block_state,
-    encode_capability_set, encode_connection_phase, encode_core_command, encode_core_event,
-    encode_entity_id, encode_envelope, encode_inventory_slot, encode_option, encode_player_id,
-    encode_player_snapshot, encode_world_meta,
+    decode_envelope, decode_f32_value, decode_inventory_slot, decode_option, decode_player_id,
+    decode_player_snapshot, decode_u8_value, decode_world_meta, encode_block_pos,
+    encode_block_state, encode_capability_set, encode_connection_phase, encode_core_command,
+    encode_core_event, encode_entity_id, encode_envelope, encode_inventory_slot, encode_option,
+    encode_player_id, encode_player_snapshot, encode_world_meta,
 };
 use crate::{CURRENT_PLUGIN_ABI, PROTOCOL_FLAG_RESPONSE, PluginKind, ProtocolCodecError};
 use mc_core::{
@@ -112,6 +112,12 @@ pub enum GameplayResponse {
     Empty,
 }
 
+/// Encodes a gameplay request into the plugin protocol envelope.
+///
+/// # Errors
+///
+/// Returns an error when the request payload exceeds protocol length limits or contains values
+/// that cannot be serialized.
 pub fn encode_gameplay_request(request: &GameplayRequest) -> Result<Vec<u8>, ProtocolCodecError> {
     let mut payload = Encoder::default();
     encode_gameplay_request_payload(&mut payload, request)?;
@@ -125,10 +131,16 @@ pub fn encode_gameplay_request(request: &GameplayRequest) -> Result<Vec<u8>, Pro
             payload_len: u32::try_from(payload.len())
                 .map_err(|_| ProtocolCodecError::LengthOverflow)?,
         },
-        payload,
+        &payload,
     )
 }
 
+/// Decodes a gameplay request from the plugin protocol envelope.
+///
+/// # Errors
+///
+/// Returns an error when the envelope is malformed, the plugin kind/opcode is invalid, or the
+/// gameplay payload cannot be decoded.
 pub fn decode_gameplay_request(bytes: &[u8]) -> Result<GameplayRequest, ProtocolCodecError> {
     let (header, payload) = decode_envelope(bytes)?;
     if header.plugin_kind != PluginKind::Gameplay {
@@ -148,6 +160,12 @@ pub fn decode_gameplay_request(bytes: &[u8]) -> Result<GameplayRequest, Protocol
     Ok(request)
 }
 
+/// Encodes a gameplay response for the provided gameplay request.
+///
+/// # Errors
+///
+/// Returns an error when the response does not match the request opcode, exceeds protocol
+/// length limits, or contains values that cannot be serialized.
 pub fn encode_gameplay_response(
     request: &GameplayRequest,
     response: &GameplayResponse,
@@ -164,10 +182,16 @@ pub fn encode_gameplay_response(
             payload_len: u32::try_from(payload.len())
                 .map_err(|_| ProtocolCodecError::LengthOverflow)?,
         },
-        payload,
+        &payload,
     )
 }
 
+/// Decodes a gameplay response for the provided gameplay request.
+///
+/// # Errors
+///
+/// Returns an error when the envelope is malformed, the response opcode does not match the
+/// request, or the gameplay payload cannot be decoded.
 pub fn decode_gameplay_response(
     request: &GameplayRequest,
     bytes: &[u8],
@@ -389,7 +413,7 @@ fn decode_gameplay_join_effect(
 ) -> Result<GameplayJoinEffect, ProtocolCodecError> {
     Ok(GameplayJoinEffect {
         inventory: decode_option(decoder, decode_player_inventory_blob_inner)?,
-        selected_hotbar_slot: decode_option(decoder, |decoder| decoder.read_u8())?,
+        selected_hotbar_slot: decode_option(decoder, decode_u8_value)?,
         emitted_events: decode_targeted_events(decoder)?,
     })
 }
@@ -489,8 +513,8 @@ fn decode_gameplay_mutation(
                     decoder.read_f64()?,
                 ))
             })?,
-            yaw: decode_option(decoder, |decoder| decoder.read_f32())?,
-            pitch: decode_option(decoder, |decoder| decoder.read_f32())?,
+            yaw: decode_option(decoder, decode_f32_value)?,
+            pitch: decode_option(decoder, decode_f32_value)?,
             on_ground: decoder.read_bool()?,
         }),
         2 => Ok(GameplayMutation::SelectedHotbarSlot {
@@ -608,12 +632,18 @@ fn decode_player_inventory_blob_inner(
     })
 }
 
+#[must_use]
 pub fn encode_host_player_id_blob(player_id: PlayerId) -> Vec<u8> {
     let mut encoder = Encoder::default();
     encode_player_id(&mut encoder, player_id);
     encoder.into_inner()
 }
 
+/// Decodes a player identifier blob returned by the gameplay host API.
+///
+/// # Errors
+///
+/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
 pub fn decode_host_player_id_blob(bytes: &[u8]) -> Result<PlayerId, ProtocolCodecError> {
     let mut decoder = Decoder::new(bytes);
     let player_id = decode_player_id(&mut decoder)?;
@@ -621,12 +651,18 @@ pub fn decode_host_player_id_blob(bytes: &[u8]) -> Result<PlayerId, ProtocolCode
     Ok(player_id)
 }
 
+#[must_use]
 pub fn encode_host_block_pos_blob(position: mc_core::BlockPos) -> Vec<u8> {
     let mut encoder = Encoder::default();
     encode_block_pos(&mut encoder, position);
     encoder.into_inner()
 }
 
+/// Decodes a block-position blob returned by the gameplay host API.
+///
+/// # Errors
+///
+/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
 pub fn decode_host_block_pos_blob(bytes: &[u8]) -> Result<mc_core::BlockPos, ProtocolCodecError> {
     let mut decoder = Decoder::new(bytes);
     let position = decode_block_pos(&mut decoder)?;
@@ -634,6 +670,11 @@ pub fn decode_host_block_pos_blob(bytes: &[u8]) -> Result<mc_core::BlockPos, Pro
     Ok(position)
 }
 
+/// Decodes the `(player_id, block_pos)` key used by the host can-edit-block cache.
+///
+/// # Errors
+///
+/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
 pub fn decode_host_can_edit_block_key(
     bytes: &[u8],
 ) -> Result<(PlayerId, mc_core::BlockPos), ProtocolCodecError> {
@@ -644,6 +685,7 @@ pub fn decode_host_can_edit_block_key(
     Ok((player_id, position))
 }
 
+#[must_use]
 pub fn encode_host_can_edit_block_key(player_id: PlayerId, position: mc_core::BlockPos) -> Vec<u8> {
     let mut encoder = Encoder::default();
     encode_player_id(&mut encoder, player_id);
@@ -651,6 +693,11 @@ pub fn encode_host_can_edit_block_key(player_id: PlayerId, position: mc_core::Bl
     encoder.into_inner()
 }
 
+/// Encodes an optional player snapshot for host-side gameplay queries.
+///
+/// # Errors
+///
+/// Returns an error when the snapshot cannot be serialized.
 pub fn encode_host_player_snapshot_blob(
     snapshot: Option<&PlayerSnapshot>,
 ) -> Result<Vec<u8>, ProtocolCodecError> {
@@ -659,6 +706,11 @@ pub fn encode_host_player_snapshot_blob(
     Ok(encoder.into_inner())
 }
 
+/// Decodes an optional player snapshot returned by the gameplay host API.
+///
+/// # Errors
+///
+/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
 pub fn decode_host_player_snapshot_blob(
     bytes: &[u8],
 ) -> Result<Option<PlayerSnapshot>, ProtocolCodecError> {
@@ -668,12 +720,22 @@ pub fn decode_host_player_snapshot_blob(
     Ok(snapshot)
 }
 
+/// Encodes world metadata for host-side gameplay queries.
+///
+/// # Errors
+///
+/// Returns an error when the world metadata cannot be serialized.
 pub fn encode_host_world_meta_blob(meta: &WorldMeta) -> Result<Vec<u8>, ProtocolCodecError> {
     let mut encoder = Encoder::default();
     encode_world_meta(&mut encoder, meta)?;
     Ok(encoder.into_inner())
 }
 
+/// Decodes world metadata returned by the gameplay host API.
+///
+/// # Errors
+///
+/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
 pub fn decode_host_world_meta_blob(bytes: &[u8]) -> Result<WorldMeta, ProtocolCodecError> {
     let mut decoder = Decoder::new(bytes);
     let meta = decode_world_meta(&mut decoder)?;
@@ -681,6 +743,11 @@ pub fn decode_host_world_meta_blob(bytes: &[u8]) -> Result<WorldMeta, ProtocolCo
     Ok(meta)
 }
 
+/// Encodes a block state for host-side gameplay queries.
+///
+/// # Errors
+///
+/// Returns an error when the block state cannot be serialized.
 pub fn encode_host_block_state_blob(
     block_state: &mc_core::BlockState,
 ) -> Result<Vec<u8>, ProtocolCodecError> {
@@ -689,6 +756,11 @@ pub fn encode_host_block_state_blob(
     Ok(encoder.into_inner())
 }
 
+/// Decodes a block state returned by the gameplay host API.
+///
+/// # Errors
+///
+/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
 pub fn decode_host_block_state_blob(
     bytes: &[u8],
 ) -> Result<mc_core::BlockState, ProtocolCodecError> {

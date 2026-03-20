@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 mod error;
 mod plugin_host;
 mod transport;

@@ -2,35 +2,121 @@ use super::{OnlineAuthKeys, RunningServer, RuntimeServer, RuntimeState};
 use crate::RuntimeError;
 use crate::config::ServerConfig;
 use crate::host::plugin_reload_poll_interval_ms;
-use crate::registry::RuntimeRegistries;
+use crate::plugin_host::{HotSwappableAuthProfile, HotSwappableStorageProfile, PluginHost};
+use crate::registry::{ListenerBinding, ProtocolRegistry, RuntimeRegistries};
 use crate::transport::{
     AcceptedTransportSession, BoundTransportListener, TransportSessionIo, bind_transport_listener,
     build_listener_plans,
 };
+use bedrockrs_network::listener::Listener as BedrockListener;
 use mc_core::{CoreConfig, ServerCore};
 use mc_plugin_api::AuthMode;
-use mc_proto_common::{Edition, TransportKind};
+use mc_proto_common::{Edition, ProtocolAdapter, TransportKind};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, oneshot};
+use tokio::task::JoinHandle;
 
 /// # Errors
 ///
 /// Returns [`RuntimeError`] when the server cannot bind, load its persisted
 /// world state, or starts with unsupported configuration such as
 /// an auth profile mode mismatch.
+///
+/// # Panics
+///
+/// The spawned server task panics if the Bedrock accept branch runs without a
+/// configured Bedrock listener.
 pub async fn spawn_server(
     config: ServerConfig,
     registries: RuntimeRegistries,
 ) -> Result<RunningServer, RuntimeError> {
-    let plugin_host = registries.plugin_host().ok_or_else(|| {
+    let plugin_host = resolve_plugin_host(&registries, &config)?;
+    let ActiveProtocols {
+        protocols: active_protocols,
+        default_adapter,
+        default_bedrock_adapter,
+    } = activate_protocols(&config, &registries, &plugin_host)?;
+    let RuntimeProfiles {
+        storage_profile,
+        auth_profile,
+        bedrock_auth_profile,
+        online_auth_keys,
+        core,
+    } = resolve_runtime_profiles(&config, &plugin_host)?;
+    let BoundListeners {
+        listener_bindings,
+        tcp_listener,
+        bedrock_listener,
+    } = bind_runtime_listeners(&config, &active_protocols).await?;
+
+    let server = Arc::new(RuntimeServer {
+        config,
+        protocol_registry: active_protocols,
+        plugin_host: Some(plugin_host.clone()),
+        default_adapter,
+        default_bedrock_adapter,
+        auth_profile,
+        bedrock_auth_profile,
+        online_auth_keys,
+        storage_profile,
+        state: Mutex::new(RuntimeState { core, dirty: false }),
+        sessions: Mutex::new(HashMap::new()),
+        next_connection_id: Mutex::new(1),
+    });
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let run_server = Arc::clone(&server);
+    let join_handle = spawn_runtime_loop(run_server, shutdown_rx, tcp_listener, bedrock_listener);
+
+    Ok(RunningServer {
+        listener_bindings,
+        plugin_host: Some(plugin_host),
+        runtime: server,
+        shutdown_tx: Some(shutdown_tx),
+        join_handle,
+    })
+}
+
+struct ActiveProtocols {
+    protocols: ProtocolRegistry,
+    default_adapter: Arc<dyn ProtocolAdapter>,
+    default_bedrock_adapter: Option<Arc<dyn ProtocolAdapter>>,
+}
+
+struct RuntimeProfiles {
+    storage_profile: Arc<HotSwappableStorageProfile>,
+    auth_profile: Arc<HotSwappableAuthProfile>,
+    bedrock_auth_profile: Option<Arc<HotSwappableAuthProfile>>,
+    online_auth_keys: Option<Arc<OnlineAuthKeys>>,
+    core: ServerCore,
+}
+
+struct BoundListeners {
+    listener_bindings: Vec<ListenerBinding>,
+    tcp_listener: tokio::net::TcpListener,
+    bedrock_listener: Option<Box<BedrockListener>>,
+}
+
+fn resolve_plugin_host(
+    registries: &RuntimeRegistries,
+    config: &ServerConfig,
+) -> Result<Arc<PluginHost>, RuntimeError> {
+    registries.plugin_host().ok_or_else(|| {
         RuntimeError::Config(format!(
             "no plugins discovered under `{}`",
             config.plugins_dir.display()
         ))
-    })?;
+    })
+}
+
+fn activate_protocols(
+    config: &ServerConfig,
+    registries: &RuntimeRegistries,
+    plugin_host: &Arc<PluginHost>,
+) -> Result<ActiveProtocols, RuntimeError> {
     if registries
         .protocols()
         .resolve_adapter(&config.default_adapter)
@@ -82,7 +168,7 @@ pub async fn spawn_server(
     let active_protocols = registries
         .protocols()
         .filter_enabled(&enabled_adapter_ids)?;
-    plugin_host.activate_runtime_profiles(&config)?;
+    plugin_host.activate_runtime_profiles(config)?;
     if !config.be_enabled
         && !active_protocols
             .adapter_ids_for_transport(TransportKind::Udp)
@@ -107,6 +193,7 @@ pub async fn spawn_server(
             config.default_adapter
         )));
     }
+
     let default_bedrock_adapter = if config.be_enabled {
         let adapter = active_protocols
             .resolve_adapter(&config.default_bedrock_adapter)
@@ -127,6 +214,18 @@ pub async fn spawn_server(
     } else {
         None
     };
+
+    Ok(ActiveProtocols {
+        protocols: active_protocols,
+        default_adapter,
+        default_bedrock_adapter,
+    })
+}
+
+fn resolve_runtime_profiles(
+    config: &ServerConfig,
+    plugin_host: &Arc<PluginHost>,
+) -> Result<RuntimeProfiles, RuntimeError> {
     let storage_profile = plugin_host
         .resolve_storage_profile(&config.storage_profile)
         .ok_or_else(|| {
@@ -154,8 +253,8 @@ pub async fn spawn_server(
     } else {
         None
     };
-    let auth_mode = auth_profile.mode()?;
-    match (config.online_mode, auth_mode) {
+
+    match (config.online_mode, auth_profile.mode()?) {
         (true, AuthMode::Online) | (false, AuthMode::Offline) => {}
         (true, mode) => {
             return Err(RuntimeError::Config(format!(
@@ -178,6 +277,7 @@ pub async fn spawn_server(
             }
         }
     }
+
     let online_auth_keys = if config.online_mode {
         Some(Arc::new(OnlineAuthKeys::generate()?))
     } else {
@@ -197,7 +297,21 @@ pub async fn spawn_server(
         Some(snapshot) => ServerCore::from_snapshot(core_config, snapshot),
         None => ServerCore::new(core_config),
     };
-    let listener_plans = build_listener_plans(&config, &active_protocols)?;
+
+    Ok(RuntimeProfiles {
+        storage_profile,
+        auth_profile,
+        bedrock_auth_profile,
+        online_auth_keys,
+        core,
+    })
+}
+
+async fn bind_runtime_listeners(
+    config: &ServerConfig,
+    active_protocols: &ProtocolRegistry,
+) -> Result<BoundListeners, RuntimeError> {
+    let listener_plans = build_listener_plans(config, active_protocols)?;
     let mut tcp_plan = None;
     let mut udp_plan = None;
     for plan in listener_plans {
@@ -209,7 +323,7 @@ pub async fn spawn_server(
 
     let tcp_plan = tcp_plan
         .ok_or_else(|| RuntimeError::Config("no tcp listener plan was generated".to_string()))?;
-    let tcp_listener = bind_transport_listener(tcp_plan, &config).await?;
+    let tcp_listener = bind_transport_listener(tcp_plan, config).await?;
     let tcp_local_addr = match &tcp_listener {
         BoundTransportListener::Tcp { listener, .. } => listener.local_addr()?,
         BoundTransportListener::Bedrock { .. } => {
@@ -224,7 +338,7 @@ pub async fn spawn_server(
         if udp_plan.bind_addr.port() == 0 {
             udp_plan.bind_addr = SocketAddr::new(tcp_local_addr.ip(), tcp_local_addr.port());
         }
-        bound_listeners.push(bind_transport_listener(udp_plan, &config).await?);
+        bound_listeners.push(bind_transport_listener(udp_plan, config).await?);
     }
 
     let listener_bindings = bound_listeners
@@ -254,28 +368,25 @@ pub async fn spawn_server(
     let tcp_listener = tcp_listener
         .ok_or_else(|| RuntimeError::Config("no tcp transport listeners were bound".to_string()))?;
 
-    let server = Arc::new(RuntimeServer {
-        config,
-        protocol_registry: active_protocols,
-        plugin_host: Some(plugin_host.clone()),
-        default_adapter,
-        default_bedrock_adapter,
-        auth_profile,
-        bedrock_auth_profile,
-        online_auth_keys,
-        storage_profile,
-        state: Mutex::new(RuntimeState { core, dirty: false }),
-        sessions: Mutex::new(HashMap::new()),
-        next_connection_id: Mutex::new(1),
-    });
+    Ok(BoundListeners {
+        listener_bindings,
+        tcp_listener,
+        bedrock_listener,
+    })
+}
 
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-    let run_server = Arc::clone(&server);
-    let join_handle = tokio::spawn(async move {
+fn spawn_runtime_loop(
+    run_server: Arc<RuntimeServer>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+    tcp_listener: tokio::net::TcpListener,
+    mut bedrock_listener: Option<Box<BedrockListener>>,
+) -> JoinHandle<Result<(), RuntimeError>> {
+    tokio::spawn(async move {
         let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
         let mut save_interval = tokio::time::interval(Duration::from_secs(2));
         let mut plugin_reload_interval =
             tokio::time::interval(Duration::from_millis(plugin_reload_poll_interval_ms()));
+        let tcp_listener = tcp_listener;
         loop {
             tokio::select! {
                 _ = &mut shutdown_rx => {
@@ -284,14 +395,13 @@ pub async fn spawn_server(
                 }
                 accepted = tcp_listener.accept() => {
                     let (stream, _) = accepted?;
-                    let session = AcceptedTransportSession {
+                    run_server.spawn_session(AcceptedTransportSession {
                         transport: TransportKind::Tcp,
                         io: TransportSessionIo::Tcp {
                             stream,
-                            encryption: None,
+                            encryption: Box::default(),
                         },
-                    };
-                    run_server.spawn_session(session).await;
+                    }).await;
                 }
                 accepted = async {
                     bedrock_listener
@@ -301,12 +411,8 @@ pub async fn spawn_server(
                         .await
                 }, if bedrock_listener.is_some() => {
                     match accepted {
-                        Ok(connection) => {
-                            run_server.spawn_bedrock_session(connection).await;
-                        }
-                        Err(error) => {
-                            eprintln!("bedrock accept failed: {error}");
-                        }
+                        Ok(connection) => run_server.spawn_bedrock_session(connection).await,
+                        Err(error) => eprintln!("bedrock accept failed: {error}"),
                     }
                 }
                 _ = tick_interval.tick() => {
@@ -324,13 +430,5 @@ pub async fn spawn_server(
                 }
             }
         }
-    });
-
-    Ok(RunningServer {
-        listener_bindings,
-        plugin_host: Some(plugin_host),
-        runtime: server,
-        shutdown_tx: Some(shutdown_tx),
-        join_handle,
     })
 }

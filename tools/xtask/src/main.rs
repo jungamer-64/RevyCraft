@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use std::env;
 use std::ffi::OsString;
 use std::fs;

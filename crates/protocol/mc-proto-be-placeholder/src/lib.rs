@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use mc_core::{CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, LoginRequest,

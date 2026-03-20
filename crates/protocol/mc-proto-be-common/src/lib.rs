@@ -1,7 +1,9 @@
+#![allow(clippy::multiple_crate_versions)]
 use base64::Engine;
 use bedrockrs_proto::info::MAGIC as BEDROCK_MAGIC;
 use mc_core::BlockPos;
 use mc_proto_common::{Edition, HandshakeIntent, HandshakeNextState, ProtocolError};
+use num_traits::ToPrimitive;
 use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
@@ -59,7 +61,8 @@ pub fn detects_bedrock_datagram(frame: &[u8]) -> bool {
     }
 }
 
-pub fn bedrock_probe_intent() -> HandshakeIntent {
+#[must_use]
+pub const fn bedrock_probe_intent() -> HandshakeIntent {
     HandshakeIntent {
         edition: Edition::Be,
         protocol_number: 0,
@@ -69,6 +72,12 @@ pub fn bedrock_probe_intent() -> HandshakeIntent {
     }
 }
 
+/// Parses the Bedrock login payload into the JWT chain and client data token.
+///
+/// # Errors
+///
+/// Returns an error when the payload is truncated, overflows declared lengths, contains
+/// invalid JSON/JWT data, or does not provide the required Bedrock display name fields.
 pub fn parse_bedrock_login_payload(bytes: &[u8]) -> Result<ParsedBedrockLogin, BedrockLoginError> {
     if bytes.len() < 8 {
         return Err(BedrockLoginError::TooShort);
@@ -162,14 +171,14 @@ pub fn block_pos_to_network(
 ) -> bedrockrs_proto::v662::types::NetworkBlockPosition {
     bedrockrs_proto::v662::types::NetworkBlockPosition {
         x: position.x,
-        y: position.y.max(0) as u32,
+        y: position.y.max(0).cast_unsigned(),
         z: position.z,
     }
 }
 
 #[must_use]
 pub fn block_pos_from_network(
-    position: bedrockrs_proto::v662::types::NetworkBlockPosition,
+    position: &bedrockrs_proto::v662::types::NetworkBlockPosition,
 ) -> BlockPos {
     BlockPos::new(
         position.x,
@@ -180,11 +189,22 @@ pub fn block_pos_from_network(
 
 #[must_use]
 pub fn vec3_to_bedrock(position: mc_core::Vec3) -> Vec3<f32> {
-    Vec3::new(position.x as f32, position.y as f32, position.z as f32)
+    Vec3::new(
+        f64_to_bedrock_component(position.x),
+        f64_to_bedrock_component(position.y),
+        f64_to_bedrock_component(position.z),
+    )
 }
 
-pub fn protocol_error(message: &'static str) -> ProtocolError {
+#[must_use]
+pub const fn protocol_error(message: &'static str) -> ProtocolError {
     ProtocolError::InvalidPacket(message)
+}
+
+fn f64_to_bedrock_component(value: f64) -> f32 {
+    value
+        .to_f32()
+        .expect("bedrock position component should fit into f32")
 }
 
 #[cfg(test)]
@@ -193,7 +213,7 @@ mod tests {
     use base64::Engine;
     use serde_json::json;
 
-    fn test_jwt(payload: serde_json::Value) -> String {
+    fn test_jwt(payload: &serde_json::Value) -> String {
         let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
         let payload =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
@@ -204,15 +224,23 @@ mod tests {
     fn parses_connection_request_blob() {
         let chain = json!({
             "chain": [
-                test_jwt(json!({"extraData":{"displayName":"ChainName"}}))
+                test_jwt(&json!({"extraData":{"displayName":"ChainName"}}))
             ]
         })
         .to_string();
-        let client_jwt = test_jwt(json!({"DisplayName":"ClientName"}));
+        let client_jwt = test_jwt(&json!({"DisplayName":"ClientName"}));
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&(chain.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(
+            &u32::try_from(chain.len())
+                .expect("chain length should fit into u32")
+                .to_le_bytes(),
+        );
         bytes.extend_from_slice(chain.as_bytes());
-        bytes.extend_from_slice(&(client_jwt.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(
+            &u32::try_from(client_jwt.len())
+                .expect("client jwt length should fit into u32")
+                .to_le_bytes(),
+        );
         bytes.extend_from_slice(client_jwt.as_bytes());
 
         let parsed = parse_bedrock_login_payload(&bytes).expect("login payload should parse");
@@ -220,7 +248,7 @@ mod tests {
             parsed,
             ParsedBedrockLogin {
                 display_name: "ClientName".to_string(),
-                chain_jwts: vec![test_jwt(json!({"extraData":{"displayName":"ChainName"}}))],
+                chain_jwts: vec![test_jwt(&json!({"extraData":{"displayName":"ChainName"}}))],
                 client_data_jwt: client_jwt,
             }
         );

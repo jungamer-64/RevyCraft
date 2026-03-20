@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use mc_core::{
     BlockFace, BlockPos, ChunkColumn, CoreCommand, CoreEvent, DimensionId, EntityId,
     InteractionHand, InventoryContainer, PlayerId, PlayerInventory, PlayerSnapshot, Vec3,
@@ -309,7 +310,7 @@ impl PlaySyncAdapter for Je18xAdapter {
                 .collect::<Result<Vec<_>, _>>()
                 .map(|packets| packets.into_iter().flatten().collect()),
             CoreEvent::EntitySpawned { entity_id, player } => Ok(vec![
-                encode_named_entity_spawn(*entity_id, player)?,
+                encode_named_entity_spawn(*entity_id, player),
                 encode_entity_head_rotation(*entity_id, player.yaw),
             ]),
             CoreEvent::EntityMoved { entity_id, player } => Ok(vec![
@@ -464,10 +465,7 @@ fn encode_keep_alive(keep_alive_id: i32) -> Vec<u8> {
     writer.into_inner()
 }
 
-fn encode_named_entity_spawn(
-    entity_id: EntityId,
-    player: &PlayerSnapshot,
-) -> Result<Vec<u8>, ProtocolError> {
+fn encode_named_entity_spawn(entity_id: EntityId, player: &PlayerSnapshot) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_NAMED_ENTITY_SPAWN);
     writer.write_varint(entity_id.0);
@@ -479,7 +477,7 @@ fn encode_named_entity_spawn(
     writer.write_i8(to_angle_byte(player.pitch));
     writer.write_i16(0);
     write_empty_metadata_1_8(&mut writer);
-    Ok(writer.into_inner())
+    writer.into_inner()
 }
 
 fn encode_entity_teleport(entity_id: EntityId, player: &PlayerSnapshot) -> Vec<u8> {
@@ -667,7 +665,11 @@ fn decode_client_settings_packet(
 }
 
 const fn i8_to_u8(value: i8) -> u8 {
-    if value.is_negative() { 0 } else { value as u8 }
+    if value.is_negative() {
+        0
+    } else {
+        value.cast_unsigned()
+    }
 }
 
 #[cfg(test)]

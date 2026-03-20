@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use bytes::BytesMut;
 use mc_core::{
     CapabilitySet, CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot, PluginGenerationId,

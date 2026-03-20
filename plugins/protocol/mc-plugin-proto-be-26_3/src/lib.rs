@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use mc_plugin_sdk_rust::{StaticPluginManifest, export_protocol_plugin};
 use mc_proto_be_26_3::Bedrock263Adapter;
 use mc_proto_common::{

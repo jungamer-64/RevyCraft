@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use bytes::BytesMut;
 use mc_core::{
     CapabilitySet, CoreCommand, GameplayEffect, GameplayJoinEffect, PlayerId, PlayerSnapshot,
@@ -115,6 +116,11 @@ pub struct InProcessAuthEntrypoints {
 }
 
 pub trait RustProtocolPlugin: HandshakeProbe + ProtocolAdapter + Send + Sync + 'static {
+    /// Exports protocol plugin session state into an opaque transfer blob.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin cannot serialize its protocol session state.
     fn export_session_state(
         &self,
         _session: &ProtocolSessionSnapshot,
@@ -122,6 +128,11 @@ pub trait RustProtocolPlugin: HandshakeProbe + ProtocolAdapter + Send + Sync + '
         Ok(Vec::new())
     }
 
+    /// Imports protocol plugin session state from a previously exported blob.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the transfer blob is invalid for the current plugin.
     fn import_session_state(
         &self,
         _session: &ProtocolSessionSnapshot,
@@ -140,11 +151,26 @@ pub trait RustStoragePlugin: Send + Sync + 'static {
         CapabilitySet::new()
     }
 
+    /// Loads the current world snapshot for the provided world directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the snapshot cannot be read or decoded.
     fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError>;
 
+    /// Persists the provided world snapshot for the provided world directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the snapshot cannot be written.
     fn save_snapshot(&self, world_dir: &Path, snapshot: &WorldSnapshot)
     -> Result<(), StorageError>;
 
+    /// Exports runtime-specific state for later re-import.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the runtime state cannot be read or serialized.
     fn export_runtime_state(
         &self,
         world_dir: &Path,
@@ -152,6 +178,11 @@ pub trait RustStoragePlugin: Send + Sync + 'static {
         self.load_snapshot(world_dir)
     }
 
+    /// Imports runtime-specific state that was previously exported.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the runtime state cannot be applied.
     fn import_runtime_state(
         &self,
         world_dir: &Path,
@@ -168,12 +199,27 @@ pub trait RustAuthPlugin: Send + Sync + 'static {
         CapabilitySet::new()
     }
 
+    /// Authenticates a Java Edition player without external services.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the username cannot be authenticated.
     fn authenticate_offline(&self, username: &str) -> Result<PlayerId, String>;
 
+    /// Authenticates a Java Edition player against an online service.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin does not support or rejects online auth.
     fn authenticate_online(&self, _username: &str, _server_hash: &str) -> Result<PlayerId, String> {
         Err("online auth is not implemented for this plugin".to_string())
     }
 
+    /// Authenticates a Bedrock player without XBL validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin does not support or rejects Bedrock offline auth.
     fn authenticate_bedrock_offline(
         &self,
         _display_name: &str,
@@ -181,6 +227,11 @@ pub trait RustAuthPlugin: Send + Sync + 'static {
         Err("bedrock offline auth is not implemented for this plugin".to_string())
     }
 
+    /// Authenticates a Bedrock player using the provided XBL token chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin does not support or rejects Bedrock XBL auth.
     fn authenticate_bedrock_xbl(
         &self,
         _chain_jwts: &[String],
@@ -191,10 +242,39 @@ pub trait RustAuthPlugin: Send + Sync + 'static {
 }
 
 pub trait GameplayHost {
+    /// Writes a diagnostic message through the host runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the host rejects or cannot persist the log entry.
     fn log(&self, level: u32, message: &str) -> Result<(), String>;
+
+    /// Reads the latest snapshot for the given player.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the host query fails.
     fn read_player_snapshot(&self, player_id: PlayerId) -> Result<Option<PlayerSnapshot>, String>;
+
+    /// Reads world metadata from the host runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the host query fails.
     fn read_world_meta(&self) -> Result<WorldMeta, String>;
+
+    /// Reads the current block state at the given position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the host query fails.
     fn read_block_state(&self, position: mc_core::BlockPos) -> Result<mc_core::BlockState, String>;
+
+    /// Checks whether the given player is allowed to edit the given block.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the host query fails.
     fn can_edit_block(
         &self,
         player_id: PlayerId,
@@ -209,6 +289,11 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
         CapabilitySet::new()
     }
 
+    /// Handles a player joining the gameplay session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin cannot produce join-side effects.
     fn handle_player_join(
         &self,
         _host: &dyn GameplayHost,
@@ -218,6 +303,11 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
         Ok(GameplayJoinEffect::default())
     }
 
+    /// Handles a gameplay command emitted by the runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin cannot produce command-side effects.
     fn handle_command(
         &self,
         _host: &dyn GameplayHost,
@@ -227,6 +317,11 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
         Ok(GameplayEffect::default())
     }
 
+    /// Handles a gameplay tick for the current session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin cannot produce tick-side effects.
     fn handle_tick(
         &self,
         _host: &dyn GameplayHost,
@@ -236,6 +331,11 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
         Ok(GameplayEffect::default())
     }
 
+    /// Notifies the plugin that the gameplay session has been closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin cannot clean up its session state.
     fn session_closed(
         &self,
         _host: &dyn GameplayHost,
@@ -244,6 +344,11 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Exports plugin-specific gameplay session state into an opaque blob.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin cannot serialize its session state.
     fn export_session_state(
         &self,
         _host: &dyn GameplayHost,
@@ -252,6 +357,11 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
         Ok(Vec::new())
     }
 
+    /// Imports plugin-specific gameplay session state from an opaque blob.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the provided blob is invalid for the current plugin.
     fn import_session_state(
         &self,
         _host: &dyn GameplayHost,
@@ -291,7 +401,7 @@ pub fn manifest_from_static(manifest: &StaticPluginManifest) -> PluginManifestV1
 }
 
 #[must_use]
-pub fn into_owned_buffer(mut buffer: Vec<u8>) -> OwnedBuffer {
+pub const fn into_owned_buffer(mut buffer: Vec<u8>) -> OwnedBuffer {
     let owned = OwnedBuffer {
         ptr: buffer.as_mut_ptr(),
         len: buffer.len(),
@@ -313,11 +423,18 @@ pub unsafe fn free_owned_buffer(buffer: OwnedBuffer) {
 }
 
 #[doc(hidden)]
-pub unsafe fn byte_slice_as_bytes(slice: ByteSlice) -> &'static [u8] {
+#[must_use]
+pub const unsafe fn byte_slice_as_bytes(slice: ByteSlice) -> &'static [u8] {
     if slice.ptr.is_null() || slice.len == 0 {
         &[]
     } else {
         unsafe { std::slice::from_raw_parts(slice.ptr, slice.len) }
+    }
+}
+
+fn write_owned_buffer_ptr(output: *mut OwnedBuffer, bytes: Vec<u8>) {
+    unsafe {
+        *output = into_owned_buffer(bytes);
     }
 }
 
@@ -326,9 +443,7 @@ pub fn write_error_buffer(error_out: *mut OwnedBuffer, message: String) {
     if error_out.is_null() {
         return;
     }
-    unsafe {
-        *error_out = into_owned_buffer(message.into_bytes());
-    }
+    write_owned_buffer_ptr(error_out, message.into_bytes());
 }
 
 #[doc(hidden)]
@@ -336,9 +451,7 @@ pub fn write_output_buffer(output: *mut OwnedBuffer, bytes: Vec<u8>) {
     if output.is_null() {
         return;
     }
-    unsafe {
-        *output = into_owned_buffer(bytes);
-    }
+    write_owned_buffer_ptr(output, bytes);
 }
 
 #[doc(hidden)]
@@ -587,8 +700,8 @@ fn call_host_buffer(
                 ptr: payload.as_ptr(),
                 len: payload.len(),
             },
-            &mut output,
-            &mut error,
+            &raw mut output,
+            &raw mut error,
         )
     };
     if status != mc_plugin_api::PluginErrorCode::Ok {
@@ -611,7 +724,7 @@ fn call_host_zero_arg(
 ) -> Result<Vec<u8>, String> {
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
-    let status = unsafe { callback(context, &mut output, &mut error) };
+    let status = unsafe { callback(context, &raw mut output, &raw mut error) };
     if status != mc_plugin_api::PluginErrorCode::Ok {
         return Err(read_error_buffer(error));
     }
@@ -641,8 +754,8 @@ fn call_host_bool(
                 ptr: payload.as_ptr(),
                 len: payload.len(),
             },
-            &mut value,
-            &mut error,
+            &raw mut value,
+            &raw mut error,
         )
     };
     if status != mc_plugin_api::PluginErrorCode::Ok {
@@ -968,15 +1081,14 @@ mod tests {
     use mc_core::{CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
     use mc_core::{GameplayEffect, GameplayProfileId, WorldMeta};
     use mc_plugin_api::{
-        ByteSlice, CURRENT_PLUGIN_ABI, GameplayDescriptor, PluginErrorCode,
-        ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_gameplay_response,
-        encode_gameplay_request, encode_host_world_meta_blob,
+        ByteSlice, CURRENT_PLUGIN_ABI, GameplayDescriptor, PluginErrorCode, ProtocolRequest,
+        ProtocolResponse, WireFrameDecodeResult, decode_gameplay_response, encode_gameplay_request,
+        encode_host_world_meta_blob,
     };
     use mc_proto_common::{
         ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest,
-        PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
-        ServerListStatus, SessionAdapter, StatusRequest, TransportKind, WireCodec,
-        WireFormatKind,
+        PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus,
+        SessionAdapter, StatusRequest, TransportKind, WireCodec, WireFormatKind,
     };
     use std::ffi::c_void;
     use std::sync::{Mutex, OnceLock};
@@ -1073,7 +1185,10 @@ mod tests {
             Ok(frame)
         }
 
-        fn try_decode_frame(&self, buffer: &mut BytesMut) -> Result<Option<Vec<u8>>, ProtocolError> {
+        fn try_decode_frame(
+            &self,
+            buffer: &mut BytesMut,
+        ) -> Result<Option<Vec<u8>>, ProtocolError> {
             let Some(length) = buffer.first().copied() else {
                 return Ok(None);
             };
@@ -1149,10 +1264,7 @@ mod tests {
             Err(ProtocolError::InvalidPacket("unused test protocol method"))
         }
 
-        fn encode_login_success(
-            &self,
-            _player: &PlayerSnapshot,
-        ) -> Result<Vec<u8>, ProtocolError> {
+        fn encode_login_success(&self, _player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
             Err(ProtocolError::InvalidPacket("unused test protocol method"))
         }
     }
@@ -1360,8 +1472,8 @@ mod tests {
                     ptr: payload.as_ptr(),
                     len: payload.len(),
                 },
-                &mut output,
-                &mut error,
+                &raw mut output,
+                &raw mut error,
             )
         };
         if status != PluginErrorCode::Ok {

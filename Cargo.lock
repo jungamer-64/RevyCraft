@@ -1618,6 +1618,7 @@ dependencies = [
  "bedrockrs_proto_core",
  "mc-core",
  "mc-proto-common",
+ "num-traits",
  "serde",
  "serde_json",
  "thiserror",

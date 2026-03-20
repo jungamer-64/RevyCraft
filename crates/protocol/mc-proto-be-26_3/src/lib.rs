@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use bedrockrs_proto::ProtoVersion;
 use bedrockrs_proto::V924;
 use bedrockrs_proto::codec::{decode_packets, encode_packets};
@@ -73,13 +74,13 @@ impl Bedrock263Adapter {
         world_meta: &mc_core::WorldMeta,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         let start_game = StartGamePacket {
-            target_actor_id: ActorUniqueID(entity_id.0 as u64),
-            target_runtime_id: ActorRuntimeID(entity_id.0 as u64),
+            target_actor_id: ActorUniqueID(bedrock_actor_id(entity_id)),
+            target_runtime_id: ActorRuntimeID(bedrock_actor_id(entity_id)),
             actor_game_type: GameType::Creative,
             position: vec3_to_bedrock(player.position),
             rotation: Vec2::new(player.yaw, player.pitch),
             settings: LevelSettings {
-                seed: u64::try_from(world_meta.seed).unwrap_or_default(),
+                seed: world_meta.seed,
                 spawn_settings: SpawnSettings {
                     spawn_type: SpawnBiomeType::Default,
                     user_defined_biome_name: String::new(),
@@ -354,23 +355,20 @@ impl PlaySyncAdapter for Bedrock263Adapter {
                 }))
             }
             V924::PlayerActionPacket(PlayerActionPacket {
-                action,
+                action:
+                    PlayerActionType::StartDestroyBlock { .. }
+                    | PlayerActionType::StopDestroyBlock { .. }
+                    | PlayerActionType::CreativeDestroyBlock
+                    | PlayerActionType::PredictDestroyBlock { .. },
                 block_position,
                 face,
                 ..
-            }) => match action {
-                PlayerActionType::StartDestroyBlock { .. }
-                | PlayerActionType::StopDestroyBlock { .. }
-                | PlayerActionType::CreativeDestroyBlock
-                | PlayerActionType::PredictDestroyBlock { .. } => Ok(Some(CoreCommand::DigBlock {
-                    player_id,
-                    position: block_pos_from_network(block_position),
-                    status: 2,
-                    face: block_face_from_i32(face),
-                })),
-                _ => Ok(None),
-            },
-            V924::InventoryTransactionPacket(_) => Ok(None),
+            }) => Ok(Some(CoreCommand::DigBlock {
+                player_id,
+                position: block_pos_from_network(&block_position),
+                status: 2,
+                face: block_face_from_i32(face),
+            })),
             V924::ClientCacheStatusPacket(_) | V924::ResourcePackClientResponsePacket(_) => {
                 Ok(None)
             }
@@ -393,7 +391,7 @@ impl PlaySyncAdapter for Bedrock263Adapter {
             CoreEvent::EntityMoved { entity_id, player } => {
                 Ok(vec![Self::encode_v924(&[V924::MovePlayerPacket(
                     MovePlayerPacket {
-                        player_runtime_id: ActorRuntimeID(entity_id.0 as u64),
+                        player_runtime_id: ActorRuntimeID(bedrock_actor_id(*entity_id)),
                         position: vec3_to_bedrock(player.position),
                         rotation: Vec2::new(player.yaw, player.pitch),
                         y_head_rotation: player.yaw,
@@ -420,8 +418,9 @@ impl PlaySyncAdapter for Bedrock263Adapter {
             | CoreEvent::EntityDespawned { .. }
             | CoreEvent::InventoryContents { .. }
             | CoreEvent::InventorySlotChanged { .. }
-            | CoreEvent::SelectedHotbarSlotChanged { .. } => Ok(Vec::new()),
-            CoreEvent::LoginAccepted { .. } | CoreEvent::Disconnect { .. } => Ok(Vec::new()),
+            | CoreEvent::SelectedHotbarSlotChanged { .. }
+            | CoreEvent::LoginAccepted { .. }
+            | CoreEvent::Disconnect { .. } => Ok(Vec::new()),
         }
     }
 }
@@ -441,13 +440,12 @@ impl ProtocolAdapter for Bedrock263Adapter {
     fn bedrock_listener_descriptor(&self) -> Option<BedrockListenerDescriptor> {
         Some(BedrockListenerDescriptor {
             game_version: V924::GAME_VERSION.to_string(),
-            raknet_version: u8::try_from(V924::RAKNET_VERSION)
-                .expect("bedrock raknet version should fit into u8"),
+            raknet_version: V924::RAKNET_VERSION,
         })
     }
 }
 
-fn block_face_from_i32(face: i32) -> Option<BlockFace> {
+const fn block_face_from_i32(face: i32) -> Option<BlockFace> {
     match face {
         0 => Some(BlockFace::Bottom),
         1 => Some(BlockFace::Top),
@@ -459,9 +457,12 @@ fn block_face_from_i32(face: i32) -> Option<BlockFace> {
     }
 }
 
+fn bedrock_actor_id(entity_id: mc_core::EntityId) -> u64 {
+    u64::try_from(entity_id.0).expect("bedrock entity id should be non-negative")
+}
+
 fn block_runtime_id(block: &BlockState) -> u32 {
     match block.key.as_str() {
-        "minecraft:stone" => 2_532,
         "minecraft:cobblestone" => 5_088,
         "minecraft:sand" => 6_234,
         "minecraft:bricks" => 7_455,

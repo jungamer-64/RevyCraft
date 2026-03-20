@@ -79,6 +79,12 @@ pub enum StorageResponse {
     Empty,
 }
 
+/// Encodes a storage request into the plugin protocol envelope.
+///
+/// # Errors
+///
+/// Returns an error when the request payload exceeds protocol length limits or contains values
+/// that cannot be serialized.
 pub fn encode_storage_request(request: &StorageRequest) -> Result<Vec<u8>, ProtocolCodecError> {
     let mut payload = Encoder::default();
     encode_storage_request_payload(&mut payload, request)?;
@@ -92,10 +98,16 @@ pub fn encode_storage_request(request: &StorageRequest) -> Result<Vec<u8>, Proto
             payload_len: u32::try_from(payload.len())
                 .map_err(|_| ProtocolCodecError::LengthOverflow)?,
         },
-        payload,
+        &payload,
     )
 }
 
+/// Decodes a storage request from the plugin protocol envelope.
+///
+/// # Errors
+///
+/// Returns an error when the envelope is malformed, the plugin kind/opcode is invalid, or the
+/// storage payload cannot be decoded.
 pub fn decode_storage_request(bytes: &[u8]) -> Result<StorageRequest, ProtocolCodecError> {
     let (header, payload) = decode_envelope(bytes)?;
     if header.plugin_kind != PluginKind::Storage {
@@ -115,6 +127,12 @@ pub fn decode_storage_request(bytes: &[u8]) -> Result<StorageRequest, ProtocolCo
     Ok(request)
 }
 
+/// Encodes a storage response for the provided storage request.
+///
+/// # Errors
+///
+/// Returns an error when the response does not match the request opcode, exceeds protocol
+/// length limits, or contains values that cannot be serialized.
 pub fn encode_storage_response(
     request: &StorageRequest,
     response: &StorageResponse,
@@ -131,10 +149,16 @@ pub fn encode_storage_response(
             payload_len: u32::try_from(payload.len())
                 .map_err(|_| ProtocolCodecError::LengthOverflow)?,
         },
-        payload,
+        &payload,
     )
 }
 
+/// Decodes a storage response for the provided storage request.
+///
+/// # Errors
+///
+/// Returns an error when the envelope is malformed, the response opcode does not match the
+/// request, or the storage payload cannot be decoded.
 pub fn decode_storage_response(
     request: &StorageRequest,
     bytes: &[u8],

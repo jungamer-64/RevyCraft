@@ -100,9 +100,9 @@ mod entity_id_probe_gameplay_plugin {
 mod custom_wire_codec_protocol_plugin {
     use mc_core::CapabilitySet;
     use mc_plugin_api::{
-        ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode, PluginKind,
-        PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse, Utf8Slice,
-        WireFrameDecodeResult, decode_protocol_request, encode_protocol_response,
+        ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode, PluginKind, PluginManifestV1,
+        ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse, Utf8Slice, WireFrameDecodeResult,
+        decode_protocol_request, encode_protocol_response,
     };
     use mc_plugin_sdk_rust::InProcessProtocolEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
@@ -145,9 +145,9 @@ mod custom_wire_codec_protocol_plugin {
             ProtocolRequest::DescribeBedrockListener => {
                 Ok(ProtocolResponse::BedrockListenerDescriptor(None))
             }
-            ProtocolRequest::CapabilitySet => Ok(ProtocolResponse::CapabilitySet(
-                CapabilitySet::new(),
-            )),
+            ProtocolRequest::CapabilitySet => {
+                Ok(ProtocolResponse::CapabilitySet(CapabilitySet::new()))
+            }
             ProtocolRequest::EncodeWireFrame { payload } => {
                 let length = u8::try_from(payload.len())
                     .map_err(|_| "payload too large for test wire codec".to_string())?;
@@ -174,7 +174,9 @@ mod custom_wire_codec_protocol_plugin {
                     },
                 )))
             }
-            other => Err(format!("unsupported protocol request in test plugin: {other:?}")),
+            other => Err(format!(
+                "unsupported protocol request in test plugin: {other:?}"
+            )),
         }
     }
 
@@ -445,7 +447,10 @@ fn protocol_plugins_can_override_host_wire_codec_framing() {
         .try_decode_frame(&mut buffer)
         .expect("custom wire frame should decode");
     assert_eq!(decoded, Some(vec![0xaa, 0xbb, 0xcc]));
-    assert!(buffer.is_empty(), "decoded frame should consume buffered bytes");
+    assert!(
+        buffer.is_empty(),
+        "decoded frame should consume buffered bytes"
+    );
 }
 
 #[test]
@@ -572,7 +577,12 @@ fn initialize_runtime_registries_activates_runtime_profiles() {
     host.initialize_runtime_registries(&ServerConfig::default(), &mut registries)
         .expect("runtime registries should initialize with runtime profiles");
 
-    assert!(registries.protocols().resolve_adapter("je-1_7_10").is_some());
+    assert!(
+        registries
+            .protocols()
+            .resolve_adapter("je-1_7_10")
+            .is_some()
+    );
     assert!(registries.plugin_host().is_some());
     assert!(registries.storage().resolve("je-anvil-1_7_10").is_some());
     assert!(host.resolve_gameplay_profile("canonical").is_some());

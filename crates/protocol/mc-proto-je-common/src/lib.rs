@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use mc_core::catalog::{
     BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_PLANKS, SAND, SANDSTONE, STONE,
 };
@@ -6,6 +7,7 @@ use mc_proto_common::{PacketReader, PacketWriter, ProtocolError};
 use num_traits::ToPrimitive;
 use std::collections::BTreeMap;
 
+#[must_use]
 pub fn legacy_block(state: &BlockState) -> (u16, u8) {
     match state.key.as_str() {
         STONE => (1, 0),
@@ -79,6 +81,11 @@ pub fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
     ItemStack::new(key, count, damage)
 }
 
+/// Reads a legacy item slot from a Java Edition packet stream.
+///
+/// # Errors
+///
+/// Returns an error when the slot payload is truncated or contains invalid NBT framing.
 pub fn read_legacy_slot(reader: &mut PacketReader<'_>) -> Result<Option<ItemStack>, ProtocolError> {
     let item_id = reader.read_i16()?;
     if item_id < 0 {
@@ -90,6 +97,11 @@ pub fn read_legacy_slot(reader: &mut PacketReader<'_>) -> Result<Option<ItemStac
     Ok(Some(semantic_item(item_id, damage, count)))
 }
 
+/// Writes a legacy item slot to a Java Edition packet stream.
+///
+/// # Errors
+///
+/// Returns an error when the provided item stack cannot be represented in the legacy item table.
 pub fn write_legacy_slot(
     writer: &mut PacketWriter,
     stack: Option<&ItemStack>,
@@ -108,6 +120,11 @@ pub fn write_legacy_slot(
     Ok(())
 }
 
+/// Skips the optional legacy slot NBT payload.
+///
+/// # Errors
+///
+/// Returns an error when the NBT length prefix is invalid or the payload is truncated.
 pub fn skip_slot_nbt(reader: &mut PacketReader<'_>) -> Result<(), ProtocolError> {
     let length = reader.read_i16()?;
     if length < 0 {
@@ -180,6 +197,11 @@ pub fn pack_block_position(position: BlockPos) -> i64 {
 }
 
 #[must_use]
+/// Unpacks the packed 64-bit block position used by legacy Java Edition protocols.
+///
+/// # Panics
+///
+/// Panics if the unpacked coordinates fall outside the `i32` range expected by `BlockPos`.
 pub fn unpack_block_position(packed: i64) -> BlockPos {
     let x = sign_extend((packed >> 38) & 0x3ff_ffff, 26);
     let y = sign_extend((packed >> 26) & 0xfff, 12);
@@ -197,6 +219,11 @@ pub fn to_fixed_point(value: f64) -> i32 {
 }
 
 #[must_use]
+/// Converts a degree angle into the signed byte representation used on the wire.
+///
+/// # Panics
+///
+/// Panics if the rounded angle value cannot be narrowed into a single byte.
 pub fn to_angle_byte(value: f32) -> i8 {
     let wrapped = value.rem_euclid(360.0);
     let scaled = rounded_f32_to_i32(wrapped * 256.0 / 360.0);
@@ -206,6 +233,11 @@ pub fn to_angle_byte(value: f32) -> i8 {
 }
 
 #[must_use]
+/// Builds legacy 1.8 chunk section payload bytes and the corresponding section bitmask.
+///
+/// # Panics
+///
+/// Panics if a retained section index or legacy block state ID falls outside the encoded range.
 pub fn build_chunk_data_1_8(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
     let mut bit_map = 0_u16;
     let mut bytes = Vec::new();
@@ -233,6 +265,12 @@ pub fn build_chunk_data_1_8(chunk: &ChunkColumn, include_biomes: bool) -> (u16, 
 }
 
 #[must_use]
+/// Builds legacy 1.12 chunk section payload bytes and the corresponding section bitmask.
+///
+/// # Panics
+///
+/// Panics if section indices, palette sizes, or packed array lengths exceed the legacy codec
+/// limits assumed by this helper.
 pub fn build_chunk_data_1_12(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
     let mut bit_map = 0_u16;
     let mut bytes = Vec::new();
@@ -251,16 +289,13 @@ pub fn build_chunk_data_1_12(chunk: &ChunkColumn, include_biomes: bool) -> (u16,
         let mut palette_lookup = BTreeMap::from([(0_i32, 0_u64)]);
         let mut packed_indices = vec![0_u64; 4096];
         for (index, state_id) in block_states.into_iter().enumerate() {
-            let palette_index = match palette_lookup.get(&state_id) {
-                Some(palette_index) => *palette_index,
-                None => {
-                    let next_index =
-                        u64::try_from(palette.len()).expect("palette length should fit into u64");
-                    palette.push(state_id);
-                    palette_lookup.insert(state_id, next_index);
-                    next_index
-                }
-            };
+            let palette_index = palette_lookup.get(&state_id).copied().unwrap_or_else(|| {
+                let next_index =
+                    u64::try_from(palette.len()).expect("palette length should fit into u64");
+                palette.push(state_id);
+                palette_lookup.insert(state_id, next_index);
+                next_index
+            });
             packed_indices[index] = palette_index;
         }
 
@@ -329,7 +364,7 @@ fn write_varint_to_vec(target: &mut Vec<u8>, mut value: i32) {
     }
 }
 
-fn sign_extend(value: i64, bits: u8) -> i64 {
+const fn sign_extend(value: i64, bits: u8) -> i64 {
     let shift = 64_u8.saturating_sub(bits);
     (value << shift) >> shift
 }

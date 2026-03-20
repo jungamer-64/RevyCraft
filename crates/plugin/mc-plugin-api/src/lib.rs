@@ -1,6 +1,7 @@
+#![allow(clippy::multiple_crate_versions)]
 mod auth_codec;
 mod gameplay_codec;
-mod protocol_codec;
+pub(crate) mod protocol_codec;
 mod storage_codec;
 
 use std::ffi::c_void;

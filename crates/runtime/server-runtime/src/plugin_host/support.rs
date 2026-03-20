@@ -1,4 +1,14 @@
-use super::*;
+use super::{
+    Arc, AuthPluginApiV1, AuthRequest, AuthResponse, BedrockListenerDescriptor, CapabilitySet,
+    GameplayGeneration, GameplayPluginApiV1, GameplayProfileId, GameplayRequest, GameplayResponse,
+    GameplaySessionSnapshot, HashMap, HashSet, ManagedGameplayPlugin, OwnedBuffer,
+    PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1, ProtocolDescriptor,
+    ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse, RuntimeError, RuntimeReloadContext,
+    StorageGeneration, StoragePluginApiV1, StorageRequest, StorageResponse, decode_auth_response,
+    decode_gameplay_response, decode_plugin_error, decode_protocol_response,
+    decode_storage_response, encode_auth_request, encode_gameplay_request, encode_protocol_request,
+    encode_storage_request,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct DecodedManifest {
@@ -51,9 +61,9 @@ pub(super) fn decode_utf8_slice(slice: mc_plugin_api::Utf8Slice) -> Result<Strin
 
 pub(super) fn invoke_protocol(
     api: &ProtocolPluginApiV1,
-    request: ProtocolRequest,
+    request: &ProtocolRequest,
 ) -> Result<ProtocolResponse, RuntimeError> {
-    let request_bytes = encode_protocol_request(&request)
+    let request_bytes = encode_protocol_request(request)
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
@@ -63,8 +73,8 @@ pub(super) fn invoke_protocol(
                 ptr: request_bytes.as_ptr(),
                 len: request_bytes.len(),
             },
-            &mut output,
-            &mut error,
+            &raw mut output,
+            &raw mut error,
         )
     };
     if status != PluginErrorCode::Ok {
@@ -84,16 +94,16 @@ pub(super) fn invoke_protocol(
     unsafe {
         (api.free_buffer)(output);
     }
-    decode_protocol_response(&request, &response_bytes)
+    decode_protocol_response(request, &response_bytes)
         .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
 pub(super) fn invoke_gameplay(
     plugin_id: &str,
     api: &GameplayPluginApiV1,
-    request: GameplayRequest,
+    request: &GameplayRequest,
 ) -> Result<GameplayResponse, RuntimeError> {
-    let request_bytes = encode_gameplay_request(&request)
+    let request_bytes = encode_gameplay_request(request)
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
@@ -103,8 +113,8 @@ pub(super) fn invoke_gameplay(
                 ptr: request_bytes.as_ptr(),
                 len: request_bytes.len(),
             },
-            &mut output,
-            &mut error,
+            &raw mut output,
+            &raw mut error,
         )
     };
     if status != PluginErrorCode::Ok {
@@ -119,17 +129,17 @@ pub(super) fn invoke_gameplay(
     unsafe {
         (api.free_buffer)(output);
     }
-    decode_gameplay_response(&request, &response_bytes)
+    decode_gameplay_response(request, &response_bytes)
         .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
 pub(super) fn invoke_storage(
     plugin_id: &str,
     api: &StoragePluginApiV1,
-    request: StorageRequest,
+    request: &StorageRequest,
 ) -> Result<StorageResponse, RuntimeError> {
-    let request_bytes = encode_storage_request(&request)
-        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let request_bytes =
+        encode_storage_request(request).map_err(|error| RuntimeError::Config(error.to_string()))?;
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
@@ -138,8 +148,8 @@ pub(super) fn invoke_storage(
                 ptr: request_bytes.as_ptr(),
                 len: request_bytes.len(),
             },
-            &mut output,
-            &mut error,
+            &raw mut output,
+            &raw mut error,
         )
     };
     if status != PluginErrorCode::Ok {
@@ -155,17 +165,17 @@ pub(super) fn invoke_storage(
     unsafe {
         (api.free_buffer)(output);
     }
-    decode_storage_response(&request, &response_bytes)
+    decode_storage_response(request, &response_bytes)
         .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
 pub(super) fn invoke_auth(
     plugin_id: &str,
     api: &AuthPluginApiV1,
-    request: AuthRequest,
+    request: &AuthRequest,
 ) -> Result<AuthResponse, RuntimeError> {
     let request_bytes =
-        encode_auth_request(&request).map_err(|error| RuntimeError::Config(error.to_string()))?;
+        encode_auth_request(request).map_err(|error| RuntimeError::Config(error.to_string()))?;
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
@@ -174,8 +184,8 @@ pub(super) fn invoke_auth(
                 ptr: request_bytes.as_ptr(),
                 len: request_bytes.len(),
             },
-            &mut output,
-            &mut error,
+            &raw mut output,
+            &raw mut error,
         )
     };
     if status != PluginErrorCode::Ok {
@@ -191,7 +201,7 @@ pub(super) fn invoke_auth(
     unsafe {
         (api.free_buffer)(output);
     }
-    decode_auth_response(&request, &response_bytes)
+    decode_auth_response(request, &response_bytes)
         .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
@@ -391,7 +401,7 @@ fn export_gameplay_session_blob(
     generation: &GameplayGeneration,
     session: &GameplaySessionSnapshot,
 ) -> Option<Vec<u8>> {
-    match generation.invoke(GameplayRequest::ExportSessionState {
+    match generation.invoke(&GameplayRequest::ExportSessionState {
         session: session.clone(),
     }) {
         Ok(GameplayResponse::SessionTransferBlob(blob)) => Some(blob),
@@ -414,7 +424,7 @@ fn import_gameplay_session_blob(
     session: &GameplaySessionSnapshot,
     blob: Vec<u8>,
 ) -> bool {
-    match generation.invoke(GameplayRequest::ImportSessionState {
+    match generation.invoke(&GameplayRequest::ImportSessionState {
         session: session.clone(),
         blob,
     }) {
@@ -437,7 +447,7 @@ pub(super) fn import_storage_runtime_state(
     generation: &StorageGeneration,
     runtime: &RuntimeReloadContext,
 ) -> bool {
-    match generation.invoke(StorageRequest::ImportRuntimeState {
+    match generation.invoke(&StorageRequest::ImportRuntimeState {
         world_dir: runtime.world_dir.display().to_string(),
         snapshot: runtime.snapshot.clone(),
     }) {

@@ -8,9 +8,7 @@ use mc_core::{BlockFace, CoreCommand, InteractionHand, PlayerId, Vec3};
 use mc_proto_common::{Edition, HandshakeIntent, HandshakeNextState, PacketReader, ProtocolError};
 use mc_proto_je_common::{modern_inventory_slot, read_legacy_slot, unpack_block_position};
 
-pub(super) fn decode_handshake_frame(
-    frame: &[u8],
-) -> Result<Option<HandshakeIntent>, ProtocolError> {
+pub fn decode_handshake_frame(frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
     let mut reader = PacketReader::new(frame);
     let packet_id = reader.read_varint()?;
     if packet_id != PACKET_HANDSHAKE {
@@ -37,7 +35,7 @@ pub(super) fn decode_handshake_frame(
     }))
 }
 
-pub(super) fn decode_play_packet(
+pub fn decode_play_packet(
     player_id: PlayerId,
     frame: &[u8],
 ) -> Result<Option<CoreCommand>, ProtocolError> {
@@ -96,9 +94,7 @@ pub(super) fn decode_play_packet(
     }
 }
 
-pub(super) fn read_login_byte_array(
-    reader: &mut PacketReader<'_>,
-) -> Result<Vec<u8>, ProtocolError> {
+pub fn read_login_byte_array(reader: &mut PacketReader<'_>) -> Result<Vec<u8>, ProtocolError> {
     let len = usize::try_from(reader.read_varint()?)
         .map_err(|_| ProtocolError::InvalidPacket("negative login byte array length"))?;
     Ok(reader.read_bytes(len)?.to_vec())
@@ -189,7 +185,7 @@ fn decode_client_settings_packet(
     })
 }
 
-fn decode_interaction_hand(hand: i32) -> Result<InteractionHand, ProtocolError> {
+const fn decode_interaction_hand(hand: i32) -> Result<InteractionHand, ProtocolError> {
     match hand {
         0 => Ok(InteractionHand::Main),
         1 => Ok(InteractionHand::Offhand),
@@ -198,5 +194,9 @@ fn decode_interaction_hand(hand: i32) -> Result<InteractionHand, ProtocolError> 
 }
 
 const fn i8_to_u8(value: i8) -> u8 {
-    if value.is_negative() { 0 } else { value as u8 }
+    if value.is_negative() {
+        0
+    } else {
+        value.cast_unsigned()
+    }
 }

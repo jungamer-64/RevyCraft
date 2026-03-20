@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use server_runtime::RuntimeError;
 use server_runtime::config::ServerConfig;
 use server_runtime::host::plugin_host_from_config;

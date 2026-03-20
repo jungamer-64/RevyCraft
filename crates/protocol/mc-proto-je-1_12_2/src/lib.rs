@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 mod decoding;
 mod encoding;
 
@@ -240,7 +241,7 @@ impl PlaySyncAdapter for Je1122Adapter {
                 .collect::<Result<Vec<_>, _>>()
                 .map(|packets| packets.into_iter().flatten().collect()),
             CoreEvent::EntitySpawned { entity_id, player } => Ok(vec![
-                encode_named_entity_spawn(*entity_id, player)?,
+                encode_named_entity_spawn(*entity_id, player),
                 encode_entity_head_rotation(*entity_id, player.yaw),
             ]),
             CoreEvent::EntityMoved { entity_id, player } => Ok(vec![

@@ -118,17 +118,15 @@ impl ServerConfig {
     }
 
     pub(crate) fn effective_enabled_adapters(&self) -> Vec<String> {
-        match &self.enabled_adapters {
-            Some(enabled_adapters) => enabled_adapters.clone(),
-            None => vec![self.default_adapter.clone()],
-        }
+        self.enabled_adapters
+            .as_ref()
+            .map_or_else(|| vec![self.default_adapter.clone()], Clone::clone)
     }
 
     pub(crate) fn effective_enabled_bedrock_adapters(&self) -> Vec<String> {
-        match &self.enabled_bedrock_adapters {
-            Some(enabled_adapters) => enabled_adapters.clone(),
-            None => vec![self.default_bedrock_adapter.clone()],
-        }
+        self.enabled_bedrock_adapters
+            .as_ref()
+            .map_or_else(|| vec![self.default_bedrock_adapter.clone()], Clone::clone)
     }
 }
 
@@ -159,10 +157,10 @@ fn apply_property(config: &mut ServerConfig, key: &str, value: &str) -> Result<(
         "difficulty" => config.difficulty = parse_u8(value, "difficulty")?,
         "view-distance" => config.view_distance = parse_u8(value, "view-distance")?,
         "default-adapter" => config.default_adapter = value.to_string(),
-        "enabled-adapters" => config.enabled_adapters = parse_enabled_adapters(value)?,
+        "enabled-adapters" => config.enabled_adapters = parse_enabled_adapters(value),
         "default-bedrock-adapter" => config.default_bedrock_adapter = value.to_string(),
         "enabled-bedrock-adapters" => {
-            config.enabled_bedrock_adapters = parse_enabled_adapters(value)?;
+            config.enabled_bedrock_adapters = parse_enabled_adapters(value);
         }
         "storage-profile" => config.storage_profile = value.to_string(),
         "auth-profile" => config.auth_profile = value.to_string(),
@@ -172,7 +170,7 @@ fn apply_property(config: &mut ServerConfig, key: &str, value: &str) -> Result<(
             config.gameplay_profile_map = parse_gameplay_profile_map(value)?;
         }
         "plugins-dir" => config.plugins_dir = PathBuf::from(value),
-        "plugin-allowlist" => config.plugin_allowlist = parse_enabled_adapters(value)?,
+        "plugin-allowlist" => config.plugin_allowlist = parse_enabled_adapters(value),
         "plugin-failure-policy" => {
             config.plugin_failure_policy = PluginFailurePolicy::parse(value)?;
         }
@@ -195,8 +193,13 @@ fn parse_server_ip(value: &str) -> Result<Option<IpAddr>, RuntimeError> {
     }
 }
 
-fn parse_bool_flag(value: &str) -> bool {
-    value.eq_ignore_ascii_case("true")
+const fn parse_bool_flag(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 4
+        && (bytes[0] == b't' || bytes[0] == b'T')
+        && (bytes[1] == b'r' || bytes[1] == b'R')
+        && (bytes[2] == b'u' || bytes[2] == b'U')
+        && (bytes[3] == b'e' || bytes[3] == b'E')
 }
 
 fn parse_u8(value: &str, key: &str) -> Result<u8, RuntimeError> {
@@ -218,7 +221,7 @@ fn finalize_relative_paths(config: &mut ServerConfig, parent: &Path) {
     }
 }
 
-fn parse_enabled_adapters(value: &str) -> Result<Option<Vec<String>>, RuntimeError> {
+fn parse_enabled_adapters(value: &str) -> Option<Vec<String>> {
     let adapters = value
         .split(',')
         .map(str::trim)
@@ -226,9 +229,9 @@ fn parse_enabled_adapters(value: &str) -> Result<Option<Vec<String>>, RuntimeErr
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     if adapters.is_empty() {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(adapters))
+    Some(adapters)
 }
 
 fn parse_gameplay_profile_map(value: &str) -> Result<HashMap<String, String>, RuntimeError> {

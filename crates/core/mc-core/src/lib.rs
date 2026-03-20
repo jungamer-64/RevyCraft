@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 pub mod catalog;
 
 use num_traits::ToPrimitive;
@@ -72,7 +73,6 @@ impl CapabilitySet {
         self.capabilities.contains(capability)
     }
 
-    #[must_use]
     pub fn iter(&self) -> impl Iterator<Item = &str> {
         self.capabilities.iter().map(String::as_str)
     }
@@ -148,6 +148,12 @@ pub trait GameplayQuery {
 }
 
 pub trait GameplayPolicyResolver: Send + Sync {
+    /// Produces join-time gameplay effects for a player snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the gameplay policy cannot evaluate the join flow for the
+    /// provided query state or session capabilities.
     fn handle_player_join(
         &self,
         query: &dyn GameplayQuery,
@@ -155,6 +161,12 @@ pub trait GameplayPolicyResolver: Send + Sync {
         player: &PlayerSnapshot,
     ) -> Result<GameplayJoinEffect, String>;
 
+    /// Produces gameplay effects for a player-owned command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the gameplay policy cannot evaluate the command for the
+    /// provided query state or session capabilities.
     fn handle_command(
         &self,
         query: &dyn GameplayQuery,
@@ -162,6 +174,12 @@ pub trait GameplayPolicyResolver: Send + Sync {
         command: &CoreCommand,
     ) -> Result<GameplayEffect, String>;
 
+    /// Produces gameplay effects for a player tick.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the gameplay policy cannot evaluate the tick for the
+    /// provided query state or session capabilities.
     fn handle_tick(
         &self,
         query: &dyn GameplayQuery,
@@ -424,7 +442,6 @@ impl InventorySlot {
                 Some(AUXILIARY_SLOT_COUNT + index)
             }
             Self::Hotbar(index) if index < HOTBAR_SLOT_COUNT => Some(HOTBAR_START_SLOT + index),
-            Self::Offhand => None,
             _ => None,
         }
     }
@@ -671,7 +688,7 @@ impl From<SectionBlockIndex> for u16 {
 
 impl From<SectionBlockIndex> for usize {
     fn from(index: SectionBlockIndex) -> Self {
-        usize::from(index.into_raw())
+        Self::from(index.into_raw())
     }
 }
 
@@ -1074,12 +1091,23 @@ impl ServerCore {
         &self.world_meta
     }
 
+    /// Applies a command using the built-in canonical gameplay policy.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the canonical gameplay policy returns an error while evaluating the command.
     pub fn apply_command(&mut self, command: CoreCommand, now_ms: u64) -> Vec<TargetedEvent> {
         let session = canonical_session_capabilities();
         self.apply_command_with_policy(command, now_ms, Some(&session), &CanonicalGameplayPolicy)
             .expect("canonical gameplay policy should not fail")
     }
 
+    /// Applies a command using the provided gameplay policy resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the command requires session capabilities that are not present,
+    /// or when the gameplay policy resolver rejects the command.
     pub fn apply_command_with_policy<R: GameplayPolicyResolver>(
         &mut self,
         command: CoreCommand,
@@ -1158,6 +1186,11 @@ impl ServerCore {
         events
     }
 
+    /// Applies a tick for a single player using the provided gameplay policy resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the gameplay policy resolver rejects the tick.
     pub fn tick_player_with_policy<R: GameplayPolicyResolver>(
         &mut self,
         player_id: PlayerId,
@@ -1198,7 +1231,7 @@ impl ServerCore {
             .unwrap_or_else(|| default_player(player_id, username.clone(), self.config.spawn));
         player.username = username;
         let join_effect = resolver.handle_player_join(self, session, &player)?;
-        let join_events = self.apply_gameplay_join_effect(&mut player, join_effect);
+        let join_events = Self::apply_gameplay_join_effect(&mut player, join_effect);
 
         let entity_id = EntityId(self.next_entity_id);
         self.next_entity_id = self.next_entity_id.saturating_add(1);
@@ -1241,7 +1274,6 @@ impl ServerCore {
     }
 
     fn apply_gameplay_join_effect(
-        &self,
         player: &mut PlayerSnapshot,
         effect: GameplayJoinEffect,
     ) -> Vec<TargetedEvent> {
@@ -1624,6 +1656,190 @@ impl GameplayQuery for ServerCore {
     }
 }
 
+impl CanonicalGameplayPolicy {
+    fn move_intent_effect(
+        player_id: PlayerId,
+        position: Option<Vec3>,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        on_ground: bool,
+    ) -> GameplayEffect {
+        GameplayEffect {
+            mutations: vec![GameplayMutation::PlayerPose {
+                player_id,
+                position,
+                yaw,
+                pitch,
+                on_ground,
+            }],
+            emitted_events: Vec::new(),
+        }
+    }
+
+    fn set_held_slot_effect(
+        query: &dyn GameplayQuery,
+        player_id: PlayerId,
+        slot: i16,
+    ) -> GameplayEffect {
+        let Some(player) = query.player_snapshot(player_id) else {
+            return GameplayEffect::default();
+        };
+        let Ok(slot) = u8::try_from(slot) else {
+            return Self::rejected_held_slot_effect(player_id, player.selected_hotbar_slot);
+        };
+        if slot >= HOTBAR_SLOT_COUNT {
+            return Self::rejected_held_slot_effect(player_id, player.selected_hotbar_slot);
+        }
+        GameplayEffect {
+            mutations: vec![GameplayMutation::SelectedHotbarSlot { player_id, slot }],
+            emitted_events: Vec::new(),
+        }
+    }
+
+    fn creative_inventory_set_effect(
+        query: &dyn GameplayQuery,
+        player_id: PlayerId,
+        slot: InventorySlot,
+        stack: Option<&ItemStack>,
+    ) -> GameplayEffect {
+        let Some(player) = query.player_snapshot(player_id) else {
+            return GameplayEffect::default();
+        };
+        if query.world_meta().game_mode != 1
+            || !slot.is_storage_slot()
+            || matches!(slot, InventorySlot::Auxiliary(_))
+            || stack.is_some_and(|stack| {
+                !stack.is_supported_placeable() || stack.count == 0 || stack.count > 64
+            })
+        {
+            return GameplayEffect {
+                mutations: Vec::new(),
+                emitted_events: reject_inventory_slot_events_snapshot(player_id, slot, &player),
+            };
+        }
+        GameplayEffect {
+            mutations: vec![GameplayMutation::InventorySlot {
+                player_id,
+                slot,
+                stack: stack.cloned(),
+            }],
+            emitted_events: Vec::new(),
+        }
+    }
+
+    fn dig_block_effect(
+        query: &dyn GameplayQuery,
+        player_id: PlayerId,
+        position: BlockPos,
+        status: u8,
+    ) -> GameplayEffect {
+        if !matches!(status, 0 | 2) {
+            return GameplayEffect::default();
+        }
+        if query.player_snapshot(player_id).is_none() {
+            return GameplayEffect::default();
+        }
+        if query.world_meta().game_mode != 1 || !query.can_edit_block(player_id, position) {
+            return Self::block_changed_effect(player_id, position, query.block_state(position));
+        }
+        let current = query.block_state(position);
+        if current.is_air() || current.key.as_str() == "minecraft:bedrock" {
+            return Self::block_changed_effect(player_id, position, current);
+        }
+        GameplayEffect {
+            mutations: vec![GameplayMutation::Block {
+                position,
+                block: BlockState::air(),
+            }],
+            emitted_events: Vec::new(),
+        }
+    }
+
+    fn place_block_effect(
+        query: &dyn GameplayQuery,
+        player_id: PlayerId,
+        hand: InteractionHand,
+        position: BlockPos,
+        face: Option<BlockFace>,
+        held_item: Option<&ItemStack>,
+    ) -> GameplayEffect {
+        let Some(face) = face else {
+            return GameplayEffect::default();
+        };
+        let Some(player) = query.player_snapshot(player_id) else {
+            return GameplayEffect::default();
+        };
+        let place_pos = position.offset(face);
+        let Some(selected_stack) = player
+            .inventory
+            .selected_stack(player.selected_hotbar_slot, hand)
+            .cloned()
+        else {
+            return Self::place_rejection_effect(query, player_id, hand, place_pos, &player);
+        };
+        if held_item.is_some_and(|held_item| held_item != &selected_stack) {
+            return Self::place_rejection_effect(query, player_id, hand, place_pos, &player);
+        }
+        let Some(block) = catalog::placeable_block_state_from_item_key(selected_stack.key.as_str())
+        else {
+            return Self::place_rejection_effect(query, player_id, hand, place_pos, &player);
+        };
+        if query.world_meta().game_mode != 1
+            || !query.can_edit_block(player_id, place_pos)
+            || query.block_state(position).is_air()
+            || !query.block_state(place_pos).is_air()
+        {
+            return Self::place_rejection_effect(query, player_id, hand, place_pos, &player);
+        }
+        GameplayEffect {
+            mutations: vec![GameplayMutation::Block {
+                position: place_pos,
+                block,
+            }],
+            emitted_events: Vec::new(),
+        }
+    }
+
+    fn rejected_held_slot_effect(player_id: PlayerId, slot: u8) -> GameplayEffect {
+        GameplayEffect {
+            mutations: Vec::new(),
+            emitted_events: vec![TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::SelectedHotbarSlotChanged { slot },
+            }],
+        }
+    }
+
+    fn block_changed_effect(
+        player_id: PlayerId,
+        position: BlockPos,
+        block: BlockState,
+    ) -> GameplayEffect {
+        GameplayEffect {
+            mutations: Vec::new(),
+            emitted_events: vec![TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::BlockChanged { position, block },
+            }],
+        }
+    }
+
+    fn place_rejection_effect(
+        query: &dyn GameplayQuery,
+        player_id: PlayerId,
+        hand: InteractionHand,
+        place_pos: BlockPos,
+        player: &PlayerSnapshot,
+    ) -> GameplayEffect {
+        GameplayEffect {
+            mutations: Vec::new(),
+            emitted_events: place_rejection_events_snapshot(
+                query, player_id, hand, place_pos, player,
+            ),
+        }
+    }
+}
+
 impl GameplayPolicyResolver for CanonicalGameplayPolicy {
     fn handle_player_join(
         &self,
@@ -1647,191 +1863,44 @@ impl GameplayPolicyResolver for CanonicalGameplayPolicy {
                 yaw,
                 pitch,
                 on_ground,
-            } => Ok(GameplayEffect {
-                mutations: vec![GameplayMutation::PlayerPose {
-                    player_id: *player_id,
-                    position: *position,
-                    yaw: *yaw,
-                    pitch: *pitch,
-                    on_ground: *on_ground,
-                }],
-                emitted_events: Vec::new(),
-            }),
+            } => Ok(Self::move_intent_effect(
+                *player_id, *position, *yaw, *pitch, *on_ground,
+            )),
             CoreCommand::SetHeldSlot { player_id, slot } => {
-                let Some(player) = query.player_snapshot(*player_id) else {
-                    return Ok(GameplayEffect::default());
-                };
-                let Ok(slot) = u8::try_from(*slot) else {
-                    return Ok(GameplayEffect {
-                        mutations: Vec::new(),
-                        emitted_events: vec![TargetedEvent {
-                            target: EventTarget::Player(*player_id),
-                            event: CoreEvent::SelectedHotbarSlotChanged {
-                                slot: player.selected_hotbar_slot,
-                            },
-                        }],
-                    });
-                };
-                if slot >= HOTBAR_SLOT_COUNT {
-                    return Ok(GameplayEffect {
-                        mutations: Vec::new(),
-                        emitted_events: vec![TargetedEvent {
-                            target: EventTarget::Player(*player_id),
-                            event: CoreEvent::SelectedHotbarSlotChanged {
-                                slot: player.selected_hotbar_slot,
-                            },
-                        }],
-                    });
-                }
-                Ok(GameplayEffect {
-                    mutations: vec![GameplayMutation::SelectedHotbarSlot {
-                        player_id: *player_id,
-                        slot,
-                    }],
-                    emitted_events: Vec::new(),
-                })
+                Ok(Self::set_held_slot_effect(query, *player_id, *slot))
             }
             CoreCommand::CreativeInventorySet {
                 player_id,
                 slot,
                 stack,
-            } => {
-                let Some(player) = query.player_snapshot(*player_id) else {
-                    return Ok(GameplayEffect::default());
-                };
-                if query.world_meta().game_mode != 1
-                    || !slot.is_storage_slot()
-                    || matches!(slot, InventorySlot::Auxiliary(_))
-                    || stack.as_ref().is_some_and(|stack| {
-                        !stack.is_supported_placeable() || stack.count == 0 || stack.count > 64
-                    })
-                {
-                    return Ok(GameplayEffect {
-                        mutations: Vec::new(),
-                        emitted_events: reject_inventory_slot_events_snapshot(
-                            *player_id, *slot, &player,
-                        ),
-                    });
-                }
-                Ok(GameplayEffect {
-                    mutations: vec![GameplayMutation::InventorySlot {
-                        player_id: *player_id,
-                        slot: *slot,
-                        stack: stack.clone(),
-                    }],
-                    emitted_events: Vec::new(),
-                })
-            }
+            } => Ok(Self::creative_inventory_set_effect(
+                query,
+                *player_id,
+                *slot,
+                stack.as_ref(),
+            )),
             CoreCommand::DigBlock {
                 player_id,
                 position,
                 status,
                 ..
-            } => {
-                if !matches!(status, 0 | 2) {
-                    return Ok(GameplayEffect::default());
-                }
-                let Some(_player) = query.player_snapshot(*player_id) else {
-                    return Ok(GameplayEffect::default());
-                };
-                if query.world_meta().game_mode != 1 || !query.can_edit_block(*player_id, *position)
-                {
-                    return Ok(GameplayEffect {
-                        mutations: Vec::new(),
-                        emitted_events: vec![TargetedEvent {
-                            target: EventTarget::Player(*player_id),
-                            event: CoreEvent::BlockChanged {
-                                position: *position,
-                                block: query.block_state(*position),
-                            },
-                        }],
-                    });
-                }
-                let current = query.block_state(*position);
-                if current.is_air() || current.key.as_str() == "minecraft:bedrock" {
-                    return Ok(GameplayEffect {
-                        mutations: Vec::new(),
-                        emitted_events: vec![TargetedEvent {
-                            target: EventTarget::Player(*player_id),
-                            event: CoreEvent::BlockChanged {
-                                position: *position,
-                                block: current,
-                            },
-                        }],
-                    });
-                }
-                Ok(GameplayEffect {
-                    mutations: vec![GameplayMutation::Block {
-                        position: *position,
-                        block: BlockState::air(),
-                    }],
-                    emitted_events: Vec::new(),
-                })
-            }
+            } => Ok(Self::dig_block_effect(
+                query, *player_id, *position, *status,
+            )),
             CoreCommand::PlaceBlock {
                 player_id,
                 hand,
                 position,
                 face,
                 held_item,
-            } => {
-                let Some(face) = *face else {
-                    return Ok(GameplayEffect::default());
-                };
-                let Some(player) = query.player_snapshot(*player_id) else {
-                    return Ok(GameplayEffect::default());
-                };
-                let place_pos = position.offset(face);
-                let Some(selected_stack) = player
-                    .inventory
-                    .selected_stack(player.selected_hotbar_slot, *hand)
-                    .cloned()
-                else {
-                    return Ok(GameplayEffect {
-                        mutations: Vec::new(),
-                        emitted_events: place_rejection_events_snapshot(
-                            query, *player_id, *hand, place_pos, &player,
-                        ),
-                    });
-                };
-                if held_item.is_some() && held_item != &Some(selected_stack.clone()) {
-                    return Ok(GameplayEffect {
-                        mutations: Vec::new(),
-                        emitted_events: place_rejection_events_snapshot(
-                            query, *player_id, *hand, place_pos, &player,
-                        ),
-                    });
-                }
-                let Some(block) =
-                    catalog::placeable_block_state_from_item_key(selected_stack.key.as_str())
-                else {
-                    return Ok(GameplayEffect {
-                        mutations: Vec::new(),
-                        emitted_events: place_rejection_events_snapshot(
-                            query, *player_id, *hand, place_pos, &player,
-                        ),
-                    });
-                };
-                if query.world_meta().game_mode != 1
-                    || !query.can_edit_block(*player_id, place_pos)
-                    || query.block_state(*position).is_air()
-                    || !query.block_state(place_pos).is_air()
-                {
-                    return Ok(GameplayEffect {
-                        mutations: Vec::new(),
-                        emitted_events: place_rejection_events_snapshot(
-                            query, *player_id, *hand, place_pos, &player,
-                        ),
-                    });
-                }
-                Ok(GameplayEffect {
-                    mutations: vec![GameplayMutation::Block {
-                        position: place_pos,
-                        block,
-                    }],
-                    emitted_events: Vec::new(),
-                })
-            }
+            } => Ok(Self::place_block_effect(
+                query,
+                *player_id,
+                *hand,
+                *position,
+                *face,
+                held_item.as_ref(),
+            )),
             _ => Ok(GameplayEffect::default()),
         }
     }
@@ -1867,9 +1936,6 @@ impl GameplayPolicyResolver for ReadonlyGameplayPolicy {
             CoreCommand::MoveIntent { .. } | CoreCommand::SetHeldSlot { .. } => {
                 CanonicalGameplayPolicy.handle_command(query, session, command)
             }
-            CoreCommand::CreativeInventorySet { .. }
-            | CoreCommand::DigBlock { .. }
-            | CoreCommand::PlaceBlock { .. } => Ok(GameplayEffect::default()),
             _ => Ok(GameplayEffect::default()),
         }
     }

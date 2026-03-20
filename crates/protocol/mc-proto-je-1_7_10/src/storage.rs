@@ -267,21 +267,21 @@ fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
             Some(NbtTag::Compound(compound))
         })
         .collect();
-    if let Some(stack) = inventory.offhand.as_ref() {
-        if let Some((item_id, damage)) = crate::legacy_item(stack) {
-            let mut compound = BTreeMap::new();
-            compound.insert("Slot".to_string(), NbtTag::Byte(PLAYERDATA_OFFHAND_SLOT));
-            compound.insert("id".to_string(), NbtTag::Short(item_id));
-            compound.insert(
-                "Damage".to_string(),
-                NbtTag::Short(i16::from_be_bytes(damage.to_be_bytes())),
-            );
-            compound.insert(
-                "Count".to_string(),
-                NbtTag::Byte(i8::try_from(stack.count).expect("count should fit into i8")),
-            );
-            entries.push(NbtTag::Compound(compound));
-        }
+    if let Some(stack) = inventory.offhand.as_ref()
+        && let Some((item_id, damage)) = crate::legacy_item(stack)
+    {
+        let mut compound = BTreeMap::new();
+        compound.insert("Slot".to_string(), NbtTag::Byte(PLAYERDATA_OFFHAND_SLOT));
+        compound.insert("id".to_string(), NbtTag::Short(item_id));
+        compound.insert(
+            "Damage".to_string(),
+            NbtTag::Short(i16::from_be_bytes(damage.to_be_bytes())),
+        );
+        compound.insert(
+            "Count".to_string(),
+            NbtTag::Byte(i8::try_from(stack.count).expect("count should fit into i8")),
+        );
+        entries.push(NbtTag::Compound(compound));
     }
     entries
 }

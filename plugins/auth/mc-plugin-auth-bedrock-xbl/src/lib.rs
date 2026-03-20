@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use base64::Engine;
 use bedrock_jwt::verifier::{
     build_public_key_from_b64, decode_b64_url_nopad, decode_header_get_x5u, jose_sig_to_der,

@@ -97,6 +97,12 @@ pub enum AuthResponse {
     AuthenticatedBedrockPlayer(BedrockAuthResult),
 }
 
+/// Encodes an auth request into the plugin protocol envelope.
+///
+/// # Errors
+///
+/// Returns an error when the request payload exceeds the protocol length limits or contains
+/// values that cannot be serialized.
 pub fn encode_auth_request(request: &AuthRequest) -> Result<Vec<u8>, ProtocolCodecError> {
     let mut payload = Encoder::default();
     encode_auth_request_payload(&mut payload, request)?;
@@ -110,10 +116,16 @@ pub fn encode_auth_request(request: &AuthRequest) -> Result<Vec<u8>, ProtocolCod
             payload_len: u32::try_from(payload.len())
                 .map_err(|_| ProtocolCodecError::LengthOverflow)?,
         },
-        payload,
+        &payload,
     )
 }
 
+/// Decodes an auth request from the plugin protocol envelope.
+///
+/// # Errors
+///
+/// Returns an error when the envelope is malformed, the plugin kind/opcode is invalid, or the
+/// auth payload cannot be decoded.
 pub fn decode_auth_request(bytes: &[u8]) -> Result<AuthRequest, ProtocolCodecError> {
     let (header, payload) = decode_envelope(bytes)?;
     if header.plugin_kind != PluginKind::Auth {
@@ -132,6 +144,12 @@ pub fn decode_auth_request(bytes: &[u8]) -> Result<AuthRequest, ProtocolCodecErr
     Ok(request)
 }
 
+/// Encodes an auth response for the provided auth request.
+///
+/// # Errors
+///
+/// Returns an error when the response does not match the request opcode, exceeds protocol
+/// length limits, or contains values that cannot be serialized.
 pub fn encode_auth_response(
     request: &AuthRequest,
     response: &AuthResponse,
@@ -148,10 +166,16 @@ pub fn encode_auth_response(
             payload_len: u32::try_from(payload.len())
                 .map_err(|_| ProtocolCodecError::LengthOverflow)?,
         },
-        payload,
+        &payload,
     )
 }
 
+/// Decodes an auth response for the provided auth request.
+///
+/// # Errors
+///
+/// Returns an error when the envelope is malformed, the response opcode does not match the
+/// request, or the auth payload cannot be decoded.
 pub fn decode_auth_response(
     request: &AuthRequest,
     bytes: &[u8],
@@ -253,8 +277,10 @@ fn encode_auth_response_payload(
         (AuthOpCode::CapabilitySet, AuthResponse::CapabilitySet(capabilities)) => {
             encode_capability_set(encoder, capabilities)
         }
-        (AuthOpCode::AuthenticateOffline, AuthResponse::AuthenticatedPlayer(player_id))
-        | (AuthOpCode::AuthenticateOnline, AuthResponse::AuthenticatedPlayer(player_id)) => {
+        (
+            AuthOpCode::AuthenticateOffline | AuthOpCode::AuthenticateOnline,
+            AuthResponse::AuthenticatedPlayer(player_id),
+        ) => {
             encode_player_id(encoder, *player_id);
             Ok(())
         }
@@ -335,15 +361,12 @@ fn encode_optional_string(
     encoder: &mut Encoder,
     value: Option<&str>,
 ) -> Result<(), ProtocolCodecError> {
-    match value {
-        Some(value) => {
-            encoder.write_bool(true);
-            encoder.write_string(value)
-        }
-        None => {
-            encoder.write_bool(false);
-            Ok(())
-        }
+    if let Some(value) = value {
+        encoder.write_bool(true);
+        encoder.write_string(value)
+    } else {
+        encoder.write_bool(false);
+        Ok(())
     }
 }
 

@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    Arc, HashMap, HashSet, HotSwappableAuthProfile, HotSwappableGameplayProfile,
+    HotSwappableStorageProfile, ManagedAuthPlugin, ManagedGameplayPlugin, ManagedStoragePlugin,
+    PluginHost, PluginKind, PluginPackage, RuntimeError, RuntimeRegistries, ServerConfig,
+    ensure_known_profiles, ensure_profile_known,
+};
 
 impl PluginHost {
     fn required_gameplay_profiles(config: &ServerConfig) -> HashSet<String> {
@@ -140,6 +145,15 @@ impl PluginHost {
         Ok(())
     }
 
+    /// Activates every gameplay profile required by the current server configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a required profile cannot be loaded, is duplicated, or is unknown.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the gameplay plugin registry mutex is poisoned.
     pub fn activate_gameplay_profiles(&self, config: &ServerConfig) -> Result<(), RuntimeError> {
         let required_profiles = Self::required_gameplay_profiles(config);
 
@@ -156,9 +170,21 @@ impl PluginHost {
             self.load_requested_gameplay_plugin(&mut gameplay, package, &required_profiles)?;
         }
 
-        ensure_known_profiles(&gameplay, &required_profiles, "gameplay")
+        let result = ensure_known_profiles(&gameplay, &required_profiles, "gameplay");
+        drop(gameplay);
+        result
     }
 
+    /// Activates the configured storage profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the requested storage profile cannot be loaded, is duplicated, or
+    /// is unknown.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the storage plugin registry mutex is poisoned.
     pub fn activate_storage_profile(&self, storage_profile: &str) -> Result<(), RuntimeError> {
         let mut storage = self
             .storage
@@ -173,9 +199,21 @@ impl PluginHost {
             self.load_requested_storage_plugin(&mut storage, package, storage_profile)?;
         }
 
-        ensure_profile_known(&storage, storage_profile, "storage")
+        let result = ensure_profile_known(&storage, storage_profile, "storage");
+        drop(storage);
+        result
     }
 
+    /// Activates the requested auth profiles.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no profiles are requested, when a requested profile cannot be
+    /// loaded, is duplicated, or is unknown.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the auth plugin registry mutex is poisoned.
     pub fn activate_auth_profiles(&self, auth_profiles: &[String]) -> Result<(), RuntimeError> {
         let requested = Self::requested_auth_profiles(auth_profiles)?;
         let mut auth = self
@@ -191,19 +229,37 @@ impl PluginHost {
             self.load_requested_auth_plugin(&mut auth, package, &requested)?;
         }
 
-        ensure_known_profiles(&auth, &requested, "auth")
+        let result = ensure_known_profiles(&auth, &requested, "auth");
+        drop(auth);
+        result
     }
 
+    /// Activates a single auth profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the requested auth profile cannot be activated.
     pub fn activate_auth_profile(&self, auth_profile: &str) -> Result<(), RuntimeError> {
         self.activate_auth_profiles(&[auth_profile.to_string()])
     }
 
+    /// Activates gameplay, storage, and auth profiles needed by the runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when any configured runtime profile cannot be activated.
     pub fn activate_runtime_profiles(&self, config: &ServerConfig) -> Result<(), RuntimeError> {
         self.activate_gameplay_profiles(config)?;
         self.activate_storage_profile(&config.storage_profile)?;
         self.activate_auth_profiles(&Self::runtime_auth_profiles(config))
     }
 
+    /// Registers protocol adapters and activates runtime-selected profiles.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when registries cannot be initialized or required profiles cannot be
+    /// activated.
     pub fn initialize_runtime_registries(
         self: &Arc<Self>,
         config: &ServerConfig,

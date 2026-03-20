@@ -214,6 +214,6 @@ impl RuntimeServer {
         plugin_host: &PluginHost,
     ) -> Result<Vec<String>, RuntimeError> {
         let context = self.reload_context().await;
-        plugin_host.reload_modified_with_context(&context).await
+        plugin_host.reload_modified_with_context(&context)
     }
 }

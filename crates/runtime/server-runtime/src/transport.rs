@@ -13,29 +13,29 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ListenerPlan {
-    pub(crate) transport: TransportKind,
-    pub(crate) bind_addr: SocketAddr,
-    pub(crate) adapter_ids: Vec<String>,
-    pub(crate) bedrock_bind_metadata: Option<BedrockBindMetadata>,
+pub struct ListenerPlan {
+    pub transport: TransportKind,
+    pub bind_addr: SocketAddr,
+    pub adapter_ids: Vec<String>,
+    pub bedrock_bind_metadata: Option<BedrockBindMetadata>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BedrockBindMetadata {
-    pub(crate) game_version: String,
-    pub(crate) protocol_number: i32,
-    pub(crate) raknet_version: u8,
+pub struct BedrockBindMetadata {
+    pub game_version: String,
+    pub protocol_number: i32,
+    pub raknet_version: u8,
 }
 
-pub(crate) struct AcceptedTransportSession {
-    pub(crate) transport: TransportKind,
-    pub(crate) io: TransportSessionIo,
+pub struct AcceptedTransportSession {
+    pub transport: TransportKind,
+    pub io: TransportSessionIo,
 }
 
-pub(crate) enum TransportSessionIo {
+pub enum TransportSessionIo {
     Tcp {
         stream: TcpStream,
-        encryption: Option<TransportEncryptionState>,
+        encryption: Box<Option<TransportEncryptionState>>,
     },
     Bedrock {
         connection: BedrockConnection,
@@ -44,10 +44,7 @@ pub(crate) enum TransportSessionIo {
 }
 
 impl TransportSessionIo {
-    pub(crate) async fn read_into(
-        &mut self,
-        buffer: &mut BytesMut,
-    ) -> Result<usize, std::io::Error> {
+    pub async fn read_into(&mut self, buffer: &mut BytesMut) -> Result<usize, std::io::Error> {
         match self {
             Self::Tcp { stream, encryption } => {
                 let mut chunk = [0_u8; 8192];
@@ -56,7 +53,7 @@ impl TransportSessionIo {
                     return Ok(0);
                 }
                 let bytes = &mut chunk[..bytes_read];
-                if let Some(encryption) = encryption.as_mut() {
+                if let Some(encryption) = encryption.as_mut().as_mut() {
                     encryption.decrypt.apply_decrypt(bytes);
                 }
                 buffer.extend_from_slice(bytes);
@@ -80,11 +77,11 @@ impl TransportSessionIo {
         }
     }
 
-    pub(crate) async fn write_all(&mut self, bytes: &[u8]) -> Result<(), std::io::Error> {
+    pub async fn write_all(&mut self, bytes: &[u8]) -> Result<(), std::io::Error> {
         match self {
             Self::Tcp { stream, encryption } => {
                 let mut encrypted = bytes.to_vec();
-                if let Some(encryption) = encryption.as_mut() {
+                if let Some(encryption) = encryption.as_mut().as_mut() {
                     encryption.encrypt.apply_encrypt(&mut encrypted);
                 }
                 stream.write_all(&encrypted).await
@@ -108,16 +105,18 @@ impl TransportSessionIo {
         }
     }
 
-    pub(crate) fn enable_encryption(&mut self, shared_secret: [u8; 16]) {
+    pub fn enable_encryption(&mut self, shared_secret: [u8; 16]) {
         match self {
             Self::Tcp { encryption, .. } => {
-                *encryption = Some(TransportEncryptionState::new(shared_secret));
+                encryption
+                    .as_mut()
+                    .replace(TransportEncryptionState::new(shared_secret));
             }
             Self::Bedrock { .. } => {}
         }
     }
 
-    pub(crate) fn enable_bedrock_compression(&mut self, compression_threshold: u16) {
+    pub const fn enable_bedrock_compression(&mut self, compression_threshold: u16) {
         if let Self::Bedrock { compression, .. } = self {
             *compression = Some(BedrockCompression::Zlib {
                 threshold: compression_threshold,
@@ -127,20 +126,20 @@ impl TransportSessionIo {
     }
 }
 
-pub(crate) enum BoundTransportListener {
+pub enum BoundTransportListener {
     Tcp {
         listener: TcpListener,
         adapter_ids: Vec<String>,
     },
     Bedrock {
-        listener: BedrockListener,
+        listener: Box<BedrockListener>,
         adapter_ids: Vec<String>,
         bind_addr: SocketAddr,
     },
 }
 
 impl BoundTransportListener {
-    pub(crate) fn listener_binding(&self) -> Result<ListenerBinding, RuntimeError> {
+    pub fn listener_binding(&self) -> Result<ListenerBinding, RuntimeError> {
         match self {
             Self::Tcp {
                 listener,
@@ -163,7 +162,7 @@ impl BoundTransportListener {
     }
 }
 
-pub(crate) struct TransportEncryptionState {
+pub struct TransportEncryptionState {
     encrypt: MinecraftStreamCipher,
     decrypt: MinecraftStreamCipher,
 }
@@ -177,13 +176,13 @@ impl TransportEncryptionState {
     }
 }
 
-pub(crate) struct MinecraftStreamCipher {
+pub struct MinecraftStreamCipher {
     cipher: Aes128,
     shift_register: [u8; 16],
 }
 
 impl MinecraftStreamCipher {
-    pub(crate) fn new(shared_secret: [u8; 16]) -> Self {
+    pub fn new(shared_secret: [u8; 16]) -> Self {
         Self {
             cipher: Aes128::new_from_slice(&shared_secret)
                 .expect("AES-128 key length should be exactly 16 bytes"),
@@ -191,7 +190,7 @@ impl MinecraftStreamCipher {
         }
     }
 
-    pub(crate) fn apply_encrypt(&mut self, bytes: &mut [u8]) {
+    pub fn apply_encrypt(&mut self, bytes: &mut [u8]) {
         for byte in bytes {
             let mut block = aes::Block::default();
             block.copy_from_slice(&self.shift_register);
@@ -203,7 +202,7 @@ impl MinecraftStreamCipher {
         }
     }
 
-    pub(crate) fn apply_decrypt(&mut self, bytes: &mut [u8]) {
+    pub fn apply_decrypt(&mut self, bytes: &mut [u8]) {
         for byte in bytes {
             let ciphertext = *byte;
             let mut block = aes::Block::default();
@@ -217,7 +216,7 @@ impl MinecraftStreamCipher {
     }
 }
 
-pub(crate) fn build_listener_plans(
+pub fn build_listener_plans(
     config: &ServerConfig,
     protocols: &ProtocolRegistry,
 ) -> Result<Vec<ListenerPlan>, RuntimeError> {
@@ -271,7 +270,7 @@ pub(crate) fn build_listener_plans(
     Ok(plans)
 }
 
-pub(crate) async fn bind_transport_listener(
+pub async fn bind_transport_listener(
     plan: ListenerPlan,
     config: &ServerConfig,
 ) -> Result<BoundTransportListener, RuntimeError> {
@@ -310,7 +309,7 @@ pub(crate) async fn bind_transport_listener(
                 RuntimeError::Unsupported(format!("failed to start bedrock listener: {error}"))
             })?;
             Ok(BoundTransportListener::Bedrock {
-                listener,
+                listener: Box::new(listener),
                 bind_addr: plan.bind_addr,
                 adapter_ids: plan.adapter_ids,
             })
@@ -318,7 +317,7 @@ pub(crate) async fn bind_transport_listener(
     }
 }
 
-pub(crate) fn default_wire_codec(transport: TransportKind) -> &'static dyn WireCodec {
+pub fn default_wire_codec(transport: TransportKind) -> &'static dyn WireCodec {
     static TCP_CODEC: MinecraftWireCodec = MinecraftWireCodec;
     match transport {
         TransportKind::Tcp => &TCP_CODEC,
@@ -326,7 +325,7 @@ pub(crate) fn default_wire_codec(transport: TransportKind) -> &'static dyn WireC
     }
 }
 
-pub(crate) async fn write_payload(
+pub async fn write_payload(
     transport_io: &mut TransportSessionIo,
     codec: &dyn WireCodec,
     payload: &[u8],

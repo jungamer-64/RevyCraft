@@ -1,20 +1,29 @@
-use super::*;
+use super::{
+    Arc, AuthGeneration, AuthPluginApiV1, AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest,
+    GameplayGeneration, GameplayPluginApiV1, GameplayRequest, Library, Mutex,
+    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1, PLUGIN_MANIFEST_SYMBOL_V1,
+    PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginErrorCode,
+    PluginGenerationId, PluginLoader, PluginManifestV1, PluginPackage, PluginSource,
+    ProtocolGeneration, ProtocolPluginApiV1, ProtocolRequest, RuntimeError, StorageGeneration,
+    StoragePluginApiV1, StorageRequest, decode_manifest, expect_auth_capabilities,
+    expect_auth_descriptor, expect_gameplay_capabilities, expect_gameplay_descriptor,
+    expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
+    expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
+    gameplay_host_api, gameplay_profile_id_from_manifest, invoke_auth, invoke_gameplay,
+    invoke_protocol, invoke_storage, manifest_profile_id, require_manifest_capability,
+};
+
+type LibraryGuard = Option<Arc<Mutex<Library>>>;
+type LoadedProtocolApi = (LibraryGuard, DecodedManifest, ProtocolPluginApiV1);
+type LoadedGameplayApi = (LibraryGuard, DecodedManifest, GameplayPluginApiV1);
+type LoadedStorageApi = (LibraryGuard, DecodedManifest, StoragePluginApiV1);
+type LoadedAuthApi = (LibraryGuard, DecodedManifest, AuthPluginApiV1);
 
 impl PluginLoader {
-    fn load_protocol_api(
-        &self,
-        package: &PluginPackage,
-    ) -> Result<
-        (
-            Option<Arc<Mutex<Library>>>,
-            DecodedManifest,
-            ProtocolPluginApiV1,
-        ),
-        RuntimeError,
-    > {
+    fn load_protocol_api(package: &PluginPackage) -> Result<LoadedProtocolApi, RuntimeError> {
         match &package.source {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                self.load_dynamic_protocol(library_path)
+                Self::load_dynamic_protocol(library_path)
             },
             PluginSource::InProcessProtocol(plugin) => {
                 Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
@@ -28,20 +37,10 @@ impl PluginLoader {
         }
     }
 
-    fn load_gameplay_api(
-        &self,
-        package: &PluginPackage,
-    ) -> Result<
-        (
-            Option<Arc<Mutex<Library>>>,
-            DecodedManifest,
-            GameplayPluginApiV1,
-        ),
-        RuntimeError,
-    > {
+    fn load_gameplay_api(package: &PluginPackage) -> Result<LoadedGameplayApi, RuntimeError> {
         match &package.source {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                self.load_dynamic_gameplay(library_path)
+                Self::load_dynamic_gameplay(library_path)
             },
             PluginSource::InProcessGameplay(plugin) => {
                 let status = unsafe { (plugin.api.set_host_api)(&gameplay_host_api()) };
@@ -62,20 +61,10 @@ impl PluginLoader {
         }
     }
 
-    fn load_storage_api(
-        &self,
-        package: &PluginPackage,
-    ) -> Result<
-        (
-            Option<Arc<Mutex<Library>>>,
-            DecodedManifest,
-            StoragePluginApiV1,
-        ),
-        RuntimeError,
-    > {
+    fn load_storage_api(package: &PluginPackage) -> Result<LoadedStorageApi, RuntimeError> {
         match &package.source {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                self.load_dynamic_storage(library_path)
+                Self::load_dynamic_storage(library_path)
             },
             PluginSource::InProcessStorage(plugin) => {
                 Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
@@ -89,20 +78,10 @@ impl PluginLoader {
         }
     }
 
-    fn load_auth_api(
-        &self,
-        package: &PluginPackage,
-    ) -> Result<
-        (
-            Option<Arc<Mutex<Library>>>,
-            DecodedManifest,
-            AuthPluginApiV1,
-        ),
-        RuntimeError,
-    > {
+    fn load_auth_api(package: &PluginPackage) -> Result<LoadedAuthApi, RuntimeError> {
         match &package.source {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                self.load_dynamic_auth(library_path)
+                Self::load_dynamic_auth(library_path)
             },
             PluginSource::InProcessAuth(plugin) => {
                 Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
@@ -121,19 +100,19 @@ impl PluginLoader {
         package: &PluginPackage,
         generation_id: PluginGenerationId,
     ) -> Result<ProtocolGeneration, RuntimeError> {
-        let (guard, manifest, api) = self.load_protocol_api(package)?;
+        let (guard, manifest, api) = Self::load_protocol_api(package)?;
         self.validate_manifest(package, &manifest)?;
         let descriptor = expect_protocol_descriptor(
             &package.plugin_id,
-            invoke_protocol(&api, ProtocolRequest::Describe)?,
+            invoke_protocol(&api, &ProtocolRequest::Describe)?,
         )?;
         let bedrock_listener_descriptor = expect_protocol_bedrock_listener_descriptor(
             &package.plugin_id,
-            invoke_protocol(&api, ProtocolRequest::DescribeBedrockListener)?,
+            invoke_protocol(&api, &ProtocolRequest::DescribeBedrockListener)?,
         )?;
         let capabilities = expect_protocol_capabilities(
             &package.plugin_id,
-            invoke_protocol(&api, ProtocolRequest::CapabilitySet)?,
+            invoke_protocol(&api, &ProtocolRequest::CapabilitySet)?,
         )?;
         Ok(ProtocolGeneration {
             generation_id,
@@ -152,7 +131,7 @@ impl PluginLoader {
         package: &PluginPackage,
         generation_id: PluginGenerationId,
     ) -> Result<GameplayGeneration, RuntimeError> {
-        let (guard, manifest, api) = self.load_gameplay_api(package)?;
+        let (guard, manifest, api) = Self::load_gameplay_api(package)?;
         self.validate_manifest(package, &manifest)?;
         let profile_id = gameplay_profile_id_from_manifest(&manifest, &package.plugin_id)?;
         require_manifest_capability(
@@ -163,7 +142,7 @@ impl PluginLoader {
         )?;
         let descriptor = expect_gameplay_descriptor(
             &package.plugin_id,
-            invoke_gameplay(&package.plugin_id, &api, GameplayRequest::Describe)?,
+            invoke_gameplay(&package.plugin_id, &api, &GameplayRequest::Describe)?,
         )?;
         if descriptor.profile != profile_id {
             return Err(RuntimeError::Config(format!(
@@ -175,7 +154,7 @@ impl PluginLoader {
         }
         let capabilities = expect_gameplay_capabilities(
             &package.plugin_id,
-            invoke_gameplay(&package.plugin_id, &api, GameplayRequest::CapabilitySet)?,
+            invoke_gameplay(&package.plugin_id, &api, &GameplayRequest::CapabilitySet)?,
         )?;
         Ok(GameplayGeneration {
             generation_id,
@@ -193,7 +172,7 @@ impl PluginLoader {
         package: &PluginPackage,
         generation_id: PluginGenerationId,
     ) -> Result<StorageGeneration, RuntimeError> {
-        let (guard, manifest, api) = self.load_storage_api(package)?;
+        let (guard, manifest, api) = Self::load_storage_api(package)?;
         self.validate_manifest(package, &manifest)?;
         let profile_id =
             manifest_profile_id(&manifest, "storage.profile:", &package.plugin_id, "storage")?;
@@ -205,7 +184,7 @@ impl PluginLoader {
         )?;
         let descriptor = expect_storage_descriptor(
             &package.plugin_id,
-            invoke_storage(&package.plugin_id, &api, StorageRequest::Describe)?,
+            invoke_storage(&package.plugin_id, &api, &StorageRequest::Describe)?,
         )?;
         if descriptor.storage_profile != profile_id {
             return Err(RuntimeError::Config(format!(
@@ -215,7 +194,7 @@ impl PluginLoader {
         }
         let capabilities = expect_storage_capabilities(
             &package.plugin_id,
-            invoke_storage(&package.plugin_id, &api, StorageRequest::CapabilitySet)?,
+            invoke_storage(&package.plugin_id, &api, &StorageRequest::CapabilitySet)?,
         )?;
         Ok(StorageGeneration {
             generation_id,
@@ -233,14 +212,14 @@ impl PluginLoader {
         package: &PluginPackage,
         generation_id: PluginGenerationId,
     ) -> Result<AuthGeneration, RuntimeError> {
-        let (guard, manifest, api) = self.load_auth_api(package)?;
+        let (guard, manifest, api) = Self::load_auth_api(package)?;
         self.validate_manifest(package, &manifest)?;
         let profile_id =
             manifest_profile_id(&manifest, "auth.profile:", &package.plugin_id, "auth")?;
         require_manifest_capability(&manifest, "runtime.reload.auth", &package.plugin_id, "auth")?;
         let descriptor = expect_auth_descriptor(
             &package.plugin_id,
-            invoke_auth(&package.plugin_id, &api, AuthRequest::Describe)?,
+            invoke_auth(&package.plugin_id, &api, &AuthRequest::Describe)?,
         )?;
         if descriptor.auth_profile != profile_id {
             return Err(RuntimeError::Config(format!(
@@ -250,7 +229,7 @@ impl PluginLoader {
         }
         let capabilities = expect_auth_capabilities(
             &package.plugin_id,
-            invoke_auth(&package.plugin_id, &api, AuthRequest::CapabilitySet)?,
+            invoke_auth(&package.plugin_id, &api, &AuthRequest::CapabilitySet)?,
         )?;
         Ok(AuthGeneration {
             generation_id,
@@ -265,16 +244,8 @@ impl PluginLoader {
     }
 
     unsafe fn load_dynamic_protocol(
-        &self,
         library_path: &Path,
-    ) -> Result<
-        (
-            Option<Arc<Mutex<Library>>>,
-            DecodedManifest,
-            ProtocolPluginApiV1,
-        ),
-        RuntimeError,
-    > {
+    ) -> Result<LoadedProtocolApi, RuntimeError> {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
             let library = library
@@ -306,16 +277,8 @@ impl PluginLoader {
     }
 
     unsafe fn load_dynamic_gameplay(
-        &self,
         library_path: &Path,
-    ) -> Result<
-        (
-            Option<Arc<Mutex<Library>>>,
-            DecodedManifest,
-            GameplayPluginApiV1,
-        ),
-        RuntimeError,
-    > {
+    ) -> Result<LoadedGameplayApi, RuntimeError> {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
             let library = library
@@ -353,17 +316,7 @@ impl PluginLoader {
         Ok((Some(library), decode_manifest(manifest_ptr)?, api))
     }
 
-    unsafe fn load_dynamic_storage(
-        &self,
-        library_path: &Path,
-    ) -> Result<
-        (
-            Option<Arc<Mutex<Library>>>,
-            DecodedManifest,
-            StoragePluginApiV1,
-        ),
-        RuntimeError,
-    > {
+    unsafe fn load_dynamic_storage(library_path: &Path) -> Result<LoadedStorageApi, RuntimeError> {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
             let library = library
@@ -394,17 +347,7 @@ impl PluginLoader {
         Ok((Some(library), decode_manifest(manifest_ptr)?, api))
     }
 
-    unsafe fn load_dynamic_auth(
-        &self,
-        library_path: &Path,
-    ) -> Result<
-        (
-            Option<Arc<Mutex<Library>>>,
-            DecodedManifest,
-            AuthPluginApiV1,
-        ),
-        RuntimeError,
-    > {
+    unsafe fn load_dynamic_auth(library_path: &Path) -> Result<LoadedAuthApi, RuntimeError> {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
             let library = library

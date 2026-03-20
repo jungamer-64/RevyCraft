@@ -61,6 +61,11 @@ pub enum PluginFailurePolicy {
 }
 
 impl PluginFailurePolicy {
+    /// Parses the configured plugin failure policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the provided value does not match a supported policy.
     pub fn parse(value: &str) -> Result<Self, RuntimeError> {
         if value.eq_ignore_ascii_case("quarantine") {
             Ok(Self::Quarantine)
@@ -88,6 +93,11 @@ impl Default for PluginAbiRange {
 }
 
 impl PluginAbiRange {
+    /// Parses a `major.minor` plugin ABI version string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the provided value is not a valid `major.minor` ABI version.
     pub fn parse_version(value: &str) -> Result<PluginAbiVersion, RuntimeError> {
         let Some((major, minor)) = value.split_once('.') else {
             return Err(RuntimeError::Config(format!(
@@ -225,6 +235,12 @@ pub struct PluginCatalog {
 }
 
 impl PluginCatalog {
+    /// Discovers dynamic plugin packages from the configured plugin root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin root cannot be read or when any discovered manifest is
+    /// invalid.
     pub fn discover(
         root: &Path,
         allowlist: Option<&HashSet<String>>,
@@ -442,8 +458,8 @@ fn decode_plugin_error(
 }
 
 impl ProtocolGeneration {
-    fn invoke(&self, request: ProtocolRequest) -> Result<ProtocolResponse, ProtocolError> {
-        let request_bytes = encode_protocol_request(&request)
+    fn invoke(&self, request: &ProtocolRequest) -> Result<ProtocolResponse, ProtocolError> {
+        let request_bytes = encode_protocol_request(request)
             .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
         let mut output = OwnedBuffer::empty();
         let mut error = OwnedBuffer::empty();
@@ -453,8 +469,8 @@ impl ProtocolGeneration {
                     ptr: request_bytes.as_ptr(),
                     len: request_bytes.len(),
                 },
-                &mut output,
-                &mut error,
+                &raw mut output,
+                &raw mut error,
             )
         };
         if status != PluginErrorCode::Ok {
@@ -470,13 +486,20 @@ impl ProtocolGeneration {
         unsafe {
             (self.free_buffer)(output);
         }
-        decode_protocol_response(&request, &response_bytes)
+        decode_protocol_response(request, &response_bytes)
             .map_err(|error| ProtocolError::Plugin(error.to_string()))
     }
 }
 
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct GameplayQueryHandle {
+    data: *const (),
+    vtable: *const (),
+}
+
 thread_local! {
-    static CURRENT_GAMEPLAY_QUERY: RefCell<Option<*const dyn GameplayQuery>> = RefCell::new(None);
+    static CURRENT_GAMEPLAY_QUERY: RefCell<Option<GameplayQueryHandle>> = const { RefCell::new(None) };
 }
 
 fn with_gameplay_query<T>(
@@ -485,11 +508,8 @@ fn with_gameplay_query<T>(
 ) -> Result<T, String> {
     CURRENT_GAMEPLAY_QUERY.with(|slot| {
         // The pointer never outlives this closure; callbacks run synchronously inside `f`.
-        let query_ptr = unsafe {
-            std::mem::transmute::<*const dyn GameplayQuery, *const dyn GameplayQuery>(
-                query as *const dyn GameplayQuery,
-            )
-        };
+        let query_ptr =
+            unsafe { std::mem::transmute::<&dyn GameplayQuery, GameplayQueryHandle>(query) };
         let previous = slot.replace(Some(query_ptr));
         let result = f();
         let _ = slot.replace(previous);
@@ -505,7 +525,9 @@ fn with_current_gameplay_query<T>(
             slot.borrow().as_ref().copied().ok_or_else(|| {
                 "gameplay host callback invoked without an active query".to_string()
             })?;
-        let query = unsafe { &*query };
+        let query_ptr =
+            unsafe { std::mem::transmute::<GameplayQueryHandle, *const dyn GameplayQuery>(query) };
+        let query = unsafe { &*query_ptr };
         f(query)
     })
 }
@@ -644,7 +666,7 @@ fn write_error_buffer(error_out: *mut OwnedBuffer, message: String) {
 }
 
 #[derive(Clone)]
-pub(crate) struct GameplayGeneration {
+pub struct GameplayGeneration {
     generation_id: PluginGenerationId,
     plugin_id: String,
     profile_id: GameplayProfileId,
@@ -655,8 +677,8 @@ pub(crate) struct GameplayGeneration {
 }
 
 impl GameplayGeneration {
-    fn invoke(&self, request: GameplayRequest) -> Result<GameplayResponse, String> {
-        let request_bytes = encode_gameplay_request(&request).map_err(|error| error.to_string())?;
+    fn invoke(&self, request: &GameplayRequest) -> Result<GameplayResponse, String> {
+        let request_bytes = encode_gameplay_request(request).map_err(|error| error.to_string())?;
         let mut output = OwnedBuffer::empty();
         let mut error = OwnedBuffer::empty();
         let status = unsafe {
@@ -665,8 +687,8 @@ impl GameplayGeneration {
                     ptr: request_bytes.as_ptr(),
                     len: request_bytes.len(),
                 },
-                &mut output,
-                &mut error,
+                &raw mut output,
+                &raw mut error,
             )
         };
         if status != PluginErrorCode::Ok {
@@ -681,7 +703,7 @@ impl GameplayGeneration {
         unsafe {
             (self.free_buffer)(output);
         }
-        decode_gameplay_response(&request, &response_bytes).map_err(|error| error.to_string())
+        decode_gameplay_response(request, &response_bytes).map_err(|error| error.to_string())
     }
 }
 
@@ -699,8 +721,8 @@ struct StorageGeneration {
 }
 
 impl StorageGeneration {
-    fn invoke(&self, request: StorageRequest) -> Result<StorageResponse, StorageError> {
-        let request_bytes = encode_storage_request(&request)
+    fn invoke(&self, request: &StorageRequest) -> Result<StorageResponse, StorageError> {
+        let request_bytes = encode_storage_request(request)
             .map_err(|error| StorageError::Plugin(error.to_string()))?;
         let mut output = OwnedBuffer::empty();
         let mut error = OwnedBuffer::empty();
@@ -710,8 +732,8 @@ impl StorageGeneration {
                     ptr: request_bytes.as_ptr(),
                     len: request_bytes.len(),
                 },
-                &mut output,
-                &mut error,
+                &raw mut output,
+                &raw mut error,
             )
         };
         if status != PluginErrorCode::Ok {
@@ -726,14 +748,14 @@ impl StorageGeneration {
         unsafe {
             (self.free_buffer)(output);
         }
-        decode_storage_response(&request, &response_bytes)
+        decode_storage_response(request, &response_bytes)
             .map_err(|error| StorageError::Plugin(error.to_string()))
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct AuthGeneration {
-    pub(crate) generation_id: PluginGenerationId,
+pub struct AuthGeneration {
+    pub generation_id: PluginGenerationId,
     plugin_id: String,
     profile_id: String,
     mode: AuthMode,
@@ -745,8 +767,8 @@ pub(crate) struct AuthGeneration {
 }
 
 impl AuthGeneration {
-    fn invoke(&self, request: AuthRequest) -> Result<AuthResponse, String> {
-        let request_bytes = encode_auth_request(&request).map_err(|error| error.to_string())?;
+    fn invoke(&self, request: &AuthRequest) -> Result<AuthResponse, String> {
+        let request_bytes = encode_auth_request(request).map_err(|error| error.to_string())?;
         let mut output = OwnedBuffer::empty();
         let mut error = OwnedBuffer::empty();
         let status = unsafe {
@@ -755,8 +777,8 @@ impl AuthGeneration {
                     ptr: request_bytes.as_ptr(),
                     len: request_bytes.len(),
                 },
-                &mut output,
-                &mut error,
+                &raw mut output,
+                &raw mut error,
             )
         };
         if status != PluginErrorCode::Ok {
@@ -771,16 +793,16 @@ impl AuthGeneration {
         unsafe {
             (self.free_buffer)(output);
         }
-        decode_auth_response(&request, &response_bytes).map_err(|error| error.to_string())
+        decode_auth_response(request, &response_bytes).map_err(|error| error.to_string())
     }
 
-    pub(crate) fn mode(&self) -> AuthMode {
+    pub const fn mode(&self) -> AuthMode {
         self.mode
     }
 
-    pub(crate) fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
+    pub fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
         match self
-            .invoke(AuthRequest::AuthenticateOffline {
+            .invoke(&AuthRequest::AuthenticateOffline {
                 username: username.to_string(),
             })
             .map_err(RuntimeError::Config)?
@@ -792,13 +814,13 @@ impl AuthGeneration {
         }
     }
 
-    pub(crate) fn authenticate_online(
+    pub fn authenticate_online(
         &self,
         username: &str,
         server_hash: &str,
     ) -> Result<PlayerId, RuntimeError> {
         match self
-            .invoke(AuthRequest::AuthenticateOnline {
+            .invoke(&AuthRequest::AuthenticateOnline {
                 username: username.to_string(),
                 server_hash: server_hash.to_string(),
             })
@@ -811,12 +833,12 @@ impl AuthGeneration {
         }
     }
 
-    pub(crate) fn authenticate_bedrock_offline(
+    pub fn authenticate_bedrock_offline(
         &self,
         display_name: &str,
     ) -> Result<BedrockAuthResult, RuntimeError> {
         match self
-            .invoke(AuthRequest::AuthenticateBedrockOffline {
+            .invoke(&AuthRequest::AuthenticateBedrockOffline {
                 display_name: display_name.to_string(),
             })
             .map_err(RuntimeError::Config)?
@@ -828,13 +850,13 @@ impl AuthGeneration {
         }
     }
 
-    pub(crate) fn authenticate_bedrock_xbl(
+    pub fn authenticate_bedrock_xbl(
         &self,
         chain_jwts: &[String],
         client_data_jwt: &str,
     ) -> Result<BedrockAuthResult, RuntimeError> {
         match self
-            .invoke(AuthRequest::AuthenticateBedrockXbl {
+            .invoke(&AuthRequest::AuthenticateBedrockXbl {
                 chain_jwts: chain_jwts.to_vec(),
                 client_data_jwt: client_data_jwt.to_string(),
             })
@@ -854,7 +876,7 @@ pub struct PluginLoader {
 
 impl PluginLoader {
     #[must_use]
-    pub fn new(abi_range: PluginAbiRange) -> Self {
+    pub const fn new(abi_range: PluginAbiRange) -> Self {
         Self { abi_range }
     }
 }
@@ -866,7 +888,7 @@ struct HotSwappableProtocolAdapter {
 }
 
 impl HotSwappableProtocolAdapter {
-    fn new(
+    const fn new(
         plugin_id: String,
         generation: Arc<ProtocolGeneration>,
         quarantine: Arc<QuarantineManager>,
@@ -918,7 +940,7 @@ impl HandshakeProbe for HotSwappableProtocolAdapter {
     fn try_route(&self, frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::TryRoute {
+            match generation.invoke(&ProtocolRequest::TryRoute {
                 frame: frame.to_vec(),
             })? {
                 ProtocolResponse::HandshakeIntent(intent) => Ok(intent),
@@ -934,7 +956,7 @@ impl WireCodec for HotSwappableProtocolAdapter {
     fn encode_frame(&self, payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::EncodeWireFrame {
+            match generation.invoke(&ProtocolRequest::EncodeWireFrame {
                 payload: payload.to_vec(),
             })? {
                 ProtocolResponse::Frame(frame) => Ok(frame),
@@ -948,7 +970,7 @@ impl WireCodec for HotSwappableProtocolAdapter {
     fn try_decode_frame(&self, buffer: &mut BytesMut) -> Result<Option<Vec<u8>>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::TryDecodeWireFrame {
+            match generation.invoke(&ProtocolRequest::TryDecodeWireFrame {
                 buffer: buffer.to_vec(),
             })? {
                 ProtocolResponse::WireFrameDecodeResult(result) => {
@@ -984,7 +1006,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     fn decode_status(&self, frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::DecodeStatus {
+            match generation.invoke(&ProtocolRequest::DecodeStatus {
                 frame: frame.to_vec(),
             })? {
                 ProtocolResponse::StatusRequest(request) => Ok(request),
@@ -998,7 +1020,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     fn decode_login(&self, frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::DecodeLogin {
+            match generation.invoke(&ProtocolRequest::DecodeLogin {
                 frame: frame.to_vec(),
             })? {
                 ProtocolResponse::LoginRequest(request) => Ok(request),
@@ -1012,7 +1034,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     fn encode_status_response(&self, status: &ServerListStatus) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::EncodeStatusResponse {
+            match generation.invoke(&ProtocolRequest::EncodeStatusResponse {
                 status: status.clone(),
             })? {
                 ProtocolResponse::Frame(frame) => Ok(frame),
@@ -1026,7 +1048,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     fn encode_status_pong(&self, payload: i64) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::EncodeStatusPong { payload })? {
+            match generation.invoke(&ProtocolRequest::EncodeStatusPong { payload })? {
                 ProtocolResponse::Frame(frame) => Ok(frame),
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected encode_status_pong payload: {other:?}"
@@ -1042,7 +1064,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     ) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::EncodeDisconnect {
+            match generation.invoke(&ProtocolRequest::EncodeDisconnect {
                 phase,
                 reason: reason.to_string(),
             })? {
@@ -1062,7 +1084,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     ) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::EncodeEncryptionRequest {
+            match generation.invoke(&ProtocolRequest::EncodeEncryptionRequest {
                 server_id: server_id.to_string(),
                 public_key_der: public_key_der.to_vec(),
                 verify_token: verify_token.to_vec(),
@@ -1081,7 +1103,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     ) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::EncodeNetworkSettings {
+            match generation.invoke(&ProtocolRequest::EncodeNetworkSettings {
                 compression_threshold,
             })? {
                 ProtocolResponse::Frame(frame) => Ok(frame),
@@ -1098,7 +1120,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     ) -> Result<Vec<u8>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::EncodeLoginSuccess {
+            match generation.invoke(&ProtocolRequest::EncodeLoginSuccess {
                 player: player.clone(),
             })? {
                 ProtocolResponse::Frame(frame) => Ok(frame),
@@ -1118,7 +1140,7 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
     ) -> Result<Option<mc_core::CoreCommand>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::DecodePlay {
+            match generation.invoke(&ProtocolRequest::DecodePlay {
                 player_id,
                 frame: frame.to_vec(),
             })? {
@@ -1137,7 +1159,7 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         let generation = self.current_generation()?;
         self.quarantine_on_error(
-            match generation.invoke(ProtocolRequest::EncodePlayEvent {
+            match generation.invoke(&ProtocolRequest::EncodePlayEvent {
                 event: event.clone(),
                 context: *context,
             })? {
@@ -1152,16 +1174,17 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
 
 impl ProtocolAdapter for HotSwappableProtocolAdapter {
     fn descriptor(&self) -> ProtocolDescriptor {
-        self.current_generation()
-            .map(|generation| generation.descriptor.clone())
-            .unwrap_or_else(|_| ProtocolDescriptor {
+        self.current_generation().map_or_else(
+            |_| ProtocolDescriptor {
                 adapter_id: self.plugin_id.clone(),
                 transport: TransportKind::Tcp,
                 wire_format: WireFormatKind::MinecraftFramed,
                 edition: mc_proto_common::Edition::Je,
                 version_name: "quarantined".to_string(),
                 protocol_number: -1,
-            })
+            },
+            |generation| generation.descriptor.clone(),
+        )
     }
 
     fn bedrock_listener_descriptor(&self) -> Option<BedrockListenerDescriptor> {
@@ -1183,7 +1206,7 @@ impl ProtocolAdapter for HotSwappableProtocolAdapter {
     }
 }
 
-pub(crate) struct HotSwappableGameplayProfile {
+pub struct HotSwappableGameplayProfile {
     plugin_id: String,
     profile_id: GameplayProfileId,
     generation: RwLock<Arc<GameplayGeneration>>,
@@ -1192,7 +1215,7 @@ pub(crate) struct HotSwappableGameplayProfile {
 }
 
 impl HotSwappableGameplayProfile {
-    fn new(
+    const fn new(
         plugin_id: String,
         profile_id: GameplayProfileId,
         generation: Arc<GameplayGeneration>,
@@ -1228,27 +1251,23 @@ impl HotSwappableGameplayProfile {
             .expect("gameplay generation lock should not be poisoned") = generation;
     }
 
-    pub(crate) fn profile_id(&self) -> GameplayProfileId {
+    pub fn profile_id(&self) -> GameplayProfileId {
         self.profile_id.clone()
     }
 
-    pub(crate) fn capability_set(&self) -> CapabilitySet {
+    pub fn capability_set(&self) -> CapabilitySet {
         self.current_generation()
             .map(|generation| generation.capabilities.clone())
             .unwrap_or_default()
     }
 
-    pub(crate) fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+    pub fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
         self.current_generation()
             .ok()
             .map(|generation| generation.generation_id)
     }
 
-    #[expect(
-        dead_code,
-        reason = "host reload exports from the current generation under the reload gate"
-    )]
-    pub(crate) fn export_session_state(
+    pub fn export_session_state(
         &self,
         session: &GameplaySessionSnapshot,
     ) -> Result<Vec<u8>, RuntimeError> {
@@ -1258,7 +1277,7 @@ impl HotSwappableGameplayProfile {
             .expect("gameplay reload gate should not be poisoned");
         let generation = self.current_generation().map_err(RuntimeError::Config)?;
         match generation
-            .invoke(GameplayRequest::ExportSessionState {
+            .invoke(&GameplayRequest::ExportSessionState {
                 session: session.clone(),
             })
             .map_err(RuntimeError::Config)?
@@ -1270,11 +1289,7 @@ impl HotSwappableGameplayProfile {
         }
     }
 
-    #[expect(
-        dead_code,
-        reason = "host reload imports into the candidate generation before swap"
-    )]
-    pub(crate) fn import_session_state(
+    pub fn import_session_state(
         &self,
         session: &GameplaySessionSnapshot,
         blob: &[u8],
@@ -1285,7 +1300,7 @@ impl HotSwappableGameplayProfile {
             .expect("gameplay reload gate should not be poisoned");
         let generation = self.current_generation().map_err(RuntimeError::Config)?;
         match generation
-            .invoke(GameplayRequest::ImportSessionState {
+            .invoke(&GameplayRequest::ImportSessionState {
                 session: session.clone(),
                 blob: blob.to_vec(),
             })
@@ -1298,17 +1313,14 @@ impl HotSwappableGameplayProfile {
         }
     }
 
-    pub(crate) fn session_closed(
-        &self,
-        session: &GameplaySessionSnapshot,
-    ) -> Result<(), RuntimeError> {
+    pub fn session_closed(&self, session: &GameplaySessionSnapshot) -> Result<(), RuntimeError> {
         let _guard = self
             .reload_gate
             .read()
             .expect("gameplay reload gate should not be poisoned");
         let generation = self.current_generation().map_err(RuntimeError::Config)?;
         match generation
-            .invoke(GameplayRequest::SessionClosed {
+            .invoke(&GameplayRequest::SessionClosed {
                 session: session.clone(),
             })
             .map_err(RuntimeError::Config)?
@@ -1340,7 +1352,7 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
             .expect("gameplay reload gate should not be poisoned");
         let generation = self.current_generation()?;
         with_gameplay_query(query, || {
-            match generation.invoke(GameplayRequest::HandlePlayerJoin {
+            match generation.invoke(&GameplayRequest::HandlePlayerJoin {
                 session,
                 player: player.clone(),
             })? {
@@ -1368,7 +1380,7 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
             .expect("gameplay reload gate should not be poisoned");
         let generation = self.current_generation()?;
         with_gameplay_query(query, || {
-            match generation.invoke(GameplayRequest::HandleCommand {
+            match generation.invoke(&GameplayRequest::HandleCommand {
                 session,
                 command: command.clone(),
             })? {
@@ -1397,7 +1409,7 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
             .expect("gameplay reload gate should not be poisoned");
         let generation = self.current_generation()?;
         with_gameplay_query(query, || {
-            match generation.invoke(GameplayRequest::HandleTick { session, now_ms })? {
+            match generation.invoke(&GameplayRequest::HandleTick { session, now_ms })? {
                 GameplayResponse::Effect(effect) => Ok(effect),
                 other => Err(format!("unexpected gameplay tick payload: {other:?}")),
             }
@@ -1405,7 +1417,7 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
     }
 }
 
-pub(crate) struct HotSwappableStorageProfile {
+pub struct HotSwappableStorageProfile {
     plugin_id: String,
     #[allow(dead_code)]
     profile_id: String,
@@ -1415,7 +1427,7 @@ pub(crate) struct HotSwappableStorageProfile {
 }
 
 impl HotSwappableStorageProfile {
-    fn new(
+    const fn new(
         plugin_id: String,
         profile_id: String,
         generation: Arc<StorageGeneration>,
@@ -1452,38 +1464,31 @@ impl HotSwappableStorageProfile {
             .expect("storage generation lock should not be poisoned") = generation;
     }
 
-    #[expect(
-        dead_code,
-        reason = "phase 4 tests introspect the active storage profile"
-    )]
-    pub(crate) fn profile_id(&self) -> &str {
+    pub fn profile_id(&self) -> &str {
         &self.profile_id
     }
 
     #[allow(dead_code)]
-    pub(crate) fn capability_set(&self) -> CapabilitySet {
+    pub fn capability_set(&self) -> CapabilitySet {
         self.current_generation()
             .map(|generation| generation.capabilities.clone())
             .unwrap_or_default()
     }
 
     #[allow(dead_code)]
-    pub(crate) fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+    pub fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
         self.current_generation()
             .ok()
             .map(|generation| generation.generation_id)
     }
 
-    pub(crate) fn load_snapshot(
-        &self,
-        world_dir: &Path,
-    ) -> Result<Option<WorldSnapshot>, StorageError> {
+    pub fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError> {
         let _guard = self
             .reload_gate
             .read()
             .expect("storage reload gate should not be poisoned");
         let generation = self.current_generation()?;
-        match generation.invoke(StorageRequest::LoadSnapshot {
+        match generation.invoke(&StorageRequest::LoadSnapshot {
             world_dir: world_dir.display().to_string(),
         })? {
             StorageResponse::Snapshot(snapshot) => Ok(snapshot),
@@ -1493,7 +1498,7 @@ impl HotSwappableStorageProfile {
         }
     }
 
-    pub(crate) fn save_snapshot(
+    pub fn save_snapshot(
         &self,
         world_dir: &Path,
         snapshot: &WorldSnapshot,
@@ -1503,7 +1508,7 @@ impl HotSwappableStorageProfile {
             .read()
             .expect("storage reload gate should not be poisoned");
         let generation = self.current_generation()?;
-        match generation.invoke(StorageRequest::SaveSnapshot {
+        match generation.invoke(&StorageRequest::SaveSnapshot {
             world_dir: world_dir.display().to_string(),
             snapshot: snapshot.clone(),
         })? {
@@ -1514,11 +1519,7 @@ impl HotSwappableStorageProfile {
         }
     }
 
-    #[expect(
-        dead_code,
-        reason = "host reload imports into a candidate generation before swap"
-    )]
-    pub(crate) fn import_runtime_state(
+    pub fn import_runtime_state(
         &self,
         world_dir: &Path,
         snapshot: &WorldSnapshot,
@@ -1528,7 +1529,7 @@ impl HotSwappableStorageProfile {
             .read()
             .expect("storage reload gate should not be poisoned");
         let generation = self.current_generation()?;
-        match generation.invoke(StorageRequest::ImportRuntimeState {
+        match generation.invoke(&StorageRequest::ImportRuntimeState {
             world_dir: world_dir.display().to_string(),
             snapshot: snapshot.clone(),
         })? {
@@ -1554,7 +1555,7 @@ impl StorageAdapter for HotSwappableStorageProfile {
     }
 }
 
-pub(crate) struct HotSwappableAuthProfile {
+pub struct HotSwappableAuthProfile {
     plugin_id: String,
     #[allow(dead_code)]
     profile_id: String,
@@ -1563,7 +1564,7 @@ pub(crate) struct HotSwappableAuthProfile {
 }
 
 impl HotSwappableAuthProfile {
-    fn new(
+    const fn new(
         plugin_id: String,
         profile_id: String,
         generation: Arc<AuthGeneration>,
@@ -1598,40 +1599,39 @@ impl HotSwappableAuthProfile {
             .expect("auth generation lock should not be poisoned") = generation;
     }
 
-    #[expect(dead_code, reason = "phase 4 tests introspect the active auth profile")]
-    pub(crate) fn profile_id(&self) -> &str {
+    pub fn profile_id(&self) -> &str {
         &self.profile_id
     }
 
     #[allow(dead_code)]
-    pub(crate) fn capability_set(&self) -> CapabilitySet {
+    pub fn capability_set(&self) -> CapabilitySet {
         self.current_generation()
             .map(|generation| generation.capabilities.clone())
             .unwrap_or_default()
     }
 
     #[allow(dead_code)]
-    pub(crate) fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+    pub fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
         self.current_generation()
             .ok()
             .map(|generation| generation.generation_id)
     }
 
-    pub(crate) fn mode(&self) -> Result<AuthMode, RuntimeError> {
+    pub fn mode(&self) -> Result<AuthMode, RuntimeError> {
         self.current_generation()
             .map(|generation| generation.mode())
             .map_err(RuntimeError::Config)
     }
 
-    pub(crate) fn capture_generation(&self) -> Result<Arc<AuthGeneration>, RuntimeError> {
+    pub fn capture_generation(&self) -> Result<Arc<AuthGeneration>, RuntimeError> {
         self.current_generation().map_err(RuntimeError::Config)
     }
 
-    pub(crate) fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
+    pub fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
         self.capture_generation()?.authenticate_offline(username)
     }
 
-    pub(crate) fn authenticate_online(
+    pub fn authenticate_online(
         &self,
         username: &str,
         server_hash: &str,
@@ -1640,7 +1640,7 @@ impl HotSwappableAuthProfile {
             .authenticate_online(username, server_hash)
     }
 
-    pub(crate) fn authenticate_bedrock_offline(
+    pub fn authenticate_bedrock_offline(
         &self,
         display_name: &str,
     ) -> Result<BedrockAuthResult, RuntimeError> {
@@ -1648,7 +1648,7 @@ impl HotSwappableAuthProfile {
             .authenticate_bedrock_offline(display_name)
     }
 
-    pub(crate) fn authenticate_bedrock_xbl(
+    pub fn authenticate_bedrock_xbl(
         &self,
         chain_jwts: &[String],
         client_data_jwt: &str,
@@ -1717,14 +1717,23 @@ impl PluginHost {
         }
     }
 
+    /// Registers protocol adapters and probes from the plugin catalog.
+    ///
+    /// `load_into_registries()` only registers protocol adapters and probes.
+    /// Use `initialize_runtime_registries()` when gameplay, storage, and auth
+    /// profiles also need to be activated from a concrete `ServerConfig`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a protocol plugin cannot be loaded into the runtime registries.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the protocol plugin registry mutex is poisoned.
     pub fn load_into_registries(
         self: &Arc<Self>,
         registries: &mut RuntimeRegistries,
     ) -> Result<(), RuntimeError> {
-        // `load_into_registries()` only registers protocol adapters and probes.
-        // Use `initialize_runtime_registries()` when gameplay, storage, and
-        // auth profiles also need to be activated from a concrete
-        // `ServerConfig`.
         for package in self.catalog.packages() {
             match package.plugin_kind {
                 PluginKind::Protocol => {
@@ -1752,15 +1761,19 @@ impl PluginHost {
                             },
                         );
                 }
-                PluginKind::Gameplay => {}
-                PluginKind::Storage | PluginKind::Auth => {}
+                PluginKind::Gameplay | PluginKind::Storage | PluginKind::Auth => {}
             }
         }
         registries.attach_plugin_host(Arc::clone(self));
         Ok(())
     }
 
-    pub(crate) fn resolve_gameplay_profile(
+    /// Resolves an active gameplay profile by id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the gameplay plugin registry mutex is poisoned.
+    pub fn resolve_gameplay_profile(
         &self,
         profile_id: &str,
     ) -> Option<Arc<HotSwappableGameplayProfile>> {
@@ -1771,7 +1784,12 @@ impl PluginHost {
             .map(|managed| Arc::clone(&managed.profile))
     }
 
-    pub(crate) fn resolve_storage_profile(
+    /// Resolves an active storage profile by id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the storage plugin registry mutex is poisoned.
+    pub fn resolve_storage_profile(
         &self,
         profile_id: &str,
     ) -> Option<Arc<HotSwappableStorageProfile>> {
@@ -1782,10 +1800,12 @@ impl PluginHost {
             .map(|managed| Arc::clone(&managed.profile))
     }
 
-    pub(crate) fn resolve_auth_profile(
-        &self,
-        profile_id: &str,
-    ) -> Option<Arc<HotSwappableAuthProfile>> {
+    /// Resolves an active auth profile by id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the auth plugin registry mutex is poisoned.
+    pub fn resolve_auth_profile(&self, profile_id: &str) -> Option<Arc<HotSwappableAuthProfile>> {
         self.auth
             .lock()
             .expect("plugin host mutex should not be poisoned")
@@ -1793,6 +1813,16 @@ impl PluginHost {
             .map(|managed| Arc::clone(&managed.profile))
     }
 
+    /// Replaces a managed protocol plugin with a new in-process implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the plugin is not managed by this host or the replacement
+    /// generation cannot be loaded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the protocol plugin registry mutex is poisoned.
     pub fn replace_in_process_protocol_plugin(
         &self,
         plugin: InProcessProtocolPlugin,
@@ -1815,6 +1845,7 @@ impl PluginHost {
         );
         managed.adapter.swap_generation(generation);
         managed.loaded_at = managed.package.modified_at()?;
+        drop(protocols);
         Ok(generation_id)
     }
 
@@ -1823,6 +1854,11 @@ impl PluginHost {
     }
 }
 
+/// Builds a plugin host from the current server configuration.
+///
+/// # Errors
+///
+/// Returns an error when plugin discovery fails or a configured plugin manifest is invalid.
 pub fn plugin_host_from_config(
     config: &ServerConfig,
 ) -> Result<Option<Arc<PluginHost>>, RuntimeError> {
@@ -1844,6 +1880,7 @@ pub fn plugin_host_from_config(
     ))))
 }
 
+#[must_use]
 pub const fn plugin_reload_poll_interval_ms() -> u64 {
     PLUGIN_RELOAD_POLL_INTERVAL_MS
 }

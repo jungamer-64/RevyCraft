@@ -30,6 +30,7 @@ impl ProtocolRegistry {
 
     pub fn register_adapter(&mut self, adapter: Arc<dyn ProtocolAdapter>) -> &mut Self {
         let descriptor = adapter.descriptor();
+        let adapter_id = descriptor.adapter_id;
         self.adapters_by_route.insert(
             (
                 descriptor.transport,
@@ -38,8 +39,7 @@ impl ProtocolRegistry {
             ),
             Arc::clone(&adapter),
         );
-        self.adapters_by_id
-            .insert(descriptor.adapter_id.to_string(), adapter);
+        self.adapters_by_id.insert(adapter_id, adapter);
         self
     }
 
@@ -85,7 +85,7 @@ impl ProtocolRegistry {
             };
             filtered.register_adapter(adapter);
         }
-        filtered.probes = self.probes.clone();
+        filtered.probes.clone_from(&self.probes);
         Ok(filtered)
     }
 

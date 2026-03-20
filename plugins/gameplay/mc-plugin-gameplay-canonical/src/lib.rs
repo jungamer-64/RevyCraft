@@ -1,3 +1,4 @@
+#![allow(clippy::multiple_crate_versions)]
 use mc_core::{
     CanonicalGameplayPolicy, CapabilitySet, GameplayPolicyResolver, GameplayProfileId,
     GameplayQuery, PlayerId, PlayerSnapshot, SessionCapabilitySet,
