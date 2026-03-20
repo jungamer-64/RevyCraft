@@ -101,6 +101,27 @@ fn can_reuse_listener(
 }
 
 impl RuntimeServer {
+    pub(crate) fn take_pending_plugin_fatal_error(&self) -> Option<RuntimeError> {
+        self.plugin_host
+            .as_ref()
+            .and_then(|plugin_host| plugin_host.take_pending_fatal_error())
+    }
+
+    pub(crate) async fn finish_with_runtime_error(
+        &self,
+        error: RuntimeError,
+    ) -> Result<(), RuntimeError> {
+        if matches!(error, RuntimeError::PluginFatal(_)) {
+            self.shutdown_listener_workers().await;
+            self.terminate_all_sessions("Server stopping due to plugin failure")
+                .await;
+            if let Err(save_error) = self.maybe_save().await {
+                eprintln!("best-effort save during fatal shutdown failed: {save_error}");
+            }
+        }
+        Err(error)
+    }
+
     pub(crate) fn listener_bindings(&self) -> Vec<ListenerBinding> {
         self.active_topology().listener_bindings.clone()
     }
@@ -244,16 +265,55 @@ impl RuntimeServer {
 
     pub(super) async fn maybe_save(&self) -> Result<(), RuntimeError> {
         let snapshot = {
-            let mut state = self.state.lock().await;
+            let state = self.state.lock().await;
             if !state.dirty {
                 return Ok(());
             }
-            state.dirty = false;
             state.core.snapshot()
         };
-        self.storage_profile
-            .save_snapshot(&self.config.world_dir, &snapshot)?;
-        Ok(())
+        match self
+            .storage_profile
+            .save_snapshot(&self.config.world_dir, &snapshot)
+        {
+            Ok(()) => {
+                let mut state = self.state.lock().await;
+                state.dirty = false;
+                Ok(())
+            }
+            Err(mc_proto_common::StorageError::Plugin(message)) => {
+                let action = self.plugin_host.as_ref().map_or(
+                    crate::host::PluginFailureAction::FailFast,
+                    |plugin_host| {
+                        plugin_host.handle_runtime_failure(
+                            mc_plugin_api::PluginKind::Storage,
+                            self.storage_profile.plugin_id(),
+                            &message,
+                        )
+                    },
+                );
+                let mut state = self.state.lock().await;
+                state.dirty = true;
+                match action {
+                    crate::host::PluginFailureAction::Skip => {
+                        eprintln!(
+                            "storage runtime failure for `{}` skipped: {message}",
+                            self.storage_profile.plugin_id()
+                        );
+                        Ok(())
+                    }
+                    crate::host::PluginFailureAction::FailFast => {
+                        Err(RuntimeError::PluginFatal(format!(
+                            "storage plugin `{}` failed during runtime: {message}",
+                            self.storage_profile.plugin_id()
+                        )))
+                    }
+                    crate::host::PluginFailureAction::Quarantine => Err(RuntimeError::Storage(
+                        mc_proto_common::StorageError::Plugin(message),
+                    )),
+                }
+            }
+            Err(error) => Err(RuntimeError::Storage(error)),
+        }
     }
 
     async fn dispatch_events(&self, events: Vec<TargetedEvent>) {
@@ -427,19 +487,31 @@ impl RuntimeServer {
         }
     }
 
+    pub(super) async fn terminate_all_sessions(&self, reason: &str) {
+        let handles = self
+            .sessions
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for handle in handles {
+            let _ = handle.tx.send(SessionMessage::Terminate {
+                reason: reason.to_string(),
+            });
+        }
+    }
+
     pub(super) async fn maybe_reload_topology_watch(
         &self,
         plugin_host: &PluginHost,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<TopologyReloadResult, RuntimeError> {
         let loaded = self.config_source.load()?;
         let active = self.active_topology();
         if !loaded.topology_reload_watch && !active.config.topology_reload_watch {
-            return Ok(());
+            return Ok(self.noop_topology_reload_result());
         }
-        let _ = self
-            .reload_topology_with_config(plugin_host, loaded)
-            .await?;
-        Ok(())
+        self.reload_topology_with_config(plugin_host, loaded).await
     }
 
     pub(super) async fn reload_topology(
@@ -459,7 +531,7 @@ impl RuntimeServer {
         let mut candidate_config = active.config.clone();
         let applied_config_change = candidate_config.apply_topology_from(&loaded_config);
 
-        let prepared = plugin_host.prepare_protocol_topology()?;
+        let prepared = plugin_host.prepare_protocol_topology_for_reload()?;
         let current_signature = protocol_topology_signature(&active.protocol_registry);
         let candidate_active_protocols = activate_protocols(&candidate_config, &prepared.registry)?;
         let candidate_signature =

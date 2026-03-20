@@ -582,17 +582,19 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("storage-reload-failure");
     crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
-    let server = spawn_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            plugins_dir: dist_dir.clone(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
-    )
-    .await?;
+    let config = ServerConfig {
+        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+        server_port: 0,
+        plugins_dir: dist_dir.clone(),
+        plugin_allowlist: Some(plugin_allowlist_with_supporting_plugins(
+            &[JE_1_7_10_ADAPTER_ID],
+            STORAGE_AND_AUTH_PLUGIN_IDS,
+        )),
+        plugin_failure_policy_storage: PluginFailureAction::Skip,
+        world_dir: temp_dir.path().join("world"),
+        ..ServerConfig::default()
+    };
+    let server = spawn_server(config.clone(), plugin_test_registries_from_config(&config)?).await?;
     let plugin_host = server
         .plugin_host
         .as_ref()
@@ -1054,6 +1056,82 @@ async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result
     assert_eq!(
         server.runtime.active_topology().generation_id,
         before_generation
+    );
+
+    server.shutdown().await
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn topology_reload_status_reports_draining_generation() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let properties_path = temp_dir.path().join("server.properties");
+    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    write_topology_properties(
+        &properties_path,
+        &dist_dir,
+        &[
+            "default-adapter=je-1_7_10",
+            "enabled-adapters=je-1_7_10,je-1_8_x",
+            "topology-reload-watch=false",
+            "topology-drain-grace-secs=30",
+        ],
+    )?;
+    let server = spawn_server_from_source(
+        ServerConfigSource::Properties(properties_path.clone()),
+        plugin_test_registries_from_dist(
+            dist_dir.clone(),
+            &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
+        )?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+    let (_stream, _buffer) =
+        connect_and_login_java_client(addr, &codec, 5, "topology-status", 0x30, 12).await?;
+    let before_generation = server.runtime.active_topology().generation_id;
+
+    std::thread::sleep(Duration::from_secs(1));
+    write_topology_properties(
+        &properties_path,
+        &dist_dir,
+        &[
+            "default-adapter=je-1_8_x",
+            "enabled-adapters=je-1_7_10,je-1_8_x",
+            "topology-reload-watch=false",
+            "topology-drain-grace-secs=30",
+        ],
+    )?;
+    let result = server.reload_topology().await?;
+    assert_ne!(result.activated_generation_id, before_generation);
+
+    let status = server.status().await;
+    assert_eq!(
+        status.active_topology.generation_id,
+        result.activated_generation_id
+    );
+    assert_eq!(status.active_topology.state, TopologyStatusState::Active);
+    assert_eq!(status.draining_topologies.len(), 1);
+    assert_eq!(
+        status.draining_topologies[0].generation_id,
+        before_generation
+    );
+    assert_eq!(
+        status.draining_topologies[0].state,
+        TopologyStatusState::Draining
+    );
+    assert!(status.draining_topologies[0].drain_deadline_ms.is_some());
+
+    let sessions = server.session_status().await;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].topology_generation_id, before_generation);
+    assert!(
+        status
+            .session_summary
+            .by_topology_generation
+            .iter()
+            .any(|entry| entry.generation_id == before_generation && entry.count == 1)
     );
 
     server.shutdown().await

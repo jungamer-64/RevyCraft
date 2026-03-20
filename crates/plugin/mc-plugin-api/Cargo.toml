@@ -12,6 +12,7 @@ description = "Stable C ABI and binary envelope contract for RevyCraft runtime p
 [dependencies]
 mc-core = { path = "../../core/mc-core" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
+serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 

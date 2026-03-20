@@ -462,26 +462,71 @@ fn spawn_runtime_loop(
                         .await;
                 }
                 _ = tick_interval.tick() => {
-                    run_server.tick().await?;
-                    run_server.enforce_topology_drains().await?;
+                    if let Err(error) = run_server.tick().await {
+                        return run_server.finish_with_runtime_error(error).await;
+                    }
+                    if let Err(error) = run_server.enforce_topology_drains().await {
+                        return run_server.finish_with_runtime_error(error).await;
+                    }
                 }
                 _ = topology_reload_interval.tick(), if run_server.plugin_host.is_some() => {
-                    if let Some(plugin_host) = run_server.plugin_host.as_ref()
-                        && let Err(error) = run_server.maybe_reload_topology_watch(plugin_host).await
-                    {
-                        eprintln!("topology reload failed: {error}");
+                    if let Some(plugin_host) = run_server.plugin_host.as_ref() {
+                        let previous_generation = run_server.active_topology_generation_id();
+                        match run_server.maybe_reload_topology_watch(plugin_host).await {
+                            Ok(result) => {
+                                if result.changed(previous_generation) {
+                                    run_server
+                                        .log_status_summary(&format!(
+                                            "topology reload applied: activated_generation={} reconfigured={}",
+                                            result.activated_generation_id.0,
+                                            if result.reconfigured_adapter_ids.is_empty() {
+                                                "-".to_string()
+                                            } else {
+                                                result.reconfigured_adapter_ids.join(",")
+                                            }
+                                        ))
+                                        .await;
+                                }
+                            }
+                            Err(error) => {
+                                if matches!(error, RuntimeError::PluginFatal(_)) {
+                                    return run_server.finish_with_runtime_error(error).await;
+                                }
+                                eprintln!("topology reload failed: {error}");
+                            }
+                        }
                     }
                 }
                 _ = plugin_reload_interval.tick(), if run_server.config.plugin_reload_watch && run_server.plugin_host.is_some() => {
-                    if let Some(plugin_host) = run_server.plugin_host.as_ref()
-                        && let Err(error) = run_server.reload_plugins(plugin_host).await
-                    {
-                        eprintln!("plugin reload failed: {error}");
+                    if let Some(plugin_host) = run_server.plugin_host.as_ref() {
+                        match run_server.reload_plugins(plugin_host).await {
+                            Ok(reloaded) => {
+                                if !reloaded.is_empty() {
+                                    run_server
+                                        .log_status_summary(&format!(
+                                            "plugin reload applied: {}",
+                                            reloaded.join(",")
+                                        ))
+                                        .await;
+                                }
+                            }
+                            Err(error) => {
+                                if matches!(error, RuntimeError::PluginFatal(_)) {
+                                    return run_server.finish_with_runtime_error(error).await;
+                                }
+                                eprintln!("plugin reload failed: {error}");
+                            }
+                        }
                     }
                 }
                 _ = save_interval.tick() => {
-                    run_server.maybe_save().await?;
+                    if let Err(error) = run_server.maybe_save().await {
+                        return run_server.finish_with_runtime_error(error).await;
+                    }
                 }
+            }
+            if let Some(error) = run_server.take_pending_plugin_fatal_error() {
+                return run_server.finish_with_runtime_error(error).await;
             }
         }
     })

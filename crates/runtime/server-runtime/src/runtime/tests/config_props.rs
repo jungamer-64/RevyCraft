@@ -160,6 +160,88 @@ fn server_properties_parse_topology_reload_settings() -> Result<(), RuntimeError
 }
 
 #[test]
+fn server_properties_parse_per_kind_failure_policies() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let path = temp_dir.path().join("server.properties");
+    fs::write(
+        &path,
+        "plugin-failure-policy-protocol=skip\nplugin-failure-policy-gameplay=fail-fast\nplugin-failure-policy-storage=skip\nplugin-failure-policy-auth=fail-fast\n",
+    )?;
+
+    let config = ServerConfig::from_properties(&path)?;
+    assert_eq!(
+        config.plugin_failure_policy_protocol,
+        PluginFailureAction::Skip
+    );
+    assert_eq!(
+        config.plugin_failure_policy_gameplay,
+        PluginFailureAction::FailFast
+    );
+    assert_eq!(
+        config.plugin_failure_policy_storage,
+        PluginFailureAction::Skip
+    );
+    assert_eq!(
+        config.plugin_failure_policy_auth,
+        PluginFailureAction::FailFast
+    );
+    Ok(())
+}
+
+#[test]
+fn server_properties_use_balanced_failure_policy_defaults() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let path = temp_dir.path().join("server.properties");
+    fs::write(&path, "level-name=flatland\n")?;
+
+    let config = ServerConfig::from_properties(&path)?;
+    assert_eq!(
+        config.plugin_failure_policy_protocol,
+        PluginFailureAction::Quarantine
+    );
+    assert_eq!(
+        config.plugin_failure_policy_gameplay,
+        PluginFailureAction::Quarantine
+    );
+    assert_eq!(
+        config.plugin_failure_policy_storage,
+        PluginFailureAction::FailFast
+    );
+    assert_eq!(config.plugin_failure_policy_auth, PluginFailureAction::Skip);
+    Ok(())
+}
+
+#[test]
+fn server_properties_reject_legacy_failure_policy_key() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let path = temp_dir.path().join("server.properties");
+    fs::write(&path, "plugin-failure-policy=quarantine\n")?;
+
+    let error =
+        ServerConfig::from_properties(&path).expect_err("legacy failure policy key should fail");
+    assert!(matches!(
+        error,
+        RuntimeError::Config(message) if message.contains("plugin-failure-policy is no longer supported")
+    ));
+    Ok(())
+}
+
+#[test]
+fn server_properties_reject_invalid_failure_policy_for_kind() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let path = temp_dir.path().join("server.properties");
+    fs::write(&path, "plugin-failure-policy-storage=quarantine\n")?;
+
+    let error = ServerConfig::from_properties(&path)
+        .expect_err("storage failure policy should reject quarantine");
+    assert!(matches!(
+        error,
+        RuntimeError::Config(message) if message.contains("plugin-failure-policy-storage")
+    ));
+    Ok(())
+}
+
+#[test]
 fn server_properties_reject_non_flat_level_type() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let path = temp_dir.path().join("server.properties");

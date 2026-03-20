@@ -5,6 +5,54 @@ enum UdpDatagramAction {
     UnsupportedBedrock,
 }
 
+mod failing_storage_plugin {
+    use mc_core::{CapabilitySet, WorldSnapshot};
+    use mc_plugin_api::StorageDescriptor;
+    use mc_plugin_sdk_rust::{RustStoragePlugin, StaticPluginManifest, export_storage_plugin};
+    use mc_proto_common::StorageError;
+    use std::path::Path;
+
+    pub const PLUGIN_ID: &str = "storage-failing-runtime";
+    pub const PROFILE_ID: &str = "failing-storage";
+
+    #[derive(Default)]
+    pub struct FailingStoragePlugin;
+
+    impl RustStoragePlugin for FailingStoragePlugin {
+        fn descriptor(&self) -> StorageDescriptor {
+            StorageDescriptor {
+                storage_profile: PROFILE_ID.to_string(),
+            }
+        }
+
+        fn capability_set(&self) -> CapabilitySet {
+            let mut capabilities = CapabilitySet::new();
+            let _ = capabilities.insert("runtime.reload.storage");
+            capabilities
+        }
+
+        fn load_snapshot(&self, _world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError> {
+            Ok(None)
+        }
+
+        fn save_snapshot(
+            &self,
+            _world_dir: &Path,
+            _snapshot: &WorldSnapshot,
+        ) -> Result<(), StorageError> {
+            Err(StorageError::Plugin("storage runtime failure".to_string()))
+        }
+    }
+
+    const MANIFEST: StaticPluginManifest = StaticPluginManifest::storage(
+        PLUGIN_ID,
+        "Failing Storage Plugin",
+        &["storage.profile:failing-storage", "runtime.reload.storage"],
+    );
+
+    export_storage_plugin!(FailingStoragePlugin, MANIFEST);
+}
+
 #[cfg(test)]
 fn classify_udp_datagram(
     protocol_registry: &ProtocolRegistry,
@@ -29,17 +77,22 @@ fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8>, R
     Ok(writer.into_inner())
 }
 
-use super::spawn_server as spawn_server_with_source;
+use super::{
+    TopologyStatusState, format_runtime_status_summary, spawn_server as spawn_server_with_source,
+};
 use crate::RuntimeError;
 use crate::config::{BEDROCK_OFFLINE_AUTH_PROFILE_ID, LevelType, ServerConfig, ServerConfigSource};
 use crate::host::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
-    PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost, plugin_host_from_config,
+    PluginAbiRange, PluginCatalog, PluginFailureAction, PluginFailureMatrix, PluginHost,
+    plugin_host_from_config,
 };
 use crate::registry::RuntimeRegistries;
 use crate::transport::{MinecraftStreamCipher, build_listener_plans, default_wire_codec};
 use bytes::BytesMut;
-use mc_plugin_auth_offline::OFFLINE_AUTH_PROFILE_ID;
+use mc_plugin_auth_offline::{
+    OFFLINE_AUTH_PROFILE_ID, in_process_auth_entrypoints as offline_auth_entrypoints,
+};
 use mc_plugin_auth_online_stub::{
     ONLINE_STUB_AUTH_PLUGIN_ID, ONLINE_STUB_AUTH_PROFILE_ID,
     in_process_auth_entrypoints as online_stub_auth_entrypoints,
@@ -182,6 +235,17 @@ fn plugin_test_registries_from_dist_with_supporting_plugins(
     Ok(registries)
 }
 
+fn plugin_test_registries_from_config(
+    config: &ServerConfig,
+) -> Result<RuntimeRegistries, RuntimeError> {
+    let plugin_host = plugin_host_from_config(config)?.ok_or_else(|| {
+        RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
+    })?;
+    let mut registries = RuntimeRegistries::new();
+    plugin_host.initialize_runtime_registries(config, &mut registries)?;
+    Ok(registries)
+}
+
 fn plugin_test_registries_tcp_only() -> Result<RuntimeRegistries, RuntimeError> {
     plugin_test_registries_with_allowlist(TCP_ONLY_PROTOCOL_PLUGIN_IDS)
 }
@@ -265,12 +329,56 @@ fn in_process_online_auth_registries(
     let plugin_host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix::default(),
     ));
     let mut registries = RuntimeRegistries::new();
     plugin_host.initialize_runtime_registries(
         &ServerConfig {
             auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+            ..ServerConfig::default()
+        },
+        &mut registries,
+    )?;
+    Ok(registries)
+}
+
+fn in_process_failing_storage_registries(
+    failure_action: PluginFailureAction,
+) -> Result<RuntimeRegistries, RuntimeError> {
+    let mut catalog = PluginCatalog::default();
+    register_in_process_protocol_adapter(&mut catalog, JE_1_7_10_ADAPTER_ID)?;
+    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+        plugin_id: "gameplay-canonical".to_string(),
+        manifest: canonical_gameplay_entrypoints().manifest,
+        api: canonical_gameplay_entrypoints().api,
+    });
+    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+        plugin_id: "gameplay-readonly".to_string(),
+        manifest: readonly_gameplay_entrypoints().manifest,
+        api: readonly_gameplay_entrypoints().api,
+    });
+    catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
+        plugin_id: failing_storage_plugin::PLUGIN_ID.to_string(),
+        manifest: failing_storage_plugin::in_process_storage_entrypoints().manifest,
+        api: failing_storage_plugin::in_process_storage_entrypoints().api,
+    });
+    catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
+        plugin_id: "auth-offline".to_string(),
+        manifest: offline_auth_entrypoints().manifest,
+        api: offline_auth_entrypoints().api,
+    });
+    let plugin_host = Arc::new(PluginHost::new(
+        catalog,
+        PluginAbiRange::default(),
+        PluginFailureMatrix {
+            storage: failure_action,
+            ..PluginFailureMatrix::default()
+        },
+    ));
+    let mut registries = RuntimeRegistries::new();
+    plugin_host.initialize_runtime_registries(
+        &ServerConfig {
+            storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
             ..ServerConfig::default()
         },
         &mut registries,
@@ -1060,6 +1168,70 @@ fn player_abilities_flags(packet: &[u8]) -> Result<u8, RuntimeError> {
         ));
     }
     reader.read_u8().map_err(RuntimeError::from)
+}
+
+#[tokio::test]
+async fn storage_skip_keeps_dirty_state_after_runtime_save_failure() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = spawn_server(
+        ServerConfig {
+            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+            server_port: 0,
+            storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
+            plugin_failure_policy_storage: PluginFailureAction::Skip,
+            world_dir: temp_dir.path().join("world"),
+            ..ServerConfig::default()
+        },
+        in_process_failing_storage_registries(PluginFailureAction::Skip)?,
+    )
+    .await?;
+
+    {
+        let mut state = server.runtime.state.lock().await;
+        state.dirty = true;
+    }
+    server.runtime.maybe_save().await?;
+    assert!(server.runtime.state.lock().await.dirty);
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn storage_fail_fast_returns_plugin_fatal_on_runtime_save_failure() -> Result<(), RuntimeError>
+{
+    let temp_dir = tempdir()?;
+    let server = spawn_server(
+        ServerConfig {
+            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+            server_port: 0,
+            storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
+            plugin_failure_policy_storage: PluginFailureAction::FailFast,
+            world_dir: temp_dir.path().join("world"),
+            ..ServerConfig::default()
+        },
+        in_process_failing_storage_registries(PluginFailureAction::FailFast)?,
+    )
+    .await?;
+
+    {
+        let mut state = server.runtime.state.lock().await;
+        state.dirty = true;
+    }
+    let error = server
+        .runtime
+        .maybe_save()
+        .await
+        .expect_err("fail-fast storage policy should return a fatal runtime error");
+    assert!(matches!(
+        error,
+        RuntimeError::PluginFatal(message) if message.contains("storage plugin")
+    ));
+    {
+        let mut state = server.runtime.state.lock().await;
+        state.dirty = false;
+    }
+
+    server.shutdown().await
 }
 
 mod auth;

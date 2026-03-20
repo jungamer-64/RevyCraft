@@ -364,6 +364,7 @@ impl RuntimeServer {
     async fn sync_session_handle(&self, connection_id: ConnectionId, session: &SessionState) {
         if let Some(handle) = self.sessions.lock().await.get_mut(&connection_id) {
             handle.topology_generation_id = session.topology_generation_id;
+            handle.transport = session.transport;
             handle.phase = session.phase;
             handle.adapter_id = session
                 .adapter
@@ -460,6 +461,7 @@ impl RuntimeServer {
             SessionHandle {
                 tx,
                 topology_generation_id: session.topology_generation_id,
+                transport: session.transport,
                 phase: session.phase,
                 adapter_id: session
                     .adapter

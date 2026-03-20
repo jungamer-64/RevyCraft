@@ -1,8 +1,9 @@
 use super::{
     Arc, AuthGeneration, GameplayGeneration, ManagedAuthPlugin, ManagedGameplayPlugin,
-    ManagedProtocolPlugin, ManagedStoragePlugin, PluginHost, RuntimeError, RuntimeReloadContext,
-    StorageGeneration, SystemTime, import_storage_runtime_state, migrate_gameplay_sessions,
-    migrate_protocol_sessions, protocol_reload_compatible,
+    ManagedProtocolPlugin, ManagedStoragePlugin, PluginFailureAction, PluginFailureStage,
+    PluginHost, PluginKind, RuntimeError, RuntimeReloadContext, StorageGeneration, SystemTime,
+    import_storage_runtime_state, migrate_gameplay_sessions, migrate_protocol_sessions,
+    protocol_reload_compatible,
 };
 use crate::runtime::ProtocolReloadSession;
 
@@ -10,10 +11,33 @@ impl PluginHost {
     fn load_protocol_reload_candidate(
         &self,
         managed: &mut ManagedProtocolPlugin,
-    ) -> Result<Option<(SystemTime, Arc<super::ProtocolGeneration>)>, RuntimeError> {
+    ) -> Result<
+        Option<(
+            SystemTime,
+            super::ArtifactIdentity,
+            Arc<super::ProtocolGeneration>,
+        )>,
+        RuntimeError,
+    > {
         managed.package.refresh_dynamic_manifest()?;
         let modified_at = managed.package.modified_at()?;
         if modified_at <= managed.loaded_at {
+            return Ok(None);
+        }
+        let identity = managed.package.artifact_identity(modified_at);
+        if self
+            .failures
+            .is_artifact_quarantined(&managed.package.plugin_id, &identity)
+        {
+            if let Some(reason) = self
+                .failures
+                .artifact_reason(&managed.package.plugin_id, &identity)
+            {
+                eprintln!(
+                    "skipping quarantined protocol reload candidate `{}`: {reason}",
+                    managed.package.plugin_id
+                );
+            }
             return Ok(None);
         }
 
@@ -23,16 +47,27 @@ impl PluginHost {
         {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
+                let reason = error.to_string();
                 eprintln!(
-                    "protocol reload load failed for `{}`: {error}",
+                    "protocol reload load failed for `{}`: {reason}",
                     managed.package.plugin_id
                 );
-                managed.loaded_at = modified_at;
+                let action = self.failures.action_for_kind(PluginKind::Protocol);
+                self.failures.handle_candidate_failure(
+                    PluginKind::Protocol,
+                    PluginFailureStage::Reload,
+                    &managed.package.plugin_id,
+                    identity,
+                    &reason,
+                )?;
+                if action == PluginFailureAction::Skip {
+                    managed.loaded_at = modified_at;
+                }
                 return Ok(None);
             }
         };
 
-        Ok(Some((modified_at, generation)))
+        Ok(Some((modified_at, identity, generation)))
     }
 
     fn reload_protocol_plugin_with_sessions(
@@ -41,7 +76,9 @@ impl PluginHost {
         protocol_sessions: &[ProtocolReloadSession],
         reloaded: &mut Vec<String>,
     ) -> Result<(), RuntimeError> {
-        let Some((modified_at, generation)) = self.load_protocol_reload_candidate(managed)? else {
+        let Some((modified_at, identity, generation)) =
+            self.load_protocol_reload_candidate(managed)?
+        else {
             return Ok(());
         };
         let current_generation = managed
@@ -50,14 +87,38 @@ impl PluginHost {
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
         if !protocol_reload_compatible(&managed.package.plugin_id, &current_generation, &generation)
         {
-            managed.loaded_at = modified_at;
+            let reason = "protocol topology changed during reload".to_string();
+            let action = self.failures.action_for_kind(PluginKind::Protocol);
+            self.failures.handle_candidate_failure(
+                PluginKind::Protocol,
+                PluginFailureStage::Reload,
+                &managed.package.plugin_id,
+                identity,
+                &reason,
+            )?;
+            if action == PluginFailureAction::Skip {
+                managed.loaded_at = modified_at;
+            }
             return Ok(());
         }
         if !migrate_protocol_sessions(managed, &generation, protocol_sessions)? {
-            managed.loaded_at = modified_at;
+            let reason = "protocol session migration failed".to_string();
+            let action = self.failures.action_for_kind(PluginKind::Protocol);
+            self.failures.handle_candidate_failure(
+                PluginKind::Protocol,
+                PluginFailureStage::Reload,
+                &managed.package.plugin_id,
+                identity,
+                &reason,
+            )?;
+            if action == PluginFailureAction::Skip {
+                managed.loaded_at = modified_at;
+            }
             return Ok(());
         }
+        self.failures.clear_plugin_state(&managed.package.plugin_id);
         managed.loaded_at = modified_at;
+        managed.active_loaded_at = modified_at;
         reloaded.push(managed.package.plugin_id.clone());
         Ok(())
     }
@@ -80,10 +141,27 @@ impl PluginHost {
     fn load_gameplay_reload_candidate(
         &self,
         managed: &mut ManagedGameplayPlugin,
-    ) -> Result<Option<(SystemTime, Arc<GameplayGeneration>)>, RuntimeError> {
+    ) -> Result<Option<(SystemTime, super::ArtifactIdentity, Arc<GameplayGeneration>)>, RuntimeError>
+    {
         managed.package.refresh_dynamic_manifest()?;
         let modified_at = managed.package.modified_at()?;
         if modified_at <= managed.loaded_at {
+            return Ok(None);
+        }
+        let identity = managed.package.artifact_identity(modified_at);
+        if self
+            .failures
+            .is_artifact_quarantined(&managed.package.plugin_id, &identity)
+        {
+            if let Some(reason) = self
+                .failures
+                .artifact_reason(&managed.package.plugin_id, &identity)
+            {
+                eprintln!(
+                    "skipping quarantined gameplay reload candidate `{}`: {reason}",
+                    managed.package.plugin_id
+                );
+            }
             return Ok(None);
         }
 
@@ -93,25 +171,46 @@ impl PluginHost {
         {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
+                let reason = error.to_string();
                 eprintln!(
-                    "gameplay reload load failed for `{}`: {error}",
+                    "gameplay reload load failed for `{}`: {reason}",
                     managed.package.plugin_id
                 );
-                managed.loaded_at = modified_at;
+                let action = self.failures.action_for_kind(PluginKind::Gameplay);
+                self.failures.handle_candidate_failure(
+                    PluginKind::Gameplay,
+                    PluginFailureStage::Reload,
+                    &managed.package.plugin_id,
+                    identity,
+                    &reason,
+                )?;
+                if action == PluginFailureAction::Skip {
+                    managed.loaded_at = modified_at;
+                }
                 return Ok(None);
             }
         };
         if generation.profile_id != managed.profile_id {
-            eprintln!(
+            let reason = format!(
                 "gameplay plugin `{}` changed profile from `{}` to `{}` during reload",
                 managed.package.plugin_id,
                 managed.profile_id.as_str(),
                 generation.profile_id.as_str()
             );
-            managed.loaded_at = modified_at;
+            let action = self.failures.action_for_kind(PluginKind::Gameplay);
+            self.failures.handle_candidate_failure(
+                PluginKind::Gameplay,
+                PluginFailureStage::Reload,
+                &managed.package.plugin_id,
+                identity,
+                &reason,
+            )?;
+            if action == PluginFailureAction::Skip {
+                managed.loaded_at = modified_at;
+            }
             return Ok(None);
         }
-        Ok(Some((modified_at, generation)))
+        Ok(Some((modified_at, identity, generation)))
     }
 
     fn reload_gameplay_plugin_with_context(
@@ -120,15 +219,30 @@ impl PluginHost {
         runtime: &RuntimeReloadContext,
         reloaded: &mut Vec<String>,
     ) -> Result<(), RuntimeError> {
-        let Some((modified_at, generation)) = self.load_gameplay_reload_candidate(managed)? else {
+        let Some((modified_at, identity, generation)) =
+            self.load_gameplay_reload_candidate(managed)?
+        else {
             return Ok(());
         };
         let migration_succeeded = migrate_gameplay_sessions(managed, &generation, runtime)?;
-        managed.loaded_at = modified_at;
         if !migration_succeeded {
+            let action = self.failures.action_for_kind(PluginKind::Gameplay);
+            self.failures.handle_candidate_failure(
+                PluginKind::Gameplay,
+                PluginFailureStage::Reload,
+                &managed.package.plugin_id,
+                identity,
+                "gameplay session migration failed",
+            )?;
+            if action == PluginFailureAction::Skip {
+                managed.loaded_at = modified_at;
+            }
             return Ok(());
         }
         managed.profile.swap_generation(generation);
+        self.failures.clear_plugin_state(&managed.package.plugin_id);
+        managed.loaded_at = modified_at;
+        managed.active_loaded_at = modified_at;
         reloaded.push(managed.package.plugin_id.clone());
         Ok(())
     }
@@ -153,10 +267,27 @@ impl PluginHost {
     fn load_storage_reload_candidate(
         &self,
         managed: &mut ManagedStoragePlugin,
-    ) -> Result<Option<(SystemTime, Arc<StorageGeneration>)>, RuntimeError> {
+    ) -> Result<Option<(SystemTime, super::ArtifactIdentity, Arc<StorageGeneration>)>, RuntimeError>
+    {
         managed.package.refresh_dynamic_manifest()?;
         let modified_at = managed.package.modified_at()?;
         if modified_at <= managed.loaded_at {
+            return Ok(None);
+        }
+        let identity = managed.package.artifact_identity(modified_at);
+        if self
+            .failures
+            .is_artifact_quarantined(&managed.package.plugin_id, &identity)
+        {
+            if let Some(reason) = self
+                .failures
+                .artifact_reason(&managed.package.plugin_id, &identity)
+            {
+                eprintln!(
+                    "skipping quarantined storage reload candidate `{}`: {reason}",
+                    managed.package.plugin_id
+                );
+            }
             return Ok(None);
         }
 
@@ -166,23 +297,44 @@ impl PluginHost {
         {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
+                let reason = error.to_string();
                 eprintln!(
-                    "storage reload load failed for `{}`: {error}",
+                    "storage reload load failed for `{}`: {reason}",
                     managed.package.plugin_id
                 );
-                managed.loaded_at = modified_at;
+                let action = self.failures.action_for_kind(PluginKind::Storage);
+                self.failures.handle_candidate_failure(
+                    PluginKind::Storage,
+                    PluginFailureStage::Reload,
+                    &managed.package.plugin_id,
+                    identity,
+                    &reason,
+                )?;
+                if action == PluginFailureAction::Skip {
+                    managed.loaded_at = modified_at;
+                }
                 return Ok(None);
             }
         };
         if generation.profile_id != managed.profile_id {
-            eprintln!(
+            let reason = format!(
                 "storage plugin `{}` changed profile from `{}` to `{}` during reload",
                 managed.package.plugin_id, managed.profile_id, generation.profile_id
             );
-            managed.loaded_at = modified_at;
+            let action = self.failures.action_for_kind(PluginKind::Storage);
+            self.failures.handle_candidate_failure(
+                PluginKind::Storage,
+                PluginFailureStage::Reload,
+                &managed.package.plugin_id,
+                identity,
+                &reason,
+            )?;
+            if action == PluginFailureAction::Skip {
+                managed.loaded_at = modified_at;
+            }
             return Ok(None);
         }
-        Ok(Some((modified_at, generation)))
+        Ok(Some((modified_at, identity, generation)))
     }
 
     fn reload_storage_plugin_with_context(
@@ -191,7 +343,9 @@ impl PluginHost {
         runtime: &RuntimeReloadContext,
         reloaded: &mut Vec<String>,
     ) -> Result<(), RuntimeError> {
-        let Some((modified_at, generation)) = self.load_storage_reload_candidate(managed)? else {
+        let Some((modified_at, identity, generation)) =
+            self.load_storage_reload_candidate(managed)?
+        else {
             return Ok(());
         };
         let _reload_guard = managed
@@ -201,9 +355,23 @@ impl PluginHost {
             .expect("storage reload gate should not be poisoned");
         if import_storage_runtime_state(&managed.package.plugin_id, &generation, runtime) {
             managed.profile.swap_generation(generation);
+            self.failures.clear_plugin_state(&managed.package.plugin_id);
+            managed.loaded_at = modified_at;
+            managed.active_loaded_at = modified_at;
             reloaded.push(managed.package.plugin_id.clone());
+            return Ok(());
         }
-        managed.loaded_at = modified_at;
+        let action = self.failures.action_for_kind(PluginKind::Storage);
+        self.failures.handle_candidate_failure(
+            PluginKind::Storage,
+            PluginFailureStage::Reload,
+            &managed.package.plugin_id,
+            identity,
+            "storage runtime state import failed",
+        )?;
+        if action == PluginFailureAction::Skip {
+            managed.loaded_at = modified_at;
+        }
         Ok(())
     }
 
@@ -227,10 +395,27 @@ impl PluginHost {
     fn load_auth_reload_candidate(
         &self,
         managed: &mut ManagedAuthPlugin,
-    ) -> Result<Option<(SystemTime, Arc<AuthGeneration>)>, RuntimeError> {
+    ) -> Result<Option<(SystemTime, super::ArtifactIdentity, Arc<AuthGeneration>)>, RuntimeError>
+    {
         managed.package.refresh_dynamic_manifest()?;
         let modified_at = managed.package.modified_at()?;
         if modified_at <= managed.loaded_at {
+            return Ok(None);
+        }
+        let identity = managed.package.artifact_identity(modified_at);
+        if self
+            .failures
+            .is_artifact_quarantined(&managed.package.plugin_id, &identity)
+        {
+            if let Some(reason) = self
+                .failures
+                .artifact_reason(&managed.package.plugin_id, &identity)
+            {
+                eprintln!(
+                    "skipping quarantined auth reload candidate `{}`: {reason}",
+                    managed.package.plugin_id
+                );
+            }
             return Ok(None);
         }
 
@@ -240,23 +425,44 @@ impl PluginHost {
         {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
+                let reason = error.to_string();
                 eprintln!(
-                    "auth reload load failed for `{}`: {error}",
+                    "auth reload load failed for `{}`: {reason}",
                     managed.package.plugin_id
                 );
-                managed.loaded_at = modified_at;
+                let action = self.failures.action_for_kind(PluginKind::Auth);
+                self.failures.handle_candidate_failure(
+                    PluginKind::Auth,
+                    PluginFailureStage::Reload,
+                    &managed.package.plugin_id,
+                    identity,
+                    &reason,
+                )?;
+                if action == PluginFailureAction::Skip {
+                    managed.loaded_at = modified_at;
+                }
                 return Ok(None);
             }
         };
         if generation.profile_id != managed.profile_id {
-            eprintln!(
+            let reason = format!(
                 "auth plugin `{}` changed profile from `{}` to `{}` during reload",
                 managed.package.plugin_id, managed.profile_id, generation.profile_id
             );
-            managed.loaded_at = modified_at;
+            let action = self.failures.action_for_kind(PluginKind::Auth);
+            self.failures.handle_candidate_failure(
+                PluginKind::Auth,
+                PluginFailureStage::Reload,
+                &managed.package.plugin_id,
+                identity,
+                &reason,
+            )?;
+            if action == PluginFailureAction::Skip {
+                managed.loaded_at = modified_at;
+            }
             return Ok(None);
         }
-        Ok(Some((modified_at, generation)))
+        Ok(Some((modified_at, identity, generation)))
     }
 
     fn reload_auth_plugin(
@@ -264,11 +470,15 @@ impl PluginHost {
         managed: &mut ManagedAuthPlugin,
         reloaded: &mut Vec<String>,
     ) -> Result<(), RuntimeError> {
-        let Some((modified_at, generation)) = self.load_auth_reload_candidate(managed)? else {
+        let Some((modified_at, _identity, generation)) =
+            self.load_auth_reload_candidate(managed)?
+        else {
             return Ok(());
         };
         managed.profile.swap_generation(generation);
+        self.failures.clear_plugin_state(&managed.package.plugin_id);
         managed.loaded_at = modified_at;
+        managed.active_loaded_at = modified_at;
         reloaded.push(managed.package.plugin_id.clone());
         Ok(())
     }

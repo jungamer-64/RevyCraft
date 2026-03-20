@@ -21,17 +21,18 @@ use mc_plugin_api::{
     encode_gameplay_request, encode_protocol_request, encode_storage_request,
 };
 use mc_proto_common::{
-    BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest,
-    PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus,
-    StatusRequest, StorageAdapter, StorageError, TransportKind, WireCodec, WireFormatKind,
+    BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
+    LoginRequest, PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
+    ServerListStatus, StatusRequest, StorageAdapter, StorageError, TransportKind, WireCodec,
+    WireFormatKind,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "plugin_host/activation.rs"]
 mod activation;
@@ -55,25 +56,218 @@ use self::support::{
 
 const PLUGIN_RELOAD_POLL_INTERVAL_MS: u64 = 1_000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PluginFailurePolicy {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PluginFailureAction {
     Quarantine,
+    Skip,
+    FailFast,
 }
 
-impl PluginFailurePolicy {
-    /// Parses the configured plugin failure policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the provided value does not match a supported policy.
-    pub fn parse(value: &str) -> Result<Self, RuntimeError> {
-        if value.eq_ignore_ascii_case("quarantine") {
-            Ok(Self::Quarantine)
+impl PluginFailureAction {
+    fn parse_with_allowed(value: &str, key: &str, allowed: &[Self]) -> Result<Self, RuntimeError> {
+        let action = if value.eq_ignore_ascii_case("quarantine") {
+            Self::Quarantine
+        } else if value.eq_ignore_ascii_case("skip") {
+            Self::Skip
+        } else if value.eq_ignore_ascii_case("fail-fast") {
+            Self::FailFast
         } else {
-            Err(RuntimeError::Config(format!(
-                "unsupported plugin-failure-policy `{value}`"
-            )))
+            return Err(RuntimeError::Config(format!("unsupported {key} `{value}`")));
+        };
+        if allowed.contains(&action) {
+            Ok(action)
+        } else {
+            Err(RuntimeError::Config(format!("unsupported {key} `{value}`")))
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginFailureMatrix {
+    pub protocol: PluginFailureAction,
+    pub gameplay: PluginFailureAction,
+    pub storage: PluginFailureAction,
+    pub auth: PluginFailureAction,
+}
+
+impl Default for PluginFailureMatrix {
+    fn default() -> Self {
+        Self {
+            protocol: PluginFailureAction::Quarantine,
+            gameplay: PluginFailureAction::Quarantine,
+            storage: PluginFailureAction::FailFast,
+            auth: PluginFailureAction::Skip,
+        }
+    }
+}
+
+impl PluginFailureMatrix {
+    pub fn parse_protocol(value: &str) -> Result<PluginFailureAction, RuntimeError> {
+        PluginFailureAction::parse_with_allowed(
+            value,
+            "plugin-failure-policy-protocol",
+            &[
+                PluginFailureAction::Quarantine,
+                PluginFailureAction::Skip,
+                PluginFailureAction::FailFast,
+            ],
+        )
+    }
+
+    pub fn parse_gameplay(value: &str) -> Result<PluginFailureAction, RuntimeError> {
+        PluginFailureAction::parse_with_allowed(
+            value,
+            "plugin-failure-policy-gameplay",
+            &[
+                PluginFailureAction::Quarantine,
+                PluginFailureAction::Skip,
+                PluginFailureAction::FailFast,
+            ],
+        )
+    }
+
+    pub fn parse_storage(value: &str) -> Result<PluginFailureAction, RuntimeError> {
+        PluginFailureAction::parse_with_allowed(
+            value,
+            "plugin-failure-policy-storage",
+            &[PluginFailureAction::Skip, PluginFailureAction::FailFast],
+        )
+    }
+
+    pub fn parse_auth(value: &str) -> Result<PluginFailureAction, RuntimeError> {
+        PluginFailureAction::parse_with_allowed(
+            value,
+            "plugin-failure-policy-auth",
+            &[PluginFailureAction::Skip, PluginFailureAction::FailFast],
+        )
+    }
+
+    const fn action_for_kind(self, kind: PluginKind) -> PluginFailureAction {
+        match kind {
+            PluginKind::Protocol => self.protocol,
+            PluginKind::Gameplay => self.gameplay,
+            PluginKind::Storage => self.storage,
+            PluginKind::Auth => self.auth,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginArtifactStatusSnapshot {
+    pub source: String,
+    pub modified_at_ms: u64,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProtocolPluginStatusSnapshot {
+    pub plugin_id: String,
+    pub adapter_id: String,
+    pub generation_id: PluginGenerationId,
+    pub loaded_at_ms: u64,
+    pub failure_action: PluginFailureAction,
+    pub current_artifact: PluginArtifactStatusSnapshot,
+    pub active_quarantine_reason: Option<String>,
+    pub artifact_quarantine: Option<PluginArtifactStatusSnapshot>,
+    pub version_name: String,
+    pub transport: TransportKind,
+    pub edition: Edition,
+    pub protocol_number: i32,
+    pub bedrock_listener_descriptor_present: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GameplayPluginStatusSnapshot {
+    pub plugin_id: String,
+    pub profile_id: GameplayProfileId,
+    pub generation_id: PluginGenerationId,
+    pub loaded_at_ms: u64,
+    pub failure_action: PluginFailureAction,
+    pub current_artifact: PluginArtifactStatusSnapshot,
+    pub active_quarantine_reason: Option<String>,
+    pub artifact_quarantine: Option<PluginArtifactStatusSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoragePluginStatusSnapshot {
+    pub plugin_id: String,
+    pub profile_id: String,
+    pub generation_id: PluginGenerationId,
+    pub loaded_at_ms: u64,
+    pub failure_action: PluginFailureAction,
+    pub current_artifact: PluginArtifactStatusSnapshot,
+    pub active_quarantine_reason: Option<String>,
+    pub artifact_quarantine: Option<PluginArtifactStatusSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthPluginStatusSnapshot {
+    pub plugin_id: String,
+    pub profile_id: String,
+    pub generation_id: PluginGenerationId,
+    pub loaded_at_ms: u64,
+    pub failure_action: PluginFailureAction,
+    pub current_artifact: PluginArtifactStatusSnapshot,
+    pub active_quarantine_reason: Option<String>,
+    pub artifact_quarantine: Option<PluginArtifactStatusSnapshot>,
+    pub mode: AuthMode,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginHostStatusSnapshot {
+    pub failure_matrix: PluginFailureMatrix,
+    pub pending_fatal_error: Option<String>,
+    pub protocols: Vec<ProtocolPluginStatusSnapshot>,
+    pub gameplay: Vec<GameplayPluginStatusSnapshot>,
+    pub storage: Vec<StoragePluginStatusSnapshot>,
+    pub auth: Vec<AuthPluginStatusSnapshot>,
+}
+
+impl PluginHostStatusSnapshot {
+    #[must_use]
+    pub fn active_quarantine_count(&self) -> usize {
+        self.protocols
+            .iter()
+            .filter(|plugin| plugin.active_quarantine_reason.is_some())
+            .count()
+            + self
+                .gameplay
+                .iter()
+                .filter(|plugin| plugin.active_quarantine_reason.is_some())
+                .count()
+            + self
+                .storage
+                .iter()
+                .filter(|plugin| plugin.active_quarantine_reason.is_some())
+                .count()
+            + self
+                .auth
+                .iter()
+                .filter(|plugin| plugin.active_quarantine_reason.is_some())
+                .count()
+    }
+
+    #[must_use]
+    pub fn artifact_quarantine_count(&self) -> usize {
+        self.protocols
+            .iter()
+            .filter(|plugin| plugin.artifact_quarantine.is_some())
+            .count()
+            + self
+                .gameplay
+                .iter()
+                .filter(|plugin| plugin.artifact_quarantine.is_some())
+                .count()
+            + self
+                .storage
+                .iter()
+                .filter(|plugin| plugin.artifact_quarantine.is_some())
+                .count()
+            + self
+                .auth
+                .iter()
+                .filter(|plugin| plugin.artifact_quarantine.is_some())
+                .count()
     }
 }
 
@@ -232,6 +426,23 @@ impl PluginPackage {
             .unwrap_or_else(|| Path::new("."))
             .join(relative_library_path);
         Ok(())
+    }
+
+    fn artifact_identity(&self, modified_at: SystemTime) -> ArtifactIdentity {
+        let source = match &self.source {
+            PluginSource::DynamicLibrary {
+                manifest_path,
+                library_path,
+            } => format!("{}|{}", manifest_path.display(), library_path.display()),
+            PluginSource::InProcessProtocol(_)
+            | PluginSource::InProcessGameplay(_)
+            | PluginSource::InProcessStorage(_)
+            | PluginSource::InProcessAuth(_) => "in-process".to_string(),
+        };
+        ArtifactIdentity {
+            source,
+            modified_at,
+        }
     }
 }
 
@@ -398,6 +609,15 @@ fn current_artifact_key() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
+fn system_time_ms(time: SystemTime) -> u64 {
+    u64::try_from(
+        time.duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or_default()
+}
+
 #[derive(Default)]
 pub struct GenerationManager {
     next_generation_id: Mutex<u64>,
@@ -416,16 +636,20 @@ impl GenerationManager {
 }
 
 #[derive(Default)]
-pub struct QuarantineManager {
+pub struct ActiveQuarantineManager {
     reasons: Mutex<HashMap<String, String>>,
 }
 
-impl QuarantineManager {
-    fn quarantine(&self, plugin_id: &str, reason: impl Into<String>) {
-        self.reasons
+impl ActiveQuarantineManager {
+    fn quarantine(&self, plugin_id: &str, reason: impl Into<String>) -> bool {
+        let reason = reason.into();
+        let mut reasons = self
+            .reasons
             .lock()
-            .expect("quarantine mutex should not be poisoned")
-            .insert(plugin_id.to_string(), reason.into());
+            .expect("quarantine mutex should not be poisoned");
+        let changed = reasons.get(plugin_id) != Some(&reason);
+        reasons.insert(plugin_id.to_string(), reason);
+        changed
     }
 
     fn is_quarantined(&self, plugin_id: &str) -> bool {
@@ -435,12 +659,279 @@ impl QuarantineManager {
             .contains_key(plugin_id)
     }
 
+    fn clear(&self, plugin_id: &str) {
+        self.reasons
+            .lock()
+            .expect("quarantine mutex should not be poisoned")
+            .remove(plugin_id);
+    }
+
     pub fn reason(&self, plugin_id: &str) -> Option<String> {
         self.reasons
             .lock()
             .expect("quarantine mutex should not be poisoned")
             .get(plugin_id)
             .cloned()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ArtifactIdentity {
+    source: String,
+    modified_at: SystemTime,
+}
+
+#[derive(Clone, Debug)]
+struct ArtifactQuarantineRecord {
+    identity: ArtifactIdentity,
+    reason: String,
+}
+
+#[derive(Default)]
+struct ArtifactQuarantineManager {
+    records: Mutex<HashMap<String, ArtifactQuarantineRecord>>,
+}
+
+impl ArtifactQuarantineManager {
+    fn quarantine(
+        &self,
+        plugin_id: &str,
+        identity: ArtifactIdentity,
+        reason: impl Into<String>,
+    ) -> bool {
+        let reason = reason.into();
+        let mut records = self
+            .records
+            .lock()
+            .expect("artifact quarantine mutex should not be poisoned");
+        let changed = records
+            .get(plugin_id)
+            .is_none_or(|record| record.identity != identity || record.reason != reason);
+        records.insert(
+            plugin_id.to_string(),
+            ArtifactQuarantineRecord { identity, reason },
+        );
+        changed
+    }
+
+    fn is_quarantined(&self, plugin_id: &str, identity: &ArtifactIdentity) -> bool {
+        self.records
+            .lock()
+            .expect("artifact quarantine mutex should not be poisoned")
+            .get(plugin_id)
+            .is_some_and(|record| &record.identity == identity)
+    }
+
+    fn clear(&self, plugin_id: &str) {
+        self.records
+            .lock()
+            .expect("artifact quarantine mutex should not be poisoned")
+            .remove(plugin_id);
+    }
+
+    fn reason(&self, plugin_id: &str, identity: &ArtifactIdentity) -> Option<String> {
+        self.records
+            .lock()
+            .expect("artifact quarantine mutex should not be poisoned")
+            .get(plugin_id)
+            .filter(|record| &record.identity == identity)
+            .map(|record| record.reason.clone())
+    }
+
+    fn record(&self, plugin_id: &str) -> Option<ArtifactQuarantineRecord> {
+        self.records
+            .lock()
+            .expect("artifact quarantine mutex should not be poisoned")
+            .get(plugin_id)
+            .cloned()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PluginFailureStage {
+    Boot,
+    Reload,
+    Runtime,
+}
+
+impl PluginFailureStage {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Boot => "boot",
+            Self::Reload => "reload",
+            Self::Runtime => "runtime",
+        }
+    }
+}
+
+struct PluginFailureDispatch {
+    matrix: PluginFailureMatrix,
+    active_quarantine: ActiveQuarantineManager,
+    artifact_quarantine: ArtifactQuarantineManager,
+    pending_fatal: Mutex<Option<String>>,
+}
+
+impl PluginFailureDispatch {
+    fn new(matrix: PluginFailureMatrix) -> Self {
+        Self {
+            matrix,
+            active_quarantine: ActiveQuarantineManager {
+                reasons: Mutex::new(HashMap::new()),
+            },
+            artifact_quarantine: ArtifactQuarantineManager {
+                records: Mutex::new(HashMap::new()),
+            },
+            pending_fatal: Mutex::new(None),
+        }
+    }
+
+    const fn action_for_kind(&self, kind: PluginKind) -> PluginFailureAction {
+        self.matrix.action_for_kind(kind)
+    }
+
+    fn active_reason(&self, plugin_id: &str) -> Option<String> {
+        self.active_quarantine.reason(plugin_id)
+    }
+
+    fn pending_fatal_message(&self) -> Option<String> {
+        self.pending_fatal
+            .lock()
+            .expect("pending fatal mutex should not be poisoned")
+            .clone()
+    }
+
+    fn is_active_quarantined(&self, plugin_id: &str) -> bool {
+        self.active_quarantine.is_quarantined(plugin_id)
+    }
+
+    fn is_artifact_quarantined(&self, plugin_id: &str, identity: &ArtifactIdentity) -> bool {
+        self.artifact_quarantine.is_quarantined(plugin_id, identity)
+    }
+
+    fn artifact_reason(&self, plugin_id: &str, identity: &ArtifactIdentity) -> Option<String> {
+        self.artifact_quarantine.reason(plugin_id, identity)
+    }
+
+    fn artifact_record(&self, plugin_id: &str) -> Option<ArtifactQuarantineRecord> {
+        self.artifact_quarantine.record(plugin_id)
+    }
+
+    fn clear_plugin_state(&self, plugin_id: &str) {
+        self.active_quarantine.clear(plugin_id);
+        self.artifact_quarantine.clear(plugin_id);
+    }
+
+    fn record_fatal_message(&self, message: String) {
+        let mut pending = self
+            .pending_fatal
+            .lock()
+            .expect("pending fatal mutex should not be poisoned");
+        if pending.is_none() {
+            eprintln!("plugin fail-fast scheduled graceful shutdown: {message}");
+            *pending = Some(message);
+        }
+    }
+
+    const fn kind_label(kind: PluginKind) -> &'static str {
+        match kind {
+            PluginKind::Protocol => "protocol",
+            PluginKind::Gameplay => "gameplay",
+            PluginKind::Storage => "storage",
+            PluginKind::Auth => "auth",
+        }
+    }
+
+    fn take_pending_fatal_error(&self) -> Option<RuntimeError> {
+        self.pending_fatal
+            .lock()
+            .expect("pending fatal mutex should not be poisoned")
+            .take()
+            .map(RuntimeError::PluginFatal)
+    }
+
+    fn fail_fast_message(
+        kind: PluginKind,
+        stage: PluginFailureStage,
+        plugin_id: &str,
+        reason: &str,
+    ) -> String {
+        format!(
+            "{} plugin `{plugin_id}` failed during {}: {reason}",
+            match kind {
+                PluginKind::Protocol => "protocol",
+                PluginKind::Gameplay => "gameplay",
+                PluginKind::Storage => "storage",
+                PluginKind::Auth => "auth",
+            },
+            stage.as_str(),
+        )
+    }
+
+    fn handle_runtime_failure(
+        &self,
+        kind: PluginKind,
+        plugin_id: &str,
+        reason: &str,
+    ) -> PluginFailureAction {
+        let action = self.action_for_kind(kind);
+        match action {
+            PluginFailureAction::Quarantine => {
+                if self
+                    .active_quarantine
+                    .quarantine(plugin_id, reason.to_string())
+                {
+                    eprintln!(
+                        "{} plugin `{plugin_id}` entered active quarantine: {reason}",
+                        Self::kind_label(kind)
+                    );
+                }
+            }
+            PluginFailureAction::FailFast => {
+                self.record_fatal_message(Self::fail_fast_message(
+                    kind,
+                    PluginFailureStage::Runtime,
+                    plugin_id,
+                    reason,
+                ));
+            }
+            PluginFailureAction::Skip => {}
+        }
+        action
+    }
+
+    fn handle_candidate_failure(
+        &self,
+        kind: PluginKind,
+        stage: PluginFailureStage,
+        plugin_id: &str,
+        identity: ArtifactIdentity,
+        reason: &str,
+    ) -> Result<(), RuntimeError> {
+        match self.action_for_kind(kind) {
+            PluginFailureAction::Skip => Ok(()),
+            PluginFailureAction::Quarantine => {
+                let modified_at_ms = system_time_ms(identity.modified_at);
+                let source = identity.source.clone();
+                if self
+                    .artifact_quarantine
+                    .quarantine(plugin_id, identity, reason.to_string())
+                {
+                    eprintln!(
+                        "{} plugin `{plugin_id}` artifact quarantined during {}: source={} modified_at_ms={} reason={reason}",
+                        Self::kind_label(kind),
+                        stage.as_str(),
+                        source,
+                        modified_at_ms,
+                    );
+                }
+                Ok(())
+            }
+            PluginFailureAction::FailFast => {
+                let message = Self::fail_fast_message(kind, stage, plugin_id, reason);
+                self.record_fatal_message(message.clone());
+                Err(RuntimeError::PluginFatal(message))
+            }
+        }
     }
 }
 
@@ -913,7 +1404,7 @@ impl PluginLoader {
 struct HotSwappableProtocolAdapter {
     plugin_id: String,
     generation: RwLock<Arc<ProtocolGeneration>>,
-    quarantine: Arc<QuarantineManager>,
+    failures: Arc<PluginFailureDispatch>,
     reload_gate: RwLock<()>,
 }
 
@@ -921,21 +1412,21 @@ impl HotSwappableProtocolAdapter {
     const fn new(
         plugin_id: String,
         generation: Arc<ProtocolGeneration>,
-        quarantine: Arc<QuarantineManager>,
+        failures: Arc<PluginFailureDispatch>,
     ) -> Self {
         Self {
             plugin_id,
             generation: RwLock::new(generation),
-            quarantine,
+            failures,
             reload_gate: RwLock::new(()),
         }
     }
 
     fn current_generation(&self) -> Result<Arc<ProtocolGeneration>, ProtocolError> {
-        if self.quarantine.is_quarantined(&self.plugin_id) {
+        if self.failures.is_active_quarantined(&self.plugin_id) {
             return Err(ProtocolError::Plugin(
-                self.quarantine
-                    .reason(&self.plugin_id)
+                self.failures
+                    .active_reason(&self.plugin_id)
                     .unwrap_or_else(|| "plugin quarantined".to_string()),
             ));
         }
@@ -963,7 +1454,11 @@ impl HotSwappableProtocolAdapter {
 
     fn quarantine_on_error<T>(&self, result: Result<T, ProtocolError>) -> Result<T, ProtocolError> {
         if let Err(ProtocolError::Plugin(message)) = &result {
-            self.quarantine.quarantine(&self.plugin_id, message.clone());
+            let _ = self.failures.handle_runtime_failure(
+                PluginKind::Protocol,
+                &self.plugin_id,
+                message,
+            );
         }
         result
     }
@@ -1284,7 +1779,7 @@ pub struct HotSwappableGameplayProfile {
     plugin_id: String,
     profile_id: GameplayProfileId,
     generation: RwLock<Arc<GameplayGeneration>>,
-    quarantine: Arc<QuarantineManager>,
+    failures: Arc<PluginFailureDispatch>,
     reload_gate: RwLock<()>,
 }
 
@@ -1293,29 +1788,22 @@ impl HotSwappableGameplayProfile {
         plugin_id: String,
         profile_id: GameplayProfileId,
         generation: Arc<GameplayGeneration>,
-        quarantine: Arc<QuarantineManager>,
+        failures: Arc<PluginFailureDispatch>,
     ) -> Self {
         Self {
             plugin_id,
             profile_id,
             generation: RwLock::new(generation),
-            quarantine,
+            failures,
             reload_gate: RwLock::new(()),
         }
     }
 
-    fn current_generation(&self) -> Result<Arc<GameplayGeneration>, String> {
-        if self.quarantine.is_quarantined(&self.plugin_id) {
-            return Err(self
-                .quarantine
-                .reason(&self.plugin_id)
-                .unwrap_or_else(|| "plugin quarantined".to_string()));
-        }
-        Ok(self
-            .generation
+    fn current_generation(&self) -> Arc<GameplayGeneration> {
+        self.generation
             .read()
             .expect("gameplay generation lock should not be poisoned")
-            .clone())
+            .clone()
     }
 
     fn swap_generation(&self, generation: Arc<GameplayGeneration>) {
@@ -1330,15 +1818,11 @@ impl HotSwappableGameplayProfile {
     }
 
     pub fn capability_set(&self) -> CapabilitySet {
-        self.current_generation()
-            .map(|generation| generation.capabilities.clone())
-            .unwrap_or_default()
+        self.current_generation().capabilities.clone()
     }
 
     pub fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
-        self.current_generation()
-            .ok()
-            .map(|generation| generation.generation_id)
+        Some(self.current_generation().generation_id)
     }
 
     pub fn export_session_state(
@@ -1349,7 +1833,7 @@ impl HotSwappableGameplayProfile {
             .reload_gate
             .read()
             .expect("gameplay reload gate should not be poisoned");
-        let generation = self.current_generation().map_err(RuntimeError::Config)?;
+        let generation = self.current_generation();
         match generation
             .invoke(&GameplayRequest::ExportSessionState {
                 session: session.clone(),
@@ -1372,7 +1856,7 @@ impl HotSwappableGameplayProfile {
             .reload_gate
             .read()
             .expect("gameplay reload gate should not be poisoned");
-        let generation = self.current_generation().map_err(RuntimeError::Config)?;
+        let generation = self.current_generation();
         match generation
             .invoke(&GameplayRequest::ImportSessionState {
                 session: session.clone(),
@@ -1392,7 +1876,7 @@ impl HotSwappableGameplayProfile {
             .reload_gate
             .read()
             .expect("gameplay reload gate should not be poisoned");
-        let generation = self.current_generation().map_err(RuntimeError::Config)?;
+        let generation = self.current_generation();
         match generation
             .invoke(&GameplayRequest::SessionClosed {
                 session: session.clone(),
@@ -1424,14 +1908,39 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
             .reload_gate
             .read()
             .expect("gameplay reload gate should not be poisoned");
-        let generation = self.current_generation()?;
+        if self.failures.is_active_quarantined(&self.plugin_id) {
+            return Ok(GameplayJoinEffect::default());
+        }
+        let generation = self.current_generation();
         with_gameplay_query(query, || {
             match generation.invoke(&GameplayRequest::HandlePlayerJoin {
                 session,
                 player: player.clone(),
-            })? {
-                GameplayResponse::JoinEffect(effect) => Ok(effect),
-                other => Err(format!("unexpected gameplay join payload: {other:?}")),
+            }) {
+                Ok(GameplayResponse::JoinEffect(effect)) => Ok(effect),
+                Ok(other) => {
+                    let message = format!("unexpected gameplay join payload: {other:?}");
+                    match self.failures.handle_runtime_failure(
+                        PluginKind::Gameplay,
+                        &self.plugin_id,
+                        &message,
+                    ) {
+                        PluginFailureAction::Skip | PluginFailureAction::Quarantine => {
+                            Ok(GameplayJoinEffect::default())
+                        }
+                        PluginFailureAction::FailFast => Err(message),
+                    }
+                }
+                Err(error) => match self.failures.handle_runtime_failure(
+                    PluginKind::Gameplay,
+                    &self.plugin_id,
+                    &error,
+                ) {
+                    PluginFailureAction::Skip | PluginFailureAction::Quarantine => {
+                        Ok(GameplayJoinEffect::default())
+                    }
+                    PluginFailureAction::FailFast => Err(error),
+                },
             }
         })
     }
@@ -1452,14 +1961,39 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
             .reload_gate
             .read()
             .expect("gameplay reload gate should not be poisoned");
-        let generation = self.current_generation()?;
+        if self.failures.is_active_quarantined(&self.plugin_id) {
+            return Ok(GameplayEffect::default());
+        }
+        let generation = self.current_generation();
         with_gameplay_query(query, || {
             match generation.invoke(&GameplayRequest::HandleCommand {
                 session,
                 command: command.clone(),
-            })? {
-                GameplayResponse::Effect(effect) => Ok(effect),
-                other => Err(format!("unexpected gameplay command payload: {other:?}")),
+            }) {
+                Ok(GameplayResponse::Effect(effect)) => Ok(effect),
+                Ok(other) => {
+                    let message = format!("unexpected gameplay command payload: {other:?}");
+                    match self.failures.handle_runtime_failure(
+                        PluginKind::Gameplay,
+                        &self.plugin_id,
+                        &message,
+                    ) {
+                        PluginFailureAction::Skip | PluginFailureAction::Quarantine => {
+                            Ok(GameplayEffect::default())
+                        }
+                        PluginFailureAction::FailFast => Err(message),
+                    }
+                }
+                Err(error) => match self.failures.handle_runtime_failure(
+                    PluginKind::Gameplay,
+                    &self.plugin_id,
+                    &error,
+                ) {
+                    PluginFailureAction::Skip | PluginFailureAction::Quarantine => {
+                        Ok(GameplayEffect::default())
+                    }
+                    PluginFailureAction::FailFast => Err(error),
+                },
             }
         })
     }
@@ -1481,11 +2015,36 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
             .reload_gate
             .read()
             .expect("gameplay reload gate should not be poisoned");
-        let generation = self.current_generation()?;
+        if self.failures.is_active_quarantined(&self.plugin_id) {
+            return Ok(GameplayEffect::default());
+        }
+        let generation = self.current_generation();
         with_gameplay_query(query, || {
-            match generation.invoke(&GameplayRequest::HandleTick { session, now_ms })? {
-                GameplayResponse::Effect(effect) => Ok(effect),
-                other => Err(format!("unexpected gameplay tick payload: {other:?}")),
+            match generation.invoke(&GameplayRequest::HandleTick { session, now_ms }) {
+                Ok(GameplayResponse::Effect(effect)) => Ok(effect),
+                Ok(other) => {
+                    let message = format!("unexpected gameplay tick payload: {other:?}");
+                    match self.failures.handle_runtime_failure(
+                        PluginKind::Gameplay,
+                        &self.plugin_id,
+                        &message,
+                    ) {
+                        PluginFailureAction::Skip | PluginFailureAction::Quarantine => {
+                            Ok(GameplayEffect::default())
+                        }
+                        PluginFailureAction::FailFast => Err(message),
+                    }
+                }
+                Err(error) => match self.failures.handle_runtime_failure(
+                    PluginKind::Gameplay,
+                    &self.plugin_id,
+                    &error,
+                ) {
+                    PluginFailureAction::Skip | PluginFailureAction::Quarantine => {
+                        Ok(GameplayEffect::default())
+                    }
+                    PluginFailureAction::FailFast => Err(error),
+                },
             }
         })
     }
@@ -1496,7 +2055,6 @@ pub struct HotSwappableStorageProfile {
     #[allow(dead_code)]
     profile_id: String,
     generation: RwLock<Arc<StorageGeneration>>,
-    quarantine: Arc<QuarantineManager>,
     reload_gate: RwLock<()>,
 }
 
@@ -1505,25 +2063,16 @@ impl HotSwappableStorageProfile {
         plugin_id: String,
         profile_id: String,
         generation: Arc<StorageGeneration>,
-        quarantine: Arc<QuarantineManager>,
     ) -> Self {
         Self {
             plugin_id,
             profile_id,
             generation: RwLock::new(generation),
-            quarantine,
             reload_gate: RwLock::new(()),
         }
     }
 
     fn current_generation(&self) -> Result<Arc<StorageGeneration>, StorageError> {
-        if self.quarantine.is_quarantined(&self.plugin_id) {
-            return Err(StorageError::Plugin(
-                self.quarantine
-                    .reason(&self.plugin_id)
-                    .unwrap_or_else(|| "plugin quarantined".to_string()),
-            ));
-        }
         Ok(self
             .generation
             .read()
@@ -1540,6 +2089,10 @@ impl HotSwappableStorageProfile {
 
     pub fn profile_id(&self) -> &str {
         &self.profile_id
+    }
+
+    pub fn plugin_id(&self) -> &str {
+        &self.plugin_id
     }
 
     #[allow(dead_code)]
@@ -1634,7 +2187,7 @@ pub struct HotSwappableAuthProfile {
     #[allow(dead_code)]
     profile_id: String,
     generation: RwLock<Arc<AuthGeneration>>,
-    quarantine: Arc<QuarantineManager>,
+    failures: Arc<PluginFailureDispatch>,
 }
 
 impl HotSwappableAuthProfile {
@@ -1642,23 +2195,17 @@ impl HotSwappableAuthProfile {
         plugin_id: String,
         profile_id: String,
         generation: Arc<AuthGeneration>,
-        quarantine: Arc<QuarantineManager>,
+        failures: Arc<PluginFailureDispatch>,
     ) -> Self {
         Self {
             plugin_id,
             profile_id,
             generation: RwLock::new(generation),
-            quarantine,
+            failures,
         }
     }
 
     fn current_generation(&self) -> Result<Arc<AuthGeneration>, String> {
-        if self.quarantine.is_quarantined(&self.plugin_id) {
-            return Err(self
-                .quarantine
-                .reason(&self.plugin_id)
-                .unwrap_or_else(|| "plugin quarantined".to_string()));
-        }
         Ok(self
             .generation
             .read()
@@ -1702,7 +2249,18 @@ impl HotSwappableAuthProfile {
     }
 
     pub fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
-        self.capture_generation()?.authenticate_offline(username)
+        match self.capture_generation()?.authenticate_offline(username) {
+            Ok(player_id) => Ok(player_id),
+            Err(RuntimeError::Config(message)) => {
+                let _ = self.failures.handle_runtime_failure(
+                    PluginKind::Auth,
+                    &self.plugin_id,
+                    &message,
+                );
+                Err(RuntimeError::Config(message))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn authenticate_online(
@@ -1710,16 +2268,42 @@ impl HotSwappableAuthProfile {
         username: &str,
         server_hash: &str,
     ) -> Result<PlayerId, RuntimeError> {
-        self.capture_generation()?
+        match self
+            .capture_generation()?
             .authenticate_online(username, server_hash)
+        {
+            Ok(player_id) => Ok(player_id),
+            Err(RuntimeError::Config(message)) => {
+                let _ = self.failures.handle_runtime_failure(
+                    PluginKind::Auth,
+                    &self.plugin_id,
+                    &message,
+                );
+                Err(RuntimeError::Config(message))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn authenticate_bedrock_offline(
         &self,
         display_name: &str,
     ) -> Result<BedrockAuthResult, RuntimeError> {
-        self.capture_generation()?
+        match self
+            .capture_generation()?
             .authenticate_bedrock_offline(display_name)
+        {
+            Ok(result) => Ok(result),
+            Err(RuntimeError::Config(message)) => {
+                let _ = self.failures.handle_runtime_failure(
+                    PluginKind::Auth,
+                    &self.plugin_id,
+                    &message,
+                );
+                Err(RuntimeError::Config(message))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn authenticate_bedrock_xbl(
@@ -1727,8 +2311,21 @@ impl HotSwappableAuthProfile {
         chain_jwts: &[String],
         client_data_jwt: &str,
     ) -> Result<BedrockAuthResult, RuntimeError> {
-        self.capture_generation()?
+        match self
+            .capture_generation()?
             .authenticate_bedrock_xbl(chain_jwts, client_data_jwt)
+        {
+            Ok(result) => Ok(result),
+            Err(RuntimeError::Config(message)) => {
+                let _ = self.failures.handle_runtime_failure(
+                    PluginKind::Auth,
+                    &self.plugin_id,
+                    &message,
+                );
+                Err(RuntimeError::Config(message))
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -1736,6 +2333,7 @@ struct ManagedProtocolPlugin {
     package: PluginPackage,
     adapter: Arc<HotSwappableProtocolAdapter>,
     loaded_at: SystemTime,
+    active_loaded_at: SystemTime,
 }
 
 pub(crate) struct PreparedProtocolTopology {
@@ -1749,6 +2347,7 @@ struct ManagedGameplayPlugin {
     profile_id: GameplayProfileId,
     profile: Arc<HotSwappableGameplayProfile>,
     loaded_at: SystemTime,
+    active_loaded_at: SystemTime,
 }
 
 struct ManagedStoragePlugin {
@@ -1756,6 +2355,7 @@ struct ManagedStoragePlugin {
     profile_id: String,
     profile: Arc<HotSwappableStorageProfile>,
     loaded_at: SystemTime,
+    active_loaded_at: SystemTime,
 }
 
 struct ManagedAuthPlugin {
@@ -1763,6 +2363,7 @@ struct ManagedAuthPlugin {
     profile_id: String,
     profile: Arc<HotSwappableAuthProfile>,
     loaded_at: SystemTime,
+    active_loaded_at: SystemTime,
 }
 
 pub struct PluginHost {
@@ -1770,8 +2371,7 @@ pub struct PluginHost {
     dynamic_catalog_source: Option<DynamicCatalogSource>,
     loader: PluginLoader,
     generations: Arc<GenerationManager>,
-    quarantine: Arc<QuarantineManager>,
-    _failure_policy: PluginFailurePolicy,
+    failures: Arc<PluginFailureDispatch>,
     protocols: Mutex<HashMap<String, ManagedProtocolPlugin>>,
     gameplay: Mutex<HashMap<String, ManagedGameplayPlugin>>,
     storage: Mutex<HashMap<String, ManagedStoragePlugin>>,
@@ -1783,16 +2383,16 @@ impl PluginHost {
     pub fn new(
         catalog: PluginCatalog,
         abi_range: PluginAbiRange,
-        failure_policy: PluginFailurePolicy,
+        failure_matrix: PluginFailureMatrix,
     ) -> Self {
-        Self::new_with_dynamic_catalog_source(catalog, abi_range, failure_policy, None)
+        Self::new_with_dynamic_catalog_source(catalog, abi_range, failure_matrix, None)
     }
 
     #[must_use]
     pub fn new_with_dynamic_catalog_source(
         catalog: PluginCatalog,
         abi_range: PluginAbiRange,
-        failure_policy: PluginFailurePolicy,
+        failure_matrix: PluginFailureMatrix,
         dynamic_catalog_source: Option<(PathBuf, Option<HashSet<String>>)>,
     ) -> Self {
         Self {
@@ -1801,8 +2401,7 @@ impl PluginHost {
                 .map(|(root, allowlist)| DynamicCatalogSource { root, allowlist }),
             loader: PluginLoader::new(abi_range),
             generations: Arc::new(GenerationManager::default()),
-            quarantine: Arc::new(QuarantineManager::default()),
-            _failure_policy: failure_policy,
+            failures: Arc::new(PluginFailureDispatch::new(failure_matrix)),
             protocols: Mutex::new(HashMap::new()),
             gameplay: Mutex::new(HashMap::new()),
             storage: Mutex::new(HashMap::new()),
@@ -1817,8 +2416,9 @@ impl PluginHost {
         }
     }
 
-    pub(crate) fn prepare_protocol_topology(
+    fn prepare_protocol_topology_with_stage(
         &self,
+        stage: PluginFailureStage,
     ) -> Result<PreparedProtocolTopology, RuntimeError> {
         let catalog = self.protocol_catalog()?;
         let mut registry = ProtocolRegistry::new();
@@ -1828,14 +2428,47 @@ impl PluginHost {
             if package.plugin_kind != PluginKind::Protocol {
                 continue;
             }
-            let generation = Arc::new(
-                self.loader
-                    .load_protocol_generation(package, self.generations.next_generation_id())?,
-            );
+            let modified_at = package.modified_at()?;
+            let identity = package.artifact_identity(modified_at);
+            if self
+                .failures
+                .is_artifact_quarantined(&package.plugin_id, &identity)
+            {
+                if let Some(reason) = self.failures.artifact_reason(&package.plugin_id, &identity) {
+                    eprintln!(
+                        "skipping quarantined protocol artifact `{}` during {}: {reason}",
+                        package.plugin_id,
+                        stage.as_str()
+                    );
+                }
+                continue;
+            }
+            let generation = match self
+                .loader
+                .load_protocol_generation(package, self.generations.next_generation_id())
+            {
+                Ok(generation) => Arc::new(generation),
+                Err(error) => {
+                    let reason = error.to_string();
+                    eprintln!(
+                        "protocol {} load failed for `{}`: {reason}",
+                        stage.as_str(),
+                        package.plugin_id
+                    );
+                    self.failures.handle_candidate_failure(
+                        PluginKind::Protocol,
+                        stage,
+                        &package.plugin_id,
+                        identity,
+                        &reason,
+                    )?;
+                    continue;
+                }
+            };
             let adapter = Arc::new(HotSwappableProtocolAdapter::new(
                 package.plugin_id.clone(),
                 generation,
-                Arc::clone(&self.quarantine),
+                Arc::clone(&self.failures),
             ));
             registry.register_adapter(adapter.clone());
             registry.register_probe(adapter.clone());
@@ -1845,7 +2478,8 @@ impl PluginHost {
                 ManagedProtocolPlugin {
                     package: package.clone(),
                     adapter,
-                    loaded_at: package.modified_at()?,
+                    loaded_at: modified_at,
+                    active_loaded_at: modified_at,
                 },
             );
         }
@@ -1855,6 +2489,18 @@ impl PluginHost {
             adapter_ids,
             managed,
         })
+    }
+
+    pub(crate) fn prepare_protocol_topology_for_boot(
+        &self,
+    ) -> Result<PreparedProtocolTopology, RuntimeError> {
+        self.prepare_protocol_topology_with_stage(PluginFailureStage::Boot)
+    }
+
+    pub(crate) fn prepare_protocol_topology_for_reload(
+        &self,
+    ) -> Result<PreparedProtocolTopology, RuntimeError> {
+        self.prepare_protocol_topology_with_stage(PluginFailureStage::Reload)
     }
 
     pub(crate) fn activate_protocol_topology(&self, candidate: PreparedProtocolTopology) {
@@ -1881,7 +2527,7 @@ impl PluginHost {
         self: &Arc<Self>,
         registries: &mut RuntimeRegistries,
     ) -> Result<(), RuntimeError> {
-        let prepared = self.prepare_protocol_topology()?;
+        let prepared = self.prepare_protocol_topology_for_boot()?;
         registries.replace_protocols(prepared.registry.clone());
         self.activate_protocol_topology(prepared);
         registries.attach_plugin_host(Arc::clone(self));
@@ -1933,6 +2579,162 @@ impl PluginHost {
             .map(|managed| Arc::clone(&managed.profile))
     }
 
+    #[must_use]
+    pub fn status(&self) -> PluginHostStatusSnapshot {
+        let mut protocols = self
+            .protocols
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .values()
+            .map(|managed| {
+                let generation = managed
+                    .adapter
+                    .generation
+                    .read()
+                    .expect("protocol generation lock should not be poisoned")
+                    .clone();
+                ProtocolPluginStatusSnapshot {
+                    plugin_id: managed.package.plugin_id.clone(),
+                    adapter_id: generation.descriptor.adapter_id.clone(),
+                    generation_id: generation.generation_id,
+                    loaded_at_ms: system_time_ms(managed.active_loaded_at),
+                    failure_action: self.failures.action_for_kind(PluginKind::Protocol),
+                    current_artifact: artifact_status_snapshot(
+                        managed.package.artifact_identity(managed.active_loaded_at),
+                        None,
+                    ),
+                    active_quarantine_reason: self
+                        .failures
+                        .active_reason(&managed.package.plugin_id),
+                    artifact_quarantine: self
+                        .failures
+                        .artifact_record(&managed.package.plugin_id)
+                        .map(artifact_quarantine_status_snapshot),
+                    version_name: generation.descriptor.version_name.clone(),
+                    transport: generation.descriptor.transport,
+                    edition: generation.descriptor.edition,
+                    protocol_number: generation.descriptor.protocol_number,
+                    bedrock_listener_descriptor_present: generation
+                        .bedrock_listener_descriptor
+                        .is_some(),
+                }
+            })
+            .collect::<Vec<_>>();
+        protocols.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+
+        let mut gameplay = self
+            .gameplay
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .values()
+            .map(|managed| {
+                let generation = managed
+                    .profile
+                    .generation
+                    .read()
+                    .expect("gameplay generation lock should not be poisoned")
+                    .clone();
+                GameplayPluginStatusSnapshot {
+                    plugin_id: managed.package.plugin_id.clone(),
+                    profile_id: managed.profile_id.clone(),
+                    generation_id: generation.generation_id,
+                    loaded_at_ms: system_time_ms(managed.active_loaded_at),
+                    failure_action: self.failures.action_for_kind(PluginKind::Gameplay),
+                    current_artifact: artifact_status_snapshot(
+                        managed.package.artifact_identity(managed.active_loaded_at),
+                        None,
+                    ),
+                    active_quarantine_reason: self
+                        .failures
+                        .active_reason(&managed.package.plugin_id),
+                    artifact_quarantine: self
+                        .failures
+                        .artifact_record(&managed.package.plugin_id)
+                        .map(artifact_quarantine_status_snapshot),
+                }
+            })
+            .collect::<Vec<_>>();
+        gameplay.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+
+        let mut storage = self
+            .storage
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .values()
+            .map(|managed| {
+                let generation = managed
+                    .profile
+                    .generation
+                    .read()
+                    .expect("storage generation lock should not be poisoned")
+                    .clone();
+                StoragePluginStatusSnapshot {
+                    plugin_id: managed.package.plugin_id.clone(),
+                    profile_id: managed.profile_id.clone(),
+                    generation_id: generation.generation_id,
+                    loaded_at_ms: system_time_ms(managed.active_loaded_at),
+                    failure_action: self.failures.action_for_kind(PluginKind::Storage),
+                    current_artifact: artifact_status_snapshot(
+                        managed.package.artifact_identity(managed.active_loaded_at),
+                        None,
+                    ),
+                    active_quarantine_reason: self
+                        .failures
+                        .active_reason(&managed.package.plugin_id),
+                    artifact_quarantine: self
+                        .failures
+                        .artifact_record(&managed.package.plugin_id)
+                        .map(artifact_quarantine_status_snapshot),
+                }
+            })
+            .collect::<Vec<_>>();
+        storage.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+
+        let mut auth = self
+            .auth
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .values()
+            .map(|managed| {
+                let generation = managed
+                    .profile
+                    .generation
+                    .read()
+                    .expect("auth generation lock should not be poisoned")
+                    .clone();
+                AuthPluginStatusSnapshot {
+                    plugin_id: managed.package.plugin_id.clone(),
+                    profile_id: managed.profile_id.clone(),
+                    generation_id: generation.generation_id,
+                    loaded_at_ms: system_time_ms(managed.active_loaded_at),
+                    failure_action: self.failures.action_for_kind(PluginKind::Auth),
+                    current_artifact: artifact_status_snapshot(
+                        managed.package.artifact_identity(managed.active_loaded_at),
+                        None,
+                    ),
+                    active_quarantine_reason: self
+                        .failures
+                        .active_reason(&managed.package.plugin_id),
+                    artifact_quarantine: self
+                        .failures
+                        .artifact_record(&managed.package.plugin_id)
+                        .map(artifact_quarantine_status_snapshot),
+                    mode: generation.mode(),
+                }
+            })
+            .collect::<Vec<_>>();
+        auth.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+
+        PluginHostStatusSnapshot {
+            failure_matrix: self.failures.matrix,
+            pending_fatal_error: self.failures.pending_fatal_message(),
+            protocols,
+            gameplay,
+            storage,
+            auth,
+        }
+    }
+
     /// Replaces a managed protocol plugin with a new in-process implementation.
     ///
     /// # Errors
@@ -1947,14 +2749,15 @@ impl PluginHost {
         &self,
         plugin: InProcessProtocolPlugin,
     ) -> Result<PluginGenerationId, RuntimeError> {
+        let plugin_id = plugin.plugin_id.clone();
         let mut protocols = self
             .protocols
             .lock()
             .expect("plugin host mutex should not be poisoned");
-        let managed = protocols.get_mut(&plugin.plugin_id).ok_or_else(|| {
+        let managed = protocols.get_mut(&plugin_id).ok_or_else(|| {
             RuntimeError::Config(format!(
                 "protocol plugin `{}` is not managed by this host",
-                plugin.plugin_id
+                plugin_id
             ))
         })?;
         managed.package.source = PluginSource::InProcessProtocol(plugin);
@@ -1964,13 +2767,29 @@ impl PluginHost {
                 .load_protocol_generation(&managed.package, generation_id)?,
         );
         managed.adapter.swap_generation(generation);
+        self.failures.clear_plugin_state(&plugin_id);
         managed.loaded_at = managed.package.modified_at()?;
+        managed.active_loaded_at = managed.loaded_at;
         drop(protocols);
         Ok(generation_id)
     }
 
     pub fn quarantine_reason(&self, plugin_id: &str) -> Option<String> {
-        self.quarantine.reason(plugin_id)
+        self.failures.active_reason(plugin_id)
+    }
+
+    pub(crate) fn take_pending_fatal_error(&self) -> Option<RuntimeError> {
+        self.failures.take_pending_fatal_error()
+    }
+
+    pub(crate) fn handle_runtime_failure(
+        &self,
+        kind: PluginKind,
+        plugin_id: &str,
+        reason: &str,
+    ) -> PluginFailureAction {
+        self.failures
+            .handle_runtime_failure(kind, plugin_id, reason)
     }
 
     pub(crate) fn managed_protocol_ids(&self) -> Vec<String> {
@@ -1984,6 +2803,23 @@ impl PluginHost {
         ids.sort();
         ids
     }
+}
+
+fn artifact_status_snapshot(
+    identity: ArtifactIdentity,
+    reason: Option<String>,
+) -> PluginArtifactStatusSnapshot {
+    PluginArtifactStatusSnapshot {
+        source: identity.source,
+        modified_at_ms: system_time_ms(identity.modified_at),
+        reason,
+    }
+}
+
+fn artifact_quarantine_status_snapshot(
+    record: ArtifactQuarantineRecord,
+) -> PluginArtifactStatusSnapshot {
+    artifact_status_snapshot(record.identity, Some(record.reason))
 }
 
 /// Builds a plugin host from the current server configuration.
@@ -2008,7 +2844,12 @@ pub fn plugin_host_from_config(
             min: config.plugin_abi_min,
             max: config.plugin_abi_max,
         },
-        config.plugin_failure_policy,
+        PluginFailureMatrix {
+            protocol: config.plugin_failure_policy_protocol,
+            gameplay: config.plugin_failure_policy_gameplay,
+            storage: config.plugin_failure_policy_storage,
+            auth: config.plugin_failure_policy_auth,
+        },
         Some((config.plugins_dir.clone(), allowlist)),
     ))))
 }

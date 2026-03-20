@@ -4,11 +4,12 @@ use mc_proto_common::{
     Edition, HandshakeIntent, HandshakeProbe, ProtocolAdapter, ProtocolError, StorageAdapter,
     TransportKind,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListenerBinding {
     pub transport: TransportKind,
     pub local_addr: SocketAddr,

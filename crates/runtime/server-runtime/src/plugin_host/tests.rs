@@ -1,7 +1,7 @@
 use super::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
-    PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost, current_artifact_key,
-    with_current_gameplay_query, with_gameplay_query,
+    PluginAbiRange, PluginCatalog, PluginFailureAction, PluginFailureMatrix, PluginHost,
+    current_artifact_key, with_current_gameplay_query, with_gameplay_query,
 };
 use crate::config::ServerConfig;
 use crate::host::plugin_host_from_config;
@@ -258,6 +258,231 @@ mod custom_wire_codec_protocol_plugin {
     }
 }
 
+mod failing_protocol_plugin {
+    use mc_core::CapabilitySet;
+    use mc_plugin_api::{
+        ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
+        PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
+        Utf8Slice, decode_protocol_request, encode_protocol_response,
+    };
+    use mc_plugin_sdk_rust::InProcessProtocolEntrypoints;
+    use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use std::sync::OnceLock;
+
+    pub const PLUGIN_ID: &str = "protocol-failing-runtime";
+
+    fn descriptor() -> ProtocolDescriptor {
+        ProtocolDescriptor {
+            adapter_id: PLUGIN_ID.to_string(),
+            transport: TransportKind::Tcp,
+            wire_format: WireFormatKind::MinecraftFramed,
+            edition: Edition::Je,
+            version_name: "failing-runtime".to_string(),
+            protocol_number: 4242,
+        }
+    }
+
+    fn write_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
+        if output.is_null() {
+            return;
+        }
+        unsafe {
+            *output = OwnedBuffer {
+                ptr: bytes.as_mut_ptr(),
+                len: bytes.len(),
+                cap: bytes.capacity(),
+            };
+        }
+        std::mem::forget(bytes);
+    }
+
+    fn write_error(error_out: *mut OwnedBuffer, message: String) {
+        write_buffer(error_out, message.into_bytes());
+    }
+
+    fn handle_request(request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+        match request {
+            ProtocolRequest::Describe => Ok(ProtocolResponse::Descriptor(descriptor())),
+            ProtocolRequest::DescribeBedrockListener => {
+                Ok(ProtocolResponse::BedrockListenerDescriptor(None))
+            }
+            ProtocolRequest::CapabilitySet => {
+                let mut capabilities = CapabilitySet::new();
+                let _ = capabilities.insert("runtime.reload.protocol");
+                Ok(ProtocolResponse::CapabilitySet(capabilities))
+            }
+            ProtocolRequest::TryRoute { .. } => Err("protocol runtime failure".to_string()),
+            other => Err(format!(
+                "unsupported protocol request in failing test plugin: {other:?}"
+            )),
+        }
+    }
+
+    unsafe extern "C" fn invoke(
+        request: ByteSlice,
+        output: *mut OwnedBuffer,
+        error_out: *mut OwnedBuffer,
+    ) -> PluginErrorCode {
+        let request_bytes = unsafe { std::slice::from_raw_parts(request.ptr, request.len) };
+        let request = match decode_protocol_request(request_bytes) {
+            Ok(request) => request,
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                return PluginErrorCode::InvalidInput;
+            }
+        };
+        let response = match handle_request(request.clone()) {
+            Ok(response) => response,
+            Err(message) => {
+                write_error(error_out, message);
+                return PluginErrorCode::Internal;
+            }
+        };
+        match encode_protocol_response(&request, &response) {
+            Ok(bytes) => {
+                write_buffer(output, bytes);
+                PluginErrorCode::Ok
+            }
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                PluginErrorCode::Internal
+            }
+        }
+    }
+
+    unsafe extern "C" fn free_buffer(buffer: OwnedBuffer) {
+        if buffer.ptr.is_null() {
+            return;
+        }
+        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
+    }
+
+    pub fn in_process_entrypoints() -> InProcessProtocolEntrypoints {
+        static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+        static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
+        static API: OnceLock<ProtocolPluginApiV1> = OnceLock::new();
+        InProcessProtocolEntrypoints {
+            manifest: MANIFEST.get_or_init(|| PluginManifestV1 {
+                plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
+                display_name: Utf8Slice::from_static_str("Failing Protocol Plugin"),
+                plugin_kind: PluginKind::Protocol,
+                plugin_abi: CURRENT_PLUGIN_ABI,
+                min_host_abi: CURRENT_PLUGIN_ABI,
+                max_host_abi: CURRENT_PLUGIN_ABI,
+                capabilities: CAPABILITIES
+                    .get_or_init(|| {
+                        Box::leak(
+                            vec![CapabilityDescriptorV1 {
+                                name: Utf8Slice::from_static_str("runtime.reload.protocol"),
+                            }]
+                            .into_boxed_slice(),
+                        )
+                    })
+                    .as_ptr(),
+                capabilities_len: 1,
+            }),
+            api: API.get_or_init(|| ProtocolPluginApiV1 {
+                invoke,
+                free_buffer,
+            }),
+        }
+    }
+}
+
+mod failing_gameplay_plugin {
+    use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
+    use mc_plugin_api::{GameplayDescriptor, GameplaySessionSnapshot};
+    use mc_plugin_sdk_rust::{
+        GameplayHost, RustGameplayPlugin, StaticPluginManifest, export_gameplay_plugin,
+    };
+
+    #[derive(Default)]
+    pub struct FailingGameplayPlugin;
+
+    impl RustGameplayPlugin for FailingGameplayPlugin {
+        fn descriptor(&self) -> GameplayDescriptor {
+            GameplayDescriptor {
+                profile: GameplayProfileId::new("failing"),
+            }
+        }
+
+        fn capability_set(&self) -> CapabilitySet {
+            let mut capabilities = CapabilitySet::new();
+            let _ = capabilities.insert("gameplay.profile.failing");
+            let _ = capabilities.insert("runtime.reload.gameplay");
+            capabilities
+        }
+
+        fn handle_command(
+            &self,
+            _host: &dyn GameplayHost,
+            _session: &GameplaySessionSnapshot,
+            _command: &CoreCommand,
+        ) -> Result<GameplayEffect, String> {
+            Err("gameplay runtime failure".to_string())
+        }
+
+        fn handle_player_join(
+            &self,
+            _host: &dyn GameplayHost,
+            _session: &GameplaySessionSnapshot,
+            _player: &PlayerSnapshot,
+        ) -> Result<mc_core::GameplayJoinEffect, String> {
+            Ok(mc_core::GameplayJoinEffect::default())
+        }
+    }
+
+    const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
+        "gameplay-failing",
+        "Failing Gameplay Plugin",
+        &["gameplay.profile:failing", "runtime.reload.gameplay"],
+    );
+
+    export_gameplay_plugin!(FailingGameplayPlugin, MANIFEST);
+}
+
+mod failing_auth_plugin {
+    use mc_core::{CapabilitySet, PlayerId};
+    use mc_plugin_api::{AuthDescriptor, AuthMode};
+    use mc_plugin_sdk_rust::{RustAuthPlugin, StaticPluginManifest, export_auth_plugin};
+
+    pub const PROFILE_ID: &str = "failing-auth";
+
+    #[derive(Default)]
+    pub struct FailingAuthPlugin;
+
+    impl RustAuthPlugin for FailingAuthPlugin {
+        fn descriptor(&self) -> AuthDescriptor {
+            AuthDescriptor {
+                auth_profile: PROFILE_ID.to_string(),
+                mode: AuthMode::Offline,
+            }
+        }
+
+        fn capability_set(&self) -> CapabilitySet {
+            let mut capabilities = CapabilitySet::new();
+            let _ = capabilities.insert("runtime.reload.auth");
+            capabilities
+        }
+
+        fn authenticate_offline(&self, _username: &str) -> Result<PlayerId, String> {
+            Err("auth runtime failure".to_string())
+        }
+    }
+
+    const MANIFEST: StaticPluginManifest = StaticPluginManifest::auth(
+        "auth-failing",
+        "Failing Auth Plugin",
+        &[
+            "auth.profile:failing-auth",
+            "auth.mode:offline",
+            "runtime.reload.auth",
+        ],
+    );
+
+    export_auth_plugin!(FailingAuthPlugin, MANIFEST);
+}
+
 fn manifest_with_abi(
     plugin_id: &'static str,
     plugin_abi: PluginAbiVersion,
@@ -365,7 +590,10 @@ fn in_process_protocol_plugin_swaps_generation() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix {
+            protocol: PluginFailureAction::FailFast,
+            ..PluginFailureMatrix::default()
+        },
     ));
     let mut registries = RuntimeRegistries::new();
     host.load_into_registries(&mut registries)
@@ -438,7 +666,10 @@ fn all_protocol_plugins_register_and_resolve() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix {
+            protocol: PluginFailureAction::FailFast,
+            ..PluginFailureMatrix::default()
+        },
     ));
     let mut registries = RuntimeRegistries::new();
     host.load_into_registries(&mut registries)
@@ -486,7 +717,10 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix {
+            protocol: PluginFailureAction::FailFast,
+            ..PluginFailureMatrix::default()
+        },
     ));
     let mut registries = RuntimeRegistries::new();
     host.load_into_registries(&mut registries)
@@ -538,7 +772,10 @@ fn protocol_plugins_can_override_host_wire_codec_framing() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix {
+            protocol: PluginFailureAction::FailFast,
+            ..PluginFailureMatrix::default()
+        },
     ));
     let mut registries = RuntimeRegistries::new();
     host.load_into_registries(&mut registries)
@@ -584,7 +821,10 @@ fn abi_mismatch_is_rejected_before_registration() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix {
+            protocol: PluginFailureAction::FailFast,
+            ..PluginFailureMatrix::default()
+        },
     ));
     let mut registries = RuntimeRegistries::new();
 
@@ -593,7 +833,7 @@ fn abi_mismatch_is_rejected_before_registration() {
         .expect_err("ABI mismatch should fail before registration");
     assert!(matches!(
         error,
-        crate::RuntimeError::Config(message) if message.contains("ABI")
+        crate::RuntimeError::PluginFatal(message) if message.contains("ABI")
     ));
 }
 
@@ -609,7 +849,10 @@ fn protocol_plugins_require_reload_manifest_capability() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix {
+            protocol: PluginFailureAction::FailFast,
+            ..PluginFailureMatrix::default()
+        },
     ));
     let mut registries = RuntimeRegistries::new();
 
@@ -618,7 +861,7 @@ fn protocol_plugins_require_reload_manifest_capability() {
         .expect_err("protocol plugin without runtime.reload.protocol should fail");
     assert!(matches!(
         error,
-        crate::RuntimeError::Config(message) if message.contains("runtime.reload.protocol")
+        crate::RuntimeError::PluginFatal(message) if message.contains("runtime.reload.protocol")
     ));
 }
 
@@ -640,7 +883,7 @@ fn storage_and_auth_plugins_are_managed_without_quarantine() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix::default(),
     ));
     let mut registries = RuntimeRegistries::new();
     host.load_into_registries(&mut registries)
@@ -669,7 +912,7 @@ fn gameplay_profiles_activate_and_resolve() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix::default(),
     ));
     host.activate_gameplay_profiles(&ServerConfig {
         default_gameplay_profile: "canonical".to_string(),
@@ -714,7 +957,7 @@ fn initialize_runtime_registries_activates_runtime_profiles() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix::default(),
     ));
     let mut registries = RuntimeRegistries::new();
     host.initialize_runtime_registries(&ServerConfig::default(), &mut registries)
@@ -785,7 +1028,7 @@ fn gameplay_command_snapshot_preserves_entity_id() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix::default(),
     ));
     host.activate_gameplay_profiles(&ServerConfig {
         default_gameplay_profile: "entity-aware".to_string(),
@@ -820,6 +1063,223 @@ fn gameplay_command_snapshot_preserves_entity_id() {
 }
 
 #[test]
+fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior() {
+    let cases = [
+        (PluginFailureAction::Skip, false, false, "failing-runtime"),
+        (PluginFailureAction::Quarantine, true, false, "quarantined"),
+        (
+            PluginFailureAction::FailFast,
+            false,
+            true,
+            "failing-runtime",
+        ),
+    ];
+
+    for (action, expect_quarantine, expect_fatal, expected_version_name) in cases {
+        let entrypoints = failing_protocol_plugin::in_process_entrypoints();
+        let mut catalog = PluginCatalog::default();
+        catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+            plugin_id: failing_protocol_plugin::PLUGIN_ID.to_string(),
+            manifest: entrypoints.manifest,
+            api: entrypoints.api,
+        });
+        let host = Arc::new(PluginHost::new(
+            catalog,
+            PluginAbiRange::default(),
+            PluginFailureMatrix {
+                protocol: action,
+                ..PluginFailureMatrix::default()
+            },
+        ));
+        let mut registries = RuntimeRegistries::new();
+        host.load_into_registries(&mut registries)
+            .expect("failing protocol plugin should still register");
+
+        let error = registries
+            .protocols()
+            .route_handshake(TransportKind::Tcp, &[0xde, 0xad, 0xbe, 0xef])
+            .expect_err("runtime failure should surface from the protocol probe");
+        assert!(matches!(
+            error,
+            mc_proto_common::ProtocolError::Plugin(message) if message.contains("protocol runtime failure")
+        ));
+        assert_eq!(
+            host.quarantine_reason(failing_protocol_plugin::PLUGIN_ID)
+                .is_some(),
+            expect_quarantine
+        );
+        let status = host.status();
+        assert_eq!(status.protocols.len(), 1);
+        assert_eq!(status.protocols[0].failure_action, action);
+        assert_eq!(
+            status.protocols[0].active_quarantine_reason.is_some(),
+            expect_quarantine
+        );
+        assert!(status.protocols[0].artifact_quarantine.is_none());
+        assert_eq!(status.pending_fatal_error.is_some(), expect_fatal);
+        assert_eq!(host.take_pending_fatal_error().is_some(), expect_fatal);
+        let adapter = registries
+            .protocols()
+            .resolve_adapter(failing_protocol_plugin::PLUGIN_ID)
+            .expect("protocol adapter should remain registered");
+        assert_eq!(adapter.descriptor().version_name, expected_version_name);
+    }
+}
+
+#[test]
+fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
+    use mc_core::{
+        CapabilitySet, CoreCommand, EntityId, GameplayPolicyResolver, GameplayProfileId, PlayerId,
+        SessionCapabilitySet,
+    };
+
+    let cases = [
+        (PluginFailureAction::Skip, false, false),
+        (PluginFailureAction::Quarantine, true, false),
+        (PluginFailureAction::FailFast, false, true),
+    ];
+
+    for (action, expect_quarantine, expect_fatal) in cases {
+        let entrypoints = failing_gameplay_plugin::in_process_gameplay_entrypoints();
+        let mut catalog = PluginCatalog::default();
+        catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+            plugin_id: "gameplay-failing".to_string(),
+            manifest: entrypoints.manifest,
+            api: entrypoints.api,
+        });
+        let host = Arc::new(PluginHost::new(
+            catalog,
+            PluginAbiRange::default(),
+            PluginFailureMatrix {
+                gameplay: action,
+                ..PluginFailureMatrix::default()
+            },
+        ));
+        host.activate_gameplay_profiles(&ServerConfig {
+            default_gameplay_profile: "failing".to_string(),
+            ..ServerConfig::default()
+        })
+        .expect("failing gameplay profile should activate");
+
+        let profile = host
+            .resolve_gameplay_profile("failing")
+            .expect("failing gameplay profile should resolve");
+        let result = profile.handle_command(
+            &StubGameplayQuery {
+                level_name: "world",
+            },
+            &SessionCapabilitySet {
+                protocol: CapabilitySet::new(),
+                gameplay: CapabilitySet::new(),
+                gameplay_profile: GameplayProfileId::new("failing"),
+                entity_id: Some(EntityId(9)),
+                protocol_generation: None,
+                gameplay_generation: None,
+            },
+            &CoreCommand::SetHeldSlot {
+                player_id: PlayerId(Uuid::from_u128(77)),
+                slot: 0,
+            },
+        );
+        match action {
+            PluginFailureAction::Skip | PluginFailureAction::Quarantine => {
+                assert!(
+                    result.is_ok(),
+                    "non-fatal gameplay policy should downgrade runtime failures to no-op"
+                );
+            }
+            PluginFailureAction::FailFast => {
+                assert!(
+                    matches!(result, Err(message) if message.contains("gameplay runtime failure"))
+                );
+            }
+        }
+        assert_eq!(
+            host.quarantine_reason("gameplay-failing").is_some(),
+            expect_quarantine
+        );
+        let status = host.status();
+        assert_eq!(status.gameplay.len(), 1);
+        assert_eq!(status.gameplay[0].failure_action, action);
+        assert_eq!(
+            status.gameplay[0].active_quarantine_reason.is_some(),
+            expect_quarantine
+        );
+        assert_eq!(status.pending_fatal_error.is_some(), expect_fatal);
+        assert_eq!(host.take_pending_fatal_error().is_some(), expect_fatal);
+        if action == PluginFailureAction::Quarantine {
+            assert!(
+                profile
+                    .handle_command(
+                        &StubGameplayQuery {
+                            level_name: "world",
+                        },
+                        &SessionCapabilitySet {
+                            protocol: CapabilitySet::new(),
+                            gameplay: CapabilitySet::new(),
+                            gameplay_profile: GameplayProfileId::new("failing"),
+                            entity_id: Some(EntityId(9)),
+                            protocol_generation: None,
+                            gameplay_generation: None,
+                        },
+                        &CoreCommand::SetHeldSlot {
+                            player_id: PlayerId(Uuid::from_u128(77)),
+                            slot: 1,
+                        },
+                    )
+                    .is_ok(),
+                "quarantined gameplay profile should no-op future hooks"
+            );
+        }
+    }
+}
+
+#[test]
+fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
+    let cases = [
+        (PluginFailureAction::Skip, false),
+        (PluginFailureAction::FailFast, true),
+    ];
+
+    for (action, expect_fatal) in cases {
+        let entrypoints = failing_auth_plugin::in_process_auth_entrypoints();
+        let mut catalog = PluginCatalog::default();
+        catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
+            plugin_id: "auth-failing".to_string(),
+            manifest: entrypoints.manifest,
+            api: entrypoints.api,
+        });
+        let host = Arc::new(PluginHost::new(
+            catalog,
+            PluginAbiRange::default(),
+            PluginFailureMatrix {
+                auth: action,
+                ..PluginFailureMatrix::default()
+            },
+        ));
+        host.activate_auth_profile(failing_auth_plugin::PROFILE_ID)
+            .expect("failing auth profile should activate");
+        let profile = host
+            .resolve_auth_profile(failing_auth_plugin::PROFILE_ID)
+            .expect("failing auth profile should resolve");
+
+        let error = profile
+            .authenticate_offline("tester")
+            .expect_err("failing auth should reject the current login attempt");
+        assert!(matches!(
+            error,
+            crate::RuntimeError::Config(message) if message.contains("auth runtime failure")
+        ));
+        assert!(host.quarantine_reason("auth-failing").is_none());
+        let status = host.status();
+        assert_eq!(status.auth.len(), 1);
+        assert_eq!(status.auth[0].failure_action, action);
+        assert_eq!(status.pending_fatal_error.is_some(), expect_fatal);
+        assert_eq!(host.take_pending_fatal_error().is_some(), expect_fatal);
+    }
+}
+
+#[test]
 fn unknown_gameplay_profile_fails_activation() {
     let mut catalog = PluginCatalog::default();
     let canonical = canonical_gameplay_entrypoints();
@@ -832,7 +1292,7 @@ fn unknown_gameplay_profile_fails_activation() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix::default(),
     ));
     let error = host
         .activate_gameplay_profiles(&ServerConfig {
@@ -865,7 +1325,7 @@ fn storage_and_auth_profiles_activate_and_resolve() {
     let host = Arc::new(PluginHost::new(
         catalog,
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix::default(),
     ));
     host.activate_storage_profile("je-anvil-1_7_10")
         .expect("known storage profile should activate");
@@ -881,7 +1341,7 @@ fn unknown_storage_and_auth_profiles_fail_activation() {
     let host = Arc::new(PluginHost::new(
         PluginCatalog::default(),
         PluginAbiRange::default(),
-        PluginFailurePolicy::Quarantine,
+        PluginFailureMatrix::default(),
     ));
     let storage = host
         .activate_storage_profile("missing")
@@ -1189,6 +1649,45 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), crate
             .capability_set()
             .contains("build-tag:protocol-reload-v1")
     );
+
+    let status = host.status();
+    let protocol = status
+        .protocols
+        .iter()
+        .find(|plugin| plugin.plugin_id == "je-1_7_10")
+        .expect("je-1_7_10 status snapshot should remain present");
+    assert_eq!(protocol.generation_id, before_generation);
+    assert!(protocol.loaded_at_ms > 0);
+    assert_eq!(
+        protocol.current_artifact.modified_at_ms,
+        protocol.loaded_at_ms
+    );
+    assert!(protocol.artifact_quarantine.is_some());
+    assert!(protocol.current_artifact.reason.is_none());
+
+    std::thread::sleep(Duration::from_secs(1));
+    package_single_protocol_plugin(
+        "mc-plugin-proto-je-1_7_10-reload-test",
+        "je-1_7_10",
+        &dist_dir,
+        &target_dir,
+        "protocol-reload-v2",
+    )?;
+    let reloaded = host.reload_modified()?;
+    assert!(
+        reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
+        "successful replacement should clear the quarantined artifact"
+    );
+
+    let status = host.status();
+    let protocol = status
+        .protocols
+        .iter()
+        .find(|plugin| plugin.plugin_id == "je-1_7_10")
+        .expect("je-1_7_10 status snapshot should remain present");
+    assert!(protocol.artifact_quarantine.is_none());
+    assert!(protocol.generation_id > before_generation);
+    assert!(protocol.loaded_at_ms > 0);
     Ok(())
 }
 

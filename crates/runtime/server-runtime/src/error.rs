@@ -7,6 +7,8 @@ pub enum RuntimeError {
     Io(#[from] std::io::Error),
     #[error("plugin load error: {0}")]
     PluginLoad(#[from] libloading::Error),
+    #[error("fatal plugin failure: {0}")]
+    PluginFatal(String),
     #[error("protocol error: {0}")]
     Protocol(#[from] ProtocolError),
     #[error("storage error: {0}")]

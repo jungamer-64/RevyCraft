@@ -1,4 +1,5 @@
 use super::*;
+use mc_proto_common::ConnectionPhase;
 
 fn loopback_server_config(world_dir: PathBuf) -> ServerConfig {
     ServerConfig {
@@ -51,6 +52,56 @@ async fn running_server_exposes_listener_bindings() -> Result<(), RuntimeError> 
 }
 
 #[tokio::test]
+async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = spawn_server(
+        loopback_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+
+    let status = server.status().await;
+    assert_eq!(status.active_topology.state, TopologyStatusState::Active);
+    assert_eq!(
+        status.active_topology.default_adapter_id,
+        JE_1_7_10_ADAPTER_ID
+    );
+    assert!(status.active_topology.default_bedrock_adapter_id.is_none());
+    assert_eq!(status.listener_bindings, server.listener_bindings());
+    assert_eq!(status.session_summary.total, 0);
+
+    let plugin_host = status
+        .plugin_host
+        .as_ref()
+        .expect("runtime status should expose the plugin host snapshot");
+    assert_eq!(plugin_host.protocols.len(), 1);
+    assert_eq!(plugin_host.gameplay.len(), 1);
+    assert_eq!(plugin_host.storage.len(), 1);
+    assert_eq!(plugin_host.auth.len(), 1);
+    assert_eq!(plugin_host.protocols[0].adapter_id, JE_1_7_10_ADAPTER_ID);
+    assert_eq!(
+        plugin_host.failure_matrix.protocol,
+        PluginFailureMatrix::default().protocol
+    );
+
+    let summary = format_runtime_status_summary(&status);
+    assert_eq!(
+        summary,
+        concat!(
+            "runtime active-topology=1 draining-topologies=0 listeners=1 sessions=0 dirty=false\n",
+            "topology tcp-default=je-1_7_10 tcp-enabled=je-1_7_10 udp-default=- udp-enabled=- max-players=20 motd=\"Multi-version Rust server\"\n",
+            "session-summary transport=tcp:0,udp:0 phase=handshaking:0,status:0,login:0,play:0\n",
+            "plugins protocol=1 gameplay=1 storage=1 auth=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
+        )
+    );
+    let serialized = toml::to_string(&status).expect("runtime status snapshot should serialize");
+    assert!(serialized.contains("active_topology"));
+    assert!(serialized.contains("plugin_host"));
+
+    server.shutdown().await
+}
+
+#[tokio::test]
 async fn running_server_exposes_udp_listener_binding_when_enabled() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let server = spawn_server(
@@ -75,6 +126,69 @@ async fn running_server_exposes_udp_listener_binding_when_enabled() -> Result<()
             .iter()
             .any(|adapter_id| adapter_id == BE_26_3_ADAPTER_ID)
     );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn running_server_session_status_reports_live_sessions() -> Result<(), RuntimeError> {
+    #[derive(serde::Serialize)]
+    struct SessionStatusList<'a> {
+        sessions: &'a [crate::runtime::SessionStatusSnapshot],
+    }
+
+    let temp_dir = tempdir()?;
+    let server = spawn_server(
+        loopback_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+    let (_stream, _buffer) =
+        connect_and_login_java_client(addr, &codec, 5, "status-observer", 0x26, 8).await?;
+
+    let sessions = server.session_status().await;
+    assert_eq!(sessions.len(), 1);
+    let session = &sessions[0];
+    assert_eq!(session.transport, TransportKind::Tcp);
+    assert_eq!(session.phase, ConnectionPhase::Play);
+    assert_eq!(session.adapter_id.as_deref(), Some(JE_1_7_10_ADAPTER_ID));
+    assert_eq!(session.gameplay_profile.as_deref(), Some("canonical"));
+    assert!(session.player_id.is_some());
+    assert!(session.entity_id.is_some());
+    assert!(session.protocol_generation.is_some());
+    assert!(session.gameplay_generation.is_some());
+
+    let status = server.status().await;
+    assert_eq!(status.session_summary.total, 1);
+    assert!(
+        status
+            .session_summary
+            .by_transport
+            .iter()
+            .any(|entry| entry.transport == TransportKind::Tcp && entry.count == 1)
+    );
+    assert!(
+        status
+            .session_summary
+            .by_phase
+            .iter()
+            .any(|entry| entry.phase == ConnectionPhase::Play && entry.count == 1)
+    );
+    assert!(
+        status
+            .session_summary
+            .by_adapter_id
+            .iter()
+            .any(|entry| entry.value.as_deref() == Some(JE_1_7_10_ADAPTER_ID) && entry.count == 1)
+    );
+    let serialized = toml::to_string(&SessionStatusList {
+        sessions: &sessions,
+    })
+    .expect("session status snapshot list should serialize");
+    assert!(serialized.contains("connection_id"));
+    assert!(serialized.contains("protocol_generation"));
 
     server.shutdown().await
 }

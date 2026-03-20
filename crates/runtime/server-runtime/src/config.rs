@@ -1,5 +1,5 @@
 use crate::RuntimeError;
-use crate::host::{PluginAbiRange, PluginFailurePolicy};
+use crate::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
 use mc_plugin_api::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use std::collections::HashMap;
 use std::fs;
@@ -70,7 +70,10 @@ pub struct ServerConfig {
     pub gameplay_profile_map: HashMap<String, String>,
     pub plugins_dir: PathBuf,
     pub plugin_allowlist: Option<Vec<String>>,
-    pub plugin_failure_policy: PluginFailurePolicy,
+    pub plugin_failure_policy_protocol: PluginFailureAction,
+    pub plugin_failure_policy_gameplay: PluginFailureAction,
+    pub plugin_failure_policy_storage: PluginFailureAction,
+    pub plugin_failure_policy_auth: PluginFailureAction,
     pub plugin_reload_watch: bool,
     pub topology_reload_watch: bool,
     pub topology_drain_grace_secs: u64,
@@ -81,6 +84,7 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
+        let failure_matrix = PluginFailureMatrix::default();
         Self {
             server_ip: None,
             server_port: 25565,
@@ -104,7 +108,10 @@ impl Default for ServerConfig {
             gameplay_profile_map: HashMap::new(),
             plugins_dir: PathBuf::from("runtime").join("plugins"),
             plugin_allowlist: None,
-            plugin_failure_policy: PluginFailurePolicy::Quarantine,
+            plugin_failure_policy_protocol: failure_matrix.protocol,
+            plugin_failure_policy_gameplay: failure_matrix.gameplay,
+            plugin_failure_policy_storage: failure_matrix.storage,
+            plugin_failure_policy_auth: failure_matrix.auth,
             plugin_reload_watch: false,
             topology_reload_watch: false,
             topology_drain_grace_secs: DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS,
@@ -213,7 +220,21 @@ fn apply_property(config: &mut ServerConfig, key: &str, value: &str) -> Result<(
         "plugins-dir" => config.plugins_dir = PathBuf::from(value),
         "plugin-allowlist" => config.plugin_allowlist = parse_enabled_adapters(value),
         "plugin-failure-policy" => {
-            config.plugin_failure_policy = PluginFailurePolicy::parse(value)?;
+            return Err(RuntimeError::Config(
+                "plugin-failure-policy is no longer supported; use kind-specific plugin-failure-policy-* keys".to_string(),
+            ));
+        }
+        "plugin-failure-policy-protocol" => {
+            config.plugin_failure_policy_protocol = PluginFailureMatrix::parse_protocol(value)?;
+        }
+        "plugin-failure-policy-gameplay" => {
+            config.plugin_failure_policy_gameplay = PluginFailureMatrix::parse_gameplay(value)?;
+        }
+        "plugin-failure-policy-storage" => {
+            config.plugin_failure_policy_storage = PluginFailureMatrix::parse_storage(value)?;
+        }
+        "plugin-failure-policy-auth" => {
+            config.plugin_failure_policy_auth = PluginFailureMatrix::parse_auth(value)?;
         }
         "plugin-reload-watch" => config.plugin_reload_watch = parse_bool_flag(value),
         "topology-reload-watch" => config.topology_reload_watch = parse_bool_flag(value),

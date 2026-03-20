@@ -65,11 +65,13 @@ impl PluginHost {
                     package.plugin_id.clone(),
                     profile_id,
                     generation,
-                    Arc::clone(&self.quarantine),
+                    Arc::clone(&self.failures),
                 )),
                 loaded_at: package.modified_at()?,
+                active_loaded_at: package.modified_at()?,
             },
         );
+        self.failures.clear_plugin_state(&package.plugin_id);
         Ok(())
     }
 
@@ -100,11 +102,12 @@ impl PluginHost {
                     package.plugin_id.clone(),
                     storage_profile.to_string(),
                     generation,
-                    Arc::clone(&self.quarantine),
                 )),
                 loaded_at: package.modified_at()?,
+                active_loaded_at: package.modified_at()?,
             },
         );
+        self.failures.clear_plugin_state(&package.plugin_id);
         Ok(())
     }
 
@@ -137,11 +140,13 @@ impl PluginHost {
                     package.plugin_id.clone(),
                     profile_id,
                     generation,
-                    Arc::clone(&self.quarantine),
+                    Arc::clone(&self.failures),
                 )),
                 loaded_at: package.modified_at()?,
+                active_loaded_at: package.modified_at()?,
             },
         );
+        self.failures.clear_plugin_state(&package.plugin_id);
         Ok(())
     }
 

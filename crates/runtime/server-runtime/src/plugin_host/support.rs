@@ -374,10 +374,7 @@ pub(super) fn migrate_gameplay_sessions(
         .reload_gate
         .write()
         .expect("gameplay reload gate should not be poisoned");
-    let current_generation = managed
-        .profile
-        .current_generation()
-        .map_err(RuntimeError::Config)?;
+    let current_generation = managed.profile.current_generation();
     let relevant_sessions = runtime
         .gameplay_sessions
         .iter()

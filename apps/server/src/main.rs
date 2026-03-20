@@ -3,7 +3,7 @@ use server_runtime::RuntimeError;
 use server_runtime::config::{ServerConfig, ServerConfigSource};
 use server_runtime::host::plugin_host_from_config;
 use server_runtime::registry::RuntimeRegistries;
-use server_runtime::runtime::spawn_server;
+use server_runtime::runtime::{format_runtime_status_summary, spawn_server};
 use std::path::Path;
 
 #[tokio::main]
@@ -30,6 +30,7 @@ async fn main() -> Result<(), RuntimeError> {
             binding.local_addr, binding.transport, binding.adapter_ids
         );
     }
+    println!("{}", format_runtime_status_summary(&server.status().await));
     tokio::signal::ctrl_c()
         .await
         .map_err(|error| RuntimeError::Config(format!("failed to wait for ctrl-c: {error}")))?;

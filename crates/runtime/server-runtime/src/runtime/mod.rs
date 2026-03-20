@@ -1,6 +1,7 @@
 mod bootstrap;
 mod core_loop;
 mod session;
+mod status;
 #[cfg(test)]
 mod tests;
 
@@ -19,6 +20,7 @@ use mc_core::{
 };
 use mc_plugin_api::{GameplaySessionSnapshot, ProtocolSessionSnapshot};
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -27,6 +29,11 @@ use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 pub use self::bootstrap::spawn_server;
+pub use self::status::{
+    OptionalNamedCountSnapshot, PhaseCountSnapshot, RuntimeStatusSnapshot, SessionStatusSnapshot,
+    SessionSummarySnapshot, TopologyGenerationCountSnapshot, TopologyStatusSnapshot,
+    TopologyStatusState, TransportCountSnapshot, format_runtime_status_summary,
+};
 
 pub(crate) const LOGIN_SERVER_ID: &str = "";
 pub(crate) const LOGIN_VERIFY_TOKEN_LEN: usize = 4;
@@ -81,6 +88,7 @@ impl RunningServer {
 pub(crate) struct SessionHandle {
     pub(crate) tx: mpsc::UnboundedSender<SessionMessage>,
     pub(crate) topology_generation_id: TopologyGenerationId,
+    pub(crate) transport: TransportKind,
     pub(crate) phase: ConnectionPhase,
     pub(crate) adapter_id: Option<String>,
     pub(crate) player_id: Option<PlayerId>,
@@ -117,7 +125,7 @@ pub(crate) struct AcceptedTopologySession {
     pub(crate) session: AcceptedTransportSession,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TopologyGenerationId(pub u64);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,6 +134,16 @@ pub struct TopologyReloadResult {
     pub retired_generation_ids: Vec<TopologyGenerationId>,
     pub applied_config_change: bool,
     pub reconfigured_adapter_ids: Vec<String>,
+}
+
+impl TopologyReloadResult {
+    #[must_use]
+    pub fn changed(&self, previous_generation_id: TopologyGenerationId) -> bool {
+        self.activated_generation_id != previous_generation_id
+            || self.applied_config_change
+            || !self.retired_generation_ids.is_empty()
+            || !self.reconfigured_adapter_ids.is_empty()
+    }
 }
 
 pub(crate) struct RuntimeTopologyGeneration {

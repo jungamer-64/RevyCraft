@@ -4,6 +4,7 @@ use crate::protocol_codec::{
 };
 use crate::{CURRENT_PLUGIN_ABI, PROTOCOL_FLAG_RESPONSE, PluginKind, ProtocolCodecError};
 use mc_core::{CapabilitySet, PlayerId};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -32,7 +33,7 @@ impl TryFrom<u8> for AuthOpCode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AuthMode {
     Offline,
     Online,
