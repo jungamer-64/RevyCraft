@@ -502,6 +502,11 @@ impl ProtocolGeneration {
     }
 }
 
+#[derive(Clone, Copy)]
+struct GameplayQueryScope<'a> {
+    query: &'a dyn GameplayQuery,
+}
+
 thread_local! {
     static CURRENT_GAMEPLAY_QUERY: Cell<Option<*const ()>> = const { Cell::new(None) };
 }
@@ -510,18 +515,18 @@ thread_local! {
 ///
 /// # Safety invariants
 ///
-/// The stored pointer references the stack-local `query_ref` created in this function, so it is
-/// only valid for the dynamic extent of `f`. Gameplay host callbacks must therefore remain
-/// synchronous, stay on the same thread, and never retain the pointer beyond the callback.
+/// The stored pointer borrows `query`, so it is only valid for the dynamic extent of `f`.
+/// Gameplay host callbacks must therefore remain synchronous, stay on the same thread, and never
+/// retain the pointer beyond the callback.
 fn with_gameplay_query<T>(
     query: &dyn GameplayQuery,
     f: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
     CURRENT_GAMEPLAY_QUERY.with(|slot| {
-        // The pointer targets this stack-local reference and never outlives the closure because
-        // gameplay host callbacks execute synchronously inside `f`.
-        let query_ref = query;
-        let previous = slot.replace(Some((&raw const query_ref).cast::<()>()));
+        // The pointer is only published while `f` runs, and nested invocations restore the
+        // previous pointer before returning.
+        let scope = GameplayQueryScope { query };
+        let previous = slot.replace(Some(std::ptr::from_ref(&scope).cast()));
         let result = f();
         let _ = slot.replace(previous);
         result
@@ -539,14 +544,13 @@ fn with_current_gameplay_query<T>(
     f: impl FnOnce(&dyn GameplayQuery) -> Result<T, String>,
 ) -> Result<T, String> {
     CURRENT_GAMEPLAY_QUERY.with(|slot| {
-        let query_ref_ptr = slot
+        let query_scope_ptr = slot
             .get()
-            .ok_or_else(|| "gameplay host callback invoked without an active query".to_string())?
-            .cast::<&dyn GameplayQuery>();
-        // SAFETY: `with_gameplay_query` only publishes a pointer to its stack-local `query_ref`
-        // for the duration of the callback, and this accessor is only used synchronously from that
-        // dynamic extent on the same thread.
-        let query = unsafe { *query_ref_ptr };
+            .ok_or_else(|| "gameplay host callback invoked without an active query".to_string())?;
+        // SAFETY: `with_gameplay_query` only publishes a pointer to its stack-local
+        // `GameplayQueryScope` for the duration of the callback, and this accessor is only used
+        // synchronously from that dynamic extent on the same thread.
+        let query = unsafe { (&*query_scope_ptr.cast::<GameplayQueryScope<'_>>()).query };
         f(query)
     })
 }

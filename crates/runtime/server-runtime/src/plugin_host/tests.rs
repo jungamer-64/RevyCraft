@@ -1,10 +1,12 @@
 use super::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
     PluginAbiRange, PluginCatalog, PluginFailurePolicy, PluginHost, current_artifact_key,
+    with_current_gameplay_query, with_gameplay_query,
 };
 use crate::config::ServerConfig;
 use crate::host::plugin_host_from_config;
 use crate::registry::RuntimeRegistries;
+use mc_core::{BlockPos, BlockState, DimensionId, GameplayQuery, PlayerId, WorldMeta};
 use mc_plugin_api::{
     CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind, PluginManifestV1, Utf8Slice,
 };
@@ -255,6 +257,39 @@ fn manifest_with_abi(
         capabilities: std::ptr::null(),
         capabilities_len: 0,
     }))
+}
+
+struct StubGameplayQuery {
+    level_name: &'static str,
+}
+
+impl GameplayQuery for StubGameplayQuery {
+    fn world_meta(&self) -> WorldMeta {
+        WorldMeta {
+            level_name: self.level_name.to_string(),
+            seed: 0,
+            spawn: BlockPos::new(0, 64, 0),
+            dimension: DimensionId::Overworld,
+            age: 0,
+            time: 0,
+            level_type: "FLAT".to_string(),
+            game_mode: 0,
+            difficulty: 1,
+            max_players: 20,
+        }
+    }
+
+    fn player_snapshot(&self, _player_id: PlayerId) -> Option<mc_core::PlayerSnapshot> {
+        None
+    }
+
+    fn block_state(&self, _position: BlockPos) -> BlockState {
+        BlockState::air()
+    }
+
+    fn can_edit_block(&self, _player_id: PlayerId, _position: BlockPos) -> bool {
+        false
+    }
 }
 
 #[test]
@@ -862,6 +897,42 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), crate::RuntimeEr
     assert_ne!(first_generation, next_generation);
     assert!(adapter.capability_set().contains("build-tag:reload-v2"));
     Ok(())
+}
+
+#[test]
+fn gameplay_query_tls_restores_previous_query_when_nested() {
+    let outer = StubGameplayQuery {
+        level_name: "outer",
+    };
+    let inner = StubGameplayQuery {
+        level_name: "inner",
+    };
+
+    let observed = with_gameplay_query(&outer, || {
+        let outer_name = with_current_gameplay_query(|query| Ok(query.world_meta().level_name))?;
+        let inner_name = with_gameplay_query(&inner, || {
+            with_current_gameplay_query(|query| Ok(query.world_meta().level_name))
+        })?;
+        let restored_name = with_current_gameplay_query(|query| Ok(query.world_meta().level_name))?;
+        Ok((outer_name, inner_name, restored_name))
+    })
+    .expect("nested gameplay queries should succeed");
+
+    assert_eq!(
+        observed,
+        (
+            "outer".to_string(),
+            "inner".to_string(),
+            "outer".to_string()
+        )
+    );
+}
+
+#[test]
+fn gameplay_query_tls_requires_an_active_query() {
+    let error = with_current_gameplay_query(|query| Ok(query.world_meta().level_name))
+        .expect_err("gameplay query access should fail outside callback scope");
+    assert!(error.contains("without an active query"));
 }
 
 fn je_handshake_frame(protocol_version: i32) -> Vec<u8> {
