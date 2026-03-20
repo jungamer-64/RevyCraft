@@ -23,13 +23,11 @@ bedrockrs_network = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.g
 bedrockrs_proto = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_proto", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
 bedrockrs_proto_core = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_proto_core", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
 bedrockrs_shared = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_shared", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
-bevy = { version = "0.18", features = ["bevy_ui", "bevy_text", "debug"] }
 bytes = "1.10"
 flate2 = "1.1"
 jsonwebtoken = "10.1"
 md5 = { package = "md-5", version = "0.10" }
 nbtx = "2.0"
-noise = "0.9"
 num-bigint = "0.4"
 num-traits = "0.2"
 p384 = { version = "0.13", features = ["pkcs8"] }
