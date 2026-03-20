@@ -1,14 +1,16 @@
 use super::{
     Arc, AuthPluginApiV1, AuthRequest, AuthResponse, BedrockListenerDescriptor, CapabilitySet,
     GameplayGeneration, GameplayPluginApiV1, GameplayProfileId, GameplayRequest, GameplayResponse,
-    GameplaySessionSnapshot, HashMap, HashSet, ManagedGameplayPlugin, OwnedBuffer,
-    PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1, ProtocolDescriptor,
-    ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse, RuntimeError, RuntimeReloadContext,
-    StorageGeneration, StoragePluginApiV1, StorageRequest, StorageResponse, decode_auth_response,
-    decode_gameplay_response, decode_plugin_error, decode_protocol_response,
-    decode_storage_response, encode_auth_request, encode_gameplay_request, encode_protocol_request,
-    encode_storage_request,
+    GameplaySessionSnapshot, HashMap, HashSet, ManagedGameplayPlugin, ManagedProtocolPlugin,
+    OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1,
+    ProtocolDescriptor, ProtocolGeneration, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
+    RuntimeError, RuntimeReloadContext, StorageGeneration, StoragePluginApiV1, StorageRequest,
+    StorageResponse, decode_auth_response, decode_gameplay_response, decode_plugin_error,
+    decode_protocol_response, decode_storage_response, encode_auth_request,
+    encode_gameplay_request, encode_protocol_request, encode_storage_request,
 };
+use crate::runtime::ProtocolReloadSession;
+use mc_plugin_api::ProtocolSessionSnapshot;
 
 #[derive(Clone, Debug)]
 pub(super) struct DecodedManifest {
@@ -396,6 +398,62 @@ pub(super) fn migrate_gameplay_sessions(
     Ok(true)
 }
 
+pub(super) fn protocol_reload_compatible(
+    plugin_id: &str,
+    current: &ProtocolGeneration,
+    candidate: &ProtocolGeneration,
+) -> bool {
+    let compatible = current.descriptor.adapter_id == candidate.descriptor.adapter_id
+        && current.descriptor.transport == candidate.descriptor.transport
+        && current.descriptor.edition == candidate.descriptor.edition
+        && current.descriptor.protocol_number == candidate.descriptor.protocol_number
+        && current.descriptor.wire_format == candidate.descriptor.wire_format
+        && current.bedrock_listener_descriptor == candidate.bedrock_listener_descriptor;
+    if !compatible {
+        eprintln!(
+            "protocol reload rejected for `{plugin_id}` because route/listener metadata changed"
+        );
+    }
+    compatible
+}
+
+pub(super) fn migrate_protocol_sessions(
+    managed: &ManagedProtocolPlugin,
+    generation: &Arc<ProtocolGeneration>,
+    protocol_sessions: &[ProtocolReloadSession],
+) -> Result<bool, RuntimeError> {
+    let _reload_guard = managed
+        .adapter
+        .reload_gate
+        .write()
+        .expect("protocol reload gate should not be poisoned");
+    let current_generation = managed
+        .adapter
+        .current_generation()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let relevant_sessions = protocol_sessions
+        .iter()
+        .filter(|session| session.adapter_id == managed.package.plugin_id)
+        .map(|session| session.session.clone())
+        .collect::<Vec<_>>();
+
+    for session in &relevant_sessions {
+        let Some(blob) =
+            export_protocol_session_blob(&managed.package.plugin_id, &current_generation, session)
+        else {
+            return Ok(false);
+        };
+        if !import_protocol_session_blob(&managed.package.plugin_id, generation, session, blob) {
+            return Ok(false);
+        }
+    }
+
+    managed
+        .adapter
+        .swap_generation_while_reloading(Arc::clone(generation));
+    Ok(true)
+}
+
 fn export_gameplay_session_blob(
     plugin_id: &str,
     generation: &GameplayGeneration,
@@ -414,6 +472,52 @@ fn export_gameplay_session_blob(
         Err(error) => {
             eprintln!("gameplay reload export failed for `{plugin_id}`: {error}");
             None
+        }
+    }
+}
+
+fn export_protocol_session_blob(
+    plugin_id: &str,
+    generation: &ProtocolGeneration,
+    session: &ProtocolSessionSnapshot,
+) -> Option<Vec<u8>> {
+    match generation.invoke(&ProtocolRequest::ExportSessionState {
+        session: session.clone(),
+    }) {
+        Ok(ProtocolResponse::SessionTransferBlob(blob)) => Some(blob),
+        Ok(other) => {
+            eprintln!(
+                "protocol reload export returned unexpected payload for `{plugin_id}`: {other:?}"
+            );
+            None
+        }
+        Err(error) => {
+            eprintln!("protocol reload export failed for `{plugin_id}`: {error}");
+            None
+        }
+    }
+}
+
+fn import_protocol_session_blob(
+    plugin_id: &str,
+    generation: &ProtocolGeneration,
+    session: &ProtocolSessionSnapshot,
+    blob: Vec<u8>,
+) -> bool {
+    match generation.invoke(&ProtocolRequest::ImportSessionState {
+        session: session.clone(),
+        blob,
+    }) {
+        Ok(ProtocolResponse::Empty) => true,
+        Ok(other) => {
+            eprintln!(
+                "protocol reload import returned unexpected payload for `{plugin_id}`: {other:?}"
+            );
+            false
+        }
+        Err(error) => {
+            eprintln!("protocol reload import failed for `{plugin_id}`: {error}");
+            false
         }
     }
 }

@@ -15,8 +15,8 @@ use mc_plugin_api::{
     HostApiTableV1, OwnedBuffer, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1,
     PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1,
     PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1, ProtocolPluginApiV1,
-    ProtocolRequest, ProtocolResponse, StoragePluginApiV1, StorageRequest, StorageResponse,
-    WireFrameDecodeResult, decode_auth_response, decode_gameplay_response,
+    ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, StoragePluginApiV1, StorageRequest,
+    StorageResponse, WireFrameDecodeResult, decode_auth_response, decode_gameplay_response,
     decode_protocol_response, decode_storage_response, encode_auth_request,
     encode_gameplay_request, encode_protocol_request, encode_storage_request,
 };
@@ -50,7 +50,7 @@ use self::support::{
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
     gameplay_profile_id_from_manifest, import_storage_runtime_state, invoke_auth, invoke_gameplay,
     invoke_protocol, invoke_storage, manifest_profile_id, migrate_gameplay_sessions,
-    require_manifest_capability,
+    migrate_protocol_sessions, protocol_reload_compatible, require_manifest_capability,
 };
 
 const PLUGIN_RELOAD_POLL_INTERVAL_MS: u64 = 1_000;
@@ -908,6 +908,7 @@ struct HotSwappableProtocolAdapter {
     plugin_id: String,
     generation: RwLock<Arc<ProtocolGeneration>>,
     quarantine: Arc<QuarantineManager>,
+    reload_gate: RwLock<()>,
 }
 
 impl HotSwappableProtocolAdapter {
@@ -920,6 +921,7 @@ impl HotSwappableProtocolAdapter {
             plugin_id,
             generation: RwLock::new(generation),
             quarantine,
+            reload_gate: RwLock::new(()),
         }
     }
 
@@ -939,6 +941,14 @@ impl HotSwappableProtocolAdapter {
     }
 
     fn swap_generation(&self, generation: Arc<ProtocolGeneration>) {
+        let _guard = self
+            .reload_gate
+            .write()
+            .expect("protocol reload gate should not be poisoned");
+        self.swap_generation_while_reloading(generation);
+    }
+
+    fn swap_generation_while_reloading(&self, generation: Arc<ProtocolGeneration>) {
         *self
             .generation
             .write()
@@ -951,18 +961,66 @@ impl HotSwappableProtocolAdapter {
         }
         result
     }
+
+    fn with_generation<T>(
+        &self,
+        f: impl FnOnce(&ProtocolGeneration) -> Result<T, ProtocolError>,
+    ) -> Result<T, ProtocolError> {
+        let _guard = self
+            .reload_gate
+            .read()
+            .expect("protocol reload gate should not be poisoned");
+        let generation = self.current_generation()?;
+        self.quarantine_on_error(f(&generation))
+    }
+
+    #[allow(dead_code)]
+    pub fn export_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, RuntimeError> {
+        self.with_generation(|generation| {
+            match generation.invoke(&ProtocolRequest::ExportSessionState {
+                session: session.clone(),
+            })? {
+                ProtocolResponse::SessionTransferBlob(blob) => Ok(blob),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected protocol export payload: {other:?}"
+                ))),
+            }
+        })
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    #[allow(dead_code)]
+    pub fn import_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        blob: &[u8],
+    ) -> Result<(), RuntimeError> {
+        self.with_generation(|generation| {
+            match generation.invoke(&ProtocolRequest::ImportSessionState {
+                session: session.clone(),
+                blob: blob.to_vec(),
+            })? {
+                ProtocolResponse::Empty => Ok(()),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected protocol import payload: {other:?}"
+                ))),
+            }
+        })
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
 }
 
 impl HandshakeProbe for HotSwappableProtocolAdapter {
     fn transport_kind(&self) -> TransportKind {
-        self.current_generation()
-            .map(|generation| generation.descriptor.transport)
+        self.with_generation(|generation| Ok(generation.descriptor.transport))
             .unwrap_or(TransportKind::Tcp)
     }
 
     fn try_route(&self, frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::TryRoute {
                 frame: frame.to_vec(),
             })? {
@@ -970,15 +1028,14 @@ impl HandshakeProbe for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected try_route response: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 }
 
 impl WireCodec for HotSwappableProtocolAdapter {
     fn encode_frame(&self, payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::EncodeWireFrame {
                 payload: payload.to_vec(),
             })? {
@@ -986,13 +1043,12 @@ impl WireCodec for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected encode_wire_frame response: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 
     fn try_decode_frame(&self, buffer: &mut BytesMut) -> Result<Option<Vec<u8>>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::TryDecodeWireFrame {
                 buffer: buffer.to_vec(),
             })? {
@@ -1016,8 +1072,8 @@ impl WireCodec for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected try_decode_wire_frame response: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 }
 
@@ -1027,8 +1083,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     }
 
     fn decode_status(&self, frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::DecodeStatus {
                 frame: frame.to_vec(),
             })? {
@@ -1036,13 +1091,12 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected decode_status response: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 
     fn decode_login(&self, frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::DecodeLogin {
                 frame: frame.to_vec(),
             })? {
@@ -1050,13 +1104,12 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected decode_login response: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 
     fn encode_status_response(&self, status: &ServerListStatus) -> Result<Vec<u8>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::EncodeStatusResponse {
                 status: status.clone(),
             })? {
@@ -1064,20 +1117,19 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected encode_status_response payload: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 
     fn encode_status_pong(&self, payload: i64) -> Result<Vec<u8>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::EncodeStatusPong { payload })? {
                 ProtocolResponse::Frame(frame) => Ok(frame),
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected encode_status_pong payload: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 
     fn encode_disconnect(
@@ -1085,8 +1137,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
         phase: ConnectionPhase,
         reason: &str,
     ) -> Result<Vec<u8>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::EncodeDisconnect {
                 phase,
                 reason: reason.to_string(),
@@ -1095,8 +1146,8 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected encode_disconnect payload: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 
     fn encode_encryption_request(
@@ -1105,8 +1156,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
         public_key_der: &[u8],
         verify_token: &[u8],
     ) -> Result<Vec<u8>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::EncodeEncryptionRequest {
                 server_id: server_id.to_string(),
                 public_key_der: public_key_der.to_vec(),
@@ -1116,16 +1166,15 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected encode_encryption_request payload: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 
     fn encode_network_settings(
         &self,
         compression_threshold: u16,
     ) -> Result<Vec<u8>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::EncodeNetworkSettings {
                 compression_threshold,
             })? {
@@ -1133,16 +1182,15 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected encode_network_settings payload: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 
     fn encode_login_success(
         &self,
         player: &mc_core::PlayerSnapshot,
     ) -> Result<Vec<u8>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::EncodeLoginSuccess {
                 player: player.clone(),
             })? {
@@ -1150,8 +1198,8 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected encode_login_success payload: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 }
 
@@ -1161,8 +1209,7 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
         player_id: mc_core::PlayerId,
         frame: &[u8],
     ) -> Result<Option<mc_core::CoreCommand>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::DecodePlay {
                 player_id,
                 frame: frame.to_vec(),
@@ -1171,8 +1218,8 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected decode_play payload: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 
     fn encode_play_event(
@@ -1180,8 +1227,7 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
         event: &mc_core::CoreEvent,
         context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
-        let generation = self.current_generation()?;
-        self.quarantine_on_error(
+        self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::EncodePlayEvent {
                 event: event.clone(),
                 context: *context,
@@ -1190,42 +1236,41 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected encode_play_event payload: {other:?}"
                 ))),
-            },
-        )
+            }
+        })
     }
 }
 
 impl ProtocolAdapter for HotSwappableProtocolAdapter {
     fn descriptor(&self) -> ProtocolDescriptor {
-        self.current_generation().map_or_else(
-            |_| ProtocolDescriptor {
-                adapter_id: self.plugin_id.clone(),
-                transport: TransportKind::Tcp,
-                wire_format: WireFormatKind::MinecraftFramed,
-                edition: mc_proto_common::Edition::Je,
-                version_name: "quarantined".to_string(),
-                protocol_number: -1,
-            },
-            |generation| generation.descriptor.clone(),
-        )
+        self.with_generation(|generation| Ok(generation.descriptor.clone()))
+            .map_or_else(
+                |_| ProtocolDescriptor {
+                    adapter_id: self.plugin_id.clone(),
+                    transport: TransportKind::Tcp,
+                    wire_format: WireFormatKind::MinecraftFramed,
+                    edition: mc_proto_common::Edition::Je,
+                    version_name: "quarantined".to_string(),
+                    protocol_number: -1,
+                },
+                |descriptor| descriptor,
+            )
     }
 
     fn bedrock_listener_descriptor(&self) -> Option<BedrockListenerDescriptor> {
-        self.current_generation()
+        self.with_generation(|generation| Ok(generation.bedrock_listener_descriptor.clone()))
             .ok()
-            .and_then(|generation| generation.bedrock_listener_descriptor.clone())
+            .flatten()
     }
 
     fn capability_set(&self) -> CapabilitySet {
-        self.current_generation()
-            .map(|generation| generation.capabilities.clone())
+        self.with_generation(|generation| Ok(generation.capabilities.clone()))
             .unwrap_or_default()
     }
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
-        self.current_generation()
+        self.with_generation(|generation| Ok(generation.generation_id))
             .ok()
-            .map(|generation| generation.generation_id)
     }
 }
 

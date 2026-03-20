@@ -28,6 +28,15 @@ pub struct StaticPluginManifest {
 impl StaticPluginManifest {
     #[must_use]
     pub const fn protocol(plugin_id: &'static str, display_name: &'static str) -> Self {
+        Self::protocol_with_capabilities(plugin_id, display_name, &[])
+    }
+
+    #[must_use]
+    pub const fn protocol_with_capabilities(
+        plugin_id: &'static str,
+        display_name: &'static str,
+        capabilities: &'static [&'static str],
+    ) -> Self {
         Self {
             plugin_id,
             display_name,
@@ -35,7 +44,7 @@ impl StaticPluginManifest {
             plugin_abi: CURRENT_PLUGIN_ABI,
             min_host_abi: CURRENT_PLUGIN_ABI,
             max_host_abi: CURRENT_PLUGIN_ABI,
-            capabilities: &[],
+            capabilities,
         }
     }
 
@@ -141,8 +150,6 @@ pub trait RustProtocolPlugin: HandshakeProbe + ProtocolAdapter + Send + Sync + '
         Ok(())
     }
 }
-
-impl<T> RustProtocolPlugin for T where T: HandshakeProbe + ProtocolAdapter + Send + Sync + 'static {}
 
 pub trait RustStoragePlugin: Send + Sync + 'static {
     fn descriptor(&self) -> StorageDescriptor;
@@ -838,6 +845,8 @@ pub fn handle_gameplay_request_with_host_api<P: RustGameplayPlugin>(
 #[macro_export]
 macro_rules! delegate_protocol_adapter {
     ($plugin_ty:ty, $field:ident, $capability_body:block $(,)?) => {
+        impl $crate::RustProtocolPlugin for $plugin_ty {}
+
         impl mc_proto_common::HandshakeProbe for $plugin_ty {
             fn transport_kind(&self) -> mc_proto_common::TransportKind {
                 self.$field.transport_kind()

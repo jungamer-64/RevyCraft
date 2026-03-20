@@ -357,6 +357,10 @@ impl RuntimeServer {
     async fn sync_session_handle(&self, connection_id: ConnectionId, session: &SessionState) {
         if let Some(handle) = self.sessions.lock().await.get_mut(&connection_id) {
             handle.phase = session.phase;
+            handle.adapter_id = session
+                .adapter
+                .as_ref()
+                .map(|adapter| adapter.descriptor().adapter_id);
             handle.player_id = session.player_id;
             handle.entity_id = session.entity_id;
             handle.gameplay_profile = session
@@ -443,6 +447,10 @@ impl RuntimeServer {
             SessionHandle {
                 tx,
                 phase: session.phase,
+                adapter_id: session
+                    .adapter
+                    .as_ref()
+                    .map(|adapter| adapter.descriptor().adapter_id),
                 player_id: session.player_id,
                 entity_id: session.entity_id,
                 gameplay_profile: session

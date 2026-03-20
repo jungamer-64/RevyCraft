@@ -4,6 +4,57 @@ use mc_core::PluginGenerationId;
 
 type EncryptedLoginChallenge = ([u8; 16], Vec<u8>, Vec<u8>);
 
+async fn spawn_protocol_reload_server(
+    temp_dir: &tempfile::TempDir,
+    scenario: &str,
+) -> Result<
+    (
+        RunningServer,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        PluginGenerationId,
+    ),
+    RuntimeError,
+> {
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let target_dir = crate::packaged_plugin_test_target_dir(scenario);
+    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    package_single_plugin(
+        "mc-plugin-proto-je-1_7_10-reload-test",
+        JE_1_7_10_ADAPTER_ID,
+        "protocol",
+        &dist_dir,
+        &target_dir,
+        "protocol-reload-v1",
+    )?;
+    let server = spawn_server(
+        ServerConfig {
+            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+            server_port: 0,
+            game_mode: 1,
+            plugins_dir: dist_dir.clone(),
+            world_dir: temp_dir.path().join("world"),
+            ..ServerConfig::default()
+        },
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+    )
+    .await?;
+    let adapter = server
+        .runtime
+        .protocol_registry
+        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .expect("runtime should resolve the reload-test adapter");
+    let before_generation = adapter
+        .plugin_generation_id()
+        .expect("reload-test adapter should report generation");
+    assert!(
+        adapter
+            .capability_set()
+            .contains("build-tag:protocol-reload-v1")
+    );
+    Ok((server, dist_dir, target_dir, before_generation))
+}
+
 async fn spawn_online_auth_reload_server(
     temp_dir: &tempfile::TempDir,
 ) -> Result<
@@ -98,6 +149,105 @@ fn encrypt_online_login_challenge_response(
         shared_secret_encrypted,
         verify_token_encrypted,
     ))
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Result<(), RuntimeError>
+{
+    let temp_dir = tempdir()?;
+    let (server, dist_dir, target_dir, before_generation) =
+        spawn_protocol_reload_server(&temp_dir, "protocol-reload-success").await?;
+    let codec = MinecraftWireCodec;
+    let addr = listener_addr(&server);
+    let (mut alpha, mut alpha_buffer) =
+        connect_and_login_java_client(addr, &codec, 5, "protohot", 0x30, 12).await?;
+    let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
+
+    std::thread::sleep(Duration::from_secs(1));
+    package_single_plugin(
+        "mc-plugin-proto-je-1_7_10-reload-test",
+        JE_1_7_10_ADAPTER_ID,
+        "protocol",
+        &dist_dir,
+        &target_dir,
+        "protocol-reload-v2",
+    )?;
+
+    let reloaded = server.reload_plugins().await?;
+    assert!(
+        reloaded
+            .iter()
+            .any(|plugin_id| plugin_id == JE_1_7_10_ADAPTER_ID),
+        "protocol reload should report a generation swap"
+    );
+
+    let adapter = server
+        .runtime
+        .protocol_registry
+        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .expect("runtime should still resolve the adapter after reload");
+    assert_ne!(adapter.plugin_generation_id(), Some(before_generation));
+    assert!(
+        adapter
+            .capability_set()
+            .contains("build-tag:protocol-reload-v2")
+    );
+
+    write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
+    let held_item = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
+    assert_eq!(held_item_from_packet(&held_item)?, 4);
+
+    server.shutdown().await
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let (server, dist_dir, target_dir, before_generation) =
+        spawn_protocol_reload_server(&temp_dir, "protocol-reload-failure").await?;
+    let codec = MinecraftWireCodec;
+    let addr = listener_addr(&server);
+    let (mut alpha, mut alpha_buffer) =
+        connect_and_login_java_client(addr, &codec, 5, "protofail", 0x30, 12).await?;
+    let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
+
+    std::thread::sleep(Duration::from_secs(1));
+    package_single_plugin(
+        "mc-plugin-proto-je-1_7_10-reload-test",
+        JE_1_7_10_ADAPTER_ID,
+        "protocol",
+        &dist_dir,
+        &target_dir,
+        "protocol-reload-fail",
+    )?;
+
+    let reloaded = server.reload_plugins().await?;
+    assert!(
+        !reloaded
+            .iter()
+            .any(|plugin_id| plugin_id == JE_1_7_10_ADAPTER_ID),
+        "failed protocol migration should keep the current generation"
+    );
+
+    let adapter = server
+        .runtime
+        .protocol_registry
+        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .expect("runtime should still resolve the adapter after failed reload");
+    assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
+    assert!(
+        adapter
+            .capability_set()
+            .contains("build-tag:protocol-reload-v1")
+    );
+
+    write_packet(&mut alpha, &codec, &held_item_change(6)).await?;
+    let held_item = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
+    assert_eq!(held_item_from_packet(&held_item)?, 6);
+
+    server.shutdown().await
 }
 
 #[cfg(target_os = "linux")]

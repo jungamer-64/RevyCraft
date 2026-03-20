@@ -1,8 +1,12 @@
-use super::{RuntimeReloadContext, RuntimeServer, SessionMessage, SessionState, now_ms};
+use super::{
+    ProtocolReloadSession, RuntimeReloadContext, RuntimeServer, SessionMessage, SessionState,
+    now_ms,
+};
 use crate::RuntimeError;
 use crate::host::PluginHost;
 use mc_core::{ConnectionId, CoreCommand, CoreEvent, EventTarget, PlayerSummary, TargetedEvent};
-use mc_plugin_api::GameplaySessionSnapshot;
+use mc_plugin_api::{GameplaySessionSnapshot, ProtocolSessionSnapshot};
+use mc_proto_common::ConnectionPhase;
 use std::sync::Arc;
 
 impl RuntimeServer {
@@ -197,6 +201,31 @@ impl RuntimeServer {
     }
 
     async fn reload_context(&self) -> RuntimeReloadContext {
+        let protocol_sessions = {
+            self.sessions
+                .lock()
+                .await
+                .iter()
+                .filter_map(|(connection_id, handle)| {
+                    let adapter_id = handle.adapter_id.clone()?;
+                    if !matches!(
+                        handle.phase,
+                        ConnectionPhase::Status | ConnectionPhase::Login | ConnectionPhase::Play
+                    ) {
+                        return None;
+                    }
+                    Some(ProtocolReloadSession {
+                        adapter_id,
+                        session: ProtocolSessionSnapshot {
+                            connection_id: *connection_id,
+                            phase: handle.phase,
+                            player_id: handle.player_id,
+                            entity_id: handle.entity_id,
+                        },
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
         let gameplay_sessions = {
             self.sessions
                 .lock()
@@ -214,6 +243,7 @@ impl RuntimeServer {
         };
         let snapshot = { self.state.lock().await.core.snapshot() };
         RuntimeReloadContext {
+            protocol_sessions,
             gameplay_sessions,
             snapshot,
             world_dir: self.config.world_dir.clone(),

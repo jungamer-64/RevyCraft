@@ -18,7 +18,10 @@ delegate_protocol_adapter!(Je18xProtocolPlugin, adapter, {
     capabilities
 });
 
-const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::protocol("je-1_8_x", "JE 1.8.x Protocol Plugin");
+const MANIFEST: StaticPluginManifest = StaticPluginManifest::protocol_with_capabilities(
+    "je-1_8_x",
+    "JE 1.8.x Protocol Plugin",
+    &["runtime.reload.protocol"],
+);
 
 export_protocol_plugin!(Je18xProtocolPlugin, MANIFEST);

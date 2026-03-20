@@ -1,10 +1,82 @@
 use super::{
     Arc, AuthGeneration, GameplayGeneration, ManagedAuthPlugin, ManagedGameplayPlugin,
-    ManagedStoragePlugin, PluginHost, PluginKind, RuntimeError, RuntimeReloadContext,
+    ManagedProtocolPlugin, ManagedStoragePlugin, PluginHost, RuntimeError, RuntimeReloadContext,
     StorageGeneration, SystemTime, import_storage_runtime_state, migrate_gameplay_sessions,
+    migrate_protocol_sessions, protocol_reload_compatible,
 };
+use crate::runtime::ProtocolReloadSession;
 
 impl PluginHost {
+    fn load_protocol_reload_candidate(
+        &self,
+        managed: &mut ManagedProtocolPlugin,
+    ) -> Result<Option<(SystemTime, Arc<super::ProtocolGeneration>)>, RuntimeError> {
+        managed.package.refresh_dynamic_manifest()?;
+        let modified_at = managed.package.modified_at()?;
+        if modified_at <= managed.loaded_at {
+            return Ok(None);
+        }
+
+        let generation = match self
+            .loader
+            .load_protocol_generation(&managed.package, self.generations.next_generation_id())
+        {
+            Ok(generation) => Arc::new(generation),
+            Err(error) => {
+                eprintln!(
+                    "protocol reload load failed for `{}`: {error}",
+                    managed.package.plugin_id
+                );
+                managed.loaded_at = modified_at;
+                return Ok(None);
+            }
+        };
+
+        Ok(Some((modified_at, generation)))
+    }
+
+    fn reload_protocol_plugin_with_sessions(
+        &self,
+        managed: &mut ManagedProtocolPlugin,
+        protocol_sessions: &[ProtocolReloadSession],
+        reloaded: &mut Vec<String>,
+    ) -> Result<(), RuntimeError> {
+        let Some((modified_at, generation)) = self.load_protocol_reload_candidate(managed)? else {
+            return Ok(());
+        };
+        let current_generation = managed
+            .adapter
+            .current_generation()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        if !protocol_reload_compatible(&managed.package.plugin_id, &current_generation, &generation)
+        {
+            managed.loaded_at = modified_at;
+            return Ok(());
+        }
+        if !migrate_protocol_sessions(managed, &generation, protocol_sessions)? {
+            managed.loaded_at = modified_at;
+            return Ok(());
+        }
+        managed.loaded_at = modified_at;
+        reloaded.push(managed.package.plugin_id.clone());
+        Ok(())
+    }
+
+    fn reload_protocol_plugins_with_sessions(
+        &self,
+        protocol_sessions: &[ProtocolReloadSession],
+        reloaded: &mut Vec<String>,
+    ) -> Result<(), RuntimeError> {
+        let mut protocols = self
+            .protocols
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        for managed in protocols.values_mut() {
+            self.reload_protocol_plugin_with_sessions(managed, protocol_sessions, reloaded)?;
+        }
+        Ok(())
+    }
+
     fn load_gameplay_reload_candidate(
         &self,
         managed: &mut ManagedGameplayPlugin,
@@ -225,29 +297,7 @@ impl PluginHost {
     /// Panics if the protocol plugin registry mutex is poisoned.
     pub fn reload_modified(&self) -> Result<Vec<String>, RuntimeError> {
         let mut reloaded = Vec::new();
-        {
-            let mut protocols = self
-                .protocols
-                .lock()
-                .expect("plugin host mutex should not be poisoned");
-            for managed in protocols.values_mut() {
-                if managed.package.plugin_kind != PluginKind::Protocol {
-                    continue;
-                }
-                managed.package.refresh_dynamic_manifest()?;
-                let modified_at = managed.package.modified_at()?;
-                if modified_at <= managed.loaded_at {
-                    continue;
-                }
-                let generation = Arc::new(self.loader.load_protocol_generation(
-                    &managed.package,
-                    self.generations.next_generation_id(),
-                )?);
-                managed.adapter.swap_generation(generation);
-                managed.loaded_at = modified_at;
-                reloaded.push(managed.package.plugin_id.clone());
-            }
-        }
+        self.reload_protocol_plugins_with_sessions(&[], &mut reloaded)?;
         Ok(reloaded)
     }
 
@@ -255,7 +305,8 @@ impl PluginHost {
         &self,
         runtime: &RuntimeReloadContext,
     ) -> Result<Vec<String>, RuntimeError> {
-        let mut reloaded = self.reload_modified()?;
+        let mut reloaded = Vec::new();
+        self.reload_protocol_plugins_with_sessions(&runtime.protocol_sessions, &mut reloaded)?;
         self.reload_gameplay_plugins_with_context(runtime, &mut reloaded)?;
         self.reload_storage_plugins_with_context(runtime, &mut reloaded)?;
         self.reload_auth_plugins(&mut reloaded)?;

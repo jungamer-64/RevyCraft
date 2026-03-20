@@ -18,7 +18,10 @@ delegate_protocol_adapter!(Bedrock263ProtocolPlugin, adapter, {
     capabilities
 });
 
-const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::protocol("be-26_3", "Bedrock 26.3 Protocol Plugin");
+const MANIFEST: StaticPluginManifest = StaticPluginManifest::protocol_with_capabilities(
+    "be-26_3",
+    "Bedrock 26.3 Protocol Plugin",
+    &["runtime.reload.protocol"],
+);
 
 export_protocol_plugin!(Bedrock263ProtocolPlugin, MANIFEST);

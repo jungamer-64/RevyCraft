@@ -6,9 +6,14 @@ use super::{
 use crate::config::ServerConfig;
 use crate::host::plugin_host_from_config;
 use crate::registry::RuntimeRegistries;
-use mc_core::{BlockPos, BlockState, DimensionId, GameplayQuery, PlayerId, WorldMeta};
+use crate::runtime::{ProtocolReloadSession, RuntimeReloadContext};
+use mc_core::{
+    BlockPos, BlockState, ConnectionId, CoreConfig, DimensionId, EntityId, GameplayQuery, PlayerId,
+    ServerCore, WorldMeta,
+};
 use mc_plugin_api::{
-    CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind, PluginManifestV1, Utf8Slice,
+    CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginAbiVersion, PluginKind, PluginManifestV1,
+    ProtocolSessionSnapshot, Utf8Slice,
 };
 use mc_plugin_auth_offline::in_process_auth_entrypoints as offline_auth_entrypoints;
 use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
@@ -19,7 +24,7 @@ use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints;
 use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entrypoints;
 use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
 use mc_plugin_storage_je_anvil_1_7_10::in_process_storage_entrypoints as storage_entrypoints;
-use mc_proto_common::{Edition, PacketWriter, TransportKind, WireFormatKind};
+use mc_proto_common::{ConnectionPhase, Edition, PacketWriter, TransportKind, WireFormatKind};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -102,9 +107,9 @@ mod entity_id_probe_gameplay_plugin {
 mod custom_wire_codec_protocol_plugin {
     use mc_core::CapabilitySet;
     use mc_plugin_api::{
-        ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode, PluginKind, PluginManifestV1,
-        ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse, Utf8Slice, WireFrameDecodeResult,
-        decode_protocol_request, encode_protocol_response,
+        ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
+        PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
+        Utf8Slice, WireFrameDecodeResult, decode_protocol_request, encode_protocol_response,
     };
     use mc_plugin_sdk_rust::InProcessProtocolEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
@@ -223,6 +228,7 @@ mod custom_wire_codec_protocol_plugin {
 
     pub fn in_process_entrypoints() -> InProcessProtocolEntrypoints {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+        static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
         static API: OnceLock<ProtocolPluginApiV1> = OnceLock::new();
         InProcessProtocolEntrypoints {
             manifest: MANIFEST.get_or_init(|| PluginManifestV1 {
@@ -232,8 +238,17 @@ mod custom_wire_codec_protocol_plugin {
                 plugin_abi: CURRENT_PLUGIN_ABI,
                 min_host_abi: CURRENT_PLUGIN_ABI,
                 max_host_abi: CURRENT_PLUGIN_ABI,
-                capabilities: std::ptr::null(),
-                capabilities_len: 0,
+                capabilities: CAPABILITIES
+                    .get_or_init(|| {
+                        Box::leak(
+                            vec![CapabilityDescriptorV1 {
+                                name: Utf8Slice::from_static_str("runtime.reload.protocol"),
+                            }]
+                            .into_boxed_slice(),
+                        )
+                    })
+                    .as_ptr(),
+                capabilities_len: 1,
             }),
             api: API.get_or_init(|| ProtocolPluginApiV1 {
                 invoke,
@@ -247,6 +262,12 @@ fn manifest_with_abi(
     plugin_id: &'static str,
     plugin_abi: PluginAbiVersion,
 ) -> &'static PluginManifestV1 {
+    let capabilities = Box::leak(
+        vec![CapabilityDescriptorV1 {
+            name: Utf8Slice::from_static_str("runtime.reload.protocol"),
+        }]
+        .into_boxed_slice(),
+    );
     Box::leak(Box::new(PluginManifestV1 {
         plugin_id: Utf8Slice::from_static_str(plugin_id),
         display_name: Utf8Slice::from_static_str(plugin_id),
@@ -254,9 +275,48 @@ fn manifest_with_abi(
         plugin_abi,
         min_host_abi: CURRENT_PLUGIN_ABI,
         max_host_abi: CURRENT_PLUGIN_ABI,
+        capabilities: capabilities.as_ptr(),
+        capabilities_len: capabilities.len(),
+    }))
+}
+
+fn manifest_without_reload_capability(plugin_id: &'static str) -> &'static PluginManifestV1 {
+    Box::leak(Box::new(PluginManifestV1 {
+        plugin_id: Utf8Slice::from_static_str(plugin_id),
+        display_name: Utf8Slice::from_static_str(plugin_id),
+        plugin_kind: PluginKind::Protocol,
+        plugin_abi: CURRENT_PLUGIN_ABI,
+        min_host_abi: CURRENT_PLUGIN_ABI,
+        max_host_abi: CURRENT_PLUGIN_ABI,
         capabilities: std::ptr::null(),
         capabilities_len: 0,
     }))
+}
+
+fn protocol_reload_context(sessions: Vec<ProtocolReloadSession>) -> RuntimeReloadContext {
+    RuntimeReloadContext {
+        protocol_sessions: sessions,
+        gameplay_sessions: Vec::new(),
+        snapshot: ServerCore::new(CoreConfig::default()).snapshot(),
+        world_dir: PathBuf::from("."),
+    }
+}
+
+fn protocol_reload_session(
+    connection_id: u64,
+    phase: ConnectionPhase,
+    player_id: Option<PlayerId>,
+    entity_id: Option<EntityId>,
+) -> ProtocolReloadSession {
+    ProtocolReloadSession {
+        adapter_id: "je-1_7_10".to_string(),
+        session: ProtocolSessionSnapshot {
+            connection_id: ConnectionId(connection_id),
+            phase,
+            player_id,
+            entity_id,
+        },
+    }
 }
 
 struct StubGameplayQuery {
@@ -534,6 +594,31 @@ fn abi_mismatch_is_rejected_before_registration() {
     assert!(matches!(
         error,
         crate::RuntimeError::Config(message) if message.contains("ABI")
+    ));
+}
+
+#[test]
+fn protocol_plugins_require_reload_manifest_capability() {
+    let entrypoints = in_process_protocol_entrypoints();
+    let mut catalog = PluginCatalog::default();
+    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+        plugin_id: "je-1_7_10".to_string(),
+        manifest: manifest_without_reload_capability("je-1_7_10"),
+        api: entrypoints.api,
+    });
+    let host = Arc::new(PluginHost::new(
+        catalog,
+        PluginAbiRange::default(),
+        PluginFailurePolicy::Quarantine,
+    ));
+    let mut registries = RuntimeRegistries::new();
+
+    let error = host
+        .load_into_registries(&mut registries)
+        .expect_err("protocol plugin without runtime.reload.protocol should fail");
+    assert!(matches!(
+        error,
+        crate::RuntimeError::Config(message) if message.contains("runtime.reload.protocol")
     ));
 }
 
@@ -896,6 +981,214 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), crate::RuntimeEr
         .expect("reloaded adapter should report plugin generation");
     assert_ne!(first_generation, next_generation);
     assert!(adapter.capability_set().contains("build-tag:reload-v2"));
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn packaged_protocol_reload_with_context_migrates_protocol_sessions()
+-> Result<(), crate::RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-migrate");
+    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    package_single_protocol_plugin(
+        "mc-plugin-proto-je-1_7_10-reload-test",
+        "je-1_7_10",
+        &dist_dir,
+        &target_dir,
+        "protocol-reload-v1",
+    )?;
+
+    let config = ServerConfig {
+        plugins_dir: dist_dir.clone(),
+        ..ServerConfig::default()
+    };
+    let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+    let mut registries = RuntimeRegistries::new();
+    host.load_into_registries(&mut registries)?;
+
+    let adapter = registries
+        .protocols()
+        .resolve_adapter("je-1_7_10")
+        .expect("packaged je-1_7_10 adapter should resolve");
+    let before_generation = adapter
+        .plugin_generation_id()
+        .expect("packaged adapter should report plugin generation");
+    assert!(
+        adapter
+            .capability_set()
+            .contains("build-tag:protocol-reload-v1")
+    );
+
+    let player_id = PlayerId(Uuid::from_u128(7));
+    let context = protocol_reload_context(vec![
+        protocol_reload_session(3, ConnectionPhase::Login, None, None),
+        protocol_reload_session(
+            11,
+            ConnectionPhase::Play,
+            Some(player_id),
+            Some(EntityId(41)),
+        ),
+    ]);
+
+    std::thread::sleep(Duration::from_secs(1));
+    package_single_protocol_plugin(
+        "mc-plugin-proto-je-1_7_10-reload-test",
+        "je-1_7_10",
+        &dist_dir,
+        &target_dir,
+        "protocol-reload-v2",
+    )?;
+
+    let reloaded = host.reload_modified_with_context(&context)?;
+    assert!(
+        reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
+        "protocol reload should report the migrated adapter"
+    );
+
+    let adapter = registries
+        .protocols()
+        .resolve_adapter("je-1_7_10")
+        .expect("reloaded adapter should resolve");
+    let next_generation = adapter
+        .plugin_generation_id()
+        .expect("reloaded adapter should report plugin generation");
+    assert_ne!(before_generation, next_generation);
+    assert!(
+        adapter
+            .capability_set()
+            .contains("build-tag:protocol-reload-v2")
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), crate::RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-all-or-nothing");
+    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    package_single_protocol_plugin(
+        "mc-plugin-proto-je-1_7_10-reload-test",
+        "je-1_7_10",
+        &dist_dir,
+        &target_dir,
+        "protocol-reload-v1",
+    )?;
+
+    let config = ServerConfig {
+        plugins_dir: dist_dir.clone(),
+        ..ServerConfig::default()
+    };
+    let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+    let mut registries = RuntimeRegistries::new();
+    host.load_into_registries(&mut registries)?;
+
+    let adapter = registries
+        .protocols()
+        .resolve_adapter("je-1_7_10")
+        .expect("packaged je-1_7_10 adapter should resolve");
+    let before_generation = adapter
+        .plugin_generation_id()
+        .expect("packaged adapter should report plugin generation");
+
+    let player_id = PlayerId(Uuid::from_u128(9));
+    let context = protocol_reload_context(vec![
+        protocol_reload_session(5, ConnectionPhase::Login, None, None),
+        protocol_reload_session(
+            17,
+            ConnectionPhase::Play,
+            Some(player_id),
+            Some(EntityId(55)),
+        ),
+    ]);
+
+    std::thread::sleep(Duration::from_secs(1));
+    package_single_protocol_plugin(
+        "mc-plugin-proto-je-1_7_10-reload-test",
+        "je-1_7_10",
+        &dist_dir,
+        &target_dir,
+        "protocol-reload-fail",
+    )?;
+
+    let reloaded = host.reload_modified_with_context(&context)?;
+    assert!(
+        !reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
+        "failed protocol migration should keep the current generation"
+    );
+
+    let adapter = registries
+        .protocols()
+        .resolve_adapter("je-1_7_10")
+        .expect("adapter should still resolve after failed reload");
+    assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
+    assert!(
+        adapter
+            .capability_set()
+            .contains("build-tag:protocol-reload-v1")
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), crate::RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-incompatible");
+    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    package_single_protocol_plugin(
+        "mc-plugin-proto-je-1_7_10-reload-test",
+        "je-1_7_10",
+        &dist_dir,
+        &target_dir,
+        "protocol-reload-v1",
+    )?;
+
+    let config = ServerConfig {
+        plugins_dir: dist_dir.clone(),
+        ..ServerConfig::default()
+    };
+    let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+    let mut registries = RuntimeRegistries::new();
+    host.load_into_registries(&mut registries)?;
+
+    let adapter = registries
+        .protocols()
+        .resolve_adapter("je-1_7_10")
+        .expect("packaged je-1_7_10 adapter should resolve");
+    let before_generation = adapter
+        .plugin_generation_id()
+        .expect("packaged adapter should report plugin generation");
+
+    std::thread::sleep(Duration::from_secs(1));
+    package_single_protocol_plugin(
+        "mc-plugin-proto-je-1_7_10-reload-test",
+        "je-1_7_10",
+        &dist_dir,
+        &target_dir,
+        "protocol-reload-incompatible",
+    )?;
+
+    let reloaded = host.reload_modified()?;
+    assert!(
+        !reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
+        "incompatible protocol candidate should be rejected"
+    );
+
+    let adapter = registries
+        .protocols()
+        .resolve_adapter("je-1_7_10")
+        .expect("adapter should still resolve after incompatible reload");
+    assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
+    assert!(
+        adapter
+            .capability_set()
+            .contains("build-tag:protocol-reload-v1")
+    );
     Ok(())
 }
 

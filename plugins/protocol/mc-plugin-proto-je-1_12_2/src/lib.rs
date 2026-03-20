@@ -18,7 +18,10 @@ delegate_protocol_adapter!(Je1122ProtocolPlugin, adapter, {
     capabilities
 });
 
-const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::protocol("je-1_12_2", "JE 1.12.2 Protocol Plugin");
+const MANIFEST: StaticPluginManifest = StaticPluginManifest::protocol_with_capabilities(
+    "je-1_12_2",
+    "JE 1.12.2 Protocol Plugin",
+    &["runtime.reload.protocol"],
+);
 
 export_protocol_plugin!(Je1122ProtocolPlugin, MANIFEST);

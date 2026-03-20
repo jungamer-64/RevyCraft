@@ -90,6 +90,7 @@ pub enum ProtocolCodecError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtocolSessionSnapshot {
+    pub connection_id: ConnectionId,
     pub phase: ConnectionPhase,
     pub player_id: Option<PlayerId>,
     pub entity_id: Option<EntityId>,
@@ -1274,6 +1275,7 @@ fn encode_protocol_session_snapshot(
     encoder: &mut Encoder,
     snapshot: &ProtocolSessionSnapshot,
 ) -> Result<(), ProtocolCodecError> {
+    encode_connection_id(encoder, snapshot.connection_id);
     encode_connection_phase(encoder, snapshot.phase);
     encode_option(
         encoder,
@@ -1297,6 +1299,7 @@ fn decode_protocol_session_snapshot(
     decoder: &mut Decoder<'_>,
 ) -> Result<ProtocolSessionSnapshot, ProtocolCodecError> {
     Ok(ProtocolSessionSnapshot {
+        connection_id: decode_connection_id(decoder)?,
         phase: decode_connection_phase(decoder)?,
         player_id: decode_option(decoder, decode_player_id)?,
         entity_id: decode_option(decoder, decode_entity_id)?,
@@ -2174,6 +2177,7 @@ mod tests {
             (
                 ProtocolRequest::ExportSessionState {
                     session: super::ProtocolSessionSnapshot {
+                        connection_id: ConnectionId(1),
                         phase: ConnectionPhase::Play,
                         player_id: Some(sample_player_id()),
                         entity_id: Some(EntityId(7)),
@@ -2184,6 +2188,7 @@ mod tests {
             (
                 ProtocolRequest::ImportSessionState {
                     session: super::ProtocolSessionSnapshot {
+                        connection_id: ConnectionId(1),
                         phase: ConnectionPhase::Play,
                         player_id: Some(sample_player_id()),
                         entity_id: Some(EntityId(7)),

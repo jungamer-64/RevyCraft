@@ -16,7 +16,7 @@ use mc_core::{
     ConnectionId, CoreEvent, EntityId, GameplayProfileId, PlayerId, ServerCore,
     SessionCapabilitySet, WorldSnapshot,
 };
-use mc_plugin_api::GameplaySessionSnapshot;
+use mc_plugin_api::{GameplaySessionSnapshot, ProtocolSessionSnapshot};
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -70,6 +70,7 @@ impl RunningServer {
 pub(crate) struct SessionHandle {
     pub(crate) tx: mpsc::UnboundedSender<SessionMessage>,
     pub(crate) phase: ConnectionPhase,
+    pub(crate) adapter_id: Option<String>,
     pub(crate) player_id: Option<PlayerId>,
     pub(crate) entity_id: Option<EntityId>,
     pub(crate) gameplay_profile: Option<GameplayProfileId>,
@@ -126,7 +127,13 @@ pub(crate) struct LoginChallengeState {
     pub(crate) challenge_started_at: u64,
 }
 
+pub(crate) struct ProtocolReloadSession {
+    pub(crate) adapter_id: String,
+    pub(crate) session: ProtocolSessionSnapshot,
+}
+
 pub(crate) struct RuntimeReloadContext {
+    pub(crate) protocol_sessions: Vec<ProtocolReloadSession>,
     pub(crate) gameplay_sessions: Vec<GameplaySessionSnapshot>,
     pub(crate) snapshot: WorldSnapshot,
     pub(crate) world_dir: PathBuf,

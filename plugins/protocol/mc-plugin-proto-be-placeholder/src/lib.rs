@@ -18,7 +18,10 @@ delegate_protocol_adapter!(BePlaceholderProtocolPlugin, adapter, {
     capabilities
 });
 
-const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::protocol("be-placeholder", "Bedrock Placeholder Protocol Plugin");
+const MANIFEST: StaticPluginManifest = StaticPluginManifest::protocol_with_capabilities(
+    "be-placeholder",
+    "Bedrock Placeholder Protocol Plugin",
+    &["runtime.reload.protocol"],
+);
 
 export_protocol_plugin!(BePlaceholderProtocolPlugin, MANIFEST);

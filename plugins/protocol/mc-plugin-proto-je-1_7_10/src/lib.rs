@@ -18,7 +18,10 @@ delegate_protocol_adapter!(Je1710ProtocolPlugin, adapter, {
     capabilities
 });
 
-const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::protocol("je-1_7_10", "JE 1.7.10 Protocol Plugin");
+const MANIFEST: StaticPluginManifest = StaticPluginManifest::protocol_with_capabilities(
+    "je-1_7_10",
+    "JE 1.7.10 Protocol Plugin",
+    &["runtime.reload.protocol"],
+);
 
 export_protocol_plugin!(Je1710ProtocolPlugin, MANIFEST);

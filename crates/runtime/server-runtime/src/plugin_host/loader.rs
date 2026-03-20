@@ -102,10 +102,22 @@ impl PluginLoader {
     ) -> Result<ProtocolGeneration, RuntimeError> {
         let (guard, manifest, api) = Self::load_protocol_api(package)?;
         self.validate_manifest(package, &manifest)?;
+        require_manifest_capability(
+            &manifest,
+            "runtime.reload.protocol",
+            &package.plugin_id,
+            "protocol",
+        )?;
         let descriptor = expect_protocol_descriptor(
             &package.plugin_id,
             invoke_protocol(&api, &ProtocolRequest::Describe)?,
         )?;
+        if descriptor.adapter_id != package.plugin_id {
+            return Err(RuntimeError::Config(format!(
+                "protocol plugin `{}` describe adapter `{}` did not match package id `{}`",
+                package.plugin_id, descriptor.adapter_id, package.plugin_id
+            )));
+        }
         let bedrock_listener_descriptor = expect_protocol_bedrock_listener_descriptor(
             &package.plugin_id,
             invoke_protocol(&api, &ProtocolRequest::DescribeBedrockListener)?,

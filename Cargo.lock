@@ -1559,6 +1559,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-proto-je-1_7_10-reload-test"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-proto-common",
+ "mc-proto-je-1_7_10",
+]
+
+[[package]]
 name = "mc-plugin-proto-je-1_8_x"
 version = "0.1.0"
 dependencies = [
