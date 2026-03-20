@@ -1729,9 +1729,11 @@ dependencies = [
 name = "mc-proto-je-common"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "mc-core",
  "mc-proto-common",
  "num-traits",
+ "serde_json",
  "uuid",
 ]
 

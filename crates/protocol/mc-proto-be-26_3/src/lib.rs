@@ -23,16 +23,14 @@ use bedrockrs_proto::v898::packets::ResourcePackStackPacket;
 use bedrockrs_proto::v924::packets::StartGamePacket;
 use bedrockrs_proto::v924::types::LevelSettings;
 use mc_core::catalog::{BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_PLANKS, SAND};
-use mc_core::{BlockFace, BlockState, CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
+use mc_core::{BlockState, CoreCommand, EntityId, PlayerId, PlayerSnapshot, WorldMeta};
 use mc_proto_be_common::{
-    bedrock_probe_intent, block_pos_from_network, block_pos_to_network, detects_bedrock_datagram,
-    parse_bedrock_login_payload, protocol_error, vec3_to_bedrock,
+    BedrockAdapter, BedrockProfile, bedrock_actor_id, block_face_from_i32, block_pos_from_network,
+    block_pos_to_network, parse_bedrock_login_payload, protocol_error, vec3_to_bedrock,
 };
 use mc_proto_common::{
-    BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
-    LoginRequest, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor,
-    ProtocolError, RawPacketStreamWireCodec, ServerListStatus, SessionAdapter, StatusRequest,
-    TransportKind, WireCodec, WireFormatKind,
+    BedrockListenerDescriptor, ConnectionPhase, Edition, LoginRequest, ProtocolDescriptor,
+    ProtocolError, TransportKind, WireFormatKind,
 };
 use std::collections::HashMap;
 use vek::Vec2;
@@ -52,16 +50,11 @@ const BEDROCK_26_3_RUNTIME_ID_BEDROCK: u32 = 13_079;
 const BEDROCK_26_3_RUNTIME_ID_OAK_PLANKS: u32 = 14_388;
 
 #[derive(Default)]
-pub struct Bedrock263Adapter {
-    codec: RawPacketStreamWireCodec,
-}
+pub struct Bedrock263Profile;
 
-impl Bedrock263Adapter {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
+pub type Bedrock263Adapter = BedrockAdapter<Bedrock263Profile>;
 
+impl Bedrock263Profile {
     fn encode_v924(packets: &[V924]) -> Result<Vec<u8>, ProtocolError> {
         encode_packets(packets, None, None)
             .map_err(|error| ProtocolError::Plugin(format!("bedrock encode failed: {error}")))
@@ -187,36 +180,30 @@ impl Bedrock263Adapter {
     }
 }
 
-impl HandshakeProbe for Bedrock263Adapter {
-    fn transport_kind(&self) -> TransportKind {
-        TransportKind::Udp
+impl BedrockProfile for Bedrock263Profile {
+    fn adapter_id(&self) -> &'static str {
+        BE_26_3_ADAPTER_ID
     }
 
-    fn adapter_id(&self) -> Option<&'static str> {
-        Some(BE_26_3_ADAPTER_ID)
-    }
-
-    fn try_route(&self, frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
-        if detects_bedrock_datagram(frame) {
-            Ok(Some(bedrock_probe_intent()))
-        } else {
-            Ok(None)
+    fn descriptor(&self) -> ProtocolDescriptor {
+        ProtocolDescriptor {
+            adapter_id: BE_26_3_ADAPTER_ID.to_string(),
+            transport: TransportKind::Udp,
+            wire_format: WireFormatKind::RawPacketStream,
+            edition: Edition::Be,
+            version_name: BE_26_3_VERSION_NAME.to_string(),
+            protocol_number: BE_26_3_PROTOCOL_NUMBER,
         }
     }
-}
 
-impl SessionAdapter for Bedrock263Adapter {
-    fn wire_codec(&self) -> &dyn WireCodec {
-        &self.codec
+    fn listener_descriptor(&self) -> BedrockListenerDescriptor {
+        BedrockListenerDescriptor {
+            game_version: V924::GAME_VERSION.to_string(),
+            raknet_version: V924::RAKNET_VERSION,
+        }
     }
 
-    fn decode_status(&self, _frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
-        Err(protocol_error(
-            "bedrock status requests are handled by the raknet listener",
-        ))
-    }
-
-    fn decode_login(&self, frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
+    fn decode_login_request(&self, frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
         let packets = Self::decode_v924(frame)?;
         let packet = packets
             .into_iter()
@@ -251,19 +238,7 @@ impl SessionAdapter for Bedrock263Adapter {
         }
     }
 
-    fn encode_status_response(&self, _status: &ServerListStatus) -> Result<Vec<u8>, ProtocolError> {
-        Err(protocol_error(
-            "bedrock status responses are handled by the raknet listener",
-        ))
-    }
-
-    fn encode_status_pong(&self, _payload: i64) -> Result<Vec<u8>, ProtocolError> {
-        Err(protocol_error(
-            "bedrock status pong is handled by the raknet listener",
-        ))
-    }
-
-    fn encode_disconnect(
+    fn encode_disconnect_packet(
         &self,
         phase: ConnectionPhase,
         reason: &str,
@@ -280,18 +255,7 @@ impl SessionAdapter for Bedrock263Adapter {
         })])
     }
 
-    fn encode_encryption_request(
-        &self,
-        _server_id: &str,
-        _public_key_der: &[u8],
-        _verify_token: &[u8],
-    ) -> Result<Vec<u8>, ProtocolError> {
-        Err(protocol_error(
-            "bedrock adapters do not use java edition encryption requests",
-        ))
-    }
-
-    fn encode_network_settings(
+    fn encode_network_settings_packet(
         &self,
         compression_threshold: u16,
     ) -> Result<Vec<u8>, ProtocolError> {
@@ -304,7 +268,10 @@ impl SessionAdapter for Bedrock263Adapter {
         })])
     }
 
-    fn encode_login_success(&self, _player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
+    fn encode_login_success_packet(
+        &self,
+        _player: &PlayerSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
         Self::encode_v924(&[
             V924::PlayStatusPacket(PlayStatusPacket {
                 status: PlayStatus::LoginSuccess,
@@ -330,10 +297,8 @@ impl SessionAdapter for Bedrock263Adapter {
             }),
         ])
     }
-}
 
-impl PlaySyncAdapter for Bedrock263Adapter {
-    fn decode_play(
+    fn decode_play_packet(
         &self,
         player_id: PlayerId,
         frame: &[u8],
@@ -387,89 +352,48 @@ impl PlaySyncAdapter for Bedrock263Adapter {
         }
     }
 
-    fn encode_play_event(
+    fn encode_play_bootstrap_packets(
         &self,
-        event: &CoreEvent,
-        _context: &PlayEncodingContext,
+        player: &PlayerSnapshot,
+        entity_id: EntityId,
+        world_meta: &WorldMeta,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
-        match event {
-            CoreEvent::PlayBootstrap {
-                player,
-                entity_id,
-                world_meta,
-                ..
-            } => Self::start_game_packets(player, *entity_id, world_meta),
-            CoreEvent::EntityMoved { entity_id, player } => {
-                Ok(vec![Self::encode_v924(&[V924::MovePlayerPacket(
-                    MovePlayerPacket {
-                        player_runtime_id: ActorRuntimeID(bedrock_actor_id(*entity_id)),
-                        position: vec3_to_bedrock(player.position),
-                        rotation: Vec2::new(player.yaw, player.pitch),
-                        y_head_rotation: player.yaw,
-                        position_mode: bedrockrs_proto::v662::enums::PlayerPositionMode::Normal,
-                        on_ground: player.on_ground,
-                        riding_runtime_id: ActorRuntimeID(0),
-                        tick: 0,
-                    },
-                )])?])
-            }
-            CoreEvent::BlockChanged { position, block } => {
-                Ok(vec![Self::encode_v924(&[V924::UpdateBlockPacket(
-                    UpdateBlockPacket {
-                        block_position: block_pos_to_network(*position),
-                        block_runtime_id: block_runtime_id(block),
-                        flags: 0,
-                        layer: 0,
-                    },
-                )])?])
-            }
-            CoreEvent::KeepAliveRequested { .. }
-            | CoreEvent::ChunkBatch { .. }
-            | CoreEvent::EntitySpawned { .. }
-            | CoreEvent::EntityDespawned { .. }
-            | CoreEvent::InventoryContents { .. }
-            | CoreEvent::InventorySlotChanged { .. }
-            | CoreEvent::SelectedHotbarSlotChanged { .. }
-            | CoreEvent::LoginAccepted { .. }
-            | CoreEvent::Disconnect { .. } => Ok(Vec::new()),
-        }
-    }
-}
-
-impl ProtocolAdapter for Bedrock263Adapter {
-    fn descriptor(&self) -> ProtocolDescriptor {
-        ProtocolDescriptor {
-            adapter_id: BE_26_3_ADAPTER_ID.to_string(),
-            transport: TransportKind::Udp,
-            wire_format: WireFormatKind::RawPacketStream,
-            edition: Edition::Be,
-            version_name: BE_26_3_VERSION_NAME.to_string(),
-            protocol_number: BE_26_3_PROTOCOL_NUMBER,
-        }
+        Self::start_game_packets(player, entity_id, world_meta)
     }
 
-    fn bedrock_listener_descriptor(&self) -> Option<BedrockListenerDescriptor> {
-        Some(BedrockListenerDescriptor {
-            game_version: V924::GAME_VERSION.to_string(),
-            raknet_version: V924::RAKNET_VERSION,
-        })
+    fn encode_entity_moved_packets(
+        &self,
+        entity_id: EntityId,
+        player: &PlayerSnapshot,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        Ok(vec![Self::encode_v924(&[V924::MovePlayerPacket(
+            MovePlayerPacket {
+                player_runtime_id: ActorRuntimeID(bedrock_actor_id(entity_id)),
+                position: vec3_to_bedrock(player.position),
+                rotation: Vec2::new(player.yaw, player.pitch),
+                y_head_rotation: player.yaw,
+                position_mode: bedrockrs_proto::v662::enums::PlayerPositionMode::Normal,
+                on_ground: player.on_ground,
+                riding_runtime_id: ActorRuntimeID(0),
+                tick: 0,
+            },
+        )])?])
     }
-}
 
-const fn block_face_from_i32(face: i32) -> Option<BlockFace> {
-    match face {
-        0 => Some(BlockFace::Bottom),
-        1 => Some(BlockFace::Top),
-        2 => Some(BlockFace::North),
-        3 => Some(BlockFace::South),
-        4 => Some(BlockFace::West),
-        5 => Some(BlockFace::East),
-        _ => None,
+    fn encode_block_changed_packets(
+        &self,
+        position: mc_core::BlockPos,
+        block: &BlockState,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        Ok(vec![Self::encode_v924(&[V924::UpdateBlockPacket(
+            UpdateBlockPacket {
+                block_position: block_pos_to_network(position),
+                block_runtime_id: block_runtime_id(block),
+                flags: 0,
+                layer: 0,
+            },
+        )])?])
     }
-}
-
-fn bedrock_actor_id(entity_id: mc_core::EntityId) -> u64 {
-    u64::try_from(entity_id.0).expect("bedrock entity id should be non-negative")
 }
 
 fn block_runtime_id(block: &BlockState) -> u32 {

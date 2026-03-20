@@ -25,11 +25,8 @@ use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entryp
 use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
 use mc_plugin_storage_je_anvil_1_7_10::in_process_storage_entrypoints as storage_entrypoints;
 use mc_proto_common::{ConnectionPhase, Edition, PacketWriter, TransportKind, WireFormatKind};
-use std::env;
-use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -1365,7 +1362,15 @@ fn unknown_storage_and_auth_profiles_fail_activation() {
 fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), crate::RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    crate::seed_packaged_plugins_from_test_harness(
+        &dist_dir,
+        &[
+            "je-1_7_10",
+            "je-1_8_x",
+            "je-1_12_2",
+            "be-placeholder",
+        ],
+    )?;
 
     let config = ServerConfig {
         plugins_dir: dist_dir,
@@ -1398,7 +1403,7 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), crate::RuntimeEr
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-reload");
-    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    crate::seed_packaged_plugins_from_test_harness(&dist_dir, &["je-1_7_10"])?;
 
     let config = ServerConfig {
         plugins_dir: dist_dir.clone(),
@@ -1451,7 +1456,7 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions()
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-migrate");
-    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    crate::seed_packaged_plugins_from_test_harness(&dist_dir, &["je-1_7_10"])?;
     package_single_protocol_plugin(
         "mc-plugin-proto-je-1_7_10-reload-test",
         "je-1_7_10",
@@ -1529,7 +1534,7 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), crate
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-all-or-nothing");
-    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    crate::seed_packaged_plugins_from_test_harness(&dist_dir, &["je-1_7_10"])?;
     package_single_protocol_plugin(
         "mc-plugin-proto-je-1_7_10-reload-test",
         "je-1_7_10",
@@ -1599,7 +1604,7 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), crate
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-incompatible");
-    crate::seed_packaged_plugins_from_test_harness(&dist_dir)?;
+    crate::seed_packaged_plugins_from_test_harness(&dist_dir, &["je-1_7_10"])?;
     package_single_protocol_plugin(
         "mc-plugin-proto-je-1_7_10-reload-test",
         "je-1_7_10",
@@ -1759,66 +1764,12 @@ fn package_single_protocol_plugin(
     target_dir: &Path,
     build_tag: &str,
 ) -> Result<(), crate::RuntimeError> {
-    let _guard = crate::packaged_plugin_test_build_lock()
-        .lock()
-        .expect("packaged plugin build lock should not be poisoned");
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let status = Command::new(cargo)
-        .current_dir(workspace_root())
-        .env("CARGO_TARGET_DIR", target_dir)
-        .env("REVY_PLUGIN_BUILD_TAG", build_tag)
-        .arg("build")
-        .arg("-p")
-        .arg(cargo_package)
-        .status()
-        .map_err(|error| crate::RuntimeError::Config(error.to_string()))?;
-    if !status.success() {
-        return Err(crate::RuntimeError::Config(format!(
-            "cargo build failed for `{cargo_package}`"
-        )));
-    }
-
-    let artifact_name = dynamic_library_filename(cargo_package);
-    let source = target_dir.join("debug").join(&artifact_name);
-    let plugin_dir = dist_dir.join(plugin_id);
-    fs::create_dir_all(&plugin_dir)?;
-    let packaged_artifact = packaged_artifact_name(&artifact_name, build_tag);
-    let destination = plugin_dir.join(&packaged_artifact);
-    let staging = plugin_dir.join(format!(".{packaged_artifact}.tmp"));
-    fs::copy(&source, &staging)?;
-    if destination.exists() {
-        fs::remove_file(&destination)?;
-    }
-    fs::rename(&staging, &destination)?;
-    let manifest = format!(
-        "[plugin]\nid = \"{plugin_id}\"\nkind = \"protocol\"\n\n[artifacts]\n\"{}-{}\" = \"{packaged_artifact}\"\n",
-        env::consts::OS,
-        env::consts::ARCH
-    );
-    fs::write(plugin_dir.join("plugin.toml"), manifest)?;
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn dynamic_library_filename(package: &str) -> String {
-    let crate_name = package.replace('-', "_");
-    match env::consts::OS {
-        "windows" => format!("{crate_name}.dll"),
-        "macos" => format!("lib{crate_name}.dylib"),
-        _ => format!("lib{crate_name}.so"),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn packaged_artifact_name(base_name: &str, build_tag: &str) -> String {
-    if let Some((stem, extension)) = base_name.rsplit_once('.') {
-        format!("{stem}-{build_tag}.{extension}")
-    } else {
-        format!("{base_name}-{build_tag}")
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn workspace_root() -> PathBuf {
-    crate::packaged_plugin_test_workspace_root()
+    crate::install_packaged_plugin_from_test_cache(
+        cargo_package,
+        plugin_id,
+        "protocol",
+        dist_dir,
+        target_dir,
+        build_tag,
+    )
 }

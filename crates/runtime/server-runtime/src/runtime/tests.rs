@@ -118,12 +118,9 @@ use rand::RngCore;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 use std::collections::HashMap;
-use std::env;
-use std::ffi::OsString;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -244,6 +241,18 @@ fn plugin_test_registries_from_config(
     let mut registries = RuntimeRegistries::new();
     initialize_runtime_registries_from_config(&plugin_host, config, &mut registries)?;
     Ok(registries)
+}
+
+fn seed_runtime_plugins(
+    dist_dir: &Path,
+    allowlist: &[&str],
+    supporting_plugin_ids: &[&str],
+) -> Result<(), RuntimeError> {
+    let mut plugin_ids = Vec::new();
+    plugin_ids.extend_from_slice(allowlist);
+    plugin_ids.extend_from_slice(GAMEPLAY_PLUGIN_IDS);
+    plugin_ids.extend_from_slice(supporting_plugin_ids);
+    crate::seed_packaged_plugins_from_test_harness(dist_dir, &plugin_ids)
 }
 
 fn plugin_test_registries_tcp_only() -> Result<RuntimeRegistries, RuntimeError> {
@@ -395,10 +404,6 @@ fn gameplay_profile_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
         .collect()
 }
 
-fn workspace_root() -> PathBuf {
-    crate::packaged_plugin_test_workspace_root()
-}
-
 #[cfg(target_os = "linux")]
 fn package_single_plugin(
     cargo_package: &str,
@@ -408,73 +413,13 @@ fn package_single_plugin(
     target_dir: &Path,
     build_tag: &str,
 ) -> Result<(), RuntimeError> {
-    let source = build_plugin_binary(cargo_package, target_dir, build_tag)?;
-    let plugin_dir = dist_dir.join(plugin_id);
-    fs::create_dir_all(&plugin_dir)?;
-    let packaged_artifact = install_packaged_artifact(&source, &plugin_dir, build_tag)?;
-    fs::write(
-        plugin_dir.join("plugin.toml"),
-        plugin_manifest_contents(plugin_id, plugin_kind, &packaged_artifact),
-    )?;
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn build_plugin_binary(
-    cargo_package: &str,
-    target_dir: &Path,
-    build_tag: &str,
-) -> Result<PathBuf, RuntimeError> {
-    let _guard = crate::packaged_plugin_test_build_lock()
-        .lock()
-        .expect("packaged plugin build lock should not be poisoned");
-    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
-    let status = Command::new(cargo)
-        .current_dir(workspace_root())
-        .env("CARGO_TARGET_DIR", target_dir)
-        .env("REVY_PLUGIN_BUILD_TAG", build_tag)
-        .arg("build")
-        .arg("-p")
-        .arg(cargo_package)
-        .status()
-        .map_err(|error| RuntimeError::Config(error.to_string()))?;
-    if !status.success() {
-        return Err(RuntimeError::Config(format!(
-            "cargo build failed for `{cargo_package}`"
-        )));
-    }
-
-    let artifact_name = dynamic_library_filename(cargo_package);
-    Ok(target_dir.join("debug").join(artifact_name))
-}
-
-#[cfg(target_os = "linux")]
-fn install_packaged_artifact(
-    source: &Path,
-    plugin_dir: &Path,
-    build_tag: &str,
-) -> Result<String, RuntimeError> {
-    let file_name = source
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| RuntimeError::Config("packaged plugin artifact name missing".to_string()))?;
-    let packaged_artifact = packaged_artifact_name(file_name, build_tag);
-    let destination = plugin_dir.join(&packaged_artifact);
-    let staging = plugin_dir.join(format!(".{packaged_artifact}.tmp"));
-    fs::copy(source, &staging)?;
-    if destination.exists() {
-        fs::remove_file(&destination)?;
-    }
-    fs::rename(&staging, &destination)?;
-    Ok(packaged_artifact)
-}
-
-#[cfg(target_os = "linux")]
-fn plugin_manifest_contents(plugin_id: &str, plugin_kind: &str, packaged_artifact: &str) -> String {
-    format!(
-        "[plugin]\nid = \"{plugin_id}\"\nkind = \"{plugin_kind}\"\n\n[artifacts]\n\"{}-{}\" = \"{packaged_artifact}\"\n",
-        env::consts::OS,
-        env::consts::ARCH
+    crate::install_packaged_plugin_from_test_cache(
+        cargo_package,
+        plugin_id,
+        plugin_kind,
+        dist_dir,
+        target_dir,
+        build_tag,
     )
 }
 
@@ -485,7 +430,7 @@ fn package_single_gameplay_plugin(
     dist_dir: &Path,
     target_dir: &Path,
     build_tag: &str,
-) -> Result<(), RuntimeError> {
+    ) -> Result<(), RuntimeError> {
     package_single_plugin(
         cargo_package,
         plugin_id,
@@ -494,25 +439,6 @@ fn package_single_gameplay_plugin(
         target_dir,
         build_tag,
     )
-}
-
-#[cfg(target_os = "linux")]
-fn dynamic_library_filename(package: &str) -> String {
-    let crate_name = package.replace('-', "_");
-    match env::consts::OS {
-        "windows" => format!("{crate_name}.dll"),
-        "macos" => format!("lib{crate_name}.dylib"),
-        _ => format!("lib{crate_name}.so"),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn packaged_artifact_name(base_name: &str, build_tag: &str) -> String {
-    if let Some((stem, extension)) = base_name.rsplit_once('.') {
-        format!("{stem}-{build_tag}.{extension}")
-    } else {
-        format!("{base_name}-{build_tag}")
-    }
 }
 
 async fn write_packet(
@@ -782,6 +708,65 @@ fn plugin_test_harness_is_packaged_once_per_process() -> Result<(), RuntimeError
     let _ = plugin_test_registries_tcp_only()?;
     let _ = plugin_test_registries_all()?;
     assert_eq!(crate::packaged_plugin_test_harness_build_count(), 1);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn packaged_plugin_seed_subset_copies_only_requested_plugins() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    crate::seed_packaged_plugins_from_test_harness(
+        &dist_dir,
+        &[JE_1_7_10_ADAPTER_ID, "auth-offline"],
+    )?;
+
+    assert!(dist_dir.join(JE_1_7_10_ADAPTER_ID).is_dir());
+    assert!(dist_dir.join("auth-offline").is_dir());
+    assert!(!dist_dir.join(JE_1_8_X_ADAPTER_ID).exists());
+    assert!(!dist_dir.join("gameplay-canonical").exists());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn packaged_plugin_variant_cache_reuses_same_package_and_tag() -> Result<(), RuntimeError> {
+    let cache_dir = crate::packaged_plugin_test_artifact_cache_dir()
+        .join("mc-plugin-proto-je-1_7_10")
+        .join("cache-hit-v1");
+    if cache_dir.exists() {
+        fs::remove_dir_all(&cache_dir)?;
+    }
+
+    let target_dir = crate::packaged_plugin_test_target_dir("variant-cache");
+    let first_temp_dir = tempdir()?;
+    let second_temp_dir = tempdir()?;
+    let before_builds = crate::packaged_plugin_test_variant_build_count();
+
+    package_single_plugin(
+        "mc-plugin-proto-je-1_7_10",
+        JE_1_7_10_ADAPTER_ID,
+        "protocol",
+        &first_temp_dir.path().join("runtime").join("plugins"),
+        &target_dir,
+        "cache-hit-v1",
+    )?;
+    let after_first = crate::packaged_plugin_test_variant_build_count();
+
+    package_single_plugin(
+        "mc-plugin-proto-je-1_7_10",
+        JE_1_7_10_ADAPTER_ID,
+        "protocol",
+        &second_temp_dir.path().join("runtime").join("plugins"),
+        &target_dir,
+        "cache-hit-v1",
+    )?;
+    let after_second = crate::packaged_plugin_test_variant_build_count();
+
+    let cached_artifact = cache_dir.join(crate::dynamic_library_filename("mc-plugin-proto-je-1_7_10"));
+    assert!(cached_artifact.is_file());
+    assert!(after_first >= before_builds);
+    assert_eq!(after_second, after_first);
     Ok(())
 }
 

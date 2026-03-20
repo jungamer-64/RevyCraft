@@ -1,4 +1,5 @@
 use crate::RuntimeError;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -41,7 +42,18 @@ pub fn packaged_plugin_test_target_dir(_scope: &str) -> PathBuf {
 }
 
 #[cfg(test)]
+pub fn packaged_plugin_test_artifact_cache_dir() -> PathBuf {
+    packaged_plugin_test_workspace_root()
+        .join("target")
+        .join("server-runtime-plugin-artifacts")
+}
+
+#[cfg(test)]
 static PACKAGED_PLUGIN_TEST_HARNESS_BUILDS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+static PACKAGED_PLUGIN_TEST_VARIANT_BUILDS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
@@ -54,6 +66,11 @@ pub const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
 #[cfg(test)]
 pub fn packaged_plugin_test_harness_build_count() -> usize {
     PACKAGED_PLUGIN_TEST_HARNESS_BUILDS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(test)]
+pub fn packaged_plugin_test_variant_build_count() -> usize {
+    PACKAGED_PLUGIN_TEST_VARIANT_BUILDS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 #[cfg(test)]
@@ -216,11 +233,135 @@ fn copy_packaged_plugin_tree(source: &Path, destination: &Path) -> std::io::Resu
 }
 
 #[cfg(test)]
-pub fn seed_packaged_plugins_from_test_harness(dist_dir: &Path) -> Result<(), RuntimeError> {
+fn link_or_copy_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if destination.exists() {
+        fs::remove_file(destination)?;
+    }
+    if fs::hard_link(source, destination).is_err() {
+        fs::copy(source, destination)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub fn dynamic_library_filename(package: &str) -> String {
+    let crate_name = package.replace('-', "_");
+    match std::env::consts::OS {
+        "windows" => format!("{crate_name}.dll"),
+        "macos" => format!("lib{crate_name}.dylib"),
+        _ => format!("lib{crate_name}.so"),
+    }
+}
+
+#[cfg(test)]
+pub fn packaged_artifact_name(base_name: &str, build_tag: &str) -> String {
+    if let Some((stem, extension)) = base_name.rsplit_once('.') {
+        format!("{stem}-{build_tag}.{extension}")
+    } else {
+        format!("{base_name}-{build_tag}")
+    }
+}
+
+#[cfg(test)]
+pub fn plugin_manifest_contents(plugin_id: &str, plugin_kind: &str, packaged_artifact: &str) -> String {
+    format!(
+        "[plugin]\nid = \"{plugin_id}\"\nkind = \"{plugin_kind}\"\n\n[artifacts]\n\"{}-{}\" = \"{packaged_artifact}\"\n",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    )
+}
+
+#[cfg(test)]
+pub fn build_cached_packaged_plugin_artifact(
+    cargo_package: &str,
+    target_dir: &Path,
+    build_tag: &str,
+) -> Result<PathBuf, RuntimeError> {
+    let _guard = packaged_plugin_test_build_lock()
+        .lock()
+        .expect("packaged plugin build lock should not be poisoned");
+    let artifact_name = dynamic_library_filename(cargo_package);
+    let cached_artifact = packaged_plugin_test_artifact_cache_dir()
+        .join(cargo_package)
+        .join(build_tag)
+        .join(&artifact_name);
+    if cached_artifact.is_file() {
+        return Ok(cached_artifact);
+    }
+
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo"));
+    let status = std::process::Command::new(cargo)
+        .current_dir(packaged_plugin_test_workspace_root())
+        .env("CARGO_TARGET_DIR", target_dir)
+        .env("REVY_PLUGIN_BUILD_TAG", build_tag)
+        .arg("build")
+        .arg("-p")
+        .arg(cargo_package)
+        .status()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    if !status.success() {
+        return Err(RuntimeError::Config(format!(
+            "cargo build failed for `{cargo_package}`"
+        )));
+    }
+
+    let source = target_dir.join("debug").join(&artifact_name);
+    link_or_copy_file(&source, &cached_artifact)?;
+    PACKAGED_PLUGIN_TEST_VARIANT_BUILDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Ok(cached_artifact)
+}
+
+#[cfg(test)]
+pub fn install_packaged_plugin_from_test_cache(
+    cargo_package: &str,
+    plugin_id: &str,
+    plugin_kind: &str,
+    dist_dir: &Path,
+    target_dir: &Path,
+    build_tag: &str,
+) -> Result<(), RuntimeError> {
+    let source = build_cached_packaged_plugin_artifact(cargo_package, target_dir, build_tag)?;
+    let plugin_dir = dist_dir.join(plugin_id);
+    fs::create_dir_all(&plugin_dir)?;
+    let file_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| RuntimeError::Config("packaged plugin artifact name missing".to_string()))?;
+    let packaged_artifact = packaged_artifact_name(file_name, build_tag);
+    let destination = plugin_dir.join(&packaged_artifact);
+    link_or_copy_file(&source, &destination)?;
+    fs::write(
+        plugin_dir.join("plugin.toml"),
+        plugin_manifest_contents(plugin_id, plugin_kind, &packaged_artifact),
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub fn seed_packaged_plugins_from_test_harness(
+    dist_dir: &Path,
+    plugin_ids: &[&str],
+) -> Result<(), RuntimeError> {
     let harness_dist_dir = packaged_plugin_test_harness_dist_dir().map_err(RuntimeError::Config)?;
     if dist_dir.exists() {
         fs::remove_dir_all(dist_dir)?;
     }
-    copy_packaged_plugin_tree(harness_dist_dir, dist_dir)?;
+    fs::create_dir_all(dist_dir)?;
+    let requested = plugin_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for plugin_id in requested {
+        let source = harness_dist_dir.join(plugin_id);
+        if !source.is_dir() {
+            return Err(RuntimeError::Config(format!(
+                "packaged plugin test harness is missing `{plugin_id}`"
+            )));
+        }
+        copy_packaged_plugin_tree(&source, &dist_dir.join(plugin_id))?;
+    }
     Ok(())
 }

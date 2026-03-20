@@ -7,20 +7,14 @@ use crate::{
     PACKET_CB_WINDOW_ITEMS,
 };
 use mc_core::{
-    BlockPos, ChunkColumn, DimensionId, EntityId, InventoryContainer, ItemStack, PlayerInventory,
-    PlayerSnapshot, WorldMeta,
+    BlockPos, ChunkColumn, DimensionId, EntityId, ItemStack, PlayerInventory, PlayerSnapshot,
+    WorldMeta,
 };
 use mc_proto_common::{PacketWriter, ProtocolError};
 use mc_proto_je_common::{
     build_chunk_data_1_12, legacy_block_state_id, pack_block_position, to_angle_byte,
     write_empty_metadata_1_12, write_legacy_slot,
 };
-
-pub const fn window_id(container: InventoryContainer) -> u8 {
-    match container {
-        InventoryContainer::Player => 0,
-    }
-}
 
 pub fn encode_join_game(
     entity_id: EntityId,
@@ -204,19 +198,6 @@ pub fn encode_chunk(chunk: &ChunkColumn) -> Result<Vec<u8>, ProtocolError> {
     writer.write_varint(0);
     Ok(writer.into_inner())
 }
-
-pub fn write_login_byte_array(
-    writer: &mut PacketWriter,
-    bytes: &[u8],
-) -> Result<(), ProtocolError> {
-    writer.write_varint(
-        i32::try_from(bytes.len())
-            .map_err(|_| ProtocolError::InvalidPacket("login byte array too large"))?,
-    );
-    writer.write_bytes(bytes);
-    Ok(())
-}
-
 const fn dimension_to_i32(dimension: DimensionId) -> i32 {
     match dimension {
         DimensionId::Overworld => 0,

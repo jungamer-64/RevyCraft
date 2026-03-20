@@ -10,9 +10,11 @@ categories.workspace = true
 description = "Shared Java Edition protocol helpers for version-specific adapters."
 
 [dependencies]
+flate2.workspace = true
 mc-core = { path = "../../core/mc-core" }
 mc-proto-common = { path = "../mc-proto-common" }
 num-traits.workspace = true
+serde_json.workspace = true
 uuid.workspace = true
 
 [lints]

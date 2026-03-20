@@ -67,12 +67,6 @@ pub fn decode_play_packet(
     }
 }
 
-pub fn read_login_byte_array(reader: &mut PacketReader<'_>) -> Result<Vec<u8>, ProtocolError> {
-    let len = usize::try_from(reader.read_varint()?)
-        .map_err(|_| ProtocolError::InvalidPacket("negative login byte array length"))?;
-    Ok(reader.read_bytes(len)?.to_vec())
-}
-
 fn decode_position_packet(
     player_id: PlayerId,
     reader: &mut PacketReader<'_>,

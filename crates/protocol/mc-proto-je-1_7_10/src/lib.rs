@@ -1,25 +1,17 @@
 #![allow(clippy::multiple_crate_versions)]
 mod storage;
 
-use flate2::Compression;
-use flate2::write::ZlibEncoder;
 use mc_core::{
-    BlockFace, BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DimensionId, EntityId,
-    InteractionHand, InventoryContainer, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot,
-    Vec3, WorldMeta,
+    BlockFace, BlockPos, BlockState, ChunkColumn, CoreCommand, DimensionId, EntityId,
+    InteractionHand, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
+    PlayerSnapshot, Vec3, WorldMeta,
 };
-use mc_proto_common::{
-    ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
-    PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter,
-    ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter, StatusRequest,
-    TransportKind, WireCodec, WireFormatKind,
-};
+use mc_proto_common::{Edition, PacketReader, PacketWriter, ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
 use mc_proto_je_common::{
-    decode_handshake_frame, legacy_block, legacy_inventory_slot, legacy_item, legacy_window_slot,
-    semantic_block, semantic_item, to_angle_byte, to_fixed_point,
+    JavaEditionAdapter, JavaEditionProfile, build_chunk_data_1_7, legacy_block, legacy_inventory_slot,
+    legacy_item, legacy_window_items, legacy_window_slot, player_window_id, read_legacy_slot,
+    semantic_block, semantic_item, to_angle_byte, to_fixed_point, write_legacy_slot, zlib_compress,
 };
-use serde_json::json;
-use std::io::Write;
 
 pub use self::storage::Je1710StorageAdapter;
 
@@ -27,17 +19,6 @@ const PROTOCOL_VERSION_1_7_10: i32 = 5;
 const VERSION_NAME_1_7_10: &str = "1.7.10";
 pub const JE_1_7_10_ADAPTER_ID: &str = "je-1_7_10";
 pub const JE_1_7_10_STORAGE_PROFILE_ID: &str = "je-anvil-1_7_10";
-
-const PACKET_STATUS_REQUEST: i32 = 0x00;
-const PACKET_STATUS_PING: i32 = 0x01;
-const PACKET_LOGIN_START: i32 = 0x00;
-const PACKET_LOGIN_ENCRYPTION_RESPONSE: i32 = 0x01;
-
-const PACKET_CB_STATUS_RESPONSE: i32 = 0x00;
-const PACKET_CB_STATUS_PONG: i32 = 0x01;
-const PACKET_CB_LOGIN_DISCONNECT: i32 = 0x00;
-const PACKET_CB_LOGIN_ENCRYPTION_REQUEST: i32 = 0x01;
-const PACKET_CB_LOGIN_SUCCESS: i32 = 0x02;
 
 const PACKET_CB_KEEP_ALIVE: i32 = 0x00;
 const PACKET_CB_JOIN_GAME: i32 = 0x01;
@@ -71,134 +52,124 @@ const PACKET_SB_SETTINGS: i32 = 0x15;
 const PACKET_SB_CLIENT_COMMAND: i32 = 0x16;
 
 #[derive(Default)]
-pub struct Je1710Adapter {
-    codec: MinecraftWireCodec,
-}
+pub struct Je1710Profile;
 
-impl Je1710Adapter {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
+pub type Je1710Adapter = JavaEditionAdapter<Je1710Profile>;
 
-impl HandshakeProbe for Je1710Adapter {
-    fn transport_kind(&self) -> TransportKind {
-        TransportKind::Tcp
+impl JavaEditionProfile for Je1710Profile {
+    fn adapter_id(&self) -> &'static str {
+        JE_1_7_10_ADAPTER_ID
     }
 
-    fn try_route(&self, frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
-        decode_handshake_frame(frame)
-    }
-}
-
-impl SessionAdapter for Je1710Adapter {
-    fn wire_codec(&self) -> &dyn WireCodec {
-        &self.codec
-    }
-
-    fn decode_status(&self, frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
-        let mut reader = PacketReader::new(frame);
-        match reader.read_varint()? {
-            PACKET_STATUS_REQUEST => Ok(StatusRequest::Query),
-            PACKET_STATUS_PING => Ok(StatusRequest::Ping {
-                payload: reader.read_i64()?,
-            }),
-            packet_id => Err(ProtocolError::UnsupportedPacket(packet_id)),
+    fn descriptor(&self) -> ProtocolDescriptor {
+        ProtocolDescriptor {
+            adapter_id: JE_1_7_10_ADAPTER_ID.to_string(),
+            transport: TransportKind::Tcp,
+            wire_format: WireFormatKind::MinecraftFramed,
+            edition: Edition::Je,
+            version_name: VERSION_NAME_1_7_10.to_string(),
+            protocol_number: PROTOCOL_VERSION_1_7_10,
         }
     }
 
-    fn decode_login(&self, frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
-        let mut reader = PacketReader::new(frame);
-        match reader.read_varint()? {
-            PACKET_LOGIN_START => Ok(LoginRequest::LoginStart {
-                username: reader.read_string(16)?,
-            }),
-            PACKET_LOGIN_ENCRYPTION_RESPONSE => Ok(LoginRequest::EncryptionResponse {
-                shared_secret_encrypted: read_login_byte_array(&mut reader)?,
-                verify_token_encrypted: read_login_byte_array(&mut reader)?,
-            }),
-            packet_id => Err(ProtocolError::UnsupportedPacket(packet_id)),
-        }
+    fn play_disconnect_packet_id(&self) -> i32 {
+        PACKET_CB_PLAY_DISCONNECT
     }
 
-    fn encode_status_response(&self, status: &ServerListStatus) -> Result<Vec<u8>, ProtocolError> {
-        let payload = json!({
-            "version": {
-                "name": status.version.version_name,
-                "protocol": status.version.protocol_number,
-            },
-            "players": {
-                "max": status.max_players,
-                "online": status.players_online,
-                "sample": [],
-            },
-            "description": {
-                "text": status.description,
-            }
-        });
-        let mut writer = PacketWriter::default();
-        writer.write_varint(PACKET_CB_STATUS_RESPONSE);
-        writer.write_string(&payload.to_string())?;
-        Ok(writer.into_inner())
+    fn format_disconnect_reason(&self, reason: &str) -> String {
+        reason.to_string()
     }
 
-    fn encode_status_pong(&self, payload: i64) -> Result<Vec<u8>, ProtocolError> {
-        let mut writer = PacketWriter::default();
-        writer.write_varint(PACKET_CB_STATUS_PONG);
-        writer.write_i64(payload);
-        Ok(writer.into_inner())
-    }
-
-    fn encode_disconnect(
+    fn encode_play_bootstrap(
         &self,
-        phase: ConnectionPhase,
-        reason: &str,
+        entity_id: EntityId,
+        world_meta: &WorldMeta,
+        player: &PlayerSnapshot,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        Ok(vec![
+            encode_join_game(entity_id, world_meta, player),
+            encode_spawn_position(world_meta.spawn),
+            encode_time_update(world_meta.age, world_meta.time),
+            encode_update_health(player),
+            encode_player_abilities(world_meta.game_mode == 1),
+            encode_position_and_look(player),
+        ])
+    }
+
+    fn encode_chunk_batch(&self, chunks: &[ChunkColumn]) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        match chunks.len() {
+            0 => Ok(Vec::new()),
+            1 => Ok(vec![encode_chunk(&chunks[0])?]),
+            _ => Ok(vec![encode_chunk_bulk(chunks)?]),
+        }
+    }
+
+    fn encode_entity_spawn(
+        &self,
+        entity_id: EntityId,
+        player: &PlayerSnapshot,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        Ok(vec![
+            encode_named_entity_spawn(entity_id, player)?,
+            encode_entity_head_rotation(entity_id, player.yaw),
+        ])
+    }
+
+    fn encode_entity_moved(
+        &self,
+        entity_id: EntityId,
+        player: &PlayerSnapshot,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        Ok(vec![
+            encode_entity_teleport(entity_id, player),
+            encode_entity_head_rotation(entity_id, player.yaw),
+        ])
+    }
+
+    fn encode_entity_despawn(&self, entity_ids: &[EntityId]) -> Result<Vec<u8>, ProtocolError> {
+        encode_destroy_entities(entity_ids)
+    }
+
+    fn encode_inventory_contents(
+        &self,
+        container: InventoryContainer,
+        inventory: &PlayerInventory,
     ) -> Result<Vec<u8>, ProtocolError> {
-        let mut writer = PacketWriter::default();
-        let packet_id = match phase {
-            ConnectionPhase::Login => PACKET_CB_LOGIN_DISCONNECT,
-            ConnectionPhase::Play => PACKET_CB_PLAY_DISCONNECT,
-            _ => {
-                return Err(ProtocolError::InvalidPacket(
-                    "disconnect only valid in login/play",
-                ));
-            }
+        encode_window_items(player_window_id(container), inventory)
+    }
+
+    fn encode_inventory_slot_changed(
+        &self,
+        container: InventoryContainer,
+        slot: InventorySlot,
+        stack: Option<&ItemStack>,
+    ) -> Result<Option<Vec<u8>>, ProtocolError> {
+        let Some(protocol_slot) = legacy_window_slot(slot) else {
+            return Ok(None);
         };
-        writer.write_varint(packet_id);
-        writer.write_string(reason)?;
-        Ok(writer.into_inner())
+        Ok(Some(encode_set_slot(
+            player_window_id(container),
+            u8::try_from(protocol_slot).expect("legacy inventory slot should fit into u8"),
+            stack,
+        )?))
     }
 
-    fn encode_encryption_request(
+    fn encode_selected_hotbar_slot_changed(&self, slot: u8) -> Result<Vec<u8>, ProtocolError> {
+        Ok(encode_held_item_change(slot))
+    }
+
+    fn encode_block_changed(
         &self,
-        server_id: &str,
-        public_key_der: &[u8],
-        verify_token: &[u8],
+        position: BlockPos,
+        block: &BlockState,
     ) -> Result<Vec<u8>, ProtocolError> {
-        let mut writer = PacketWriter::default();
-        writer.write_varint(PACKET_CB_LOGIN_ENCRYPTION_REQUEST);
-        writer.write_string(server_id)?;
-        write_login_byte_array(&mut writer, public_key_der)?;
-        write_login_byte_array(&mut writer, verify_token)?;
-        Ok(writer.into_inner())
+        Ok(encode_block_change(position, block))
     }
 
-    fn encode_network_settings(
-        &self,
-        _compression_threshold: u16,
-    ) -> Result<Vec<u8>, ProtocolError> {
-        Err(ProtocolError::InvalidPacket(
-            "java edition adapters do not support bedrock network settings",
-        ))
+    fn encode_keep_alive_requested(&self, keep_alive_id: i32) -> Result<Vec<u8>, ProtocolError> {
+        Ok(encode_keep_alive(keep_alive_id))
     }
 
-    fn encode_login_success(&self, player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
-        encode_login_success(player)
-    }
-}
-
-impl PlaySyncAdapter for Je1710Adapter {
     fn decode_play(
         &self,
         player_id: PlayerId,
@@ -237,7 +208,7 @@ impl PlaySyncAdapter for Je1710Adapter {
             })),
             PACKET_SB_CREATIVE_INVENTORY_ACTION => {
                 let slot = reader.read_i16()?;
-                let stack = read_slot(&mut reader)?;
+                let stack = read_legacy_slot(&mut reader)?;
                 Ok(
                     legacy_inventory_slot(slot).map(|slot| CoreCommand::CreativeInventorySet {
                         player_id,
@@ -254,116 +225,6 @@ impl PlaySyncAdapter for Je1710Adapter {
             _ => Ok(None),
         }
     }
-
-    fn encode_play_event(
-        &self,
-        event: &CoreEvent,
-        _context: &PlayEncodingContext,
-    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
-        match event {
-            CoreEvent::PlayBootstrap {
-                player,
-                entity_id,
-                world_meta,
-                ..
-            } => Ok(vec![
-                encode_join_game(*entity_id, world_meta, player),
-                encode_spawn_position(world_meta.spawn),
-                encode_time_update(world_meta.age, world_meta.time),
-                encode_update_health(player),
-                encode_player_abilities(world_meta.game_mode == 1),
-                encode_position_and_look(player),
-            ]),
-            CoreEvent::ChunkBatch { chunks } => match chunks.len() {
-                0 => Ok(Vec::new()),
-                1 => Ok(vec![encode_chunk(&chunks[0])?]),
-                _ => Ok(vec![encode_chunk_bulk(chunks)?]),
-            },
-            CoreEvent::EntitySpawned { entity_id, player } => Ok(vec![
-                encode_named_entity_spawn(*entity_id, player)?,
-                encode_entity_head_rotation(*entity_id, player.yaw),
-            ]),
-            CoreEvent::EntityMoved { entity_id, player } => Ok(vec![
-                encode_entity_teleport(*entity_id, player),
-                encode_entity_head_rotation(*entity_id, player.yaw),
-            ]),
-            CoreEvent::EntityDespawned { entity_ids } => {
-                Ok(vec![encode_destroy_entities(entity_ids)?])
-            }
-            CoreEvent::InventoryContents {
-                container,
-                inventory,
-            } => Ok(vec![encode_window_items(window_id(*container), inventory)?]),
-            CoreEvent::InventorySlotChanged {
-                container,
-                slot,
-                stack,
-            } => {
-                let Some(protocol_slot) = legacy_window_slot(*slot) else {
-                    return Ok(Vec::new());
-                };
-                Ok(vec![encode_set_slot(
-                    window_id(*container),
-                    u8::try_from(protocol_slot).expect("legacy inventory slot should fit into u8"),
-                    stack.as_ref(),
-                )?])
-            }
-            CoreEvent::SelectedHotbarSlotChanged { slot } => {
-                Ok(vec![encode_held_item_change(*slot)])
-            }
-            CoreEvent::BlockChanged { position, block } => {
-                Ok(vec![encode_block_change(*position, block)])
-            }
-            CoreEvent::KeepAliveRequested { keep_alive_id } => {
-                Ok(vec![encode_keep_alive(*keep_alive_id)])
-            }
-            CoreEvent::LoginAccepted { .. } | CoreEvent::Disconnect { .. } => Err(
-                ProtocolError::InvalidPacket("session event cannot be encoded as play sync"),
-            ),
-        }
-    }
-}
-
-impl ProtocolAdapter for Je1710Adapter {
-    fn descriptor(&self) -> ProtocolDescriptor {
-        ProtocolDescriptor {
-            adapter_id: JE_1_7_10_ADAPTER_ID.to_string(),
-            transport: TransportKind::Tcp,
-            wire_format: WireFormatKind::MinecraftFramed,
-            edition: Edition::Je,
-            version_name: VERSION_NAME_1_7_10.to_string(),
-            protocol_number: PROTOCOL_VERSION_1_7_10,
-        }
-    }
-}
-
-const fn window_id(container: InventoryContainer) -> u8 {
-    match container {
-        InventoryContainer::Player => 0,
-    }
-}
-
-fn encode_login_success(player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
-    let mut writer = PacketWriter::default();
-    writer.write_varint(PACKET_CB_LOGIN_SUCCESS);
-    writer.write_string(&player.id.0.hyphenated().to_string())?;
-    writer.write_string(&player.username)?;
-    Ok(writer.into_inner())
-}
-
-fn write_login_byte_array(writer: &mut PacketWriter, bytes: &[u8]) -> Result<(), ProtocolError> {
-    writer.write_varint(
-        i32::try_from(bytes.len())
-            .map_err(|_| ProtocolError::InvalidPacket("login byte array too large"))?,
-    );
-    writer.write_bytes(bytes);
-    Ok(())
-}
-
-fn read_login_byte_array(reader: &mut PacketReader<'_>) -> Result<Vec<u8>, ProtocolError> {
-    let len = usize::try_from(reader.read_varint()?)
-        .map_err(|_| ProtocolError::InvalidPacket("negative login byte array length"))?;
-    Ok(reader.read_bytes(len)?.to_vec())
 }
 
 fn encode_join_game(
@@ -518,7 +379,7 @@ fn encode_set_slot(
     writer.write_varint(PACKET_CB_SET_SLOT);
     writer.write_i8(i8::from_be_bytes([window_id]));
     writer.write_i16(i16::from(slot));
-    write_slot(&mut writer, stack)?;
+    write_legacy_slot(&mut writer, stack)?;
     Ok(writer.into_inner())
 }
 
@@ -532,10 +393,14 @@ fn encode_window_items(
     writer.write_varint(PACKET_CB_WINDOW_ITEMS);
     writer.write_i8(i8::from_be_bytes([window_id]));
     writer.write_i16(slot_count);
-    for slot in &inventory.slots {
-        write_slot(&mut writer, slot.as_ref())?;
+    for slot in &legacy_window_items(inventory) {
+        write_legacy_slot(&mut writer, slot.as_ref())?;
     }
     Ok(writer.into_inner())
+}
+
+fn build_chunk_data(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
+    build_chunk_data_1_7(chunk, include_biomes)
 }
 
 fn encode_chunk(chunk: &ChunkColumn) -> Result<Vec<u8>, ProtocolError> {
@@ -585,62 +450,8 @@ fn encode_chunk_bulk(chunks: &[ChunkColumn]) -> Result<Vec<u8>, ProtocolError> {
     Ok(writer.into_inner())
 }
 
-fn build_chunk_data(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {
-    let mut bit_map = 0_u16;
-    let mut sections = Vec::new();
-    for (section_y, section) in &chunk.sections {
-        if !(0..16).contains(section_y) || section.is_empty() {
-            continue;
-        }
-        bit_map |= 1_u16 << u16::try_from(*section_y).expect("section index should fit into u16");
-        let mut blocks = vec![0_u8; 4096];
-        let mut metadata = vec![0_u8; 2048];
-        let block_light = vec![0_u8; 2048];
-        let sky_light = vec![0xff_u8; 2048];
-        for (index, state) in section.iter_blocks() {
-            let (block_id, block_meta) = legacy_block(state);
-            let index_usize = usize::from(index);
-            blocks[index_usize] =
-                u8::try_from(block_id).expect("legacy block id should fit into byte");
-            set_nibble(&mut metadata, index_usize, block_meta);
-        }
-        sections.extend_from_slice(&blocks);
-        sections.extend_from_slice(&metadata);
-        sections.extend_from_slice(&block_light);
-        sections.extend_from_slice(&sky_light);
-    }
-    if include_biomes {
-        sections.extend_from_slice(&chunk.biomes);
-    }
-    (bit_map, sections)
-}
-
-fn set_nibble(target: &mut [u8], index: usize, value: u8) {
-    let byte_index = index / 2;
-    if index.is_multiple_of(2) {
-        target[byte_index] = (target[byte_index] & 0xf0) | (value & 0x0f);
-    } else {
-        target[byte_index] = (target[byte_index] & 0x0f) | ((value & 0x0f) << 4);
-    }
-}
-
 pub(crate) fn get_nibble(source: &[u8], index: usize) -> u8 {
-    let byte = source[index / 2];
-    if index.is_multiple_of(2) {
-        byte & 0x0f
-    } else {
-        (byte >> 4) & 0x0f
-    }
-}
-
-fn zlib_compress(data: &[u8]) -> Result<Vec<u8>, ProtocolError> {
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(data)
-        .map_err(|_| ProtocolError::InvalidPacket("failed to compress payload"))?;
-    encoder
-        .finish()
-        .map_err(|_| ProtocolError::InvalidPacket("failed to finalize compressed payload"))
+    mc_proto_je_common::get_nibble(source, index)
 }
 
 const fn dimension_to_i8(dimension: DimensionId) -> i8 {
@@ -721,7 +532,7 @@ fn decode_place_block_packet(
         reader.read_i32()?,
     );
     let direction = reader.read_u8()?;
-    let held_item = read_slot(reader)?;
+    let held_item = read_legacy_slot(reader)?;
     let _cursor_x = reader.read_u8()?;
     let _cursor_y = reader.read_u8()?;
     let _cursor_z = reader.read_u8()?;
@@ -751,43 +562,6 @@ fn decode_client_settings_packet(
         player_id,
         view_distance: view_distance.max(1),
     })
-}
-
-fn read_slot(reader: &mut PacketReader<'_>) -> Result<Option<ItemStack>, ProtocolError> {
-    let item_id = reader.read_i16()?;
-    if item_id < 0 {
-        return Ok(None);
-    }
-    let count = reader.read_u8()?;
-    let damage = u16::from_be_bytes(reader.read_i16()?.to_be_bytes());
-    skip_slot_nbt(reader)?;
-    Ok(Some(semantic_item(item_id, damage, count)))
-}
-
-fn write_slot(writer: &mut PacketWriter, stack: Option<&ItemStack>) -> Result<(), ProtocolError> {
-    let Some(stack) = stack else {
-        writer.write_i16(-1);
-        return Ok(());
-    };
-    let Some((item_id, damage)) = legacy_item(stack) else {
-        return Err(ProtocolError::InvalidPacket("unsupported inventory item"));
-    };
-    writer.write_i16(item_id);
-    writer.write_u8(stack.count);
-    writer.write_i16(i16::from_be_bytes(damage.to_be_bytes()));
-    writer.write_i16(-1);
-    Ok(())
-}
-
-fn skip_slot_nbt(reader: &mut PacketReader<'_>) -> Result<(), ProtocolError> {
-    let length = reader.read_i16()?;
-    if length < 0 {
-        return Ok(());
-    }
-    let length = usize::try_from(length)
-        .map_err(|_| ProtocolError::InvalidPacket("negative slot nbt length"))?;
-    let _ = reader.read_bytes(length)?;
-    Ok(())
 }
 
 #[cfg(test)]
