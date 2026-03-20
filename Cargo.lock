@@ -1516,6 +1516,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-host"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "libloading",
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-auth-offline",
+ "mc-plugin-gameplay-canonical",
+ "mc-plugin-gameplay-readonly",
+ "mc-plugin-proto-be-26_3",
+ "mc-plugin-proto-be-placeholder",
+ "mc-plugin-proto-je-1_12_2",
+ "mc-plugin-proto-je-1_7_10",
+ "mc-plugin-proto-je-1_8_x",
+ "mc-plugin-sdk-rust",
+ "mc-plugin-storage-je-anvil-1_7_10",
+ "mc-proto-be-26_3",
+ "mc-proto-be-placeholder",
+ "mc-proto-common",
+ "mc-proto-je-1_12_2",
+ "mc-proto-je-1_7_10",
+ "mc-proto-je-1_8_x",
+ "serde",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "uuid",
+]
+
+[[package]]
 name = "mc-plugin-proto-be-26_3"
 version = "0.1.0"
 dependencies = [
@@ -2658,6 +2689,7 @@ dependencies = [
  "mc-plugin-auth-online-stub",
  "mc-plugin-gameplay-canonical",
  "mc-plugin-gameplay-readonly",
+ "mc-plugin-host",
  "mc-plugin-proto-be-26_3",
  "mc-plugin-proto-be-placeholder",
  "mc-plugin-proto-je-1_12_2",
@@ -3615,6 +3647,10 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "xuid"

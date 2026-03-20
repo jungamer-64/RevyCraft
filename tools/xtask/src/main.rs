@@ -1,78 +1,34 @@
 #![allow(clippy::multiple_crate_versions)]
+use serde::Deserialize;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct PluginSpec {
-    cargo_package: &'static str,
-    plugin_id: &'static str,
-    plugin_kind: &'static str,
+    cargo_package: String,
+    plugin_id: String,
+    plugin_kind: String,
 }
 
-const PLUGINS: &[PluginSpec] = &[
-    PluginSpec {
-        cargo_package: "mc-plugin-proto-je-1_7_10",
-        plugin_id: "je-1_7_10",
-        plugin_kind: "protocol",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-proto-je-1_8_x",
-        plugin_id: "je-1_8_x",
-        plugin_kind: "protocol",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-proto-je-1_12_2",
-        plugin_id: "je-1_12_2",
-        plugin_kind: "protocol",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-proto-be-placeholder",
-        plugin_id: "be-placeholder",
-        plugin_kind: "protocol",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-proto-be-26_3",
-        plugin_id: "be-26_3",
-        plugin_kind: "protocol",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-gameplay-canonical",
-        plugin_id: "gameplay-canonical",
-        plugin_kind: "gameplay",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-gameplay-readonly",
-        plugin_id: "gameplay-readonly",
-        plugin_kind: "gameplay",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-storage-je-anvil-1_7_10",
-        plugin_id: "storage-je-anvil-1_7_10",
-        plugin_kind: "storage",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-auth-offline",
-        plugin_id: "auth-offline",
-        plugin_kind: "auth",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-auth-mojang-online",
-        plugin_id: "auth-mojang-online",
-        plugin_kind: "auth",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-auth-bedrock-offline",
-        plugin_id: "auth-bedrock-offline",
-        plugin_kind: "auth",
-    },
-    PluginSpec {
-        cargo_package: "mc-plugin-auth-bedrock-xbl",
-        plugin_id: "auth-bedrock-xbl",
-        plugin_kind: "auth",
-    },
-];
+#[derive(Debug, Deserialize)]
+struct CargoMetadata {
+    packages: Vec<CargoPackage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoPackage {
+    name: String,
+    manifest_path: PathBuf,
+    targets: Vec<CargoTarget>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoTarget {
+    kind: Vec<String>,
+}
 
 fn main() -> Result<(), String> {
     let mut args = env::args().skip(1);
@@ -117,10 +73,11 @@ fn package_plugins(args: &[String]) -> Result<(), String> {
     }
 
     let workspace_root = workspace_root()?;
+    let plugins = discover_plugins(&workspace_root)?;
     let dist_dir = workspace_root.join(dist_dir);
     fs::create_dir_all(&dist_dir).map_err(|error| error.to_string())?;
 
-    for plugin in PLUGINS {
+    for plugin in &plugins {
         build_plugin(&workspace_root, plugin, release)?;
         package_plugin(&workspace_root, &dist_dir, plugin, release)?;
     }
@@ -152,6 +109,66 @@ fn workspace_root() -> Result<PathBuf, String> {
     ))
 }
 
+fn discover_plugins(workspace_root: &Path) -> Result<Vec<PluginSpec>, String> {
+    let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    let output = Command::new(cargo)
+        .current_dir(workspace_root)
+        .arg("metadata")
+        .arg("--no-deps")
+        .arg("--format-version")
+        .arg("1")
+        .output()
+        .map_err(|error| format!("failed to run cargo metadata: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("cargo metadata failed: {stderr}"));
+    }
+
+    let metadata: CargoMetadata = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("failed to parse cargo metadata: {error}"))?;
+    let plugins_root = workspace_root.join("plugins");
+    let mut plugins = metadata
+        .packages
+        .into_iter()
+        .filter(|package| is_plugin_package(package, &plugins_root))
+        .map(|package| plugin_spec_from_package_name(&package.name))
+        .collect::<Result<Vec<_>, _>>()?;
+    plugins.sort_by(|left, right| left.cargo_package.cmp(&right.cargo_package));
+    Ok(plugins)
+}
+
+fn is_plugin_package(package: &CargoPackage, plugins_root: &Path) -> bool {
+    package.name.starts_with("mc-plugin-")
+        && !package.name.ends_with("-reload-test")
+        && package.targets.iter().any(|target| target.kind.iter().any(|kind| kind == "cdylib"))
+        && package
+            .manifest_path
+            .parent()
+            .is_some_and(|parent| parent.starts_with(plugins_root))
+}
+
+fn plugin_spec_from_package_name(package_name: &str) -> Result<PluginSpec, String> {
+    let Some(rest) = package_name.strip_prefix("mc-plugin-") else {
+        return Err(format!("unsupported plugin package `{package_name}`"));
+    };
+    let (plugin_kind, plugin_id) = if let Some(adapter_id) = rest.strip_prefix("proto-") {
+        ("protocol", adapter_id.to_string())
+    } else if rest.starts_with("gameplay-") {
+        ("gameplay", rest.to_string())
+    } else if rest.starts_with("storage-") {
+        ("storage", rest.to_string())
+    } else if rest.starts_with("auth-") {
+        ("auth", rest.to_string())
+    } else {
+        return Err(format!("unsupported plugin package layout `{package_name}`"));
+    };
+    Ok(PluginSpec {
+        cargo_package: package_name.to_string(),
+        plugin_id,
+        plugin_kind: plugin_kind.to_string(),
+    })
+}
+
 fn build_plugin(workspace_root: &Path, plugin: &PluginSpec, release: bool) -> Result<(), String> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let mut command = Command::new(cargo);
@@ -159,7 +176,7 @@ fn build_plugin(workspace_root: &Path, plugin: &PluginSpec, release: bool) -> Re
         .current_dir(workspace_root)
         .arg("build")
         .arg("-p")
-        .arg(plugin.cargo_package);
+        .arg(&plugin.cargo_package);
     if release {
         command.arg("--release");
     }
@@ -186,7 +203,7 @@ fn package_plugin(
     let build_profile = if release { "release" } else { "debug" };
     let source = target_dir(workspace_root)
         .join(build_profile)
-        .join(dynamic_library_filename(plugin.cargo_package));
+        .join(dynamic_library_filename(&plugin.cargo_package));
     if !source.exists() {
         return Err(format!(
             "expected built plugin artifact `{}`",
@@ -194,7 +211,7 @@ fn package_plugin(
         ));
     }
 
-    let plugin_dir = dist_dir.join(plugin.plugin_id);
+    let plugin_dir = dist_dir.join(&plugin.plugin_id);
     fs::create_dir_all(&plugin_dir).map_err(|error| error.to_string())?;
 
     let packaged_artifact_name = packaged_artifact_name(
@@ -254,8 +271,12 @@ fn dynamic_library_filename(package: &str) -> String {
 }
 
 fn packaged_artifact_name(base_name: &str) -> String {
-    match env::var("REVY_PLUGIN_BUILD_TAG") {
-        Ok(build_tag) if !build_tag.is_empty() => {
+    packaged_artifact_name_with_tag(base_name, env::var("REVY_PLUGIN_BUILD_TAG").ok())
+}
+
+fn packaged_artifact_name_with_tag(base_name: &str, build_tag: Option<String>) -> String {
+    match build_tag {
+        Some(build_tag) if !build_tag.is_empty() => {
             let sanitized = build_tag
                 .chars()
                 .map(|ch| {
@@ -273,5 +294,46 @@ fn packaged_artifact_name(base_name: &str) -> String {
             }
         }
         _ => base_name.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PluginSpec, packaged_artifact_name_with_tag, plugin_spec_from_package_name};
+
+    #[test]
+    fn plugin_spec_maps_protocol_packages_to_adapter_ids() {
+        assert_eq!(
+            plugin_spec_from_package_name("mc-plugin-proto-je-1_12_2").expect("valid protocol plugin"),
+            PluginSpec {
+                cargo_package: "mc-plugin-proto-je-1_12_2".to_string(),
+                plugin_id: "je-1_12_2".to_string(),
+                plugin_kind: "protocol".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn plugin_spec_keeps_non_protocol_prefixes_in_plugin_id() {
+        assert_eq!(
+            plugin_spec_from_package_name("mc-plugin-auth-bedrock-offline")
+                .expect("valid auth plugin")
+                .plugin_id,
+            "auth-bedrock-offline"
+        );
+        assert_eq!(
+            plugin_spec_from_package_name("mc-plugin-gameplay-canonical")
+                .expect("valid gameplay plugin")
+                .plugin_id,
+            "gameplay-canonical"
+        );
+    }
+
+    #[test]
+    fn packaged_artifact_name_appends_sanitized_build_tag() {
+        assert_eq!(
+            packaged_artifact_name_with_tag("libmc_plugin.so", Some("reload smoke".to_string())),
+            "libmc_plugin-reload_smoke.so"
+        );
     }
 }

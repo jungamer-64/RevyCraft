@@ -3,7 +3,7 @@ use super::{
     SessionHandle, SessionMessage, SessionState, now_ms,
 };
 use crate::RuntimeError;
-use crate::plugin_host::{HotSwappableAuthProfile, HotSwappableGameplayProfile};
+use crate::host::{HotSwappableAuthProfile, HotSwappableGameplayProfile};
 use crate::transport::{
     AcceptedTransportSession, TransportSessionIo, default_wire_codec, write_payload,
 };
@@ -284,9 +284,13 @@ impl RuntimeServer {
                 .plugin_generation_id()
                 .ok_or_else(|| RuntimeError::Config("missing auth generation".to_string()))?;
             if current_generation_id == captured_generation_id {
-                auth_profile.authenticate_online(&username, &server_hash)
+                auth_profile
+                    .authenticate_online(&username, &server_hash)
+                    .map_err(RuntimeError::from)
             } else {
-                auth_generation.authenticate_online(&username, &server_hash)
+                auth_generation
+                    .authenticate_online(&username, &server_hash)
+                    .map_err(RuntimeError::from)
             }
         })
         .await

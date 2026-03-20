@@ -22,3 +22,18 @@ pub enum RuntimeError {
     #[error("task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
 }
+
+impl From<mc_plugin_host::PluginHostError> for RuntimeError {
+    fn from(value: mc_plugin_host::PluginHostError) -> Self {
+        match value {
+            mc_plugin_host::PluginHostError::Io(error) => Self::Io(error),
+            mc_plugin_host::PluginHostError::PluginLoad(error) => Self::PluginLoad(error),
+            mc_plugin_host::PluginHostError::PluginFatal(message) => Self::PluginFatal(message),
+            mc_plugin_host::PluginHostError::Protocol(error) => Self::Protocol(error),
+            mc_plugin_host::PluginHostError::Storage(error) => Self::Storage(error),
+            mc_plugin_host::PluginHostError::Auth(message) => Self::Auth(message),
+            mc_plugin_host::PluginHostError::Unsupported(message) => Self::Unsupported(message),
+            mc_plugin_host::PluginHostError::Config(message) => Self::Config(message),
+        }
+    }
+}

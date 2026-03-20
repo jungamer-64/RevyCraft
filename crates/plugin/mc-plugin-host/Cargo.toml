@@ -1,5 +1,5 @@
 [package]
-name = "server-runtime"
+name = "mc-plugin-host"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -7,41 +7,27 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Protocol-agnostic dedicated server runtime for the RevyCraft workspace."
+description = "Dynamic plugin host, catalog, and runtime profile management for RevyCraft."
 
 [features]
 disable-exported-symbols = []
 
 [dependencies]
-aes.workspace = true
-bedrockrs_network.workspace = true
-bedrockrs_proto.workspace = true
 bytes.workspace = true
 libloading.workspace = true
 mc-core = { path = "../../core/mc-core" }
-mc-plugin-api = { path = "../../plugin/mc-plugin-api" }
-mc-plugin-host = { path = "../../plugin/mc-plugin-host" }
-mc-proto-be-common = { path = "../../protocol/mc-proto-be-common" }
+mc-plugin-api = { path = "../mc-plugin-api" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
-md5.workspace = true
-num-bigint.workspace = true
-rand.workspace = true
-rsa.workspace = true
 serde.workspace = true
-sha1.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
 toml.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-mc-plugin-auth-bedrock-offline = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-offline", features = ["disable-exported-symbols"] }
-mc-plugin-auth-bedrock-xbl = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-xbl", features = ["disable-exported-symbols"] }
 mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline", features = ["disable-exported-symbols"] }
-mc-plugin-auth-online-stub = { path = "../../../plugins/auth/mc-plugin-auth-online-stub", features = ["disable-exported-symbols"] }
 mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gameplay-canonical", features = ["disable-exported-symbols"] }
 mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly", features = ["disable-exported-symbols"] }
-mc-plugin-sdk-rust = { path = "../../plugin/mc-plugin-sdk-rust" }
+mc-plugin-sdk-rust = { path = "../mc-plugin-sdk-rust" }
 mc-plugin-proto-be-26_3 = { path = "../../../plugins/protocol/mc-plugin-proto-be-26_3", features = ["disable-exported-symbols"] }
 mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols"] }
 mc-plugin-proto-je-1_12_2 = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_12_2", features = ["disable-exported-symbols"] }
@@ -50,7 +36,6 @@ mc-plugin-proto-je-1_8_x = { path = "../../../plugins/protocol/mc-plugin-proto-j
 mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10", features = ["disable-exported-symbols"] }
 mc-proto-be-26_3 = { path = "../../protocol/mc-proto-be-26_3" }
 mc-proto-be-placeholder = { path = "../../protocol/mc-proto-be-placeholder" }
-mc-proto-je-common = { path = "../../protocol/mc-proto-je-common" }
 mc-proto-je-1_12_2 = { path = "../../protocol/mc-proto-je-1_12_2" }
 mc-proto-je-1_7_10 = { path = "../../protocol/mc-proto-je-1_7_10" }
 mc-proto-je-1_8_x = { path = "../../protocol/mc-proto-je-1_8_x" }

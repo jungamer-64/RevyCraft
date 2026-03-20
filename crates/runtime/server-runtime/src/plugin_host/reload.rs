@@ -511,7 +511,7 @@ impl PluginHost {
         Ok(reloaded)
     }
 
-    pub(crate) fn reload_modified_with_context(
+    pub fn reload_modified_with_context(
         &self,
         runtime: &RuntimeReloadContext,
     ) -> Result<Vec<String>, RuntimeError> {

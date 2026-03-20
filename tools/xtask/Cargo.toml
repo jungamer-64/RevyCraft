@@ -9,5 +9,9 @@ keywords.workspace = true
 categories.workspace = true
 description = "Workspace automation tasks for packaging RevyCraft protocol plugins."
 
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
 [lints]
 workspace = true

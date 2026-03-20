@@ -2336,9 +2336,9 @@ struct ManagedProtocolPlugin {
     active_loaded_at: SystemTime,
 }
 
-pub(crate) struct PreparedProtocolTopology {
-    pub(crate) registry: ProtocolRegistry,
-    pub(crate) adapter_ids: Vec<String>,
+pub struct PreparedProtocolTopology {
+    pub registry: ProtocolRegistry,
+    pub adapter_ids: Vec<String>,
     managed: HashMap<String, ManagedProtocolPlugin>,
 }
 
@@ -2497,13 +2497,13 @@ impl PluginHost {
         self.prepare_protocol_topology_with_stage(PluginFailureStage::Boot)
     }
 
-    pub(crate) fn prepare_protocol_topology_for_reload(
+    pub fn prepare_protocol_topology_for_reload(
         &self,
     ) -> Result<PreparedProtocolTopology, RuntimeError> {
         self.prepare_protocol_topology_with_stage(PluginFailureStage::Reload)
     }
 
-    pub(crate) fn activate_protocol_topology(&self, candidate: PreparedProtocolTopology) {
+    pub fn activate_protocol_topology(&self, candidate: PreparedProtocolTopology) {
         *self
             .protocols
             .lock()
@@ -2778,11 +2778,11 @@ impl PluginHost {
         self.failures.active_reason(plugin_id)
     }
 
-    pub(crate) fn take_pending_fatal_error(&self) -> Option<RuntimeError> {
+    pub fn take_pending_fatal_error(&self) -> Option<RuntimeError> {
         self.failures.take_pending_fatal_error()
     }
 
-    pub(crate) fn handle_runtime_failure(
+    pub fn handle_runtime_failure(
         &self,
         kind: PluginKind,
         plugin_id: &str,
@@ -2792,7 +2792,7 @@ impl PluginHost {
             .handle_runtime_failure(kind, plugin_id, reason)
     }
 
-    pub(crate) fn managed_protocol_ids(&self) -> Vec<String> {
+    pub fn managed_protocol_ids(&self) -> Vec<String> {
         let mut ids = self
             .protocols
             .lock()
@@ -2860,4 +2860,5 @@ pub const fn plugin_reload_poll_interval_ms() -> u64 {
 }
 
 #[cfg(test)]
+#[path = "plugin_host/tests.rs"]
 mod tests;

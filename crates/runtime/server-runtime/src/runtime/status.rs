@@ -1,5 +1,5 @@
 use super::{RunningServer, RuntimeServer, TopologyGenerationId, now_ms};
-use crate::plugin_host::PluginHostStatusSnapshot;
+use crate::host::PluginHostStatusSnapshot;
 use crate::registry::ListenerBinding;
 use mc_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use mc_proto_common::{ConnectionPhase, TransportKind};

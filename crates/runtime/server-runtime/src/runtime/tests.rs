@@ -85,7 +85,7 @@ use crate::config::{BEDROCK_OFFLINE_AUTH_PROFILE_ID, LevelType, ServerConfig, Se
 use crate::host::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
     PluginAbiRange, PluginCatalog, PluginFailureAction, PluginFailureMatrix, PluginHost,
-    plugin_host_from_config,
+    initialize_runtime_registries_from_config, plugin_host_from_config,
 };
 use crate::registry::RuntimeRegistries;
 use crate::transport::{MinecraftStreamCipher, build_listener_plans, default_wire_codec};
@@ -231,7 +231,7 @@ fn plugin_test_registries_from_dist_with_supporting_plugins(
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
     let mut registries = RuntimeRegistries::new();
-    plugin_host.initialize_runtime_registries(&config, &mut registries)?;
+    initialize_runtime_registries_from_config(&plugin_host, &config, &mut registries)?;
     Ok(registries)
 }
 
@@ -242,7 +242,7 @@ fn plugin_test_registries_from_config(
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
     let mut registries = RuntimeRegistries::new();
-    plugin_host.initialize_runtime_registries(config, &mut registries)?;
+    initialize_runtime_registries_from_config(&plugin_host, config, &mut registries)?;
     Ok(registries)
 }
 
@@ -332,7 +332,8 @@ fn in_process_online_auth_registries(
         PluginFailureMatrix::default(),
     ));
     let mut registries = RuntimeRegistries::new();
-    plugin_host.initialize_runtime_registries(
+    initialize_runtime_registries_from_config(
+        &plugin_host,
         &ServerConfig {
             auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
             ..ServerConfig::default()
@@ -376,7 +377,8 @@ fn in_process_failing_storage_registries(
         },
     ));
     let mut registries = RuntimeRegistries::new();
-    plugin_host.initialize_runtime_registries(
+    initialize_runtime_registries_from_config(
+        &plugin_host,
         &ServerConfig {
             storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
             ..ServerConfig::default()

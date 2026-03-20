@@ -104,7 +104,7 @@ impl RuntimeServer {
     pub(crate) fn take_pending_plugin_fatal_error(&self) -> Option<RuntimeError> {
         self.plugin_host
             .as_ref()
-            .and_then(|plugin_host| plugin_host.take_pending_fatal_error())
+            .and_then(|plugin_host| plugin_host.take_pending_fatal_error().map(RuntimeError::from))
     }
 
     pub(crate) async fn finish_with_runtime_error(
@@ -452,7 +452,7 @@ impl RuntimeServer {
         plugin_host: &PluginHost,
     ) -> Result<Vec<String>, RuntimeError> {
         let context = self.reload_context().await;
-        plugin_host.reload_modified_with_context(&context)
+        Ok(plugin_host.reload_modified_with_context(&context)?)
     }
 
     fn next_topology_generation_id(&self) -> TopologyGenerationId {

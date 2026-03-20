@@ -15,6 +15,43 @@ use mc_plugin_api::{
 use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError, StorageError};
 use std::path::Path;
 
+pub mod manifest {
+    pub use crate::{StaticPluginManifest, manifest_from_static};
+}
+
+pub mod buffers {
+    pub use crate::{
+        byte_slice_as_bytes, free_owned_buffer, into_owned_buffer, write_error_buffer,
+        write_output_buffer,
+    };
+}
+
+pub mod entrypoints {
+    pub use crate::{
+        InProcessAuthEntrypoints, InProcessGameplayEntrypoints, InProcessProtocolEntrypoints,
+        InProcessStorageEntrypoints,
+    };
+}
+
+pub mod protocol {
+    pub use crate::{RustProtocolPlugin, handle_protocol_request};
+}
+
+pub mod storage {
+    pub use crate::{RustStoragePlugin, handle_storage_request};
+}
+
+pub mod auth {
+    pub use crate::{RustAuthPlugin, handle_auth_request};
+}
+
+pub mod gameplay {
+    pub use crate::{
+        GameplayHost, RustGameplayPlugin, handle_gameplay_request,
+        handle_gameplay_request_with_host_api,
+    };
+}
+
 pub struct StaticPluginManifest {
     pub plugin_id: &'static str,
     pub display_name: &'static str,
@@ -1648,6 +1685,8 @@ mod tests {
             }
         }
     }
+
+    impl super::RustProtocolPlugin for DirectProtocolPlugin {}
 
     #[test]
     fn direct_protocol_requests_route_wire_codec_ops_through_plugin_codec() {

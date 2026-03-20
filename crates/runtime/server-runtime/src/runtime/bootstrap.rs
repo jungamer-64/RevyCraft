@@ -4,8 +4,10 @@ use super::{
 };
 use crate::RuntimeError;
 use crate::config::{ServerConfig, ServerConfigSource};
-use crate::host::plugin_reload_poll_interval_ms;
-use crate::plugin_host::{HotSwappableAuthProfile, HotSwappableStorageProfile, PluginHost};
+use crate::host::{
+    HotSwappableAuthProfile, HotSwappableStorageProfile, PluginHost,
+    activate_runtime_profiles_from_config, plugin_reload_poll_interval_ms,
+};
 use crate::registry::{ListenerBinding, ProtocolRegistry, RuntimeRegistries};
 use crate::transport::{
     AcceptedTransportSession, BoundTransportListener, TransportSessionIo, bind_transport_listener,
@@ -225,7 +227,7 @@ fn resolve_runtime_profiles(
     config: &ServerConfig,
     plugin_host: &Arc<PluginHost>,
 ) -> Result<RuntimeProfiles, RuntimeError> {
-    plugin_host.activate_runtime_profiles(config)?;
+    activate_runtime_profiles_from_config(plugin_host, config)?;
     let storage_profile = plugin_host
         .resolve_storage_profile(&config.storage_profile)
         .ok_or_else(|| {

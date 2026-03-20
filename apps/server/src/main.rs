@@ -1,7 +1,7 @@
 #![allow(clippy::multiple_crate_versions)]
 use server_runtime::RuntimeError;
 use server_runtime::config::{ServerConfig, ServerConfigSource};
-use server_runtime::host::plugin_host_from_config;
+use server_runtime::host::{initialize_runtime_registries_from_config, plugin_host_from_config};
 use server_runtime::registry::RuntimeRegistries;
 use server_runtime::runtime::{format_runtime_status_summary, spawn_server};
 use std::path::Path;
@@ -17,7 +17,7 @@ async fn main() -> Result<(), RuntimeError> {
             config.plugins_dir.display()
         ))
     })?;
-    plugin_host.initialize_runtime_registries(&config, &mut registries)?;
+    initialize_runtime_registries_from_config(&plugin_host, &config, &mut registries)?;
 
     let server = spawn_server(
         ServerConfigSource::Properties(Path::new("runtime/server.properties").to_path_buf()),

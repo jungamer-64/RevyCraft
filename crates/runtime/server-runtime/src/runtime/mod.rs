@@ -7,26 +7,25 @@ mod tests;
 
 use crate::RuntimeError;
 use crate::config::{ServerConfig, ServerConfigSource};
-use crate::host::PluginHost;
-use crate::plugin_host::{
+use crate::host::{
     AuthGeneration, HotSwappableAuthProfile, HotSwappableGameplayProfile,
-    HotSwappableStorageProfile,
+    HotSwappableStorageProfile, PluginHost,
 };
 use crate::registry::{ListenerBinding, ProtocolRegistry};
 use crate::transport::AcceptedTransportSession;
 use mc_core::{
     ConnectionId, CoreEvent, EntityId, GameplayProfileId, PlayerId, ServerCore,
-    SessionCapabilitySet, WorldSnapshot,
+    SessionCapabilitySet,
 };
-use mc_plugin_api::{GameplaySessionSnapshot, ProtocolSessionSnapshot};
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
+
+pub(crate) use mc_plugin_host::runtime::{ProtocolReloadSession, RuntimeReloadContext};
 
 pub use self::bootstrap::spawn_server;
 pub use self::status::{
@@ -201,18 +200,6 @@ pub(crate) struct LoginChallengeState {
     pub(crate) auth_generation: Arc<AuthGeneration>,
     #[allow(dead_code)]
     pub(crate) challenge_started_at: u64,
-}
-
-pub(crate) struct ProtocolReloadSession {
-    pub(crate) adapter_id: String,
-    pub(crate) session: ProtocolSessionSnapshot,
-}
-
-pub(crate) struct RuntimeReloadContext {
-    pub(crate) protocol_sessions: Vec<ProtocolReloadSession>,
-    pub(crate) gameplay_sessions: Vec<GameplaySessionSnapshot>,
-    pub(crate) snapshot: WorldSnapshot,
-    pub(crate) world_dir: PathBuf,
 }
 
 pub(crate) fn now_ms() -> u64 {
