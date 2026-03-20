@@ -51,8 +51,7 @@ libloading = "0.9"
 warnings = "deny"
 
 [workspace.lints.clippy]
-all = { level = "deny", priority = -1 }
-pedantic = { level = "deny", priority = -1 }
-cargo = { level = "deny", priority = -1 }
-nursery = { level = "deny", priority = -1 }
-multiple_crate_versions = "allow"
+all = "deny"
+pedantic = "deny"
+cargo = "deny"
+nursery = "deny"

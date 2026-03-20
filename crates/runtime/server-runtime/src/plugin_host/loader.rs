@@ -1,0 +1,470 @@
+use super::*;
+
+impl PluginLoader {
+    fn load_protocol_api(
+        &self,
+        package: &PluginPackage,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            ProtocolPluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        match &package.source {
+            PluginSource::DynamicLibrary { library_path, .. } => unsafe {
+                self.load_dynamic_protocol(library_path)
+            },
+            PluginSource::InProcessProtocol(plugin) => {
+                Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
+            }
+            PluginSource::InProcessGameplay(_)
+            | PluginSource::InProcessStorage(_)
+            | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
+                "plugin `{}` is not a protocol plugin",
+                package.plugin_id
+            ))),
+        }
+    }
+
+    fn load_gameplay_api(
+        &self,
+        package: &PluginPackage,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            GameplayPluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        match &package.source {
+            PluginSource::DynamicLibrary { library_path, .. } => unsafe {
+                self.load_dynamic_gameplay(library_path)
+            },
+            PluginSource::InProcessGameplay(plugin) => {
+                let status = unsafe { (plugin.api.set_host_api)(&gameplay_host_api()) };
+                if status != PluginErrorCode::Ok {
+                    return Err(RuntimeError::Config(format!(
+                        "failed to configure gameplay host api for plugin `{}`: {status:?}",
+                        package.plugin_id
+                    )));
+                }
+                Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
+            }
+            PluginSource::InProcessProtocol(_)
+            | PluginSource::InProcessStorage(_)
+            | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
+                "plugin `{}` is not a gameplay plugin",
+                package.plugin_id
+            ))),
+        }
+    }
+
+    fn load_storage_api(
+        &self,
+        package: &PluginPackage,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            StoragePluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        match &package.source {
+            PluginSource::DynamicLibrary { library_path, .. } => unsafe {
+                self.load_dynamic_storage(library_path)
+            },
+            PluginSource::InProcessStorage(plugin) => {
+                Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
+            }
+            PluginSource::InProcessProtocol(_)
+            | PluginSource::InProcessGameplay(_)
+            | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
+                "plugin `{}` is not a storage plugin",
+                package.plugin_id
+            ))),
+        }
+    }
+
+    fn load_auth_api(
+        &self,
+        package: &PluginPackage,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            AuthPluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        match &package.source {
+            PluginSource::DynamicLibrary { library_path, .. } => unsafe {
+                self.load_dynamic_auth(library_path)
+            },
+            PluginSource::InProcessAuth(plugin) => {
+                Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
+            }
+            PluginSource::InProcessProtocol(_)
+            | PluginSource::InProcessGameplay(_)
+            | PluginSource::InProcessStorage(_) => Err(RuntimeError::Config(format!(
+                "plugin `{}` is not an auth plugin",
+                package.plugin_id
+            ))),
+        }
+    }
+
+    pub(super) fn load_protocol_generation(
+        &self,
+        package: &PluginPackage,
+        generation_id: PluginGenerationId,
+    ) -> Result<ProtocolGeneration, RuntimeError> {
+        let (guard, manifest, api) = self.load_protocol_api(package)?;
+        self.validate_manifest(package, &manifest)?;
+        let descriptor = expect_protocol_descriptor(
+            &package.plugin_id,
+            invoke_protocol(&api, ProtocolRequest::Describe)?,
+        )?;
+        let bedrock_listener_descriptor = expect_protocol_bedrock_listener_descriptor(
+            &package.plugin_id,
+            invoke_protocol(&api, ProtocolRequest::DescribeBedrockListener)?,
+        )?;
+        let capabilities = expect_protocol_capabilities(
+            &package.plugin_id,
+            invoke_protocol(&api, ProtocolRequest::CapabilitySet)?,
+        )?;
+        Ok(ProtocolGeneration {
+            generation_id,
+            plugin_id: package.plugin_id.clone(),
+            descriptor,
+            bedrock_listener_descriptor,
+            capabilities,
+            invoke: api.invoke,
+            free_buffer: api.free_buffer,
+            _library_guard: guard,
+        })
+    }
+
+    pub(super) fn load_gameplay_generation(
+        &self,
+        package: &PluginPackage,
+        generation_id: PluginGenerationId,
+    ) -> Result<GameplayGeneration, RuntimeError> {
+        let (guard, manifest, api) = self.load_gameplay_api(package)?;
+        self.validate_manifest(package, &manifest)?;
+        let profile_id = gameplay_profile_id_from_manifest(&manifest, &package.plugin_id)?;
+        require_manifest_capability(
+            &manifest,
+            "runtime.reload.gameplay",
+            &package.plugin_id,
+            "gameplay",
+        )?;
+        let descriptor = expect_gameplay_descriptor(
+            &package.plugin_id,
+            invoke_gameplay(&package.plugin_id, &api, GameplayRequest::Describe)?,
+        )?;
+        if descriptor.profile != profile_id {
+            return Err(RuntimeError::Config(format!(
+                "gameplay plugin `{}` describe profile `{}` did not match manifest profile `{}`",
+                package.plugin_id,
+                descriptor.profile.as_str(),
+                profile_id.as_str()
+            )));
+        }
+        let capabilities = expect_gameplay_capabilities(
+            &package.plugin_id,
+            invoke_gameplay(&package.plugin_id, &api, GameplayRequest::CapabilitySet)?,
+        )?;
+        Ok(GameplayGeneration {
+            generation_id,
+            plugin_id: package.plugin_id.clone(),
+            profile_id,
+            capabilities,
+            invoke: api.invoke,
+            free_buffer: api.free_buffer,
+            _library_guard: guard,
+        })
+    }
+
+    pub(super) fn load_storage_generation(
+        &self,
+        package: &PluginPackage,
+        generation_id: PluginGenerationId,
+    ) -> Result<StorageGeneration, RuntimeError> {
+        let (guard, manifest, api) = self.load_storage_api(package)?;
+        self.validate_manifest(package, &manifest)?;
+        let profile_id =
+            manifest_profile_id(&manifest, "storage.profile:", &package.plugin_id, "storage")?;
+        require_manifest_capability(
+            &manifest,
+            "runtime.reload.storage",
+            &package.plugin_id,
+            "storage",
+        )?;
+        let descriptor = expect_storage_descriptor(
+            &package.plugin_id,
+            invoke_storage(&package.plugin_id, &api, StorageRequest::Describe)?,
+        )?;
+        if descriptor.storage_profile != profile_id {
+            return Err(RuntimeError::Config(format!(
+                "storage plugin `{}` describe profile `{}` did not match manifest profile `{}`",
+                package.plugin_id, descriptor.storage_profile, profile_id
+            )));
+        }
+        let capabilities = expect_storage_capabilities(
+            &package.plugin_id,
+            invoke_storage(&package.plugin_id, &api, StorageRequest::CapabilitySet)?,
+        )?;
+        Ok(StorageGeneration {
+            generation_id,
+            plugin_id: package.plugin_id.clone(),
+            profile_id,
+            capabilities,
+            invoke: api.invoke,
+            free_buffer: api.free_buffer,
+            _library_guard: guard,
+        })
+    }
+
+    pub(super) fn load_auth_generation(
+        &self,
+        package: &PluginPackage,
+        generation_id: PluginGenerationId,
+    ) -> Result<AuthGeneration, RuntimeError> {
+        let (guard, manifest, api) = self.load_auth_api(package)?;
+        self.validate_manifest(package, &manifest)?;
+        let profile_id =
+            manifest_profile_id(&manifest, "auth.profile:", &package.plugin_id, "auth")?;
+        require_manifest_capability(&manifest, "runtime.reload.auth", &package.plugin_id, "auth")?;
+        let descriptor = expect_auth_descriptor(
+            &package.plugin_id,
+            invoke_auth(&package.plugin_id, &api, AuthRequest::Describe)?,
+        )?;
+        if descriptor.auth_profile != profile_id {
+            return Err(RuntimeError::Config(format!(
+                "auth plugin `{}` describe profile `{}` did not match manifest profile `{}`",
+                package.plugin_id, descriptor.auth_profile, profile_id
+            )));
+        }
+        let capabilities = expect_auth_capabilities(
+            &package.plugin_id,
+            invoke_auth(&package.plugin_id, &api, AuthRequest::CapabilitySet)?,
+        )?;
+        Ok(AuthGeneration {
+            generation_id,
+            plugin_id: package.plugin_id.clone(),
+            profile_id,
+            mode: descriptor.mode,
+            capabilities,
+            invoke: api.invoke,
+            free_buffer: api.free_buffer,
+            _library_guard: guard,
+        })
+    }
+
+    unsafe fn load_dynamic_protocol(
+        &self,
+        library_path: &Path,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            ProtocolPluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
+        let manifest_ptr = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve plugin manifest symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { manifest_fn() }
+        };
+        let api = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const ProtocolPluginApiV1> =
+                unsafe { library.get(PLUGIN_PROTOCOL_API_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve protocol api symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { *api_fn() }
+        };
+        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+    }
+
+    unsafe fn load_dynamic_gameplay(
+        &self,
+        library_path: &Path,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            GameplayPluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
+        let manifest_ptr = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve plugin manifest symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { manifest_fn() }
+        };
+        let api = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const GameplayPluginApiV1> =
+                unsafe { library.get(PLUGIN_GAMEPLAY_API_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve gameplay api symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { *api_fn() }
+        };
+        let status = unsafe { (api.set_host_api)(&gameplay_host_api()) };
+        if status != PluginErrorCode::Ok {
+            return Err(RuntimeError::Config(format!(
+                "failed to configure gameplay host api in {}: {status:?}",
+                library_path.display()
+            )));
+        }
+        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+    }
+
+    unsafe fn load_dynamic_storage(
+        &self,
+        library_path: &Path,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            StoragePluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
+        let manifest_ptr = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve plugin manifest symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { manifest_fn() }
+        };
+        let api = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const StoragePluginApiV1> =
+                unsafe { library.get(PLUGIN_STORAGE_API_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve storage api symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { *api_fn() }
+        };
+        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+    }
+
+    unsafe fn load_dynamic_auth(
+        &self,
+        library_path: &Path,
+    ) -> Result<
+        (
+            Option<Arc<Mutex<Library>>>,
+            DecodedManifest,
+            AuthPluginApiV1,
+        ),
+        RuntimeError,
+    > {
+        let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
+        let manifest_ptr = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve plugin manifest symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { manifest_fn() }
+        };
+        let api = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const AuthPluginApiV1> =
+                unsafe { library.get(PLUGIN_AUTH_API_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve auth api symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { *api_fn() }
+        };
+        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+    }
+
+    fn validate_manifest(
+        &self,
+        package: &PluginPackage,
+        manifest: &DecodedManifest,
+    ) -> Result<(), RuntimeError> {
+        if manifest.plugin_id != package.plugin_id {
+            return Err(RuntimeError::Config(format!(
+                "plugin manifest id `{}` does not match package id `{}`",
+                manifest.plugin_id, package.plugin_id
+            )));
+        }
+        if manifest.plugin_kind != package.plugin_kind {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` manifest kind mismatch",
+                package.plugin_id
+            )));
+        }
+        if !self.abi_range.contains(manifest.plugin_abi) {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` ABI {} is outside host range {}..={}",
+                package.plugin_id, manifest.plugin_abi, self.abi_range.min, self.abi_range.max
+            )));
+        }
+        if manifest.min_host_abi > CURRENT_PLUGIN_ABI || manifest.max_host_abi < CURRENT_PLUGIN_ABI
+        {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` host ABI range {}..={} does not include {}",
+                package.plugin_id, manifest.min_host_abi, manifest.max_host_abi, CURRENT_PLUGIN_ABI
+            )));
+        }
+        Ok(())
+    }
+}

@@ -102,116 +102,10 @@ impl ServerConfig {
         if path.exists() {
             let contents = fs::read_to_string(path)?;
             for raw_line in contents.lines() {
-                let line = raw_line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                let Some((key, value)) = line.split_once('=') else {
-                    continue;
-                };
-                let value = value.trim();
-                match key.trim() {
-                    "server-ip" => {
-                        if value.is_empty() {
-                            config.server_ip = None;
-                        } else {
-                            config.server_ip = Some(value.parse().map_err(|_| {
-                                RuntimeError::Config("invalid server-ip".to_string())
-                            })?);
-                        }
-                    }
-                    "server-port" => {
-                        config.server_port = value
-                            .parse()
-                            .map_err(|_| RuntimeError::Config("invalid server-port".to_string()))?;
-                    }
-                    "be-enabled" => {
-                        config.be_enabled = value.eq_ignore_ascii_case("true");
-                    }
-                    "motd" => config.motd = value.to_string(),
-                    "max-players" => {
-                        config.max_players = value
-                            .parse()
-                            .map_err(|_| RuntimeError::Config("invalid max-players".to_string()))?;
-                    }
-                    "online-mode" => {
-                        config.online_mode = value.eq_ignore_ascii_case("true");
-                    }
-                    "level-name" => config.level_name = value.to_string(),
-                    "level-type" => {
-                        config.level_type = LevelType::parse(value)?;
-                    }
-                    "gamemode" => {
-                        config.game_mode = value
-                            .parse()
-                            .map_err(|_| RuntimeError::Config("invalid gamemode".to_string()))?;
-                    }
-                    "difficulty" => {
-                        config.difficulty = value
-                            .parse()
-                            .map_err(|_| RuntimeError::Config("invalid difficulty".to_string()))?;
-                    }
-                    "view-distance" => {
-                        config.view_distance = value.parse().map_err(|_| {
-                            RuntimeError::Config("invalid view-distance".to_string())
-                        })?;
-                    }
-                    "default-adapter" => {
-                        config.default_adapter = value.to_string();
-                    }
-                    "enabled-adapters" => {
-                        config.enabled_adapters = parse_enabled_adapters(value)?;
-                    }
-                    "default-bedrock-adapter" => {
-                        config.default_bedrock_adapter = value.to_string();
-                    }
-                    "enabled-bedrock-adapters" => {
-                        config.enabled_bedrock_adapters = parse_enabled_adapters(value)?;
-                    }
-                    "storage-profile" => {
-                        config.storage_profile = value.to_string();
-                    }
-                    "auth-profile" => {
-                        config.auth_profile = value.to_string();
-                    }
-                    "bedrock-auth-profile" => {
-                        config.bedrock_auth_profile = value.to_string();
-                    }
-                    "default-gameplay-profile" => {
-                        config.default_gameplay_profile = value.to_string();
-                    }
-                    "gameplay-profile-map" => {
-                        config.gameplay_profile_map = parse_gameplay_profile_map(value)?;
-                    }
-                    "plugins-dir" => {
-                        config.plugins_dir = PathBuf::from(value);
-                    }
-                    "plugin-allowlist" => {
-                        config.plugin_allowlist = parse_enabled_adapters(value)?;
-                    }
-                    "plugin-failure-policy" => {
-                        config.plugin_failure_policy = PluginFailurePolicy::parse(value)?;
-                    }
-                    "plugin-reload-watch" => {
-                        config.plugin_reload_watch = value.eq_ignore_ascii_case("true");
-                    }
-                    "plugin-abi-min" => {
-                        config.plugin_abi_min = PluginAbiRange::parse_version(value)?;
-                    }
-                    "plugin-abi-max" => {
-                        config.plugin_abi_max = PluginAbiRange::parse_version(value)?;
-                    }
-                    unknown => {
-                        eprintln!("warning: ignoring unknown server.properties key `{unknown}`");
-                    }
-                }
+                apply_property_line(&mut config, raw_line)?;
             }
         }
-        let parent = path.parent().unwrap_or_else(|| Path::new("."));
-        config.world_dir = parent.join(&config.level_name);
-        if config.plugins_dir.is_relative() {
-            config.plugins_dir = parent.join(&config.plugins_dir);
-        }
+        finalize_relative_paths(&mut config, path.parent().unwrap_or_else(|| Path::new(".")));
         Ok(config)
     }
 
@@ -235,6 +129,92 @@ impl ServerConfig {
             Some(enabled_adapters) => enabled_adapters.clone(),
             None => vec![self.default_bedrock_adapter.clone()],
         }
+    }
+}
+
+fn apply_property_line(config: &mut ServerConfig, raw_line: &str) -> Result<(), RuntimeError> {
+    let line = raw_line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return Ok(());
+    }
+    let Some((key, value)) = line.split_once('=') else {
+        return Ok(());
+    };
+    apply_property(config, key.trim(), value.trim())
+}
+
+fn apply_property(config: &mut ServerConfig, key: &str, value: &str) -> Result<(), RuntimeError> {
+    match key {
+        "server-ip" => {
+            config.server_ip = parse_server_ip(value)?;
+        }
+        "server-port" => config.server_port = parse_u16(value, "server-port")?,
+        "be-enabled" => config.be_enabled = parse_bool_flag(value),
+        "motd" => config.motd = value.to_string(),
+        "max-players" => config.max_players = parse_u8(value, "max-players")?,
+        "online-mode" => config.online_mode = parse_bool_flag(value),
+        "level-name" => config.level_name = value.to_string(),
+        "level-type" => config.level_type = LevelType::parse(value)?,
+        "gamemode" => config.game_mode = parse_u8(value, "gamemode")?,
+        "difficulty" => config.difficulty = parse_u8(value, "difficulty")?,
+        "view-distance" => config.view_distance = parse_u8(value, "view-distance")?,
+        "default-adapter" => config.default_adapter = value.to_string(),
+        "enabled-adapters" => config.enabled_adapters = parse_enabled_adapters(value)?,
+        "default-bedrock-adapter" => config.default_bedrock_adapter = value.to_string(),
+        "enabled-bedrock-adapters" => {
+            config.enabled_bedrock_adapters = parse_enabled_adapters(value)?;
+        }
+        "storage-profile" => config.storage_profile = value.to_string(),
+        "auth-profile" => config.auth_profile = value.to_string(),
+        "bedrock-auth-profile" => config.bedrock_auth_profile = value.to_string(),
+        "default-gameplay-profile" => config.default_gameplay_profile = value.to_string(),
+        "gameplay-profile-map" => {
+            config.gameplay_profile_map = parse_gameplay_profile_map(value)?;
+        }
+        "plugins-dir" => config.plugins_dir = PathBuf::from(value),
+        "plugin-allowlist" => config.plugin_allowlist = parse_enabled_adapters(value)?,
+        "plugin-failure-policy" => {
+            config.plugin_failure_policy = PluginFailurePolicy::parse(value)?;
+        }
+        "plugin-reload-watch" => config.plugin_reload_watch = parse_bool_flag(value),
+        "plugin-abi-min" => config.plugin_abi_min = PluginAbiRange::parse_version(value)?,
+        "plugin-abi-max" => config.plugin_abi_max = PluginAbiRange::parse_version(value)?,
+        unknown => eprintln!("warning: ignoring unknown server.properties key `{unknown}`"),
+    }
+    Ok(())
+}
+
+fn parse_server_ip(value: &str) -> Result<Option<IpAddr>, RuntimeError> {
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        value
+            .parse()
+            .map(Some)
+            .map_err(|_| RuntimeError::Config("invalid server-ip".to_string()))
+    }
+}
+
+fn parse_bool_flag(value: &str) -> bool {
+    value.eq_ignore_ascii_case("true")
+}
+
+fn parse_u8(value: &str, key: &str) -> Result<u8, RuntimeError> {
+    value
+        .parse()
+        .map_err(|_| RuntimeError::Config(format!("invalid {key}")))
+}
+
+fn parse_u16(value: &str, key: &str) -> Result<u16, RuntimeError> {
+    value
+        .parse()
+        .map_err(|_| RuntimeError::Config(format!("invalid {key}")))
+}
+
+fn finalize_relative_paths(config: &mut ServerConfig, parent: &Path) {
+    config.world_dir = parent.join(&config.level_name);
+    if config.plugins_dir.is_relative() {
+        config.plugins_dir = parent.join(&config.plugins_dir);
     }
 }
 

@@ -80,7 +80,10 @@ fn main() -> Result<(), String> {
     };
 
     match command.as_str() {
-        "package-plugins" => package_plugins(args.collect()),
+        "package-plugins" => {
+            let remaining_args = args.collect::<Vec<_>>();
+            package_plugins(&remaining_args)
+        }
         _ => Err(help()),
     }
 }
@@ -89,7 +92,7 @@ fn help() -> String {
     "usage: cargo run -p xtask -- package-plugins [--release] [--dist-dir <path>]".to_string()
 }
 
-fn package_plugins(args: Vec<String>) -> Result<(), String> {
+fn package_plugins(args: &[String]) -> Result<(), String> {
     let mut release = false;
     let mut dist_dir = PathBuf::from("runtime/plugins");
     let mut index = 0;
@@ -201,7 +204,7 @@ fn package_plugin(
             .as_ref(),
     );
     let destination = plugin_dir.join(&packaged_artifact_name);
-    let staging = plugin_dir.join(format!(".{}.tmp", packaged_artifact_name));
+    let staging = plugin_dir.join(format!(".{packaged_artifact_name}.tmp"));
     fs::copy(&source, &staging).map_err(|error| {
         format!(
             "failed to copy {} to {}: {error}",
@@ -237,9 +240,7 @@ fn package_plugin(
 }
 
 fn target_dir(workspace_root: &Path) -> PathBuf {
-    env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root.join("target"))
+    env::var_os("CARGO_TARGET_DIR").map_or_else(|| workspace_root.join("target"), PathBuf::from)
 }
 
 fn dynamic_library_filename(package: &str) -> String {
