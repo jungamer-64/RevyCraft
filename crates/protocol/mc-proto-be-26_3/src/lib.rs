@@ -22,6 +22,7 @@ use bedrockrs_proto::v818::types::SyncedPlayerMovementSettings;
 use bedrockrs_proto::v898::packets::ResourcePackStackPacket;
 use bedrockrs_proto::v924::packets::StartGamePacket;
 use bedrockrs_proto::v924::types::LevelSettings;
+use mc_core::catalog::{BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_PLANKS, SAND};
 use mc_core::{BlockFace, BlockState, CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
 use mc_proto_be_common::{
     bedrock_probe_intent, block_pos_from_network, block_pos_to_network, detects_bedrock_datagram,
@@ -39,6 +40,16 @@ use vek::Vec2;
 pub const BE_26_3_ADAPTER_ID: &str = "be-26_3";
 pub const BE_26_3_VERSION_NAME: &str = "bedrock-26.3";
 pub const BE_26_3_PROTOCOL_NUMBER: i32 = 924;
+const BEDROCK_26_3_RUNTIME_ID_STONE: u32 = 2_532;
+const BEDROCK_26_3_RUNTIME_ID_COBBLESTONE: u32 = 5_088;
+const BEDROCK_26_3_RUNTIME_ID_SAND: u32 = 6_234;
+const BEDROCK_26_3_RUNTIME_ID_BRICKS: u32 = 7_455;
+const BEDROCK_26_3_RUNTIME_ID_DIRT: u32 = 9_852;
+const BEDROCK_26_3_RUNTIME_ID_GRASS_BLOCK: u32 = 11_062;
+const BEDROCK_26_3_RUNTIME_ID_GLASS: u32 = 11_998;
+const BEDROCK_26_3_RUNTIME_ID_AIR: u32 = 12_530;
+const BEDROCK_26_3_RUNTIME_ID_BEDROCK: u32 = 13_079;
+const BEDROCK_26_3_RUNTIME_ID_OAK_PLANKS: u32 = 14_388;
 
 #[derive(Default)]
 pub struct Bedrock263Adapter {
@@ -463,22 +474,29 @@ fn bedrock_actor_id(entity_id: mc_core::EntityId) -> u64 {
 
 fn block_runtime_id(block: &BlockState) -> u32 {
     match block.key.as_str() {
-        "minecraft:cobblestone" => 5_088,
-        "minecraft:sand" => 6_234,
-        "minecraft:bricks" => 7_455,
-        "minecraft:dirt" => 9_852,
-        "minecraft:grass_block" => 11_062,
-        "minecraft:glass" => 11_998,
-        "minecraft:air" => 12_530,
-        "minecraft:bedrock" => 13_079,
-        "minecraft:oak_planks" => 14_388,
-        _ => 2_532,
+        COBBLESTONE => BEDROCK_26_3_RUNTIME_ID_COBBLESTONE,
+        SAND => BEDROCK_26_3_RUNTIME_ID_SAND,
+        BRICKS => BEDROCK_26_3_RUNTIME_ID_BRICKS,
+        DIRT => BEDROCK_26_3_RUNTIME_ID_DIRT,
+        GRASS_BLOCK => BEDROCK_26_3_RUNTIME_ID_GRASS_BLOCK,
+        GLASS => BEDROCK_26_3_RUNTIME_ID_GLASS,
+        "minecraft:air" => BEDROCK_26_3_RUNTIME_ID_AIR,
+        BEDROCK => BEDROCK_26_3_RUNTIME_ID_BEDROCK,
+        OAK_PLANKS => BEDROCK_26_3_RUNTIME_ID_OAK_PLANKS,
+        _ => BEDROCK_26_3_RUNTIME_ID_STONE,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BE_26_3_PROTOCOL_NUMBER, Bedrock263Adapter, block_runtime_id};
+    use super::{
+        BE_26_3_PROTOCOL_NUMBER, BEDROCK_26_3_RUNTIME_ID_AIR, BEDROCK_26_3_RUNTIME_ID_BEDROCK,
+        BEDROCK_26_3_RUNTIME_ID_BRICKS, BEDROCK_26_3_RUNTIME_ID_COBBLESTONE,
+        BEDROCK_26_3_RUNTIME_ID_DIRT, BEDROCK_26_3_RUNTIME_ID_GLASS,
+        BEDROCK_26_3_RUNTIME_ID_GRASS_BLOCK, BEDROCK_26_3_RUNTIME_ID_OAK_PLANKS,
+        BEDROCK_26_3_RUNTIME_ID_SAND, BEDROCK_26_3_RUNTIME_ID_STONE, Bedrock263Adapter,
+        block_runtime_id,
+    };
     use base64::Engine;
     use bedrockrs_proto::V924;
     use bedrockrs_proto::codec::encode_packets;
@@ -571,15 +589,45 @@ mod tests {
 
     #[test]
     fn supported_block_runtime_ids_match_bedrock_1_26_0_palette() {
-        assert_eq!(block_runtime_id(&BlockState::stone()), 2_532);
-        assert_eq!(block_runtime_id(&BlockState::cobblestone()), 5_088);
-        assert_eq!(block_runtime_id(&BlockState::sand()), 6_234);
-        assert_eq!(block_runtime_id(&BlockState::bricks()), 7_455);
-        assert_eq!(block_runtime_id(&BlockState::dirt()), 9_852);
-        assert_eq!(block_runtime_id(&BlockState::grass_block()), 11_062);
-        assert_eq!(block_runtime_id(&BlockState::glass()), 11_998);
-        assert_eq!(block_runtime_id(&BlockState::air()), 12_530);
-        assert_eq!(block_runtime_id(&BlockState::bedrock()), 13_079);
-        assert_eq!(block_runtime_id(&BlockState::oak_planks()), 14_388);
+        assert_eq!(
+            block_runtime_id(&BlockState::stone()),
+            BEDROCK_26_3_RUNTIME_ID_STONE
+        );
+        assert_eq!(
+            block_runtime_id(&BlockState::cobblestone()),
+            BEDROCK_26_3_RUNTIME_ID_COBBLESTONE
+        );
+        assert_eq!(
+            block_runtime_id(&BlockState::sand()),
+            BEDROCK_26_3_RUNTIME_ID_SAND
+        );
+        assert_eq!(
+            block_runtime_id(&BlockState::bricks()),
+            BEDROCK_26_3_RUNTIME_ID_BRICKS
+        );
+        assert_eq!(
+            block_runtime_id(&BlockState::dirt()),
+            BEDROCK_26_3_RUNTIME_ID_DIRT
+        );
+        assert_eq!(
+            block_runtime_id(&BlockState::grass_block()),
+            BEDROCK_26_3_RUNTIME_ID_GRASS_BLOCK
+        );
+        assert_eq!(
+            block_runtime_id(&BlockState::glass()),
+            BEDROCK_26_3_RUNTIME_ID_GLASS
+        );
+        assert_eq!(
+            block_runtime_id(&BlockState::air()),
+            BEDROCK_26_3_RUNTIME_ID_AIR
+        );
+        assert_eq!(
+            block_runtime_id(&BlockState::bedrock()),
+            BEDROCK_26_3_RUNTIME_ID_BEDROCK
+        );
+        assert_eq!(
+            block_runtime_id(&BlockState::oak_planks()),
+            BEDROCK_26_3_RUNTIME_ID_OAK_PLANKS
+        );
     }
 }

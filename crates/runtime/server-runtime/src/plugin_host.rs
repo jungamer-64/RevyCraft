@@ -506,6 +506,13 @@ thread_local! {
     static CURRENT_GAMEPLAY_QUERY: Cell<Option<*const ()>> = const { Cell::new(None) };
 }
 
+/// Runs plugin gameplay code with the current query temporarily published in thread-local state.
+///
+/// # Safety invariants
+///
+/// The stored pointer references the stack-local `query_ref` created in this function, so it is
+/// only valid for the dynamic extent of `f`. Gameplay host callbacks must therefore remain
+/// synchronous, stay on the same thread, and never retain the pointer beyond the callback.
 fn with_gameplay_query<T>(
     query: &dyn GameplayQuery,
     f: impl FnOnce() -> Result<T, String>,
@@ -521,6 +528,13 @@ fn with_gameplay_query<T>(
     })
 }
 
+/// Resolves the gameplay query currently published by [`with_gameplay_query`].
+///
+/// # Safety invariants
+///
+/// This function may only be reached while `with_gameplay_query` is active on the current thread;
+/// otherwise the stored pointer would be dangling or absent. Nested calls are safe because the
+/// thread-local slot restores the previous pointer before returning.
 fn with_current_gameplay_query<T>(
     f: impl FnOnce(&dyn GameplayQuery) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -529,6 +543,9 @@ fn with_current_gameplay_query<T>(
             .get()
             .ok_or_else(|| "gameplay host callback invoked without an active query".to_string())?
             .cast::<&dyn GameplayQuery>();
+        // SAFETY: `with_gameplay_query` only publishes a pointer to its stack-local `query_ref`
+        // for the duration of the callback, and this accessor is only used synchronously from that
+        // dynamic extent on the same thread.
         let query = unsafe { *query_ref_ptr };
         f(query)
     })

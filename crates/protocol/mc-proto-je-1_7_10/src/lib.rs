@@ -3,22 +3,21 @@ mod storage;
 
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
-use mc_core::catalog::{
-    BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_PLANKS, SAND, SANDSTONE, STONE,
-};
 use mc_core::{
     BlockFace, BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DimensionId, EntityId,
     InteractionHand, InventoryContainer, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot,
     Vec3, WorldMeta,
 };
 use mc_proto_common::{
-    ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, LoginRequest,
-    MinecraftWireCodec, PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter,
-    ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
-    StatusRequest, TransportKind, WireCodec, WireFormatKind,
+    ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
+    PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter,
+    ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter, StatusRequest,
+    TransportKind, WireCodec, WireFormatKind,
 };
-use mc_proto_je_common::{legacy_inventory_slot, legacy_window_slot};
-use num_traits::ToPrimitive;
+use mc_proto_je_common::{
+    decode_handshake_frame, legacy_block, legacy_inventory_slot, legacy_item, legacy_window_slot,
+    semantic_block, semantic_item, to_angle_byte, to_fixed_point,
+};
 use serde_json::json;
 use std::io::Write;
 
@@ -29,7 +28,6 @@ const VERSION_NAME_1_7_10: &str = "1.7.10";
 pub const JE_1_7_10_ADAPTER_ID: &str = "je-1_7_10";
 pub const JE_1_7_10_STORAGE_PROFILE_ID: &str = "je-anvil-1_7_10";
 
-const PACKET_HANDSHAKE: i32 = 0x00;
 const PACKET_STATUS_REQUEST: i32 = 0x00;
 const PACKET_STATUS_PING: i32 = 0x01;
 const PACKET_LOGIN_START: i32 = 0x00;
@@ -82,33 +80,6 @@ impl Je1710Adapter {
     pub fn new() -> Self {
         Self::default()
     }
-}
-
-fn decode_handshake_frame(frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
-    let mut reader = PacketReader::new(frame);
-    let packet_id = reader.read_varint()?;
-    if packet_id != PACKET_HANDSHAKE {
-        return Ok(None);
-    }
-    let protocol_number = reader.read_varint()?;
-    let server_host = reader.read_string(255)?;
-    let server_port = reader.read_u16()?;
-    let next_state = match reader.read_varint()? {
-        1 => HandshakeNextState::Status,
-        2 => HandshakeNextState::Login,
-        _ => {
-            return Err(ProtocolError::InvalidPacket(
-                "unsupported handshake next state",
-            ));
-        }
-    };
-    Ok(Some(HandshakeIntent {
-        edition: Edition::Je,
-        protocol_number,
-        server_host,
-        server_port,
-        next_state,
-    }))
 }
 
 impl HandshakeProbe for Je1710Adapter {
@@ -364,70 +335,6 @@ impl ProtocolAdapter for Je1710Adapter {
             protocol_number: PROTOCOL_VERSION_1_7_10,
         }
     }
-}
-
-pub(crate) fn legacy_block(state: &BlockState) -> (u16, u8) {
-    match state.key.as_str() {
-        STONE => (1, 0),
-        GRASS_BLOCK => (2, 0),
-        DIRT => (3, 0),
-        COBBLESTONE => (4, 0),
-        OAK_PLANKS => (5, 0),
-        BEDROCK => (7, 0),
-        SAND => (12, 0),
-        GLASS => (20, 0),
-        SANDSTONE => (24, 0),
-        BRICKS => (45, 0),
-        _ => (0, 0),
-    }
-}
-
-pub(crate) fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
-    match block_id {
-        1 => BlockState::stone(),
-        2 => BlockState::grass_block(),
-        3 => BlockState::dirt(),
-        4 => BlockState::cobblestone(),
-        5 if metadata == 0 => BlockState::oak_planks(),
-        7 => BlockState::bedrock(),
-        12 if metadata == 0 => BlockState::sand(),
-        20 => BlockState::glass(),
-        24 if metadata == 0 => BlockState::sandstone(),
-        45 => BlockState::bricks(),
-        _ => BlockState::air(),
-    }
-}
-
-fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
-    let damage = stack.damage;
-    match stack.key.as_str() {
-        STONE => Some((1, damage)),
-        GRASS_BLOCK => Some((2, damage)),
-        DIRT => Some((3, damage)),
-        COBBLESTONE => Some((4, damage)),
-        OAK_PLANKS => Some((5, damage)),
-        SAND => Some((12, damage)),
-        GLASS => Some((20, damage)),
-        SANDSTONE => Some((24, damage)),
-        BRICKS => Some((45, damage)),
-        _ => None,
-    }
-}
-
-fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
-    let key = match item_id {
-        1 => STONE,
-        2 => GRASS_BLOCK,
-        3 => DIRT,
-        4 => COBBLESTONE,
-        5 if damage == 0 => OAK_PLANKS,
-        12 if damage == 0 => SAND,
-        20 => GLASS,
-        24 if damage == 0 => SANDSTONE,
-        45 => BRICKS,
-        _ => return ItemStack::unsupported(count, damage),
-    };
-    ItemStack::new(key, count, damage)
 }
 
 const fn window_id(container: InventoryContainer) -> u8 {
@@ -748,32 +655,6 @@ const fn i8_to_u8(value: i8) -> u8 {
     } else {
         value.cast_unsigned()
     }
-}
-
-fn to_fixed_point(value: f64) -> i32 {
-    rounded_f64_to_i32(value * 32.0)
-}
-
-fn to_angle_byte(value: f32) -> i8 {
-    let wrapped = value.rem_euclid(360.0);
-    let scaled = rounded_f32_to_i32(wrapped * 256.0 / 360.0);
-    let narrowed =
-        u8::try_from(scaled.rem_euclid(256)).expect("wrapped angle should fit into byte");
-    i8::from_be_bytes([narrowed])
-}
-
-fn rounded_f64_to_i32(value: f64) -> i32 {
-    value
-        .round()
-        .to_i32()
-        .expect("fixed-point value should fit into i32")
-}
-
-fn rounded_f32_to_i32(value: f32) -> i32 {
-    value
-        .round()
-        .to_i32()
-        .expect("angle byte intermediate should fit into i32")
 }
 
 fn decode_position_packet(

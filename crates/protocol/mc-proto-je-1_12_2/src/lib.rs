@@ -5,7 +5,7 @@ mod encoding;
 #[cfg(test)]
 mod tests;
 
-use decoding::{decode_handshake_frame, decode_play_packet, read_login_byte_array};
+use decoding::{decode_play_packet, read_login_byte_array};
 use encoding::{
     encode_block_change, encode_chunk, encode_destroy_entities, encode_entity_head_rotation,
     encode_entity_teleport, encode_held_item_change, encode_join_game, encode_keep_alive,
@@ -20,14 +20,13 @@ use mc_proto_common::{
     ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter, StatusRequest,
     TransportKind, WireCodec, WireFormatKind,
 };
-use mc_proto_je_common::modern_window_slot;
+use mc_proto_je_common::{decode_handshake_frame, modern_window_slot};
 use serde_json::json;
 
 const PROTOCOL_VERSION_1_12_2: i32 = 340;
 const VERSION_NAME_1_12_2: &str = "1.12.2";
 pub const JE_1_12_2_ADAPTER_ID: &str = "je-1_12_2";
 
-const PACKET_HANDSHAKE: i32 = 0x00;
 const PACKET_STATUS_REQUEST: i32 = 0x00;
 const PACKET_STATUS_PING: i32 = 0x01;
 const PACKET_LOGIN_START: i32 = 0x00;

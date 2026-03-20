@@ -59,7 +59,6 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self {
             server_ip: None,
             server_port: 25565,
@@ -81,13 +80,13 @@ impl Default for ServerConfig {
             bedrock_auth_profile: BEDROCK_OFFLINE_AUTH_PROFILE_ID.to_string(),
             default_gameplay_profile: "canonical".to_string(),
             gameplay_profile_map: HashMap::new(),
-            plugins_dir: cwd.join("runtime").join("plugins"),
+            plugins_dir: PathBuf::from("runtime").join("plugins"),
             plugin_allowlist: None,
             plugin_failure_policy: PluginFailurePolicy::Quarantine,
             plugin_reload_watch: false,
             plugin_abi_min: CURRENT_PLUGIN_ABI,
             plugin_abi_max: CURRENT_PLUGIN_ABI,
-            world_dir: cwd.join("runtime").join("world"),
+            world_dir: PathBuf::from("runtime").join("world"),
         }
     }
 }

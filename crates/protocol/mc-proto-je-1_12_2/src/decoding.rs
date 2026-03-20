@@ -1,39 +1,12 @@
 use crate::{
-    PACKET_HANDSHAKE, PACKET_SB_CLIENT_COMMAND, PACKET_SB_CREATIVE_INVENTORY_ACTION,
-    PACKET_SB_FLYING, PACKET_SB_HELD_ITEM_CHANGE, PACKET_SB_KEEP_ALIVE, PACKET_SB_LOOK,
+    PACKET_SB_CLIENT_COMMAND, PACKET_SB_CREATIVE_INVENTORY_ACTION, PACKET_SB_FLYING,
+    PACKET_SB_HELD_ITEM_CHANGE, PACKET_SB_KEEP_ALIVE, PACKET_SB_LOOK,
     PACKET_SB_PLAYER_BLOCK_PLACEMENT, PACKET_SB_PLAYER_DIGGING, PACKET_SB_POSITION,
     PACKET_SB_POSITION_LOOK, PACKET_SB_SETTINGS, PACKET_SB_USE_ITEM,
 };
 use mc_core::{BlockFace, CoreCommand, InteractionHand, PlayerId, Vec3};
-use mc_proto_common::{Edition, HandshakeIntent, HandshakeNextState, PacketReader, ProtocolError};
+use mc_proto_common::{PacketReader, ProtocolError};
 use mc_proto_je_common::{modern_inventory_slot, read_legacy_slot, unpack_block_position};
-
-pub fn decode_handshake_frame(frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
-    let mut reader = PacketReader::new(frame);
-    let packet_id = reader.read_varint()?;
-    if packet_id != PACKET_HANDSHAKE {
-        return Ok(None);
-    }
-    let protocol_number = reader.read_varint()?;
-    let server_host = reader.read_string(255)?;
-    let server_port = reader.read_u16()?;
-    let next_state = match reader.read_varint()? {
-        1 => HandshakeNextState::Status,
-        2 => HandshakeNextState::Login,
-        _ => {
-            return Err(ProtocolError::InvalidPacket(
-                "unsupported handshake next state",
-            ));
-        }
-    };
-    Ok(Some(HandshakeIntent {
-        edition: Edition::Je,
-        protocol_number,
-        server_host,
-        server_port,
-        next_state,
-    }))
-}
 
 pub fn decode_play_packet(
     player_id: PlayerId,

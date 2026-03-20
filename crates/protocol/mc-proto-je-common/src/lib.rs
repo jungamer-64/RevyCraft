@@ -3,9 +3,46 @@ use mc_core::catalog::{
     BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_PLANKS, SAND, SANDSTONE, STONE,
 };
 use mc_core::{BlockPos, BlockState, ChunkColumn, InventorySlot, ItemStack, PlayerInventory};
-use mc_proto_common::{PacketReader, PacketWriter, ProtocolError};
+use mc_proto_common::{
+    Edition, HandshakeIntent, HandshakeNextState, PacketReader, PacketWriter, ProtocolError,
+};
 use num_traits::ToPrimitive;
 use std::collections::BTreeMap;
+
+const PACKET_HANDSHAKE: i32 = 0x00;
+
+/// Decodes the shared Java Edition handshake packet used by the supported legacy versions.
+///
+/// # Errors
+///
+/// Returns an error when the payload identifies itself as a handshake packet but contains an
+/// unsupported next-state value or is otherwise truncated.
+pub fn decode_handshake_frame(frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
+    let mut reader = PacketReader::new(frame);
+    let packet_id = reader.read_varint()?;
+    if packet_id != PACKET_HANDSHAKE {
+        return Ok(None);
+    }
+    let protocol_number = reader.read_varint()?;
+    let server_host = reader.read_string(255)?;
+    let server_port = reader.read_u16()?;
+    let next_state = match reader.read_varint()? {
+        1 => HandshakeNextState::Status,
+        2 => HandshakeNextState::Login,
+        _ => {
+            return Err(ProtocolError::InvalidPacket(
+                "unsupported handshake next state",
+            ));
+        }
+    };
+    Ok(Some(HandshakeIntent {
+        edition: Edition::Je,
+        protocol_number,
+        server_host,
+        server_port,
+        next_state,
+    }))
+}
 
 #[must_use]
 pub fn legacy_block(state: &BlockState) -> (u16, u8) {

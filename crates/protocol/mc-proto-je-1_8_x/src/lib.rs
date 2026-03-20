@@ -5,15 +5,15 @@ use mc_core::{
     WorldMeta,
 };
 use mc_proto_common::{
-    ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, LoginRequest,
-    MinecraftWireCodec, PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter,
-    ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
-    StatusRequest, TransportKind, WireCodec, WireFormatKind,
+    ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
+    PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter,
+    ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter, StatusRequest,
+    TransportKind, WireCodec, WireFormatKind,
 };
 use mc_proto_je_common::{
-    build_chunk_data_1_8, legacy_block_state_id, legacy_inventory_slot, legacy_window_items,
-    legacy_window_slot, pack_block_position, read_legacy_slot, to_angle_byte, to_fixed_point,
-    unpack_block_position, write_empty_metadata_1_8, write_legacy_slot,
+    build_chunk_data_1_8, decode_handshake_frame, legacy_block_state_id, legacy_inventory_slot,
+    legacy_window_items, legacy_window_slot, pack_block_position, read_legacy_slot, to_angle_byte,
+    to_fixed_point, unpack_block_position, write_empty_metadata_1_8, write_legacy_slot,
 };
 use serde_json::json;
 
@@ -21,7 +21,6 @@ const PROTOCOL_VERSION_1_8_X: i32 = 47;
 const VERSION_NAME_1_8_X: &str = "1.8.x";
 pub const JE_1_8_X_ADAPTER_ID: &str = "je-1_8_x";
 
-const PACKET_HANDSHAKE: i32 = 0x00;
 const PACKET_STATUS_REQUEST: i32 = 0x00;
 const PACKET_STATUS_PING: i32 = 0x01;
 const PACKET_LOGIN_START: i32 = 0x00;
@@ -73,33 +72,6 @@ impl Je18xAdapter {
     pub fn new() -> Self {
         Self::default()
     }
-}
-
-fn decode_handshake_frame(frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
-    let mut reader = PacketReader::new(frame);
-    let packet_id = reader.read_varint()?;
-    if packet_id != PACKET_HANDSHAKE {
-        return Ok(None);
-    }
-    let protocol_number = reader.read_varint()?;
-    let server_host = reader.read_string(255)?;
-    let server_port = reader.read_u16()?;
-    let next_state = match reader.read_varint()? {
-        1 => HandshakeNextState::Status,
-        2 => HandshakeNextState::Login,
-        _ => {
-            return Err(ProtocolError::InvalidPacket(
-                "unsupported handshake next state",
-            ));
-        }
-    };
-    Ok(Some(HandshakeIntent {
-        edition: Edition::Je,
-        protocol_number,
-        server_host,
-        server_port,
-        next_state,
-    }))
 }
 
 impl HandshakeProbe for Je18xAdapter {

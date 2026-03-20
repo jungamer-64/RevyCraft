@@ -65,6 +65,13 @@ fn server_properties_use_default_adapter_and_storage_profile() -> Result<(), Run
 }
 
 #[test]
+fn default_config_uses_relative_runtime_paths() {
+    let config = ServerConfig::default();
+    assert_eq!(config.plugins_dir, PathBuf::from("runtime").join("plugins"));
+    assert_eq!(config.world_dir, PathBuf::from("runtime").join("world"));
+}
+
+#[test]
 fn server_properties_parse_enabled_adapters() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let path = temp_dir.path().join("server.properties");
