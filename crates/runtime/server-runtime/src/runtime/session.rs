@@ -82,6 +82,7 @@ impl RuntimeServer {
             protocol: adapter.capability_set(),
             gameplay: gameplay.capability_set(),
             gameplay_profile: gameplay.profile_id(),
+            entity_id: session.entity_id,
             protocol_generation: adapter.plugin_generation_id(),
             gameplay_generation: gameplay.plugin_generation_id(),
         });
@@ -699,6 +700,7 @@ impl RuntimeServer {
         message: SessionMessage,
     ) -> Result<bool, RuntimeError> {
         let SessionMessage::Event(event) = message;
+        let event = event.as_ref();
         Self::refresh_session_capabilities(session);
         let current = session
             .adapter
@@ -735,8 +737,8 @@ impl RuntimeServer {
                 entity_id: accepted_entity_id,
                 ..
             } => {
-                session.player_id = Some(accepted_player_id);
-                session.entity_id = Some(accepted_entity_id);
+                session.player_id = Some(*accepted_player_id);
+                session.entity_id = Some(*accepted_entity_id);
                 session.phase = ConnectionPhase::Play;
                 Self::refresh_session_capabilities(session);
                 self.sync_session_handle(connection_id, session).await;

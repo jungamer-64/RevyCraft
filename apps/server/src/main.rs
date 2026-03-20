@@ -16,7 +16,7 @@ async fn main() -> Result<(), RuntimeError> {
             config.plugins_dir.display()
         ))
     })?;
-    plugin_host.load_into_registries(&mut registries)?;
+    plugin_host.initialize_runtime_registries(&config, &mut registries)?;
 
     let server = spawn_server(config, registries).await?;
     for binding in server.listener_bindings() {

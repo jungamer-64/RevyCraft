@@ -26,6 +26,218 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
+use uuid::Uuid;
+
+mod entity_id_probe_gameplay_plugin {
+    use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
+    use mc_plugin_api::{GameplayDescriptor, GameplaySessionSnapshot};
+    use mc_plugin_sdk_rust::{
+        GameplayHost, RustGameplayPlugin, StaticPluginManifest, export_gameplay_plugin,
+    };
+    use std::sync::{Mutex, OnceLock};
+
+    #[derive(Default)]
+    pub struct EntityIdProbeGameplayPlugin;
+
+    fn recorded_session_slot() -> &'static Mutex<Option<GameplaySessionSnapshot>> {
+        static RECORDED_SESSION: OnceLock<Mutex<Option<GameplaySessionSnapshot>>> = OnceLock::new();
+        RECORDED_SESSION.get_or_init(|| Mutex::new(None))
+    }
+
+    pub fn take_recorded_session() -> Option<GameplaySessionSnapshot> {
+        recorded_session_slot()
+            .lock()
+            .expect("recorded gameplay session mutex should not be poisoned")
+            .take()
+    }
+
+    impl RustGameplayPlugin for EntityIdProbeGameplayPlugin {
+        fn descriptor(&self) -> GameplayDescriptor {
+            GameplayDescriptor {
+                profile: GameplayProfileId::new("entity-aware"),
+            }
+        }
+
+        fn capability_set(&self) -> CapabilitySet {
+            let mut capabilities = CapabilitySet::new();
+            let _ = capabilities.insert("gameplay.profile.entity-aware");
+            let _ = capabilities.insert("runtime.reload.gameplay");
+            capabilities
+        }
+
+        fn handle_command(
+            &self,
+            _host: &dyn GameplayHost,
+            session: &GameplaySessionSnapshot,
+            _command: &CoreCommand,
+        ) -> Result<GameplayEffect, String> {
+            *recorded_session_slot()
+                .lock()
+                .expect("recorded gameplay session mutex should not be poisoned") =
+                Some(session.clone());
+            Ok(GameplayEffect::default())
+        }
+
+        fn handle_player_join(
+            &self,
+            _host: &dyn GameplayHost,
+            _session: &GameplaySessionSnapshot,
+            _player: &PlayerSnapshot,
+        ) -> Result<mc_core::GameplayJoinEffect, String> {
+            Ok(mc_core::GameplayJoinEffect::default())
+        }
+    }
+
+    const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
+        "gameplay-entity-aware",
+        "Entity Aware Gameplay Plugin",
+        &["gameplay.profile:entity-aware", "runtime.reload.gameplay"],
+    );
+
+    export_gameplay_plugin!(EntityIdProbeGameplayPlugin, MANIFEST);
+}
+
+mod custom_wire_codec_protocol_plugin {
+    use mc_core::CapabilitySet;
+    use mc_plugin_api::{
+        ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode, PluginKind,
+        PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse, Utf8Slice,
+        WireFrameDecodeResult, decode_protocol_request, encode_protocol_response,
+    };
+    use mc_plugin_sdk_rust::InProcessProtocolEntrypoints;
+    use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use std::sync::OnceLock;
+
+    const PLUGIN_ID: &str = "protocol-custom-wire";
+
+    fn descriptor() -> ProtocolDescriptor {
+        ProtocolDescriptor {
+            adapter_id: PLUGIN_ID.to_string(),
+            transport: TransportKind::Tcp,
+            wire_format: WireFormatKind::MinecraftFramed,
+            edition: Edition::Je,
+            version_name: "custom-wire".to_string(),
+            protocol_number: 1234,
+        }
+    }
+
+    fn write_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
+        if output.is_null() {
+            return;
+        }
+        unsafe {
+            *output = OwnedBuffer {
+                ptr: bytes.as_mut_ptr(),
+                len: bytes.len(),
+                cap: bytes.capacity(),
+            };
+        }
+        std::mem::forget(bytes);
+    }
+
+    fn write_error(error_out: *mut OwnedBuffer, message: String) {
+        write_buffer(error_out, message.into_bytes());
+    }
+
+    fn handle_request(request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+        match request {
+            ProtocolRequest::Describe => Ok(ProtocolResponse::Descriptor(descriptor())),
+            ProtocolRequest::DescribeBedrockListener => {
+                Ok(ProtocolResponse::BedrockListenerDescriptor(None))
+            }
+            ProtocolRequest::CapabilitySet => Ok(ProtocolResponse::CapabilitySet(
+                CapabilitySet::new(),
+            )),
+            ProtocolRequest::EncodeWireFrame { payload } => {
+                let length = u8::try_from(payload.len())
+                    .map_err(|_| "payload too large for test wire codec".to_string())?;
+                let mut frame = vec![0xc0, length];
+                frame.extend_from_slice(&payload);
+                Ok(ProtocolResponse::Frame(frame))
+            }
+            ProtocolRequest::TryDecodeWireFrame { buffer } => {
+                if buffer.is_empty() || buffer[0] != 0xc0 {
+                    return Ok(ProtocolResponse::WireFrameDecodeResult(None));
+                }
+                if buffer.len() < 2 {
+                    return Ok(ProtocolResponse::WireFrameDecodeResult(None));
+                }
+                let payload_len = usize::from(buffer[1]);
+                let frame_len = 2 + payload_len;
+                if buffer.len() < frame_len {
+                    return Ok(ProtocolResponse::WireFrameDecodeResult(None));
+                }
+                Ok(ProtocolResponse::WireFrameDecodeResult(Some(
+                    WireFrameDecodeResult {
+                        frame: buffer[2..frame_len].to_vec(),
+                        bytes_consumed: frame_len,
+                    },
+                )))
+            }
+            other => Err(format!("unsupported protocol request in test plugin: {other:?}")),
+        }
+    }
+
+    unsafe extern "C" fn invoke(
+        request: ByteSlice,
+        output: *mut OwnedBuffer,
+        error_out: *mut OwnedBuffer,
+    ) -> PluginErrorCode {
+        let request_bytes = unsafe { std::slice::from_raw_parts(request.ptr, request.len) };
+        let request = match decode_protocol_request(request_bytes) {
+            Ok(request) => request,
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                return PluginErrorCode::InvalidInput;
+            }
+        };
+        let response = match handle_request(request.clone()) {
+            Ok(response) => response,
+            Err(message) => {
+                write_error(error_out, message);
+                return PluginErrorCode::Internal;
+            }
+        };
+        match encode_protocol_response(&request, &response) {
+            Ok(bytes) => {
+                write_buffer(output, bytes);
+                PluginErrorCode::Ok
+            }
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                PluginErrorCode::Internal
+            }
+        }
+    }
+
+    unsafe extern "C" fn free_buffer(buffer: OwnedBuffer) {
+        if buffer.ptr.is_null() {
+            return;
+        }
+        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
+    }
+
+    pub fn in_process_entrypoints() -> InProcessProtocolEntrypoints {
+        static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+        static API: OnceLock<ProtocolPluginApiV1> = OnceLock::new();
+        InProcessProtocolEntrypoints {
+            manifest: MANIFEST.get_or_init(|| PluginManifestV1 {
+                plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
+                display_name: Utf8Slice::from_static_str("Custom Wire Codec Protocol Plugin"),
+                plugin_kind: PluginKind::Protocol,
+                plugin_abi: CURRENT_PLUGIN_ABI,
+                min_host_abi: CURRENT_PLUGIN_ABI,
+                max_host_abi: CURRENT_PLUGIN_ABI,
+                capabilities: std::ptr::null(),
+                capabilities_len: 0,
+            }),
+            api: API.get_or_init(|| ProtocolPluginApiV1 {
+                invoke,
+                free_buffer,
+            }),
+        }
+    }
+}
 
 fn manifest_with_abi(
     plugin_id: &'static str,
@@ -191,6 +403,52 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
 }
 
 #[test]
+fn protocol_plugins_can_override_host_wire_codec_framing() {
+    use bytes::BytesMut;
+
+    let mut catalog = PluginCatalog::default();
+    let entrypoints = custom_wire_codec_protocol_plugin::in_process_entrypoints();
+    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+        plugin_id: "protocol-custom-wire".to_string(),
+        manifest: entrypoints.manifest,
+        api: entrypoints.api,
+    });
+
+    let host = Arc::new(PluginHost::new(
+        catalog,
+        PluginAbiRange::default(),
+        PluginFailurePolicy::Quarantine,
+    ));
+    let mut registries = RuntimeRegistries::new();
+    host.load_into_registries(&mut registries)
+        .expect("custom wire codec plugin should load");
+
+    let adapter = registries
+        .protocols()
+        .resolve_adapter("protocol-custom-wire")
+        .expect("custom wire codec adapter should resolve");
+    assert_eq!(
+        adapter.descriptor().wire_format,
+        WireFormatKind::MinecraftFramed,
+        "descriptor stays stable even when framing is plugin-defined"
+    );
+
+    let encoded = adapter
+        .wire_codec()
+        .encode_frame(&[0xaa, 0xbb, 0xcc])
+        .expect("custom wire frame should encode");
+    assert_eq!(encoded, vec![0xc0, 3, 0xaa, 0xbb, 0xcc]);
+
+    let mut buffer = BytesMut::from(&encoded[..]);
+    let decoded = adapter
+        .wire_codec()
+        .try_decode_frame(&mut buffer)
+        .expect("custom wire frame should decode");
+    assert_eq!(decoded, Some(vec![0xaa, 0xbb, 0xcc]));
+    assert!(buffer.is_empty(), "decoded frame should consume buffered bytes");
+}
+
+#[test]
 fn abi_mismatch_is_rejected_before_registration() {
     let entrypoints = in_process_protocol_entrypoints();
     let mut catalog = PluginCatalog::default();
@@ -275,6 +533,137 @@ fn gameplay_profiles_activate_and_resolve() {
 
     assert!(host.resolve_gameplay_profile("canonical").is_some());
     assert!(host.resolve_gameplay_profile("readonly").is_some());
+}
+
+#[test]
+fn initialize_runtime_registries_activates_runtime_profiles() {
+    let mut catalog = PluginCatalog::default();
+    let protocol = in_process_protocol_entrypoints();
+    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+        plugin_id: "je-1_7_10".to_string(),
+        manifest: protocol.manifest,
+        api: protocol.api,
+    });
+    let canonical = canonical_gameplay_entrypoints();
+    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+        plugin_id: "gameplay-canonical".to_string(),
+        manifest: canonical.manifest,
+        api: canonical.api,
+    });
+    let storage = storage_entrypoints();
+    catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
+        plugin_id: "storage-je-anvil-1_7_10".to_string(),
+        manifest: storage.manifest,
+        api: storage.api,
+    });
+    let auth = offline_auth_entrypoints();
+    catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
+        plugin_id: "auth-offline".to_string(),
+        manifest: auth.manifest,
+        api: auth.api,
+    });
+
+    let host = Arc::new(PluginHost::new(
+        catalog,
+        PluginAbiRange::default(),
+        PluginFailurePolicy::Quarantine,
+    ));
+    let mut registries = RuntimeRegistries::new();
+    host.initialize_runtime_registries(&ServerConfig::default(), &mut registries)
+        .expect("runtime registries should initialize with runtime profiles");
+
+    assert!(registries.protocols().resolve_adapter("je-1_7_10").is_some());
+    assert!(registries.plugin_host().is_some());
+    assert!(registries.storage().resolve("je-anvil-1_7_10").is_some());
+    assert!(host.resolve_gameplay_profile("canonical").is_some());
+    assert!(host.resolve_storage_profile("je-anvil-1_7_10").is_some());
+    assert!(host.resolve_auth_profile("offline-v1").is_some());
+}
+
+#[test]
+fn gameplay_command_snapshot_preserves_entity_id() {
+    use mc_core::{
+        BlockPos, BlockState, CapabilitySet, CoreCommand, DimensionId, EntityId,
+        GameplayPolicyResolver, GameplayProfileId, GameplayQuery, PlayerId, SessionCapabilitySet,
+        WorldMeta,
+    };
+
+    struct NoopQuery;
+
+    impl GameplayQuery for NoopQuery {
+        fn world_meta(&self) -> WorldMeta {
+            WorldMeta {
+                level_name: "world".to_string(),
+                seed: 0,
+                spawn: BlockPos::new(0, 64, 0),
+                dimension: DimensionId::Overworld,
+                age: 0,
+                time: 0,
+                level_type: "FLAT".to_string(),
+                game_mode: 0,
+                difficulty: 1,
+                max_players: 20,
+            }
+        }
+
+        fn player_snapshot(&self, _player_id: PlayerId) -> Option<mc_core::PlayerSnapshot> {
+            None
+        }
+
+        fn block_state(&self, _position: BlockPos) -> BlockState {
+            BlockState::air()
+        }
+
+        fn can_edit_block(&self, _player_id: PlayerId, _position: BlockPos) -> bool {
+            true
+        }
+    }
+
+    let _ = entity_id_probe_gameplay_plugin::take_recorded_session();
+
+    let mut catalog = PluginCatalog::default();
+    let probe = entity_id_probe_gameplay_plugin::in_process_gameplay_entrypoints();
+    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
+        plugin_id: "gameplay-entity-aware".to_string(),
+        manifest: probe.manifest,
+        api: probe.api,
+    });
+
+    let host = Arc::new(PluginHost::new(
+        catalog,
+        PluginAbiRange::default(),
+        PluginFailurePolicy::Quarantine,
+    ));
+    host.activate_gameplay_profiles(&ServerConfig {
+        default_gameplay_profile: "entity-aware".to_string(),
+        ..ServerConfig::default()
+    })
+    .expect("entity-aware gameplay profile should activate");
+
+    let profile = host
+        .resolve_gameplay_profile("entity-aware")
+        .expect("entity-aware gameplay profile should resolve");
+    let player_id = PlayerId(Uuid::from_u128(7));
+    profile
+        .handle_command(
+            &NoopQuery,
+            &SessionCapabilitySet {
+                protocol: CapabilitySet::new(),
+                gameplay: CapabilitySet::new(),
+                gameplay_profile: GameplayProfileId::new("entity-aware"),
+                entity_id: Some(EntityId(41)),
+                protocol_generation: None,
+                gameplay_generation: None,
+            },
+            &CoreCommand::SetHeldSlot { player_id, slot: 0 },
+        )
+        .expect("gameplay command should succeed");
+
+    let recorded = entity_id_probe_gameplay_plugin::take_recorded_session()
+        .expect("gameplay plugin should receive a session snapshot");
+    assert_eq!(recorded.player_id, Some(player_id));
+    assert_eq!(recorded.entity_id, Some(EntityId(41)));
+    assert_eq!(recorded.gameplay_profile.as_str(), "entity-aware");
 }
 
 #[test]

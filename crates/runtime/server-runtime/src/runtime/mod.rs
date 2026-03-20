@@ -78,7 +78,7 @@ pub(crate) struct SessionHandle {
 
 #[derive(Clone, Debug)]
 pub(crate) enum SessionMessage {
-    Event(CoreEvent),
+    Event(Arc<CoreEvent>),
 }
 
 pub(crate) struct SessionState {

@@ -48,6 +48,7 @@ fn session_capabilities(
         protocol: CapabilitySet::new(),
         gameplay: plugin_capabilities.clone(),
         gameplay_profile: session.gameplay_profile.clone(),
+        entity_id: session.entity_id,
         protocol_generation: None,
         gameplay_generation: None,
     }

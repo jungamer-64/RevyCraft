@@ -9,6 +9,9 @@ keywords.workspace = true
 categories.workspace = true
 description = "Protocol-agnostic dedicated server runtime for the RevyCraft workspace."
 
+[features]
+disable-exported-symbols = []
+
 [dependencies]
 aes.workspace = true
 bedrockrs_network.workspace = true
@@ -37,6 +40,7 @@ mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline"
 mc-plugin-auth-online-stub = { path = "../../../plugins/auth/mc-plugin-auth-online-stub", features = ["disable-exported-symbols"] }
 mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gameplay-canonical", features = ["disable-exported-symbols"] }
 mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly", features = ["disable-exported-symbols"] }
+mc-plugin-sdk-rust = { path = "../../plugin/mc-plugin-sdk-rust" }
 mc-plugin-proto-be-26_3 = { path = "../../../plugins/protocol/mc-plugin-proto-be-26_3", features = ["disable-exported-symbols"] }
 mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols"] }
 mc-plugin-proto-je-1_12_2 = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_12_2", features = ["disable-exported-symbols"] }

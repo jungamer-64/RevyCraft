@@ -922,7 +922,7 @@ mod tests {
     use mc_proto_common::{
         Edition, HandshakeProbe, LoginRequest, PacketWriter, PlayEncodingContext, PlaySyncAdapter,
         ProtocolAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter, StatusRequest,
-        TransportKind,
+        TransportKind, WireFormatKind,
     };
     use uuid::Uuid;
 

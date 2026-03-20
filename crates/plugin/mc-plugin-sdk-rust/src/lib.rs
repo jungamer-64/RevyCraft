@@ -1,3 +1,4 @@
+use bytes::BytesMut;
 use mc_core::{
     CapabilitySet, CoreCommand, GameplayEffect, GameplayJoinEffect, PlayerId, PlayerSnapshot,
     WorldMeta, WorldSnapshot,
@@ -8,11 +9,10 @@ use mc_plugin_api::{
     GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HostApiTableV1, OwnedBuffer,
     PluginAbiVersion, PluginKind, PluginManifestV1, ProtocolPluginApiV1, ProtocolRequest,
     ProtocolResponse, ProtocolSessionSnapshot, StorageDescriptor, StoragePluginApiV1,
-    StorageRequest, StorageResponse, Utf8Slice,
+    StorageRequest, StorageResponse, Utf8Slice, WireFrameDecodeResult,
 };
 use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError, StorageError};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
 
 pub struct StaticPluginManifest {
     pub plugin_id: &'static str,
@@ -412,6 +412,27 @@ pub fn handle_protocol_request<P: RustProtocolPlugin>(
             .import_session_state(&session, &blob)
             .map(|()| ProtocolResponse::Empty)
             .map_err(|error| error.to_string()),
+        ProtocolRequest::EncodeWireFrame { payload } => plugin
+            .wire_codec()
+            .encode_frame(&payload)
+            .map(ProtocolResponse::Frame)
+            .map_err(|error| error.to_string()),
+        ProtocolRequest::TryDecodeWireFrame { buffer } => {
+            let mut buffer = BytesMut::from(buffer.as_slice());
+            let original_len = buffer.len();
+            plugin
+                .wire_codec()
+                .try_decode_frame(&mut buffer)
+                .map(|frame| {
+                    ProtocolResponse::WireFrameDecodeResult(frame.map(|frame| {
+                        WireFrameDecodeResult {
+                            frame,
+                            bytes_consumed: original_len - buffer.len(),
+                        }
+                    }))
+                })
+                .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -539,21 +560,10 @@ impl GameplayHost for SdkGameplayHost {
     }
 }
 
-#[doc(hidden)]
-pub fn gameplay_host_api_slot() -> &'static Mutex<Option<HostApiTableV1>> {
-    static HOST_API: OnceLock<Mutex<Option<HostApiTableV1>>> = OnceLock::new();
-    HOST_API.get_or_init(|| Mutex::new(None))
-}
-
-fn with_gameplay_host<T>(
+fn with_gameplay_host_api<T>(
+    api: HostApiTableV1,
     f: impl FnOnce(&dyn GameplayHost) -> Result<T, String>,
 ) -> Result<T, String> {
-    let api = {
-        let guard = gameplay_host_api_slot()
-            .lock()
-            .expect("gameplay host api mutex should not be poisoned");
-        guard.ok_or_else(|| "gameplay host api is not configured".to_string())?
-    };
     let host = SdkGameplayHost { api };
     f(&host)
 }
@@ -657,35 +667,58 @@ pub fn handle_gameplay_request<P: RustGameplayPlugin>(
     plugin: &P,
     request: GameplayRequest,
 ) -> Result<GameplayResponse, String> {
+    handle_gameplay_request_with_host_api(plugin, request, None)
+}
+
+#[doc(hidden)]
+pub fn handle_gameplay_request_with_host_api<P: RustGameplayPlugin>(
+    plugin: &P,
+    request: GameplayRequest,
+    host_api: Option<HostApiTableV1>,
+) -> Result<GameplayResponse, String> {
+    let require_host_api =
+        || host_api.ok_or_else(|| "gameplay host api is not configured".to_string());
     match request {
         GameplayRequest::Describe => Ok(GameplayResponse::Descriptor(plugin.descriptor())),
         GameplayRequest::CapabilitySet => {
             Ok(GameplayResponse::CapabilitySet(plugin.capability_set()))
         }
         GameplayRequest::HandlePlayerJoin { session, player } => {
-            with_gameplay_host(|host| plugin.handle_player_join(host, &session, &player))
-                .map(GameplayResponse::JoinEffect)
+            with_gameplay_host_api(require_host_api()?, |host| {
+                plugin.handle_player_join(host, &session, &player)
+            })
+            .map(GameplayResponse::JoinEffect)
         }
         GameplayRequest::HandleCommand { session, command } => {
-            with_gameplay_host(|host| plugin.handle_command(host, &session, &command))
-                .map(GameplayResponse::Effect)
+            with_gameplay_host_api(require_host_api()?, |host| {
+                plugin.handle_command(host, &session, &command)
+            })
+            .map(GameplayResponse::Effect)
         }
         GameplayRequest::HandleTick { session, now_ms } => {
-            with_gameplay_host(|host| plugin.handle_tick(host, &session, now_ms))
-                .map(GameplayResponse::Effect)
+            with_gameplay_host_api(require_host_api()?, |host| {
+                plugin.handle_tick(host, &session, now_ms)
+            })
+            .map(GameplayResponse::Effect)
         }
-        GameplayRequest::SessionClosed { session } => with_gameplay_host(|host| {
-            plugin.session_closed(host, &session)?;
-            Ok(GameplayResponse::Empty)
-        }),
+        GameplayRequest::SessionClosed { session } => {
+            with_gameplay_host_api(require_host_api()?, |host| {
+                plugin.session_closed(host, &session)?;
+                Ok(GameplayResponse::Empty)
+            })
+        }
         GameplayRequest::ExportSessionState { session } => {
-            with_gameplay_host(|host| plugin.export_session_state(host, &session))
-                .map(GameplayResponse::SessionTransferBlob)
+            with_gameplay_host_api(require_host_api()?, |host| {
+                plugin.export_session_state(host, &session)
+            })
+            .map(GameplayResponse::SessionTransferBlob)
         }
-        GameplayRequest::ImportSessionState { session, blob } => with_gameplay_host(|host| {
-            plugin.import_session_state(host, &session, &blob)?;
-            Ok(GameplayResponse::Empty)
-        }),
+        GameplayRequest::ImportSessionState { session, blob } => {
+            with_gameplay_host_api(require_host_api()?, |host| {
+                plugin.import_session_state(host, &session, &blob)?;
+                Ok(GameplayResponse::Empty)
+            })
+        }
     }
 }
 
@@ -760,13 +793,19 @@ macro_rules! export_protocol_plugin {
             }
         }
 
-        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
         pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
             MC_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest))
                 as *const mc_plugin_api::PluginManifestV1
         }
 
-        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
         pub extern "C" fn mc_plugin_protocol_api_v1() -> *const mc_plugin_api::ProtocolPluginApiV1 {
             MC_PLUGIN_API.get_or_init(|| mc_plugin_api::ProtocolPluginApiV1 {
                 invoke: mc_plugin_invoke,
@@ -793,9 +832,17 @@ macro_rules! export_gameplay_plugin {
             std::sync::OnceLock::new();
         static MC_GAMEPLAY_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::GameplayPluginApiV1> =
             std::sync::OnceLock::new();
+        static MC_GAMEPLAY_HOST_API_SLOT: std::sync::OnceLock<
+            std::sync::Mutex<Option<mc_plugin_api::HostApiTableV1>>,
+        > = std::sync::OnceLock::new();
 
         fn mc_gameplay_plugin_instance() -> &'static $plugin_ty {
             MC_GAMEPLAY_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
+        }
+
+        fn mc_gameplay_host_api_slot()
+        -> &'static std::sync::Mutex<Option<mc_plugin_api::HostApiTableV1>> {
+            MC_GAMEPLAY_HOST_API_SLOT.get_or_init(|| std::sync::Mutex::new(None))
         }
 
         unsafe extern "C" fn mc_gameplay_plugin_set_host_api(
@@ -804,7 +851,7 @@ macro_rules! export_gameplay_plugin {
             let Some(host_api) = (unsafe { host_api.as_ref() }) else {
                 return mc_plugin_api::PluginErrorCode::InvalidInput;
             };
-            let mut guard = $crate::gameplay_host_api_slot()
+            let mut guard = mc_gameplay_host_api_slot()
                 .lock()
                 .expect("gameplay host api mutex should not be poisoned");
             *guard = Some(*host_api);
@@ -835,7 +882,17 @@ macro_rules! export_gameplay_plugin {
             };
 
             let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                $crate::handle_gameplay_request(mc_gameplay_plugin_instance(), request.clone())
+                let host_api = {
+                    let guard = mc_gameplay_host_api_slot()
+                        .lock()
+                        .expect("gameplay host api mutex should not be poisoned");
+                    *guard
+                };
+                $crate::handle_gameplay_request_with_host_api(
+                    mc_gameplay_plugin_instance(),
+                    request.clone(),
+                    host_api,
+                )
             })) {
                 Ok(Ok(response)) => response,
                 Ok(Err(message)) => {
@@ -869,13 +926,19 @@ macro_rules! export_gameplay_plugin {
             }
         }
 
-        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
         pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
             MC_GAMEPLAY_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest))
                 as *const mc_plugin_api::PluginManifestV1
         }
 
-        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
         pub extern "C" fn mc_plugin_gameplay_api_v1() -> *const mc_plugin_api::GameplayPluginApiV1 {
             MC_GAMEPLAY_PLUGIN_API.get_or_init(|| mc_plugin_api::GameplayPluginApiV1 {
                 set_host_api: mc_gameplay_plugin_set_host_api,
@@ -892,6 +955,493 @@ macro_rules! export_gameplay_plugin {
             }
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CapabilitySet, GameplayHost, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
+        HostApiTableV1, OwnedBuffer, RustGameplayPlugin, StaticPluginManifest,
+        handle_gameplay_request_with_host_api, handle_protocol_request,
+    };
+    use bytes::BytesMut;
+    use mc_core::{CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
+    use mc_core::{GameplayEffect, GameplayProfileId, WorldMeta};
+    use mc_plugin_api::{
+        ByteSlice, CURRENT_PLUGIN_ABI, GameplayDescriptor, PluginErrorCode,
+        ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_gameplay_response,
+        encode_gameplay_request, encode_host_world_meta_blob,
+    };
+    use mc_proto_common::{
+        ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest,
+        PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
+        ServerListStatus, SessionAdapter, StatusRequest, TransportKind, WireCodec,
+        WireFormatKind,
+    };
+    use std::ffi::c_void;
+    use std::sync::{Mutex, OnceLock};
+
+    #[repr(C)]
+    struct TestHostContext {
+        level_name: &'static str,
+    }
+
+    fn write_test_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
+        if output.is_null() {
+            return;
+        }
+        unsafe {
+            *output = OwnedBuffer {
+                ptr: bytes.as_mut_ptr(),
+                len: bytes.len(),
+                cap: bytes.capacity(),
+            };
+        }
+        std::mem::forget(bytes);
+    }
+
+    unsafe extern "C" fn host_read_world_meta(
+        context: *mut c_void,
+        output: *mut OwnedBuffer,
+        error_out: *mut OwnedBuffer,
+    ) -> PluginErrorCode {
+        let Some(context) = (unsafe { (context as *const TestHostContext).as_ref() }) else {
+            write_test_buffer(error_out, b"missing host context".to_vec());
+            return PluginErrorCode::InvalidInput;
+        };
+        let bytes = encode_host_world_meta_blob(&WorldMeta {
+            level_name: context.level_name.to_string(),
+            seed: 0,
+            spawn: mc_core::BlockPos::new(0, 64, 0),
+            dimension: mc_core::DimensionId::Overworld,
+            age: 0,
+            time: 0,
+            level_type: "FLAT".to_string(),
+            game_mode: 0,
+            difficulty: 1,
+            max_players: 20,
+        })
+        .expect("test world meta should encode");
+        write_test_buffer(output, bytes);
+        PluginErrorCode::Ok
+    }
+
+    fn host_api_for(context: &TestHostContext) -> HostApiTableV1 {
+        HostApiTableV1 {
+            abi: CURRENT_PLUGIN_ABI,
+            context: (context as *const TestHostContext).cast_mut().cast(),
+            log: None,
+            read_player_snapshot: None,
+            read_world_meta: Some(host_read_world_meta),
+            read_block_state: None,
+            can_edit_block: None,
+        }
+    }
+
+    #[derive(Default)]
+    struct DirectProbePlugin;
+
+    impl RustGameplayPlugin for DirectProbePlugin {
+        fn descriptor(&self) -> GameplayDescriptor {
+            GameplayDescriptor {
+                profile: GameplayProfileId::new("probe"),
+            }
+        }
+
+        fn handle_tick(
+            &self,
+            host: &dyn GameplayHost,
+            _session: &GameplaySessionSnapshot,
+            _now_ms: u64,
+        ) -> Result<GameplayEffect, String> {
+            let world_meta = host.read_world_meta()?;
+            if world_meta.level_name.is_empty() {
+                return Err("world meta should not be empty".to_string());
+            }
+            Ok(GameplayEffect::default())
+        }
+    }
+
+    struct TestProtocolWireCodec;
+
+    impl WireCodec for TestProtocolWireCodec {
+        fn encode_frame(&self, payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+            let length = u8::try_from(payload.len())
+                .map_err(|_| ProtocolError::InvalidPacket("test frame too large"))?;
+            let mut frame = vec![length];
+            frame.extend_from_slice(payload);
+            Ok(frame)
+        }
+
+        fn try_decode_frame(&self, buffer: &mut BytesMut) -> Result<Option<Vec<u8>>, ProtocolError> {
+            let Some(length) = buffer.first().copied() else {
+                return Ok(None);
+            };
+            let frame_len = 1 + usize::from(length);
+            if buffer.len() < frame_len {
+                return Ok(None);
+            }
+            let frame = buffer[1..frame_len].to_vec();
+            let _ = buffer.split_to(frame_len);
+            Ok(Some(frame))
+        }
+    }
+
+    #[derive(Default)]
+    struct DirectProtocolPlugin;
+
+    impl HandshakeProbe for DirectProtocolPlugin {
+        fn transport_kind(&self) -> TransportKind {
+            TransportKind::Tcp
+        }
+
+        fn try_route(&self, _frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
+            Ok(None)
+        }
+    }
+
+    impl SessionAdapter for DirectProtocolPlugin {
+        fn wire_codec(&self) -> &dyn WireCodec {
+            static CODEC: TestProtocolWireCodec = TestProtocolWireCodec;
+            &CODEC
+        }
+
+        fn decode_status(&self, _frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused test protocol method"))
+        }
+
+        fn decode_login(&self, _frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused test protocol method"))
+        }
+
+        fn encode_status_response(
+            &self,
+            _status: &ServerListStatus,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused test protocol method"))
+        }
+
+        fn encode_status_pong(&self, _payload: i64) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused test protocol method"))
+        }
+
+        fn encode_disconnect(
+            &self,
+            _phase: ConnectionPhase,
+            _reason: &str,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused test protocol method"))
+        }
+
+        fn encode_encryption_request(
+            &self,
+            _server_id: &str,
+            _public_key_der: &[u8],
+            _verify_token: &[u8],
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused test protocol method"))
+        }
+
+        fn encode_network_settings(
+            &self,
+            _compression_threshold: u16,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused test protocol method"))
+        }
+
+        fn encode_login_success(
+            &self,
+            _player: &PlayerSnapshot,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused test protocol method"))
+        }
+    }
+
+    impl mc_proto_common::PlaySyncAdapter for DirectProtocolPlugin {
+        fn decode_play(
+            &self,
+            _player_id: PlayerId,
+            _frame: &[u8],
+        ) -> Result<Option<CoreCommand>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused test protocol method"))
+        }
+
+        fn encode_play_event(
+            &self,
+            _event: &CoreEvent,
+            _context: &PlayEncodingContext,
+        ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused test protocol method"))
+        }
+    }
+
+    impl ProtocolAdapter for DirectProtocolPlugin {
+        fn descriptor(&self) -> ProtocolDescriptor {
+            ProtocolDescriptor {
+                adapter_id: "direct-probe".to_string(),
+                transport: TransportKind::Tcp,
+                wire_format: WireFormatKind::MinecraftFramed,
+                edition: Edition::Je,
+                version_name: "test".to_string(),
+                protocol_number: 0,
+            }
+        }
+    }
+
+    #[test]
+    fn direct_protocol_requests_route_wire_codec_ops_through_plugin_codec() {
+        assert_eq!(
+            handle_protocol_request(
+                &DirectProtocolPlugin,
+                ProtocolRequest::EncodeWireFrame {
+                    payload: vec![0xaa, 0xbb, 0xcc],
+                },
+            )
+            .expect("wire frame should encode"),
+            ProtocolResponse::Frame(vec![3, 0xaa, 0xbb, 0xcc])
+        );
+
+        assert_eq!(
+            handle_protocol_request(
+                &DirectProtocolPlugin,
+                ProtocolRequest::TryDecodeWireFrame {
+                    buffer: vec![3, 0xaa, 0xbb, 0xcc, 0xff],
+                },
+            )
+            .expect("wire frame should decode"),
+            ProtocolResponse::WireFrameDecodeResult(Some(WireFrameDecodeResult {
+                frame: vec![0xaa, 0xbb, 0xcc],
+                bytes_consumed: 4,
+            }))
+        );
+
+        assert_eq!(
+            handle_protocol_request(
+                &DirectProtocolPlugin,
+                ProtocolRequest::TryDecodeWireFrame {
+                    buffer: vec![3, 0xaa],
+                },
+            )
+            .expect("incomplete frame should stay buffered"),
+            ProtocolResponse::WireFrameDecodeResult(None)
+        );
+    }
+
+    #[test]
+    fn direct_gameplay_requests_require_host_api_for_host_callbacks() {
+        let request = GameplayRequest::HandleTick {
+            session: GameplaySessionSnapshot {
+                phase: ConnectionPhase::Play,
+                player_id: None,
+                entity_id: None,
+                gameplay_profile: GameplayProfileId::new("probe"),
+            },
+            now_ms: 0,
+        };
+        let error = handle_gameplay_request_with_host_api(&DirectProbePlugin, request, None)
+            .expect_err("host callbacks should require configured host api");
+        assert!(error.contains("gameplay host api is not configured"));
+    }
+
+    #[allow(unexpected_cfgs)]
+    mod plugin_a {
+        use super::*;
+
+        #[derive(Default)]
+        pub struct PluginA;
+
+        fn recorded_slot() -> &'static Mutex<Option<String>> {
+            static RECORDED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+            RECORDED.get_or_init(|| Mutex::new(None))
+        }
+
+        pub fn take_recorded_level_name() -> Option<String> {
+            recorded_slot()
+                .lock()
+                .expect("recorded level name mutex should not be poisoned")
+                .take()
+        }
+
+        impl RustGameplayPlugin for PluginA {
+            fn descriptor(&self) -> GameplayDescriptor {
+                GameplayDescriptor {
+                    profile: GameplayProfileId::new("plugin-a"),
+                }
+            }
+
+            fn capability_set(&self) -> CapabilitySet {
+                let mut capabilities = CapabilitySet::new();
+                let _ = capabilities.insert("runtime.reload.gameplay");
+                capabilities
+            }
+
+            fn handle_tick(
+                &self,
+                host: &dyn GameplayHost,
+                _session: &GameplaySessionSnapshot,
+                _now_ms: u64,
+            ) -> Result<GameplayEffect, String> {
+                *recorded_slot()
+                    .lock()
+                    .expect("recorded level name mutex should not be poisoned") =
+                    Some(host.read_world_meta()?.level_name);
+                Ok(GameplayEffect::default())
+            }
+        }
+
+        const MANIFEST: StaticPluginManifest =
+            StaticPluginManifest::gameplay("plugin-a", "Plugin A", &["runtime.reload.gameplay"]);
+
+        export_gameplay_plugin!(PluginA, MANIFEST);
+    }
+
+    #[allow(unexpected_cfgs)]
+    mod plugin_b {
+        use super::*;
+
+        #[derive(Default)]
+        pub struct PluginB;
+
+        fn recorded_slot() -> &'static Mutex<Option<String>> {
+            static RECORDED: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+            RECORDED.get_or_init(|| Mutex::new(None))
+        }
+
+        pub fn take_recorded_level_name() -> Option<String> {
+            recorded_slot()
+                .lock()
+                .expect("recorded level name mutex should not be poisoned")
+                .take()
+        }
+
+        impl RustGameplayPlugin for PluginB {
+            fn descriptor(&self) -> GameplayDescriptor {
+                GameplayDescriptor {
+                    profile: GameplayProfileId::new("plugin-b"),
+                }
+            }
+
+            fn capability_set(&self) -> CapabilitySet {
+                let mut capabilities = CapabilitySet::new();
+                let _ = capabilities.insert("runtime.reload.gameplay");
+                capabilities
+            }
+
+            fn handle_tick(
+                &self,
+                host: &dyn GameplayHost,
+                _session: &GameplaySessionSnapshot,
+                _now_ms: u64,
+            ) -> Result<GameplayEffect, String> {
+                *recorded_slot()
+                    .lock()
+                    .expect("recorded level name mutex should not be poisoned") =
+                    Some(host.read_world_meta()?.level_name);
+                Ok(GameplayEffect::default())
+            }
+        }
+
+        const MANIFEST: StaticPluginManifest =
+            StaticPluginManifest::gameplay("plugin-b", "Plugin B", &["runtime.reload.gameplay"]);
+
+        export_gameplay_plugin!(PluginB, MANIFEST);
+    }
+
+    unsafe fn invoke_gameplay(
+        api: &mc_plugin_api::GameplayPluginApiV1,
+        request: GameplayRequest,
+    ) -> GameplayResponse {
+        let payload = encode_gameplay_request(&request).expect("gameplay request should encode");
+        let mut output = OwnedBuffer::empty();
+        let mut error = OwnedBuffer::empty();
+        let status = unsafe {
+            (api.invoke)(
+                ByteSlice {
+                    ptr: payload.as_ptr(),
+                    len: payload.len(),
+                },
+                &mut output,
+                &mut error,
+            )
+        };
+        if status != PluginErrorCode::Ok {
+            let message = if error.ptr.is_null() {
+                format!("invoke failed with status {status:?}")
+            } else {
+                let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
+                unsafe {
+                    (api.free_buffer)(error);
+                }
+                String::from_utf8(bytes).expect("plugin error should be utf-8")
+            };
+            panic!("{message}");
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
+        unsafe {
+            (api.free_buffer)(output);
+        }
+        decode_gameplay_response(&request, &bytes).expect("gameplay response should decode")
+    }
+
+    #[test]
+    fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
+        let context_a = TestHostContext {
+            level_name: "host-a",
+        };
+        let context_b = TestHostContext {
+            level_name: "host-b",
+        };
+        let host_api_a = host_api_for(&context_a);
+        let host_api_b = host_api_for(&context_b);
+
+        let entrypoints_a = plugin_a::in_process_gameplay_entrypoints();
+        let entrypoints_b = plugin_b::in_process_gameplay_entrypoints();
+
+        assert_eq!(
+            unsafe { (entrypoints_a.api.set_host_api)(&host_api_a) },
+            PluginErrorCode::Ok
+        );
+        assert_eq!(
+            unsafe { (entrypoints_b.api.set_host_api)(&host_api_b) },
+            PluginErrorCode::Ok
+        );
+
+        let request_a = GameplayRequest::HandleTick {
+            session: GameplaySessionSnapshot {
+                phase: ConnectionPhase::Play,
+                player_id: None,
+                entity_id: None,
+                gameplay_profile: GameplayProfileId::new("plugin-a"),
+            },
+            now_ms: 1,
+        };
+        let request_b = GameplayRequest::HandleTick {
+            session: GameplaySessionSnapshot {
+                phase: ConnectionPhase::Play,
+                player_id: None,
+                entity_id: None,
+                gameplay_profile: GameplayProfileId::new("plugin-b"),
+            },
+            now_ms: 2,
+        };
+
+        assert_eq!(
+            unsafe { invoke_gameplay(entrypoints_a.api, request_a) },
+            GameplayResponse::Effect(GameplayEffect::default())
+        );
+        assert_eq!(
+            unsafe { invoke_gameplay(entrypoints_b.api, request_b) },
+            GameplayResponse::Effect(GameplayEffect::default())
+        );
+        assert_eq!(
+            plugin_a::take_recorded_level_name().as_deref(),
+            Some("host-a")
+        );
+        assert_eq!(
+            plugin_b::take_recorded_level_name().as_deref(),
+            Some("host-b")
+        );
+    }
 }
 
 #[macro_export]
@@ -966,13 +1516,19 @@ macro_rules! export_storage_plugin {
             }
         }
 
-        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
         pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
             MC_STORAGE_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest))
                 as *const mc_plugin_api::PluginManifestV1
         }
 
-        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
         pub extern "C" fn mc_plugin_storage_api_v1() -> *const mc_plugin_api::StoragePluginApiV1 {
             MC_STORAGE_PLUGIN_API.get_or_init(|| mc_plugin_api::StoragePluginApiV1 {
                 invoke: mc_storage_plugin_invoke,
@@ -1062,13 +1618,19 @@ macro_rules! export_auth_plugin {
             }
         }
 
-        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
         pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::PluginManifestV1 {
             MC_AUTH_PLUGIN_MANIFEST.get_or_init(|| $crate::manifest_from_static(&$manifest))
                 as *const mc_plugin_api::PluginManifestV1
         }
 
-        #[cfg_attr(not(feature = "disable-exported-symbols"), unsafe(no_mangle))]
+        #[cfg_attr(
+            all(not(test), not(feature = "disable-exported-symbols")),
+            unsafe(no_mangle)
+        )]
         pub extern "C" fn mc_plugin_auth_api_v1() -> *const mc_plugin_api::AuthPluginApiV1 {
             MC_AUTH_PLUGIN_API.get_or_init(|| mc_plugin_api::AuthPluginApiV1 {
                 invoke: mc_auth_plugin_invoke,

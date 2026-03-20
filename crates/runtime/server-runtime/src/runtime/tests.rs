@@ -145,7 +145,7 @@ fn plugin_test_registries_from_dist_with_supporting_plugins(
     allowlist: &[&str],
     supporting_plugin_ids: &[&str],
 ) -> Result<RuntimeRegistries, RuntimeError> {
-    let config = ServerConfig {
+    let mut config = ServerConfig {
         plugins_dir: dist_dir,
         plugin_allowlist: Some(plugin_allowlist_with_supporting_plugins(
             allowlist,
@@ -153,11 +153,17 @@ fn plugin_test_registries_from_dist_with_supporting_plugins(
         )),
         ..ServerConfig::default()
     };
+    if supporting_plugin_ids
+        .iter()
+        .any(|plugin_id| *plugin_id == ONLINE_STUB_AUTH_PLUGIN_ID)
+    {
+        config.auth_profile = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+    }
     let plugin_host = plugin_host_from_config(&config)?.ok_or_else(|| {
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
     let mut registries = RuntimeRegistries::new();
-    plugin_host.load_into_registries(&mut registries)?;
+    plugin_host.initialize_runtime_registries(&config, &mut registries)?;
     Ok(registries)
 }
 
@@ -247,7 +253,13 @@ fn in_process_online_auth_registries(
         PluginFailurePolicy::Quarantine,
     ));
     let mut registries = RuntimeRegistries::new();
-    plugin_host.load_into_registries(&mut registries)?;
+    plugin_host.initialize_runtime_registries(
+        &ServerConfig {
+            auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+            ..ServerConfig::default()
+        },
+        &mut registries,
+    )?;
     Ok(registries)
 }
 

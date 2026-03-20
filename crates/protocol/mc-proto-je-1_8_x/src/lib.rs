@@ -680,7 +680,7 @@ mod tests {
     use mc_proto_common::{
         Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter, PlayEncodingContext,
         PlaySyncAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter, StatusRequest,
-        TransportKind,
+        TransportKind, WireFormatKind,
     };
     use uuid::Uuid;
 

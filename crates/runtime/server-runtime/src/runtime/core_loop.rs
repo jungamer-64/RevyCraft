@@ -3,6 +3,7 @@ use crate::RuntimeError;
 use crate::host::PluginHost;
 use mc_core::{ConnectionId, CoreCommand, CoreEvent, EventTarget, PlayerSummary, TargetedEvent};
 use mc_plugin_api::GameplaySessionSnapshot;
+use std::sync::Arc;
 
 impl RuntimeServer {
     pub(super) async fn apply_command(
@@ -106,14 +107,19 @@ impl RuntimeServer {
 
     async fn dispatch_events(&self, events: Vec<TargetedEvent>) {
         for event in events {
-            let target = event.target.clone();
-            let payload = event.event.clone();
-            if let EventTarget::Connection(connection_id) = target
-                && let CoreEvent::LoginAccepted { player_id, .. } = payload
-                && let Some(session) = self.sessions.lock().await.get_mut(&connection_id)
+            let TargetedEvent {
+                target,
+                event: payload,
+            } = event;
+            if let (
+                EventTarget::Connection(connection_id),
+                CoreEvent::LoginAccepted { player_id, .. },
+            ) = (&target, &payload)
+                && let Some(session) = self.sessions.lock().await.get_mut(connection_id)
             {
-                session.player_id = Some(player_id);
+                session.player_id = Some(*player_id);
             }
+            let payload = Arc::new(payload);
 
             let recipients = {
                 let sessions = self.sessions.lock().await;
@@ -140,7 +146,9 @@ impl RuntimeServer {
             };
 
             for recipient in recipients {
-                let _ = recipient.tx.send(SessionMessage::Event(payload.clone()));
+                let _ = recipient
+                    .tx
+                    .send(SessionMessage::Event(Arc::clone(&payload)));
             }
         }
     }

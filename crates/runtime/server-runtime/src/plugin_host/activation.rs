@@ -8,6 +8,14 @@ impl PluginHost {
         required_profiles
     }
 
+    fn runtime_auth_profiles(config: &ServerConfig) -> Vec<String> {
+        let mut auth_profiles = vec![config.auth_profile.clone()];
+        if config.be_enabled && !auth_profiles.contains(&config.bedrock_auth_profile) {
+            auth_profiles.push(config.bedrock_auth_profile.clone());
+        }
+        auth_profiles
+    }
+
     fn requested_auth_profiles(auth_profiles: &[String]) -> Result<HashSet<String>, RuntimeError> {
         let requested = auth_profiles
             .iter()
@@ -188,5 +196,24 @@ impl PluginHost {
 
     pub fn activate_auth_profile(&self, auth_profile: &str) -> Result<(), RuntimeError> {
         self.activate_auth_profiles(&[auth_profile.to_string()])
+    }
+
+    pub fn activate_runtime_profiles(&self, config: &ServerConfig) -> Result<(), RuntimeError> {
+        self.activate_gameplay_profiles(config)?;
+        self.activate_storage_profile(&config.storage_profile)?;
+        self.activate_auth_profiles(&Self::runtime_auth_profiles(config))
+    }
+
+    pub fn initialize_runtime_registries(
+        self: &Arc<Self>,
+        config: &ServerConfig,
+        registries: &mut RuntimeRegistries,
+    ) -> Result<(), RuntimeError> {
+        self.load_into_registries(registries)?;
+        self.activate_runtime_profiles(config)?;
+        if let Some(storage_profile) = self.resolve_storage_profile(&config.storage_profile) {
+            registries.register_storage_profile(config.storage_profile.clone(), storage_profile);
+        }
+        Ok(())
     }
 }

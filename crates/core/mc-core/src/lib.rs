@@ -98,6 +98,7 @@ pub struct SessionCapabilitySet {
     pub protocol: CapabilitySet,
     pub gameplay: CapabilitySet,
     pub gameplay_profile: GameplayProfileId,
+    pub entity_id: Option<EntityId>,
     pub protocol_generation: Option<PluginGenerationId>,
     pub gameplay_generation: Option<PluginGenerationId>,
 }
@@ -621,10 +622,63 @@ impl SectionPos {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SectionBlockIndex(u16);
+
+impl SectionBlockIndex {
+    #[must_use]
+    pub fn new(x: u8, y: u8, z: u8) -> Self {
+        debug_assert!(
+            x < 16,
+            "chunk-local x coordinate should stay within a section"
+        );
+        debug_assert!(
+            y < 16,
+            "chunk-local y coordinate should stay within a section"
+        );
+        debug_assert!(
+            z < 16,
+            "chunk-local z coordinate should stay within a section"
+        );
+        Self(u16::from(y) << 8 | u16::from(z) << 4 | u16::from(x))
+    }
+
+    #[must_use]
+    pub const fn from_raw(raw: u16) -> Self {
+        Self(raw & 0x0fff)
+    }
+
+    #[must_use]
+    pub const fn into_raw(self) -> u16 {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn expand(self) -> (u8, u8, u8) {
+        let x = (self.0 & 0x0F) as u8;
+        let z = ((self.0 >> 4) & 0x0F) as u8;
+        let y = ((self.0 >> 8) & 0x0F) as u8;
+        (x, y, z)
+    }
+}
+
+impl From<SectionBlockIndex> for u16 {
+    fn from(index: SectionBlockIndex) -> Self {
+        index.into_raw()
+    }
+}
+
+impl From<SectionBlockIndex> for usize {
+    fn from(index: SectionBlockIndex) -> Self {
+        usize::from(index.into_raw())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChunkSection {
     pub y: i32,
-    blocks: BTreeMap<u16, BlockState>,
+    blocks: BTreeMap<SectionBlockIndex, BlockState>,
 }
 
 impl ChunkSection {
@@ -655,7 +709,7 @@ impl ChunkSection {
         self.blocks.is_empty()
     }
 
-    pub fn iter_blocks(&self) -> impl Iterator<Item = (u16, &BlockState)> {
+    pub fn iter_blocks(&self) -> impl Iterator<Item = (SectionBlockIndex, &BlockState)> {
         self.blocks.iter().map(|(index, state)| (*index, state))
     }
 }
@@ -1838,6 +1892,7 @@ fn canonical_session_capabilities() -> SessionCapabilitySet {
         protocol: CapabilitySet::new(),
         gameplay,
         gameplay_profile: GameplayProfileId::new("canonical"),
+        entity_id: None,
         protocol_generation: None,
         gameplay_generation: None,
     }
@@ -1981,16 +2036,13 @@ fn generate_superflat_chunk(chunk_pos: ChunkPos) -> ChunkColumn {
     column
 }
 
-fn flatten_block_index(x: u8, y: u8, z: u8) -> u16 {
-    u16::from(y) * 256 + u16::from(z) * 16 + u16::from(x)
+fn flatten_block_index(x: u8, y: u8, z: u8) -> SectionBlockIndex {
+    SectionBlockIndex::new(x, y, z)
 }
 
 #[must_use]
 pub const fn expand_block_index(index: u16) -> (u8, u8, u8) {
-    let [y, lower] = index.to_be_bytes();
-    let z = lower >> 4;
-    let x = lower & 0x0F;
-    (x, y, z)
+    SectionBlockIndex::from_raw(index).expand()
 }
 
 #[cfg(test)]
@@ -2010,6 +2062,19 @@ mod tests {
             "minecraft:grass_block"
         );
         assert!(column.get_block(1, 32, 2).is_air());
+    }
+
+    #[test]
+    fn block_index_helpers_round_trip_section_local_coordinates() {
+        for y in 0_u8..16 {
+            for z in 0_u8..16 {
+                for x in 0_u8..16 {
+                    let index = flatten_block_index(x, y, z);
+                    assert_eq!(index.expand(), (x, y, z));
+                    assert_eq!(expand_block_index(index.into_raw()), (x, y, z));
+                }
+            }
+        }
     }
 
     #[test]

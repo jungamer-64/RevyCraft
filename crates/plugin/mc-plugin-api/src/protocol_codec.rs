@@ -36,6 +36,8 @@ pub enum ProtocolOpCode {
     EncodePlayEvent = 14,
     ExportSessionState = 15,
     ImportSessionState = 16,
+    EncodeWireFrame = 17,
+    TryDecodeWireFrame = 18,
 }
 
 impl TryFrom<u8> for ProtocolOpCode {
@@ -59,6 +61,8 @@ impl TryFrom<u8> for ProtocolOpCode {
             14 => Ok(Self::EncodePlayEvent),
             15 => Ok(Self::ExportSessionState),
             16 => Ok(Self::ImportSessionState),
+            17 => Ok(Self::EncodeWireFrame),
+            18 => Ok(Self::TryDecodeWireFrame),
             _ => Err(ProtocolCodecError::InvalidProtocolOpCode(value)),
         }
     }
@@ -89,6 +93,12 @@ pub struct ProtocolSessionSnapshot {
     pub phase: ConnectionPhase,
     pub player_id: Option<PlayerId>,
     pub entity_id: Option<EntityId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WireFrameDecodeResult {
+    pub frame: Vec<u8>,
+    pub bytes_consumed: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -141,6 +151,12 @@ pub enum ProtocolRequest {
         session: ProtocolSessionSnapshot,
         blob: Vec<u8>,
     },
+    EncodeWireFrame {
+        payload: Vec<u8>,
+    },
+    TryDecodeWireFrame {
+        buffer: Vec<u8>,
+    },
 }
 
 impl ProtocolRequest {
@@ -163,6 +179,8 @@ impl ProtocolRequest {
             Self::EncodePlayEvent { .. } => ProtocolOpCode::EncodePlayEvent,
             Self::ExportSessionState { .. } => ProtocolOpCode::ExportSessionState,
             Self::ImportSessionState { .. } => ProtocolOpCode::ImportSessionState,
+            Self::EncodeWireFrame { .. } => ProtocolOpCode::EncodeWireFrame,
+            Self::TryDecodeWireFrame { .. } => ProtocolOpCode::TryDecodeWireFrame,
         }
     }
 }
@@ -179,6 +197,7 @@ pub enum ProtocolResponse {
     Frames(Vec<Vec<u8>>),
     CoreCommand(Option<CoreCommand>),
     SessionTransferBlob(Vec<u8>),
+    WireFrameDecodeResult(Option<WireFrameDecodeResult>),
     Empty,
 }
 
@@ -572,6 +591,8 @@ fn encode_protocol_request_payload(
             encode_protocol_session_snapshot(encoder, session)?;
             encoder.write_bytes(blob)
         }
+        ProtocolRequest::EncodeWireFrame { payload } => encoder.write_bytes(payload),
+        ProtocolRequest::TryDecodeWireFrame { buffer } => encoder.write_bytes(buffer),
     }
 }
 
@@ -628,6 +649,12 @@ fn decode_protocol_request_payload(
             session: decode_protocol_session_snapshot(decoder)?,
             blob: decoder.read_bytes()?,
         }),
+        ProtocolOpCode::EncodeWireFrame => Ok(ProtocolRequest::EncodeWireFrame {
+            payload: decoder.read_bytes()?,
+        }),
+        ProtocolOpCode::TryDecodeWireFrame => Ok(ProtocolRequest::TryDecodeWireFrame {
+            buffer: decoder.read_bytes()?,
+        }),
     }
 }
 
@@ -682,6 +709,13 @@ fn encode_protocol_response_payload(
         (ProtocolOpCode::ExportSessionState, ProtocolResponse::SessionTransferBlob(blob)) => {
             encoder.write_bytes(blob)
         }
+        (ProtocolOpCode::EncodeWireFrame, ProtocolResponse::Frame(frame)) => {
+            encoder.write_bytes(frame)
+        }
+        (
+            ProtocolOpCode::TryDecodeWireFrame,
+            ProtocolResponse::WireFrameDecodeResult(result),
+        ) => encode_option(encoder, result.as_ref(), encode_wire_frame_decode_result),
         (ProtocolOpCode::ImportSessionState, ProtocolResponse::Empty) => Ok(()),
         _ => Err(ProtocolCodecError::InvalidValue(
             "protocol response did not match opcode",
@@ -734,6 +768,10 @@ fn decode_protocol_response_payload(
         ProtocolOpCode::ExportSessionState => {
             Ok(ProtocolResponse::SessionTransferBlob(decoder.read_bytes()?))
         }
+        ProtocolOpCode::EncodeWireFrame => Ok(ProtocolResponse::Frame(decoder.read_bytes()?)),
+        ProtocolOpCode::TryDecodeWireFrame => Ok(ProtocolResponse::WireFrameDecodeResult(
+            decode_option(decoder, decode_wire_frame_decode_result)?,
+        )),
         ProtocolOpCode::ImportSessionState => Ok(ProtocolResponse::Empty),
     }
 }
@@ -1239,6 +1277,23 @@ fn decode_protocol_session_snapshot(
     })
 }
 
+fn encode_wire_frame_decode_result(
+    encoder: &mut Encoder,
+    result: &WireFrameDecodeResult,
+) -> Result<(), ProtocolCodecError> {
+    encoder.write_len(result.bytes_consumed)?;
+    encoder.write_bytes(&result.frame)
+}
+
+fn decode_wire_frame_decode_result(
+    decoder: &mut Decoder<'_>,
+) -> Result<WireFrameDecodeResult, ProtocolCodecError> {
+    Ok(WireFrameDecodeResult {
+        bytes_consumed: decoder.read_len()?,
+        frame: decoder.read_bytes()?,
+    })
+}
+
 pub(crate) fn encode_item_stack(
     encoder: &mut Encoder,
     stack: &ItemStack,
@@ -1350,7 +1405,7 @@ fn encode_chunk_section(
     let blocks = section.iter_blocks().collect::<Vec<_>>();
     encoder.write_len(blocks.len())?;
     for (index, state) in blocks {
-        encoder.write_u16(index);
+        encoder.write_u16(index.into());
         encode_block_state(encoder, state)?;
     }
     Ok(())
@@ -1844,8 +1899,8 @@ pub(crate) fn decode_core_event(
 mod tests {
     use super::{
         CURRENT_PLUGIN_ABI, PLUGIN_ENVELOPE_HEADER_LEN, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError,
-        ProtocolRequest, ProtocolResponse, decode_protocol_request, decode_protocol_response,
-        encode_protocol_request, encode_protocol_response,
+        ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_protocol_request,
+        decode_protocol_response, encode_protocol_request, encode_protocol_response,
     };
     use mc_core::{
         BlockPos, CapabilitySet, ChunkColumn, ConnectionId, CoreCommand, CoreEvent, EntityId,
@@ -1911,7 +1966,7 @@ mod tests {
 
     fn sample_bedrock_listener_descriptor() -> BedrockListenerDescriptor {
         BedrockListenerDescriptor {
-            game_version: "1.21.90".to_string(),
+            game_version: "1.26.0".to_string(),
             raknet_version: 11,
         }
     }
@@ -2098,6 +2153,21 @@ mod tests {
                 },
                 ProtocolResponse::Empty,
             ),
+            (
+                ProtocolRequest::EncodeWireFrame {
+                    payload: vec![0xaa, 0xbb],
+                },
+                ProtocolResponse::Frame(vec![0x02, 0xaa, 0xbb]),
+            ),
+            (
+                ProtocolRequest::TryDecodeWireFrame {
+                    buffer: vec![0x02, 0xcc, 0xdd, 0xee],
+                },
+                ProtocolResponse::WireFrameDecodeResult(Some(WireFrameDecodeResult {
+                    frame: vec![0xcc, 0xdd],
+                    bytes_consumed: 3,
+                })),
+            ),
         ];
 
         for (request, response) in requests_and_responses {
@@ -2168,11 +2238,13 @@ mod tests {
             protocol,
             gameplay: CapabilitySet::new(),
             gameplay_profile: GameplayProfileId::new("canonical"),
+            entity_id: Some(EntityId(7)),
             protocol_generation: Some(PluginGenerationId(3)),
             gameplay_generation: Some(PluginGenerationId(4)),
         };
         assert!(capability_set.protocol.contains("protocol.je.1_12_2"));
         assert_eq!(capability_set.gameplay_profile.as_str(), "canonical");
+        assert_eq!(capability_set.entity_id, Some(EntityId(7)));
         assert_eq!(
             capability_set.protocol_generation,
             Some(PluginGenerationId(3))

@@ -21,8 +21,9 @@ pub use gameplay_codec::{
 };
 pub use protocol_codec::{
     PLUGIN_ENVELOPE_HEADER_LEN, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, ProtocolOpCode,
-    ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, decode_protocol_request,
-    decode_protocol_response, encode_protocol_request, encode_protocol_response,
+    ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, WireFrameDecodeResult,
+    decode_protocol_request, decode_protocol_response, encode_protocol_request,
+    encode_protocol_response,
 };
 pub use storage_codec::{
     StorageDescriptor, StorageRequest, StorageResponse, decode_storage_request,
@@ -35,7 +36,7 @@ pub const PLUGIN_STORAGE_API_SYMBOL_V1: &[u8] = b"mc_plugin_storage_api_v1\0";
 pub const PLUGIN_AUTH_API_SYMBOL_V1: &[u8] = b"mc_plugin_auth_api_v1\0";
 pub const PLUGIN_GAMEPLAY_API_SYMBOL_V1: &[u8] = b"mc_plugin_gameplay_api_v1\0";
 
-pub const CURRENT_PLUGIN_ABI: PluginAbiVersion = PluginAbiVersion { major: 1, minor: 1 };
+pub const CURRENT_PLUGIN_ABI: PluginAbiVersion = PluginAbiVersion { major: 1, minor: 2 };
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

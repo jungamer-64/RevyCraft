@@ -2,6 +2,7 @@ use crate::RuntimeError;
 use crate::config::ServerConfig;
 use crate::registry::RuntimeRegistries;
 use crate::runtime::RuntimeReloadContext;
+use bytes::BytesMut;
 use libloading::Library;
 use mc_core::{
     CapabilitySet, GameplayEffect, GameplayJoinEffect, GameplayPolicyResolver, GameplayProfileId,
@@ -15,15 +16,14 @@ use mc_plugin_api::{
     PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1,
     PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1, ProtocolPluginApiV1,
     ProtocolRequest, ProtocolResponse, StoragePluginApiV1, StorageRequest, StorageResponse,
-    decode_auth_response, decode_gameplay_response, decode_protocol_response,
-    decode_storage_response, encode_auth_request, encode_gameplay_request, encode_protocol_request,
-    encode_storage_request,
+    WireFrameDecodeResult, decode_auth_response, decode_gameplay_response,
+    decode_protocol_response, decode_storage_response, encode_auth_request,
+    encode_gameplay_request, encode_protocol_request, encode_storage_request,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest,
-    MinecraftWireCodec, PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
-    RawPacketStreamWireCodec, ServerListStatus, StatusRequest, StorageError, TransportKind,
-    WireCodec, WireFormatKind,
+    PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus,
+    StatusRequest, StorageAdapter, StorageError, TransportKind, WireCodec, WireFormatKind,
 };
 use serde::Deserialize;
 use std::cell::RefCell;
@@ -930,18 +930,55 @@ impl HandshakeProbe for HotSwappableProtocolAdapter {
     }
 }
 
+impl WireCodec for HotSwappableProtocolAdapter {
+    fn encode_frame(&self, payload: &[u8]) -> Result<Vec<u8>, ProtocolError> {
+        let generation = self.current_generation()?;
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::EncodeWireFrame {
+                payload: payload.to_vec(),
+            })? {
+                ProtocolResponse::Frame(frame) => Ok(frame),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected encode_wire_frame response: {other:?}"
+                ))),
+            },
+        )
+    }
+
+    fn try_decode_frame(&self, buffer: &mut BytesMut) -> Result<Option<Vec<u8>>, ProtocolError> {
+        let generation = self.current_generation()?;
+        self.quarantine_on_error(
+            match generation.invoke(ProtocolRequest::TryDecodeWireFrame {
+                buffer: buffer.to_vec(),
+            })? {
+                ProtocolResponse::WireFrameDecodeResult(result) => {
+                    let Some(WireFrameDecodeResult {
+                        frame,
+                        bytes_consumed,
+                    }) = result
+                    else {
+                        return Ok(None);
+                    };
+                    if bytes_consumed > buffer.len() {
+                        return Err(ProtocolError::Plugin(format!(
+                            "wire codec consumed {bytes_consumed} buffered bytes but only {} were available",
+                            buffer.len()
+                        )));
+                    }
+                    let _ = buffer.split_to(bytes_consumed);
+                    Ok(Some(frame))
+                }
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected try_decode_wire_frame response: {other:?}"
+                ))),
+            },
+        )
+    }
+}
+
 impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
     fn wire_codec(&self) -> &dyn WireCodec {
-        static MINECRAFT_CODEC: MinecraftWireCodec = MinecraftWireCodec;
-        static RAW_PACKET_STREAM_CODEC: RawPacketStreamWireCodec = RawPacketStreamWireCodec;
-        match self
-            .current_generation()
-            .map(|generation| generation.descriptor.wire_format)
-            .unwrap_or(WireFormatKind::MinecraftFramed)
-        {
-            WireFormatKind::MinecraftFramed => &MINECRAFT_CODEC,
-            WireFormatKind::RawPacketStream => &RAW_PACKET_STREAM_CODEC,
-        }
+        self
     }
 
     fn decode_status(&self, frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
@@ -1294,7 +1331,7 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
         let session = GameplaySessionSnapshot {
             phase: ConnectionPhase::Login,
             player_id: Some(player.id),
-            entity_id: None,
+            entity_id: session.entity_id,
             gameplay_profile: session.gameplay_profile.clone(),
         };
         let _guard = self
@@ -1322,7 +1359,7 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
         let session = GameplaySessionSnapshot {
             phase: ConnectionPhase::Play,
             player_id: command.player_id(),
-            entity_id: None,
+            entity_id: session.entity_id,
             gameplay_profile: session.gameplay_profile.clone(),
         };
         let _guard = self
@@ -1351,7 +1388,7 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
         let session = GameplaySessionSnapshot {
             phase: ConnectionPhase::Play,
             player_id: Some(player_id),
-            entity_id: None,
+            entity_id: session.entity_id,
             gameplay_profile: session.gameplay_profile.clone(),
         };
         let _guard = self
@@ -1500,6 +1537,20 @@ impl HotSwappableStorageProfile {
                 "unexpected storage import_runtime_state payload: {other:?}"
             ))),
         }
+    }
+}
+
+impl StorageAdapter for HotSwappableStorageProfile {
+    fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError> {
+        Self::load_snapshot(self, world_dir)
+    }
+
+    fn save_snapshot(
+        &self,
+        world_dir: &Path,
+        snapshot: &WorldSnapshot,
+    ) -> Result<(), StorageError> {
+        Self::save_snapshot(self, world_dir, snapshot)
     }
 }
 
@@ -1670,6 +1721,10 @@ impl PluginHost {
         self: &Arc<Self>,
         registries: &mut RuntimeRegistries,
     ) -> Result<(), RuntimeError> {
+        // `load_into_registries()` only registers protocol adapters and probes.
+        // Use `initialize_runtime_registries()` when gameplay, storage, and
+        // auth profiles also need to be activated from a concrete
+        // `ServerConfig`.
         for package in self.catalog.packages() {
             match package.plugin_kind {
                 PluginKind::Protocol => {

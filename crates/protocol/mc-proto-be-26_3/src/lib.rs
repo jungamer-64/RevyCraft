@@ -461,27 +461,28 @@ fn block_face_from_i32(face: i32) -> Option<BlockFace> {
 
 fn block_runtime_id(block: &BlockState) -> u32 {
     match block.key.as_str() {
-        "minecraft:air" => 0,
-        "minecraft:stone" => 1,
-        "minecraft:grass_block" => 2,
-        "minecraft:dirt" => 3,
-        "minecraft:cobblestone" => 4,
-        "minecraft:oak_planks" => 5,
-        "minecraft:sand" => 12,
-        "minecraft:glass" => 20,
-        "minecraft:bricks" => 45,
-        "minecraft:bedrock" => 7,
-        _ => 1,
+        "minecraft:stone" => 2_532,
+        "minecraft:cobblestone" => 5_088,
+        "minecraft:sand" => 6_234,
+        "minecraft:bricks" => 7_455,
+        "minecraft:dirt" => 9_852,
+        "minecraft:grass_block" => 11_062,
+        "minecraft:glass" => 11_998,
+        "minecraft:air" => 12_530,
+        "minecraft:bedrock" => 13_079,
+        "minecraft:oak_planks" => 14_388,
+        _ => 2_532,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BE_26_3_PROTOCOL_NUMBER, Bedrock263Adapter};
+    use super::{BE_26_3_PROTOCOL_NUMBER, Bedrock263Adapter, block_runtime_id};
     use base64::Engine;
     use bedrockrs_proto::V924;
     use bedrockrs_proto::codec::encode_packets;
     use bedrockrs_proto::v662::packets::{LoginPacket, RequestNetworkSettingsPacket};
+    use mc_core::BlockState;
     use mc_proto_common::{HandshakeProbe, LoginRequest, SessionAdapter};
     use serde_json::json;
 
@@ -562,5 +563,19 @@ mod tests {
                 .expect("probe should succeed")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn supported_block_runtime_ids_match_bedrock_1_26_0_palette() {
+        assert_eq!(block_runtime_id(&BlockState::stone()), 2_532);
+        assert_eq!(block_runtime_id(&BlockState::cobblestone()), 5_088);
+        assert_eq!(block_runtime_id(&BlockState::sand()), 6_234);
+        assert_eq!(block_runtime_id(&BlockState::bricks()), 7_455);
+        assert_eq!(block_runtime_id(&BlockState::dirt()), 9_852);
+        assert_eq!(block_runtime_id(&BlockState::grass_block()), 11_062);
+        assert_eq!(block_runtime_id(&BlockState::glass()), 11_998);
+        assert_eq!(block_runtime_id(&BlockState::air()), 12_530);
+        assert_eq!(block_runtime_id(&BlockState::bedrock()), 13_079);
+        assert_eq!(block_runtime_id(&BlockState::oak_planks()), 14_388);
     }
 }

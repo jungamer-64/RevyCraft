@@ -82,13 +82,7 @@ pub async fn spawn_server(
     let active_protocols = registries
         .protocols()
         .filter_enabled(&enabled_adapter_ids)?;
-    plugin_host.activate_gameplay_profiles(&config)?;
-    plugin_host.activate_storage_profile(&config.storage_profile)?;
-    let mut auth_profiles = vec![config.auth_profile.clone()];
-    if config.be_enabled && !auth_profiles.contains(&config.bedrock_auth_profile) {
-        auth_profiles.push(config.bedrock_auth_profile.clone());
-    }
-    plugin_host.activate_auth_profiles(&auth_profiles)?;
+    plugin_host.activate_runtime_profiles(&config)?;
     if !config.be_enabled
         && !active_protocols
             .adapter_ids_for_transport(TransportKind::Udp)

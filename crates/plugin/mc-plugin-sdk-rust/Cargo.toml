@@ -9,7 +9,11 @@ keywords.workspace = true
 categories.workspace = true
 description = "Rust authoring SDK for RevyCraft runtime plugins."
 
+[features]
+disable-exported-symbols = []
+
 [dependencies]
+bytes.workspace = true
 mc-core = { path = "../../core/mc-core" }
 mc-plugin-api = { path = "../mc-plugin-api" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
