@@ -104,9 +104,11 @@ cargo test --workspace
 
 `server-runtime` integration tests use the packaged-plugin harness and now package the full plugin set through `xtask package-all-plugins`.
 
-plugin crate の in-process helper は production public surface ではなく、`in-process-testing` feature を有効にした test/dev build でだけ使う前提です。`mc-plugin-host` 側の test-only helper は `mc_plugin_host::test_support::TestPluginHostBuilder` を正規入口に固定し、custom fake plugin を差し込む raw escape hatch だけを同 module に残しています。
+plugin crate の in-process helper は production public surface ではなく、`in-process-testing` feature を有効にした test/dev build でだけ使う前提です。`mc-plugin-host` 側の test-only helper は `mc_plugin_host::test_support::TestPluginHostBuilder` から `TestPluginHost` を作る流れを正規入口に固定し、custom fake plugin を差し込む raw escape hatch だけを同 module に残しています。
 
 plugin host と SDK が共有する gameplay host blob helper は `mc_plugin_api::codec::gameplay::host_blob::*` にまとまっていて、runtime/host integration 専用の surface として扱います。
+
+`mc_plugin_sdk_rust::__macro_support` と `mc_plugin_api::codec::__internal` は実装都合の unsupported path です。workspace 外からの直接利用や互換は保証しません。
 
 ## Notes
 

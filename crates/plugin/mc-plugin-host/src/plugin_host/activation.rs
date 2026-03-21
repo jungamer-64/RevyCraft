@@ -147,7 +147,6 @@ impl PluginHost {
                 profile_id: storage_profile.to_string(),
                 profile: Arc::new(HotSwappableStorageProfile::new(
                     package.plugin_id.clone(),
-                    storage_profile.to_string(),
                     generation,
                 )),
                 loaded_at: package.modified_at()?,
@@ -185,7 +184,6 @@ impl PluginHost {
                 profile_id: profile_id.clone(),
                 profile: Arc::new(HotSwappableAuthProfile::new(
                     package.plugin_id.clone(),
-                    profile_id,
                     generation,
                     Arc::clone(&self.failures),
                 )),

@@ -24,8 +24,8 @@ use mc_plugin_api::codec::gameplay::{
     encode_gameplay_request,
 };
 use mc_plugin_api::codec::protocol::{
-    ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, WireFrameDecodeResult,
-    decode_protocol_response, encode_protocol_request,
+    ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_protocol_response,
+    encode_protocol_request,
 };
 use mc_plugin_api::codec::storage::{
     StorageRequest, StorageResponse, decode_storage_response, encode_storage_request,
@@ -780,11 +780,9 @@ impl GameplayGeneration {
 
 #[derive(Clone)]
 struct StorageGeneration {
-    #[allow(dead_code)]
     generation_id: PluginGenerationId,
     plugin_id: String,
     profile_id: String,
-    #[allow(dead_code)]
     capabilities: CapabilitySet,
     invoke: PluginInvokeFn,
     free_buffer: PluginFreeBufferFn,
@@ -830,7 +828,6 @@ pub(crate) struct AuthGeneration {
     plugin_id: String,
     profile_id: String,
     mode: AuthMode,
-    #[allow(dead_code)]
     capabilities: CapabilitySet,
     invoke: PluginInvokeFn,
     free_buffer: PluginFreeBufferFn,
@@ -1039,52 +1036,6 @@ impl HotSwappableProtocolAdapter {
             .expect("protocol reload gate should not be poisoned");
         let generation = self.current_generation()?;
         self.quarantine_on_error(f(&generation))
-    }
-
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    pub fn export_session_state(
-        &self,
-        session: &ProtocolSessionSnapshot,
-    ) -> Result<Vec<u8>, RuntimeError> {
-        self.with_generation(|generation| {
-            match generation.invoke(&ProtocolRequest::ExportSessionState {
-                session: session.clone(),
-            })? {
-                ProtocolResponse::SessionTransferBlob(blob) => Ok(blob),
-                other => Err(ProtocolError::Plugin(format!(
-                    "unexpected protocol export payload: {other:?}"
-                ))),
-            }
-        })
-        .map_err(|error| RuntimeError::Config(error.to_string()))
-    }
-
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    pub fn import_session_state(
-        &self,
-        session: &ProtocolSessionSnapshot,
-        blob: &[u8],
-    ) -> Result<(), RuntimeError> {
-        self.with_generation(|generation| {
-            match generation.invoke(&ProtocolRequest::ImportSessionState {
-                session: session.clone(),
-                blob: blob.to_vec(),
-            })? {
-                ProtocolResponse::Empty => Ok(()),
-                other => Err(ProtocolError::Plugin(format!(
-                    "unexpected protocol import payload: {other:?}"
-                ))),
-            }
-        })
-        .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 }
 
@@ -1387,67 +1338,19 @@ impl HotSwappableGameplayProfile {
             .expect("gameplay generation lock should not be poisoned") = generation;
     }
 
-    pub fn profile_id(&self) -> GameplayProfileId {
+    fn profile_id(&self) -> GameplayProfileId {
         self.profile_id.clone()
     }
 
-    pub fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> CapabilitySet {
         self.current_generation().capabilities.clone()
     }
 
-    pub fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+    fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
         Some(self.current_generation().generation_id)
     }
 
-    #[allow(dead_code)]
-    pub fn export_session_state(
-        &self,
-        session: &GameplaySessionSnapshot,
-    ) -> Result<Vec<u8>, RuntimeError> {
-        let _guard = self
-            .reload_gate
-            .read()
-            .expect("gameplay reload gate should not be poisoned");
-        let generation = self.current_generation();
-        match generation
-            .invoke(&GameplayRequest::ExportSessionState {
-                session: session.clone(),
-            })
-            .map_err(RuntimeError::Config)?
-        {
-            GameplayResponse::SessionTransferBlob(blob) => Ok(blob),
-            other => Err(RuntimeError::Config(format!(
-                "unexpected gameplay export payload: {other:?}"
-            ))),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn import_session_state(
-        &self,
-        session: &GameplaySessionSnapshot,
-        blob: &[u8],
-    ) -> Result<(), RuntimeError> {
-        let _guard = self
-            .reload_gate
-            .read()
-            .expect("gameplay reload gate should not be poisoned");
-        let generation = self.current_generation();
-        match generation
-            .invoke(&GameplayRequest::ImportSessionState {
-                session: session.clone(),
-                blob: blob.to_vec(),
-            })
-            .map_err(RuntimeError::Config)?
-        {
-            GameplayResponse::Empty => Ok(()),
-            other => Err(RuntimeError::Config(format!(
-                "unexpected gameplay import payload: {other:?}"
-            ))),
-        }
-    }
-
-    pub fn session_closed(&self, session: &GameplaySessionSnapshot) -> Result<(), RuntimeError> {
+    fn session_closed(&self, session: &GameplaySessionSnapshot) -> Result<(), RuntimeError> {
         let _guard = self
             .reload_gate
             .read()
@@ -1646,21 +1549,14 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
 
 pub(crate) struct HotSwappableStorageProfile {
     plugin_id: String,
-    #[allow(dead_code)]
-    profile_id: String,
     generation: RwLock<Arc<StorageGeneration>>,
     reload_gate: RwLock<()>,
 }
 
 impl HotSwappableStorageProfile {
-    const fn new(
-        plugin_id: String,
-        profile_id: String,
-        generation: Arc<StorageGeneration>,
-    ) -> Self {
+    const fn new(plugin_id: String, generation: Arc<StorageGeneration>) -> Self {
         Self {
             plugin_id,
-            profile_id,
             generation: RwLock::new(generation),
             reload_gate: RwLock::new(()),
         }
@@ -1681,30 +1577,23 @@ impl HotSwappableStorageProfile {
             .expect("storage generation lock should not be poisoned") = generation;
     }
 
-    #[allow(dead_code)]
-    pub fn profile_id(&self) -> &str {
-        &self.profile_id
-    }
-
-    pub fn plugin_id(&self) -> &str {
+    fn plugin_id(&self) -> &str {
         &self.plugin_id
     }
 
-    #[allow(dead_code)]
-    pub fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> CapabilitySet {
         self.current_generation()
             .map(|generation| generation.capabilities.clone())
             .unwrap_or_default()
     }
 
-    #[allow(dead_code)]
-    pub fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+    fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
         self.current_generation()
             .ok()
             .map(|generation| generation.generation_id)
     }
 
-    pub fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError> {
+    fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError> {
         let _guard = self
             .reload_gate
             .read()
@@ -1720,7 +1609,7 @@ impl HotSwappableStorageProfile {
         }
     }
 
-    pub fn save_snapshot(
+    fn save_snapshot(
         &self,
         world_dir: &Path,
         snapshot: &WorldSnapshot,
@@ -1737,28 +1626,6 @@ impl HotSwappableStorageProfile {
             StorageResponse::Empty => Ok(()),
             other => Err(StorageError::Plugin(format!(
                 "unexpected storage save_snapshot payload: {other:?}"
-            ))),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn import_runtime_state(
-        &self,
-        world_dir: &Path,
-        snapshot: &WorldSnapshot,
-    ) -> Result<(), StorageError> {
-        let _guard = self
-            .reload_gate
-            .read()
-            .expect("storage reload gate should not be poisoned");
-        let generation = self.current_generation()?;
-        match generation.invoke(&StorageRequest::ImportRuntimeState {
-            world_dir: world_dir.display().to_string(),
-            snapshot: snapshot.clone(),
-        })? {
-            StorageResponse::Empty => Ok(()),
-            other => Err(StorageError::Plugin(format!(
-                "unexpected storage import_runtime_state payload: {other:?}"
             ))),
         }
     }
@@ -1806,8 +1673,6 @@ impl StorageProfileHandle for HotSwappableStorageProfile {
 
 pub(crate) struct HotSwappableAuthProfile {
     plugin_id: String,
-    #[allow(dead_code)]
-    profile_id: String,
     generation: RwLock<Arc<AuthGeneration>>,
     failures: Arc<PluginFailureDispatch>,
 }
@@ -1815,13 +1680,11 @@ pub(crate) struct HotSwappableAuthProfile {
 impl HotSwappableAuthProfile {
     const fn new(
         plugin_id: String,
-        profile_id: String,
         generation: Arc<AuthGeneration>,
         failures: Arc<PluginFailureDispatch>,
     ) -> Self {
         Self {
             plugin_id,
-            profile_id,
             generation: RwLock::new(generation),
             failures,
         }
@@ -1842,36 +1705,29 @@ impl HotSwappableAuthProfile {
             .expect("auth generation lock should not be poisoned") = generation;
     }
 
-    #[allow(dead_code)]
-    pub fn profile_id(&self) -> &str {
-        &self.profile_id
-    }
-
-    #[allow(dead_code)]
-    pub fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> CapabilitySet {
         self.current_generation()
             .map(|generation| generation.capabilities.clone())
             .unwrap_or_default()
     }
 
-    #[allow(dead_code)]
-    pub fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+    fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
         self.current_generation()
             .ok()
             .map(|generation| generation.generation_id)
     }
 
-    pub fn mode(&self) -> Result<AuthMode, RuntimeError> {
+    fn mode(&self) -> Result<AuthMode, RuntimeError> {
         self.current_generation()
             .map(|generation| generation.mode())
             .map_err(RuntimeError::Config)
     }
 
-    pub fn capture_generation(&self) -> Result<Arc<AuthGeneration>, RuntimeError> {
+    fn capture_generation(&self) -> Result<Arc<AuthGeneration>, RuntimeError> {
         self.current_generation().map_err(RuntimeError::Config)
     }
 
-    pub fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
+    fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
         match self.capture_generation()?.authenticate_offline(username) {
             Ok(player_id) => Ok(player_id),
             Err(RuntimeError::Config(message)) => {
@@ -1886,7 +1742,7 @@ impl HotSwappableAuthProfile {
         }
     }
 
-    pub fn authenticate_online(
+    fn authenticate_online(
         &self,
         username: &str,
         server_hash: &str,
@@ -1908,7 +1764,7 @@ impl HotSwappableAuthProfile {
         }
     }
 
-    pub fn authenticate_bedrock_offline(
+    fn authenticate_bedrock_offline(
         &self,
         display_name: &str,
     ) -> Result<BedrockAuthResult, RuntimeError> {
@@ -1929,7 +1785,7 @@ impl HotSwappableAuthProfile {
         }
     }
 
-    pub fn authenticate_bedrock_xbl(
+    fn authenticate_bedrock_xbl(
         &self,
         chain_jwts: &[String],
         client_data_jwt: &str,

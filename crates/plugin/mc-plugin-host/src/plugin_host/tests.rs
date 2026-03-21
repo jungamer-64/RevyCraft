@@ -6,7 +6,7 @@ use crate::runtime::{ProtocolReloadSession, RuntimeReloadContext};
 use crate::test_support::{
     self, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
     InProcessStoragePlugin, PluginAbiRange, PluginFailureAction, PluginFailureMatrix,
-    TestPluginHostBuilder,
+    TestPluginHost, TestPluginHostBuilder,
 };
 use mc_core::{
     BlockPos, BlockState, ConnectionId, CoreConfig, DimensionId, EntityId, GameplayQuery, PlayerId,
@@ -37,7 +37,7 @@ fn build_test_plugin_host(
     builder: TestPluginHostBuilder,
     abi_range: PluginAbiRange,
     failure_matrix: PluginFailureMatrix,
-) -> std::sync::Arc<crate::host::PluginHost> {
+) -> TestPluginHost {
     builder
         .abi_range(abi_range)
         .failure_matrix(failure_matrix)
@@ -1386,7 +1386,9 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
         plugins_dir: dist_dir,
         ..ServerConfig::default()
     };
-    let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+    let host = TestPluginHost::from_packaged(
+        plugin_host_from_config(&config)?.expect("packaged plugins should be discovered"),
+    );
     let registries = test_support::load_protocol_plugin_set(&host)?;
 
     for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
@@ -1418,7 +1420,9 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
         plugins_dir: dist_dir.clone(),
         ..ServerConfig::default()
     };
-    let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+    let host = TestPluginHost::from_packaged(
+        plugin_host_from_config(&config)?.expect("packaged plugins should be discovered"),
+    );
     let registries = test_support::load_protocol_plugin_set(&host)?;
 
     let adapter = registries
@@ -1476,7 +1480,9 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
         plugins_dir: dist_dir.clone(),
         ..ServerConfig::default()
     };
-    let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+    let host = TestPluginHost::from_packaged(
+        plugin_host_from_config(&config)?.expect("packaged plugins should be discovered"),
+    );
     let registries = test_support::load_protocol_plugin_set(&host)?;
 
     let adapter = registries
@@ -1553,7 +1559,9 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
         plugins_dir: dist_dir.clone(),
         ..ServerConfig::default()
     };
-    let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+    let host = TestPluginHost::from_packaged(
+        plugin_host_from_config(&config)?.expect("packaged plugins should be discovered"),
+    );
     let registries = test_support::load_protocol_plugin_set(&host)?;
 
     let adapter = registries
@@ -1622,7 +1630,9 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
         plugins_dir: dist_dir.clone(),
         ..ServerConfig::default()
     };
-    let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
+    let host = TestPluginHost::from_packaged(
+        plugin_host_from_config(&config)?.expect("packaged plugins should be discovered"),
+    );
     let registries = test_support::load_protocol_plugin_set(&host)?;
 
     let adapter = registries

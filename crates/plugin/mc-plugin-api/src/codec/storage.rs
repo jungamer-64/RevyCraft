@@ -1,5 +1,5 @@
 use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
-use crate::codec::internal::binary::{
+use crate::codec::__internal::binary::{
     Decoder, Encoder, EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError,
     decode_capability_set, decode_envelope, decode_world_snapshot, encode_capability_set,
     encode_envelope, encode_world_snapshot,

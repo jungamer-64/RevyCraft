@@ -98,7 +98,8 @@ use mc_plugin_host::host::plugin_host_from_config;
 use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_host::test_support::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
-    PluginAbiRange, PluginFailureAction, PluginFailureMatrix, PluginHost, TestPluginHostBuilder,
+    PluginAbiRange, PluginFailureAction, PluginFailureMatrix, TestPluginHost,
+    TestPluginHostBuilder,
 };
 use mc_plugin_proto_be_26_3::in_process_protocol_entrypoints as be_26_3_entrypoints;
 use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
@@ -122,7 +123,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -131,7 +131,7 @@ use tokio::net::UdpSocket;
 #[derive(Clone)]
 struct LoadedPluginTestEnvironment {
     loaded_plugins: LoadedPluginSet,
-    plugin_host: Option<Arc<PluginHost>>,
+    plugin_host: Option<TestPluginHost>,
 }
 
 impl LoadedPluginTestEnvironment {
@@ -156,7 +156,7 @@ async fn build_test_server_from_source(
             let config = source.load()?;
             let loaded_plugins = plugin_host.load_plugin_set(&config.plugin_host_config())?;
             ServerBuilder::new(source, loaded_plugins)
-                .with_reload_host(plugin_host)
+                .with_reload_host(plugin_host.runtime_host())
                 .build()
                 .await
                 .map(ReloadableRunningServer::into_running_server)
@@ -191,7 +191,7 @@ async fn build_reloadable_test_server_from_source(
     let config = source.load()?;
     let loaded_plugins = plugin_host.load_plugin_set(&config.plugin_host_config())?;
     ServerBuilder::new(source, loaded_plugins)
-        .with_reload_host(plugin_host)
+        .with_reload_host(plugin_host.runtime_host())
         .build()
         .await
 }
@@ -280,6 +280,7 @@ fn plugin_test_registries_from_dist_with_supporting_plugins(
     let plugin_host = plugin_host_from_config(&config.plugin_host_config())?.ok_or_else(|| {
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
+    let plugin_host = TestPluginHost::from_packaged(plugin_host);
     Ok(LoadedPluginTestEnvironment {
         loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
         plugin_host: Some(plugin_host),
@@ -292,6 +293,7 @@ fn plugin_test_registries_from_config(
     let plugin_host = plugin_host_from_config(&config.plugin_host_config())?.ok_or_else(|| {
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
+    let plugin_host = TestPluginHost::from_packaged(plugin_host);
     Ok(LoadedPluginTestEnvironment {
         loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
         plugin_host: Some(plugin_host),
@@ -1281,7 +1283,7 @@ async fn reloadable_server_builder_applies_reload_host_failure_policy() -> Resul
         panic!("failing storage registries should include a plugin host");
     };
     let server = ServerBuilder::new(ServerConfigSource::Inline(config), loaded_plugins)
-        .with_reload_host(reload_host)
+        .with_reload_host(reload_host.runtime_host())
         .build()
         .await?;
 
