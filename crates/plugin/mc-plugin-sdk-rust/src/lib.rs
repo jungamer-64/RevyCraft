@@ -1,25 +1,19 @@
 #![allow(clippy::multiple_crate_versions)]
-use bytes::BytesMut;
 use mc_core::{
     CapabilitySet, CoreCommand, GameplayEffect, GameplayJoinEffect, PlayerId, PlayerSnapshot,
     WorldMeta, WorldSnapshot,
 };
 use mc_plugin_api::abi::{
-    ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginAbiVersion,
-    PluginErrorCode, PluginKind, Utf8Slice,
+    CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginAbiVersion, PluginKind,
+    Utf8Slice,
 };
-use mc_plugin_api::codec::auth::{AuthDescriptor, AuthRequest, AuthResponse, BedrockAuthResult};
-use mc_plugin_api::codec::gameplay::host_blob::{
-    decode_block_state, decode_player_snapshot, decode_world_meta, encode_block_pos,
-    encode_can_edit_block_key, encode_player_id,
-};
-use mc_plugin_api::codec::gameplay::{
-    GameplayDescriptor, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
-};
-use mc_plugin_api::codec::protocol::{
-    ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, WireFrameDecodeResult,
-};
-use mc_plugin_api::codec::storage::{StorageDescriptor, StorageRequest, StorageResponse};
+use mc_plugin_api::codec::auth::{AuthDescriptor, BedrockAuthResult};
+use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
+#[cfg(test)]
+use mc_plugin_api::codec::gameplay::{GameplayRequest, GameplayResponse};
+use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_api::codec::storage::StorageDescriptor;
+#[cfg(test)]
 use mc_plugin_api::host_api::HostApiTableV1;
 use mc_plugin_api::manifest::PluginManifestV1;
 use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError, StorageError};
@@ -227,7 +221,7 @@ macro_rules! export_protocol_plugin {
 
         unsafe extern "C" fn mc_plugin_free_buffer(buffer: mc_plugin_api::abi::OwnedBuffer) {
             unsafe {
-                $crate::buffers::free_owned_buffer(buffer);
+                $crate::__macro_support::buffers::free_owned_buffer(buffer);
             }
         }
 
@@ -365,7 +359,7 @@ macro_rules! export_gameplay_plugin {
 
         unsafe extern "C" fn mc_gameplay_plugin_free_buffer(buffer: mc_plugin_api::abi::OwnedBuffer) {
             unsafe {
-                $crate::buffers::free_owned_buffer(buffer);
+                $crate::__macro_support::buffers::free_owned_buffer(buffer);
             }
         }
 
@@ -473,7 +467,7 @@ macro_rules! export_storage_plugin {
 
         unsafe extern "C" fn mc_storage_plugin_free_buffer(buffer: mc_plugin_api::abi::OwnedBuffer) {
             unsafe {
-                $crate::buffers::free_owned_buffer(buffer);
+                $crate::__macro_support::buffers::free_owned_buffer(buffer);
             }
         }
 
@@ -580,7 +574,7 @@ macro_rules! export_auth_plugin {
 
         unsafe extern "C" fn mc_auth_plugin_free_buffer(buffer: mc_plugin_api::abi::OwnedBuffer) {
             unsafe {
-                $crate::buffers::free_owned_buffer(buffer);
+                $crate::__macro_support::buffers::free_owned_buffer(buffer);
             }
         }
 

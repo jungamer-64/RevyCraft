@@ -10,6 +10,7 @@ categories.workspace = true
 description = "Shared in-process plugin-host test fixtures for RevyCraft workspace tests."
 
 [dependencies]
+mc-core = { path = "../../core/mc-core" }
 mc-plugin-host = { path = "../../plugin/mc-plugin-host", features = ["in-process-testing"] }
 
 [lints]

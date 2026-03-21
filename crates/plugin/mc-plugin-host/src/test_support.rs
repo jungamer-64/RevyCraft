@@ -6,8 +6,6 @@ use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use crate::runtime::{
     AuthProfileHandle, GameplayProfileHandle, RuntimeReloadContext, StorageProfileHandle,
 };
-#[cfg(feature = "in-process-testing")]
-use crate::runtime::RuntimePluginHost;
 use mc_core::PluginGenerationId;
 use std::sync::Arc;
 
@@ -27,12 +25,6 @@ impl TestPluginHost {
     /// Returns [`PluginHostError`] when packaged plugin discovery fails.
     pub fn discover(config: &ServerConfig) -> Result<Option<Self>, PluginHostError> {
         plugin_host_from_config(config).map(|host| host.map(|inner| Self { inner }))
-    }
-
-    #[cfg(feature = "in-process-testing")]
-    #[must_use]
-    pub fn runtime_host(&self) -> Arc<dyn RuntimePluginHost> {
-        Arc::clone(&self.inner) as Arc<dyn RuntimePluginHost>
     }
 
     #[must_use]

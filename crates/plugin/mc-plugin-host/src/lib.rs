@@ -13,17 +13,12 @@ pub mod host {
 }
 pub mod registry;
 pub mod runtime;
-#[cfg(any(test, feature = "in-process-testing"))]
+#[cfg(test)]
 mod test_support;
 
 #[cfg(feature = "in-process-testing")]
 #[doc(hidden)]
-pub mod __test_support_internal {
-    pub use crate::test_support::{
-        InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
-        InProcessStoragePlugin, TestPluginHost, TestPluginHostBuilder,
-    };
-}
+pub mod __test_hooks;
 
 pub use self::error::PluginHostError;
 

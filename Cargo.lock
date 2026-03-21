@@ -1551,6 +1551,7 @@ dependencies = [
 name = "mc-plugin-host-test-support"
 version = "0.1.0"
 dependencies = [
+ "mc-core",
  "mc-plugin-host",
 ]
 

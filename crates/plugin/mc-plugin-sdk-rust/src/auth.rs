@@ -50,31 +50,3 @@ pub trait RustAuthPlugin: Send + Sync + 'static {
         Err("bedrock xbl auth is not implemented for this plugin".to_string())
     }
 }
-
-pub(crate) fn handle_auth_request<P: RustAuthPlugin>(
-    plugin: &P,
-    request: AuthRequest,
-) -> Result<AuthResponse, String> {
-    match request {
-        AuthRequest::Describe => Ok(AuthResponse::Descriptor(plugin.descriptor())),
-        AuthRequest::CapabilitySet => Ok(AuthResponse::CapabilitySet(plugin.capability_set())),
-        AuthRequest::AuthenticateOffline { username } => plugin
-            .authenticate_offline(&username)
-            .map(AuthResponse::AuthenticatedPlayer),
-        AuthRequest::AuthenticateOnline {
-            username,
-            server_hash,
-        } => plugin
-            .authenticate_online(&username, &server_hash)
-            .map(AuthResponse::AuthenticatedPlayer),
-        AuthRequest::AuthenticateBedrockOffline { display_name } => plugin
-            .authenticate_bedrock_offline(&display_name)
-            .map(AuthResponse::AuthenticatedBedrockPlayer),
-        AuthRequest::AuthenticateBedrockXbl {
-            chain_jwts,
-            client_data_jwt,
-        } => plugin
-            .authenticate_bedrock_xbl(&chain_jwts, &client_data_jwt)
-            .map(AuthResponse::AuthenticatedBedrockPlayer),
-    }
-}
