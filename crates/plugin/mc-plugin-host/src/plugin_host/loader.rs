@@ -25,9 +25,11 @@ impl PluginLoader {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
                 Self::load_dynamic_protocol(library_path)
             },
+            #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(plugin) => {
                 Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
             }
+            #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessStorage(_)
             | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
@@ -42,6 +44,7 @@ impl PluginLoader {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
                 Self::load_dynamic_gameplay(library_path)
             },
+            #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessGameplay(plugin) => {
                 let status = unsafe { (plugin.api.set_host_api)(&gameplay_host_api()) };
                 if status != PluginErrorCode::Ok {
@@ -52,6 +55,7 @@ impl PluginLoader {
                 }
                 Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
             }
+            #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessStorage(_)
             | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
@@ -66,9 +70,11 @@ impl PluginLoader {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
                 Self::load_dynamic_storage(library_path)
             },
+            #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessStorage(plugin) => {
                 Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
             }
+            #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
@@ -83,9 +89,11 @@ impl PluginLoader {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
                 Self::load_dynamic_auth(library_path)
             },
+            #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessAuth(plugin) => {
                 Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
             }
+            #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessStorage(_) => Err(RuntimeError::Config(format!(

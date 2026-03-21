@@ -22,9 +22,8 @@ pub unsafe fn free_owned_buffer(buffer: OwnedBuffer) {
     }
 }
 
-#[doc(hidden)]
 #[must_use]
-pub const unsafe fn byte_slice_as_bytes(slice: ByteSlice) -> &'static [u8] {
+pub(crate) const unsafe fn byte_slice_as_bytes(slice: ByteSlice) -> &'static [u8] {
     if slice.ptr.is_null() || slice.len == 0 {
         &[]
     } else {
@@ -38,16 +37,14 @@ fn write_owned_buffer_ptr(output: *mut OwnedBuffer, bytes: Vec<u8>) {
     }
 }
 
-#[doc(hidden)]
-pub fn write_error_buffer(error_out: *mut OwnedBuffer, message: String) {
+pub(crate) fn write_error_buffer(error_out: *mut OwnedBuffer, message: String) {
     if error_out.is_null() {
         return;
     }
     write_owned_buffer_ptr(error_out, message.into_bytes());
 }
 
-#[doc(hidden)]
-pub fn write_output_buffer(output: *mut OwnedBuffer, bytes: Vec<u8>) {
+pub(crate) fn write_output_buffer(output: *mut OwnedBuffer, bytes: Vec<u8>) {
     if output.is_null() {
         return;
     }

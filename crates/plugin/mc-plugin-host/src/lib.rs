@@ -1,4 +1,4 @@
-#![allow(dead_code, clippy::multiple_crate_versions)]
+#![allow(clippy::multiple_crate_versions)]
 
 mod error;
 

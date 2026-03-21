@@ -29,8 +29,7 @@ pub trait RustProtocolPlugin: HandshakeProbe + ProtocolAdapter + Send + Sync + '
     }
 }
 
-#[doc(hidden)]
-pub fn handle_protocol_request<P: RustProtocolPlugin>(
+pub(crate) fn handle_protocol_request<P: RustProtocolPlugin>(
     plugin: &P,
     request: ProtocolRequest,
 ) -> Result<ProtocolResponse, String> {

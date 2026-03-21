@@ -50,8 +50,7 @@ pub trait RustStoragePlugin: Send + Sync + 'static {
     }
 }
 
-#[doc(hidden)]
-pub fn handle_storage_request<P: RustStoragePlugin>(
+pub(crate) fn handle_storage_request<P: RustStoragePlugin>(
     plugin: &P,
     request: StorageRequest,
 ) -> Result<StorageResponse, String> {

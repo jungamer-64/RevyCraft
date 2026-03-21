@@ -51,8 +51,7 @@ pub trait RustAuthPlugin: Send + Sync + 'static {
     }
 }
 
-#[doc(hidden)]
-pub fn handle_auth_request<P: RustAuthPlugin>(
+pub(crate) fn handle_auth_request<P: RustAuthPlugin>(
     plugin: &P,
     request: AuthRequest,
 ) -> Result<AuthResponse, String> {

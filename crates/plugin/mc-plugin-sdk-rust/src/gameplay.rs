@@ -158,9 +158,9 @@ impl GameplayHost for SdkGameplayHost {
         let Some(callback) = self.api.read_player_snapshot else {
             return Err("gameplay host did not provide read_player_snapshot".to_string());
         };
-        let payload = encode_host_player_id_blob(player_id);
+        let payload = encode_player_id(player_id);
         let bytes = call_host_buffer(self.api.context, &payload, callback)?;
-        decode_host_player_snapshot_blob(&bytes).map_err(|error| error.to_string())
+        decode_player_snapshot(&bytes).map_err(|error| error.to_string())
     }
 
     fn read_world_meta(&self) -> Result<WorldMeta, String> {
@@ -168,16 +168,16 @@ impl GameplayHost for SdkGameplayHost {
             return Err("gameplay host did not provide read_world_meta".to_string());
         };
         let bytes = call_host_zero_arg(self.api.context, callback)?;
-        decode_host_world_meta_blob(&bytes).map_err(|error| error.to_string())
+        decode_world_meta(&bytes).map_err(|error| error.to_string())
     }
 
     fn read_block_state(&self, position: mc_core::BlockPos) -> Result<mc_core::BlockState, String> {
         let Some(callback) = self.api.read_block_state else {
             return Err("gameplay host did not provide read_block_state".to_string());
         };
-        let payload = encode_host_block_pos_blob(position);
+        let payload = encode_block_pos(position);
         let bytes = call_host_buffer(self.api.context, &payload, callback)?;
-        decode_host_block_state_blob(&bytes).map_err(|error| error.to_string())
+        decode_block_state(&bytes).map_err(|error| error.to_string())
     }
 
     fn can_edit_block(
@@ -188,7 +188,7 @@ impl GameplayHost for SdkGameplayHost {
         let Some(callback) = self.api.can_edit_block else {
             return Err("gameplay host did not provide can_edit_block".to_string());
         };
-        let payload = encode_host_can_edit_block_key(player_id, position);
+        let payload = encode_can_edit_block_key(player_id, position);
         call_host_bool(self.api.context, &payload, callback)
     }
 }
@@ -295,16 +295,14 @@ fn read_error_buffer(buffer: OwnedBuffer) -> String {
     String::from_utf8(bytes).unwrap_or_else(|_| "host callback returned invalid utf-8".to_string())
 }
 
-#[doc(hidden)]
-pub fn handle_gameplay_request<P: RustGameplayPlugin>(
+pub(crate) fn handle_gameplay_request<P: RustGameplayPlugin>(
     plugin: &P,
     request: GameplayRequest,
 ) -> Result<GameplayResponse, String> {
     handle_gameplay_request_with_host_api(plugin, request, None)
 }
 
-#[doc(hidden)]
-pub fn handle_gameplay_request_with_host_api<P: RustGameplayPlugin>(
+pub(crate) fn handle_gameplay_request_with_host_api<P: RustGameplayPlugin>(
     plugin: &P,
     request: GameplayRequest,
     host_api: Option<HostApiTableV1>,

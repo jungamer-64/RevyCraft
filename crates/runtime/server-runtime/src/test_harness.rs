@@ -64,11 +64,13 @@ static PACKAGED_PLUGIN_TEST_HARNESS: std::sync::OnceLock<Result<PathBuf, String>
 pub const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn packaged_plugin_test_harness_build_count() -> usize {
     PACKAGED_PLUGIN_TEST_HARNESS_BUILDS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub fn packaged_plugin_test_variant_build_count() -> usize {
     PACKAGED_PLUGIN_TEST_VARIANT_BUILDS.load(std::sync::atomic::Ordering::SeqCst)
 }

@@ -145,16 +145,6 @@ impl LoadedPluginSet {
         }
     }
 
-    pub(crate) fn register_adapter(&mut self, adapter: Arc<dyn ProtocolAdapter>) -> &mut Self {
-        self.protocols.register_adapter(adapter);
-        self
-    }
-
-    pub(crate) fn register_probe(&mut self, probe: Arc<dyn HandshakeProbe>) -> &mut Self {
-        self.protocols.register_probe(probe);
-        self
-    }
-
     pub(crate) fn register_gameplay_profile(
         &mut self,
         profile_id: impl Into<String>,

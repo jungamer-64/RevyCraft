@@ -1,9 +1,9 @@
 use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
-use crate::codec::protocol::{
-    Decoder, Encoder, EnvelopeHeader, decode_capability_set, decode_envelope, decode_player_id,
-    encode_capability_set, encode_envelope, encode_player_id,
+use crate::codec::internal::binary::{
+    Decoder, Encoder, EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError,
+    decode_capability_set, decode_envelope, decode_player_id, encode_capability_set,
+    encode_envelope, encode_player_id,
 };
-use crate::codec::protocol::{PROTOCOL_FLAG_RESPONSE, ProtocolCodecError};
 use mc_core::{CapabilitySet, PlayerId};
 use serde::{Deserialize, Serialize};
 

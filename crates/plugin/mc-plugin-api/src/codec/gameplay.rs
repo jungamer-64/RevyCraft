@@ -1,14 +1,14 @@
 use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
-use crate::codec::protocol::{
-    Decoder, Encoder, EnvelopeHeader, decode_block_pos, decode_block_state, decode_capability_set,
-    decode_connection_phase, decode_core_command, decode_core_event, decode_entity_id,
-    decode_envelope, decode_f32_value, decode_inventory_slot, decode_option, decode_player_id,
-    decode_player_snapshot, decode_u8_value, decode_world_meta, encode_block_pos,
-    encode_block_state, encode_capability_set, encode_connection_phase, encode_core_command,
-    encode_core_event, encode_entity_id, encode_envelope, encode_inventory_slot, encode_option,
-    encode_player_id, encode_player_snapshot, encode_world_meta,
+use crate::codec::internal::binary::{
+    Decoder, Encoder, EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_block_pos,
+    decode_block_state, decode_capability_set, decode_connection_phase, decode_core_command,
+    decode_core_event, decode_entity_id, decode_envelope, decode_f32_value, decode_inventory_slot,
+    decode_option, decode_player_id, decode_player_snapshot, decode_u8_value, decode_world_meta,
+    encode_block_pos, encode_block_state, encode_capability_set, encode_connection_phase,
+    encode_core_command, encode_core_event, encode_entity_id, encode_envelope,
+    encode_inventory_slot, encode_option, encode_player_id, encode_player_snapshot,
+    encode_world_meta,
 };
-use crate::codec::protocol::{PROTOCOL_FLAG_RESPONSE, ProtocolCodecError};
 use mc_core::{
     CapabilitySet, CoreCommand, EventTarget, GameplayEffect, GameplayJoinEffect, GameplayMutation,
     GameplayProfileId, PlayerId, PlayerInventory, PlayerSnapshot, TargetedEvent, WorldMeta,
@@ -633,154 +633,157 @@ fn decode_player_inventory_blob_inner(
     })
 }
 
-#[must_use]
-pub fn encode_host_player_id_blob(player_id: PlayerId) -> Vec<u8> {
-    let mut encoder = Encoder::default();
-    encode_player_id(&mut encoder, player_id);
-    encoder.into_inner()
-}
+pub mod host_blob {
+    use super::*;
 
-/// Decodes a player identifier blob returned by the gameplay host API.
-///
-/// # Errors
-///
-/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
-pub fn decode_host_player_id_blob(bytes: &[u8]) -> Result<PlayerId, ProtocolCodecError> {
-    let mut decoder = Decoder::new(bytes);
-    let player_id = decode_player_id(&mut decoder)?;
-    decoder.finish()?;
-    Ok(player_id)
-}
+    #[must_use]
+    pub fn encode_player_id(player_id: PlayerId) -> Vec<u8> {
+        let mut encoder = Encoder::default();
+        super::encode_player_id(&mut encoder, player_id);
+        encoder.into_inner()
+    }
 
-#[must_use]
-pub fn encode_host_block_pos_blob(position: mc_core::BlockPos) -> Vec<u8> {
-    let mut encoder = Encoder::default();
-    encode_block_pos(&mut encoder, position);
-    encoder.into_inner()
-}
+    /// Decodes a player identifier blob returned by the gameplay host API.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
+    pub fn decode_player_id(bytes: &[u8]) -> Result<PlayerId, ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let player_id = super::decode_player_id(&mut decoder)?;
+        decoder.finish()?;
+        Ok(player_id)
+    }
 
-/// Decodes a block-position blob returned by the gameplay host API.
-///
-/// # Errors
-///
-/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
-pub fn decode_host_block_pos_blob(bytes: &[u8]) -> Result<mc_core::BlockPos, ProtocolCodecError> {
-    let mut decoder = Decoder::new(bytes);
-    let position = decode_block_pos(&mut decoder)?;
-    decoder.finish()?;
-    Ok(position)
-}
+    #[must_use]
+    pub fn encode_block_pos(position: mc_core::BlockPos) -> Vec<u8> {
+        let mut encoder = Encoder::default();
+        super::encode_block_pos(&mut encoder, position);
+        encoder.into_inner()
+    }
 
-/// Decodes the `(player_id, block_pos)` key used by the host can-edit-block cache.
-///
-/// # Errors
-///
-/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
-pub fn decode_host_can_edit_block_key(
-    bytes: &[u8],
-) -> Result<(PlayerId, mc_core::BlockPos), ProtocolCodecError> {
-    let mut decoder = Decoder::new(bytes);
-    let player_id = decode_player_id(&mut decoder)?;
-    let position = decode_block_pos(&mut decoder)?;
-    decoder.finish()?;
-    Ok((player_id, position))
-}
+    /// Decodes a block-position blob returned by the gameplay host API.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
+    pub fn decode_block_pos(bytes: &[u8]) -> Result<mc_core::BlockPos, ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let position = super::decode_block_pos(&mut decoder)?;
+        decoder.finish()?;
+        Ok(position)
+    }
 
-#[must_use]
-pub fn encode_host_can_edit_block_key(player_id: PlayerId, position: mc_core::BlockPos) -> Vec<u8> {
-    let mut encoder = Encoder::default();
-    encode_player_id(&mut encoder, player_id);
-    encode_block_pos(&mut encoder, position);
-    encoder.into_inner()
-}
+    /// Decodes the `(player_id, block_pos)` key used by the host can-edit-block cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
+    pub fn decode_can_edit_block_key(
+        bytes: &[u8],
+    ) -> Result<(PlayerId, mc_core::BlockPos), ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let player_id = super::decode_player_id(&mut decoder)?;
+        let position = super::decode_block_pos(&mut decoder)?;
+        decoder.finish()?;
+        Ok((player_id, position))
+    }
 
-/// Encodes an optional player snapshot for host-side gameplay queries.
-///
-/// # Errors
-///
-/// Returns an error when the snapshot cannot be serialized.
-pub fn encode_host_player_snapshot_blob(
-    snapshot: Option<&PlayerSnapshot>,
-) -> Result<Vec<u8>, ProtocolCodecError> {
-    let mut encoder = Encoder::default();
-    encode_option(&mut encoder, snapshot, encode_player_snapshot)?;
-    Ok(encoder.into_inner())
-}
+    #[must_use]
+    pub fn encode_can_edit_block_key(player_id: PlayerId, position: mc_core::BlockPos) -> Vec<u8> {
+        let mut encoder = Encoder::default();
+        super::encode_player_id(&mut encoder, player_id);
+        super::encode_block_pos(&mut encoder, position);
+        encoder.into_inner()
+    }
 
-/// Decodes an optional player snapshot returned by the gameplay host API.
-///
-/// # Errors
-///
-/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
-pub fn decode_host_player_snapshot_blob(
-    bytes: &[u8],
-) -> Result<Option<PlayerSnapshot>, ProtocolCodecError> {
-    let mut decoder = Decoder::new(bytes);
-    let snapshot = decode_option(&mut decoder, decode_player_snapshot)?;
-    decoder.finish()?;
-    Ok(snapshot)
-}
+    /// Encodes an optional player snapshot for host-side gameplay queries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the snapshot cannot be serialized.
+    pub fn encode_player_snapshot(
+        snapshot: Option<&PlayerSnapshot>,
+    ) -> Result<Vec<u8>, ProtocolCodecError> {
+        let mut encoder = Encoder::default();
+        encode_option(&mut encoder, snapshot, super::encode_player_snapshot)?;
+        Ok(encoder.into_inner())
+    }
 
-/// Encodes world metadata for host-side gameplay queries.
-///
-/// # Errors
-///
-/// Returns an error when the world metadata cannot be serialized.
-pub fn encode_host_world_meta_blob(meta: &WorldMeta) -> Result<Vec<u8>, ProtocolCodecError> {
-    let mut encoder = Encoder::default();
-    encode_world_meta(&mut encoder, meta)?;
-    Ok(encoder.into_inner())
-}
+    /// Decodes an optional player snapshot returned by the gameplay host API.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
+    pub fn decode_player_snapshot(
+        bytes: &[u8],
+    ) -> Result<Option<PlayerSnapshot>, ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let snapshot = decode_option(&mut decoder, super::decode_player_snapshot)?;
+        decoder.finish()?;
+        Ok(snapshot)
+    }
 
-/// Decodes world metadata returned by the gameplay host API.
-///
-/// # Errors
-///
-/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
-pub fn decode_host_world_meta_blob(bytes: &[u8]) -> Result<WorldMeta, ProtocolCodecError> {
-    let mut decoder = Decoder::new(bytes);
-    let meta = decode_world_meta(&mut decoder)?;
-    decoder.finish()?;
-    Ok(meta)
-}
+    /// Encodes world metadata for host-side gameplay queries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the world metadata cannot be serialized.
+    pub fn encode_world_meta(meta: &WorldMeta) -> Result<Vec<u8>, ProtocolCodecError> {
+        let mut encoder = Encoder::default();
+        super::encode_world_meta(&mut encoder, meta)?;
+        Ok(encoder.into_inner())
+    }
 
-/// Encodes a block state for host-side gameplay queries.
-///
-/// # Errors
-///
-/// Returns an error when the block state cannot be serialized.
-pub fn encode_host_block_state_blob(
-    block_state: &mc_core::BlockState,
-) -> Result<Vec<u8>, ProtocolCodecError> {
-    let mut encoder = Encoder::default();
-    encode_block_state(&mut encoder, block_state)?;
-    Ok(encoder.into_inner())
-}
+    /// Decodes world metadata returned by the gameplay host API.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
+    pub fn decode_world_meta(bytes: &[u8]) -> Result<WorldMeta, ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let meta = super::decode_world_meta(&mut decoder)?;
+        decoder.finish()?;
+        Ok(meta)
+    }
 
-/// Decodes a block state returned by the gameplay host API.
-///
-/// # Errors
-///
-/// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
-pub fn decode_host_block_state_blob(
-    bytes: &[u8],
-) -> Result<mc_core::BlockState, ProtocolCodecError> {
-    let mut decoder = Decoder::new(bytes);
-    let block = decode_block_state(&mut decoder)?;
-    decoder.finish()?;
-    Ok(block)
+    /// Encodes a block state for host-side gameplay queries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the block state cannot be serialized.
+    pub fn encode_block_state(
+        block_state: &mc_core::BlockState,
+    ) -> Result<Vec<u8>, ProtocolCodecError> {
+        let mut encoder = Encoder::default();
+        super::encode_block_state(&mut encoder, block_state)?;
+        Ok(encoder.into_inner())
+    }
+
+    /// Decodes a block state returned by the gameplay host API.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
+    pub fn decode_block_state(bytes: &[u8]) -> Result<mc_core::BlockState, ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let block = super::decode_block_state(&mut decoder)?;
+        decoder.finish()?;
+        Ok(block)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         GameplayDescriptor, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
-        decode_gameplay_request, decode_gameplay_response, decode_host_block_state_blob,
-        decode_host_can_edit_block_key, decode_host_player_id_blob,
-        decode_host_player_snapshot_blob, decode_host_world_meta_blob, encode_gameplay_request,
-        encode_gameplay_response, encode_host_block_pos_blob, encode_host_block_state_blob,
-        encode_host_can_edit_block_key, encode_host_player_id_blob,
-        encode_host_player_snapshot_blob, encode_host_world_meta_blob,
+        decode_gameplay_request, decode_gameplay_response, encode_gameplay_request,
+        encode_gameplay_response,
+        host_blob::{
+            decode_block_state, decode_can_edit_block_key, decode_player_id,
+            decode_player_snapshot, decode_world_meta, encode_block_pos, encode_block_state,
+            encode_can_edit_block_key, encode_player_id, encode_player_snapshot, encode_world_meta,
+        },
     };
     use mc_core::{
         BlockPos, BlockState, CapabilitySet, CoreCommand, CoreEvent, GameplayEffect,
@@ -936,43 +939,40 @@ mod tests {
 
     #[test]
     fn host_blob_helpers_round_trip() {
-        let player_id_bytes = encode_host_player_id_blob(sample_player_id());
+        let player_id_bytes = encode_player_id(sample_player_id());
         assert_eq!(
-            decode_host_player_id_blob(&player_id_bytes).expect("player id should decode"),
+            decode_player_id(&player_id_bytes).expect("player id should decode"),
             sample_player_id()
         );
 
-        let player_blob =
-            encode_host_player_snapshot_blob(Some(&sample_player())).expect("snapshot encodes");
+        let player_blob = encode_player_snapshot(Some(&sample_player())).expect("snapshot encodes");
         assert_eq!(
-            decode_host_player_snapshot_blob(&player_blob).expect("snapshot decodes"),
+            decode_player_snapshot(&player_blob).expect("snapshot decodes"),
             Some(sample_player())
         );
 
-        let world_blob = encode_host_world_meta_blob(&sample_world_meta()).expect("world encodes");
+        let world_blob = encode_world_meta(&sample_world_meta()).expect("world encodes");
         assert_eq!(
-            decode_host_world_meta_blob(&world_blob).expect("world decodes"),
+            decode_world_meta(&world_blob).expect("world decodes"),
             sample_world_meta()
         );
 
-        let block_blob =
-            encode_host_block_state_blob(&BlockState::stone()).expect("block state encodes");
+        let block_blob = encode_block_state(&BlockState::stone()).expect("block state encodes");
         assert_eq!(
-            decode_host_block_state_blob(&block_blob).expect("block state decodes"),
+            decode_block_state(&block_blob).expect("block state decodes"),
             BlockState::stone()
         );
 
-        let key = encode_host_can_edit_block_key(sample_player_id(), BlockPos::new(1, 2, 3));
+        let key = encode_can_edit_block_key(sample_player_id(), BlockPos::new(1, 2, 3));
         assert_eq!(
-            decode_host_can_edit_block_key(&key).expect("key decodes"),
+            decode_can_edit_block_key(&key).expect("key decodes"),
             (sample_player_id(), BlockPos::new(1, 2, 3))
         );
 
-        let position_bytes = encode_host_block_pos_blob(BlockPos::new(4, 5, 6));
+        let position_bytes = encode_block_pos(BlockPos::new(4, 5, 6));
         assert_eq!(
-            decode_host_block_state_blob(
-                &encode_host_block_state_blob(&BlockState::new("minecraft:glass"))
-                    .expect("block encodes")
+            decode_block_state(
+                &encode_block_state(&BlockState::new("minecraft:glass")).expect("block encodes")
             )
             .expect("block decodes"),
             BlockState::new("minecraft:glass")

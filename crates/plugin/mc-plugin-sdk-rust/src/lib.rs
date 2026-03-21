@@ -9,10 +9,12 @@ use mc_plugin_api::abi::{
     PluginErrorCode, PluginKind, Utf8Slice,
 };
 use mc_plugin_api::codec::auth::{AuthDescriptor, AuthRequest, AuthResponse, BedrockAuthResult};
+use mc_plugin_api::codec::gameplay::host_blob::{
+    decode_block_state, decode_player_snapshot, decode_world_meta, encode_block_pos,
+    encode_can_edit_block_key, encode_player_id,
+};
 use mc_plugin_api::codec::gameplay::{
     GameplayDescriptor, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
-    decode_host_block_state_blob, decode_host_player_snapshot_blob, decode_host_world_meta_blob,
-    encode_host_block_pos_blob, encode_host_can_edit_block_key, encode_host_player_id_blob,
 };
 use mc_plugin_api::codec::protocol::{
     ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, WireFrameDecodeResult,
@@ -25,6 +27,8 @@ use std::path::Path;
 pub mod auth;
 pub mod buffers;
 pub mod gameplay;
+#[doc(hidden)]
+pub mod internal;
 pub mod manifest;
 pub mod protocol;
 pub mod storage;
@@ -175,16 +179,16 @@ macro_rules! export_protocol_plugin {
             error_out: *mut mc_plugin_api::abi::OwnedBuffer,
         ) -> mc_plugin_api::abi::PluginErrorCode {
             let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let request_bytes = unsafe { $crate::buffers::byte_slice_as_bytes(request) };
+                let request_bytes = unsafe { $crate::internal::buffers::byte_slice_as_bytes(request) };
                 mc_plugin_api::codec::protocol::decode_protocol_request(request_bytes)
             })) {
                 Ok(Ok(request)) => request,
                 Ok(Err(error)) => {
-                    $crate::buffers::write_error_buffer(error_out, error.to_string());
+                    $crate::internal::buffers::write_error_buffer(error_out, error.to_string());
                     return mc_plugin_api::abi::PluginErrorCode::InvalidInput;
                 }
                 Err(_) => {
-                    $crate::buffers::write_error_buffer(
+                    $crate::internal::buffers::write_error_buffer(
                         error_out,
                         "protocol plugin panicked while decoding request".to_string(),
                     );
@@ -193,15 +197,15 @@ macro_rules! export_protocol_plugin {
             };
 
             let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                $crate::protocol::handle_protocol_request(mc_plugin_instance(), request.clone())
+                $crate::internal::handle_protocol_request(mc_plugin_instance(), request.clone())
             })) {
                 Ok(Ok(response)) => response,
                 Ok(Err(message)) => {
-                    $crate::buffers::write_error_buffer(error_out, message);
+                    $crate::internal::buffers::write_error_buffer(error_out, message);
                     return mc_plugin_api::abi::PluginErrorCode::Internal;
                 }
                 Err(_) => {
-                    $crate::buffers::write_error_buffer(
+                    $crate::internal::buffers::write_error_buffer(
                         error_out,
                         "protocol plugin panicked while handling request".to_string(),
                     );
@@ -211,11 +215,11 @@ macro_rules! export_protocol_plugin {
 
             match mc_plugin_api::codec::protocol::encode_protocol_response(&request, &response) {
                 Ok(bytes) => {
-                    $crate::buffers::write_output_buffer(output, bytes);
+                    $crate::internal::buffers::write_output_buffer(output, bytes);
                     mc_plugin_api::abi::PluginErrorCode::Ok
                 }
                 Err(message) => {
-                    $crate::buffers::write_error_buffer(error_out, message.to_string());
+                    $crate::internal::buffers::write_error_buffer(error_out, message.to_string());
                     mc_plugin_api::abi::PluginErrorCode::Internal
                 }
             }
@@ -303,16 +307,16 @@ macro_rules! export_gameplay_plugin {
             error_out: *mut mc_plugin_api::abi::OwnedBuffer,
         ) -> mc_plugin_api::abi::PluginErrorCode {
             let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let request_bytes = unsafe { $crate::buffers::byte_slice_as_bytes(request) };
+                let request_bytes = unsafe { $crate::internal::buffers::byte_slice_as_bytes(request) };
                 mc_plugin_api::codec::gameplay::decode_gameplay_request(request_bytes)
             })) {
                 Ok(Ok(request)) => request,
                 Ok(Err(error)) => {
-                    $crate::buffers::write_error_buffer(error_out, error.to_string());
+                    $crate::internal::buffers::write_error_buffer(error_out, error.to_string());
                     return mc_plugin_api::abi::PluginErrorCode::InvalidInput;
                 }
                 Err(_) => {
-                    $crate::buffers::write_error_buffer(
+                    $crate::internal::buffers::write_error_buffer(
                         error_out,
                         "gameplay plugin panicked while decoding request".to_string(),
                     );
@@ -327,7 +331,7 @@ macro_rules! export_gameplay_plugin {
                         .expect("gameplay host api mutex should not be poisoned");
                     *guard
                 };
-                $crate::gameplay::handle_gameplay_request_with_host_api(
+                $crate::internal::handle_gameplay_request_with_host_api(
                     mc_gameplay_plugin_instance(),
                     request.clone(),
                     host_api,
@@ -335,11 +339,11 @@ macro_rules! export_gameplay_plugin {
             })) {
                 Ok(Ok(response)) => response,
                 Ok(Err(message)) => {
-                    $crate::buffers::write_error_buffer(error_out, message);
+                    $crate::internal::buffers::write_error_buffer(error_out, message);
                     return mc_plugin_api::abi::PluginErrorCode::Internal;
                 }
                 Err(_) => {
-                    $crate::buffers::write_error_buffer(
+                    $crate::internal::buffers::write_error_buffer(
                         error_out,
                         "gameplay plugin panicked while handling request".to_string(),
                     );
@@ -349,11 +353,11 @@ macro_rules! export_gameplay_plugin {
 
             match mc_plugin_api::codec::gameplay::encode_gameplay_response(&request, &response) {
                 Ok(bytes) => {
-                    $crate::buffers::write_output_buffer(output, bytes);
+                    $crate::internal::buffers::write_output_buffer(output, bytes);
                     mc_plugin_api::abi::PluginErrorCode::Ok
                 }
                 Err(message) => {
-                    $crate::buffers::write_error_buffer(error_out, message.to_string());
+                    $crate::internal::buffers::write_error_buffer(error_out, message.to_string());
                     mc_plugin_api::abi::PluginErrorCode::Internal
                 }
             }
@@ -421,16 +425,16 @@ macro_rules! export_storage_plugin {
             error_out: *mut mc_plugin_api::abi::OwnedBuffer,
         ) -> mc_plugin_api::abi::PluginErrorCode {
             let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let request_bytes = unsafe { $crate::buffers::byte_slice_as_bytes(request) };
+                let request_bytes = unsafe { $crate::internal::buffers::byte_slice_as_bytes(request) };
                 mc_plugin_api::codec::storage::decode_storage_request(request_bytes)
             })) {
                 Ok(Ok(request)) => request,
                 Ok(Err(error)) => {
-                    $crate::buffers::write_error_buffer(error_out, error.to_string());
+                    $crate::internal::buffers::write_error_buffer(error_out, error.to_string());
                     return mc_plugin_api::abi::PluginErrorCode::InvalidInput;
                 }
                 Err(_) => {
-                    $crate::buffers::write_error_buffer(
+                    $crate::internal::buffers::write_error_buffer(
                         error_out,
                         "storage plugin panicked while decoding request".to_string(),
                     );
@@ -439,15 +443,15 @@ macro_rules! export_storage_plugin {
             };
 
             let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                $crate::storage::handle_storage_request(mc_storage_plugin_instance(), request.clone())
+                $crate::internal::handle_storage_request(mc_storage_plugin_instance(), request.clone())
             })) {
                 Ok(Ok(response)) => response,
                 Ok(Err(message)) => {
-                    $crate::buffers::write_error_buffer(error_out, message);
+                    $crate::internal::buffers::write_error_buffer(error_out, message);
                     return mc_plugin_api::abi::PluginErrorCode::Internal;
                 }
                 Err(_) => {
-                    $crate::buffers::write_error_buffer(
+                    $crate::internal::buffers::write_error_buffer(
                         error_out,
                         "storage plugin panicked while handling request".to_string(),
                     );
@@ -457,11 +461,11 @@ macro_rules! export_storage_plugin {
 
             match mc_plugin_api::codec::storage::encode_storage_response(&request, &response) {
                 Ok(bytes) => {
-                    $crate::buffers::write_output_buffer(output, bytes);
+                    $crate::internal::buffers::write_output_buffer(output, bytes);
                     mc_plugin_api::abi::PluginErrorCode::Ok
                 }
                 Err(message) => {
-                    $crate::buffers::write_error_buffer(error_out, message.to_string());
+                    $crate::internal::buffers::write_error_buffer(error_out, message.to_string());
                     mc_plugin_api::abi::PluginErrorCode::Internal
                 }
             }
@@ -528,16 +532,16 @@ macro_rules! export_auth_plugin {
             error_out: *mut mc_plugin_api::abi::OwnedBuffer,
         ) -> mc_plugin_api::abi::PluginErrorCode {
             let request = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let request_bytes = unsafe { $crate::buffers::byte_slice_as_bytes(request) };
+                let request_bytes = unsafe { $crate::internal::buffers::byte_slice_as_bytes(request) };
                 mc_plugin_api::codec::auth::decode_auth_request(request_bytes)
             })) {
                 Ok(Ok(request)) => request,
                 Ok(Err(error)) => {
-                    $crate::buffers::write_error_buffer(error_out, error.to_string());
+                    $crate::internal::buffers::write_error_buffer(error_out, error.to_string());
                     return mc_plugin_api::abi::PluginErrorCode::InvalidInput;
                 }
                 Err(_) => {
-                    $crate::buffers::write_error_buffer(
+                    $crate::internal::buffers::write_error_buffer(
                         error_out,
                         "auth plugin panicked while decoding request".to_string(),
                     );
@@ -546,15 +550,15 @@ macro_rules! export_auth_plugin {
             };
 
             let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                $crate::auth::handle_auth_request(mc_auth_plugin_instance(), request.clone())
+                $crate::internal::handle_auth_request(mc_auth_plugin_instance(), request.clone())
             })) {
                 Ok(Ok(response)) => response,
                 Ok(Err(message)) => {
-                    $crate::buffers::write_error_buffer(error_out, message);
+                    $crate::internal::buffers::write_error_buffer(error_out, message);
                     return mc_plugin_api::abi::PluginErrorCode::Internal;
                 }
                 Err(_) => {
-                    $crate::buffers::write_error_buffer(
+                    $crate::internal::buffers::write_error_buffer(
                         error_out,
                         "auth plugin panicked while handling request".to_string(),
                     );
@@ -564,11 +568,11 @@ macro_rules! export_auth_plugin {
 
             match mc_plugin_api::codec::auth::encode_auth_response(&request, &response) {
                 Ok(bytes) => {
-                    $crate::buffers::write_output_buffer(output, bytes);
+                    $crate::internal::buffers::write_output_buffer(output, bytes);
                     mc_plugin_api::abi::PluginErrorCode::Ok
                 }
                 Err(message) => {
-                    $crate::buffers::write_error_buffer(error_out, message.to_string());
+                    $crate::internal::buffers::write_error_buffer(error_out, message.to_string());
                     mc_plugin_api::abi::PluginErrorCode::Internal
                 }
             }
@@ -619,7 +623,7 @@ macro_rules! export_auth_plugin {
 mod tests {
     use super::{
         CapabilitySet, GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HostApiTableV1,
-        OwnedBuffer, gameplay, manifest, protocol,
+        OwnedBuffer, gameplay, internal, manifest, protocol,
     };
     use bytes::BytesMut;
     use mc_core::{CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
@@ -627,7 +631,7 @@ mod tests {
     use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, PluginErrorCode};
     use mc_plugin_api::codec::gameplay::{
         GameplayDescriptor, decode_gameplay_response, encode_gameplay_request,
-        encode_host_world_meta_blob,
+        host_blob::encode_world_meta,
     };
     use mc_plugin_api::codec::protocol::{
         ProtocolRequest, ProtocolResponse, WireFrameDecodeResult,
@@ -668,7 +672,7 @@ mod tests {
             write_test_buffer(error_out, b"missing host context".to_vec());
             return PluginErrorCode::InvalidInput;
         };
-        let bytes = encode_host_world_meta_blob(&WorldMeta {
+        let bytes = encode_world_meta(&WorldMeta {
             level_name: context.level_name.to_string(),
             seed: 0,
             spawn: mc_core::BlockPos::new(0, 64, 0),
@@ -852,7 +856,7 @@ mod tests {
     #[test]
     fn direct_protocol_requests_route_wire_codec_ops_through_plugin_codec() {
         assert_eq!(
-            protocol::handle_protocol_request(
+            internal::handle_protocol_request(
                 &DirectProtocolPlugin,
                 ProtocolRequest::EncodeWireFrame {
                     payload: vec![0xaa, 0xbb, 0xcc],
@@ -863,7 +867,7 @@ mod tests {
         );
 
         assert_eq!(
-            protocol::handle_protocol_request(
+            internal::handle_protocol_request(
                 &DirectProtocolPlugin,
                 ProtocolRequest::TryDecodeWireFrame {
                     buffer: vec![3, 0xaa, 0xbb, 0xcc, 0xff],
@@ -877,7 +881,7 @@ mod tests {
         );
 
         assert_eq!(
-            protocol::handle_protocol_request(
+            internal::handle_protocol_request(
                 &DirectProtocolPlugin,
                 ProtocolRequest::TryDecodeWireFrame {
                     buffer: vec![3, 0xaa],
@@ -900,7 +904,7 @@ mod tests {
             now_ms: 0,
         };
         let error =
-            gameplay::handle_gameplay_request_with_host_api(&DirectProbePlugin, request, None)
+            internal::handle_gameplay_request_with_host_api(&DirectProbePlugin, request, None)
                 .expect_err("host callbacks should require configured host api");
         assert!(error.contains("gameplay host api is not configured"));
     }

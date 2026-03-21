@@ -505,6 +505,7 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the protocol plugin registry mutex is poisoned.
+    #[cfg(any(test, feature = "in-process-testing"))]
     pub(crate) fn reload_modified(&self) -> Result<Vec<String>, RuntimeError> {
         let mut reloaded = Vec::new();
         self.reload_protocol_plugins_with_sessions(&[], &mut reloaded)?;

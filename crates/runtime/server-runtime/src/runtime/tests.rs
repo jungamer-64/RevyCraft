@@ -98,8 +98,7 @@ use mc_plugin_host::host::plugin_host_from_config;
 use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_host::test_support::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
-    PluginAbiRange, PluginCatalog, PluginFailureAction, PluginFailureMatrix, PluginHost,
-    build_in_process_plugin_host,
+    PluginAbiRange, PluginFailureAction, PluginFailureMatrix, PluginHost, TestPluginHostBuilder,
 };
 use mc_plugin_proto_be_26_3::in_process_protocol_entrypoints as be_26_3_entrypoints;
 use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
@@ -320,9 +319,9 @@ fn plugin_test_registries_all() -> Result<LoadedPluginTestEnvironment, RuntimeEr
 }
 
 fn register_in_process_protocol_adapter(
-    catalog: &mut PluginCatalog,
+    builder: TestPluginHostBuilder,
     adapter_id: &str,
-) -> Result<(), RuntimeError> {
+) -> Result<TestPluginHostBuilder, RuntimeError> {
     let plugin = match adapter_id {
         JE_1_7_10_ADAPTER_ID => InProcessProtocolPlugin {
             plugin_id: JE_1_7_10_ADAPTER_ID.to_string(),
@@ -355,47 +354,44 @@ fn register_in_process_protocol_adapter(
             )));
         }
     };
-    catalog.register_in_process_protocol_plugin(plugin);
-    Ok(())
+    Ok(builder.protocol_raw(plugin))
 }
 
-fn register_in_process_supporting_plugins(catalog: &mut PluginCatalog) {
-    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
-        plugin_id: "gameplay-canonical".to_string(),
-        manifest: canonical_gameplay_entrypoints().manifest,
-        api: canonical_gameplay_entrypoints().api,
-    });
-    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
-        plugin_id: "gameplay-readonly".to_string(),
-        manifest: readonly_gameplay_entrypoints().manifest,
-        api: readonly_gameplay_entrypoints().api,
-    });
-    catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
-        plugin_id: "storage-je-anvil-1_7_10".to_string(),
-        manifest: storage_entrypoints().manifest,
-        api: storage_entrypoints().api,
-    });
-    catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
-        plugin_id: ONLINE_STUB_AUTH_PLUGIN_ID.to_string(),
-        manifest: online_stub_auth_entrypoints().manifest,
-        api: online_stub_auth_entrypoints().api,
-    });
+fn register_in_process_supporting_plugins(builder: TestPluginHostBuilder) -> TestPluginHostBuilder {
+    builder
+        .gameplay_raw(InProcessGameplayPlugin {
+            plugin_id: "gameplay-canonical".to_string(),
+            manifest: canonical_gameplay_entrypoints().manifest,
+            api: canonical_gameplay_entrypoints().api,
+        })
+        .gameplay_raw(InProcessGameplayPlugin {
+            plugin_id: "gameplay-readonly".to_string(),
+            manifest: readonly_gameplay_entrypoints().manifest,
+            api: readonly_gameplay_entrypoints().api,
+        })
+        .storage_raw(InProcessStoragePlugin {
+            plugin_id: "storage-je-anvil-1_7_10".to_string(),
+            manifest: storage_entrypoints().manifest,
+            api: storage_entrypoints().api,
+        })
+        .auth_raw(InProcessAuthPlugin {
+            plugin_id: ONLINE_STUB_AUTH_PLUGIN_ID.to_string(),
+            manifest: online_stub_auth_entrypoints().manifest,
+            api: online_stub_auth_entrypoints().api,
+        })
 }
 
 fn in_process_online_auth_registries(
     allowlist: &[&str],
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
-    let mut catalog = PluginCatalog::default();
+    let mut builder = TestPluginHostBuilder::new();
     for adapter_id in allowlist {
-        register_in_process_protocol_adapter(&mut catalog, adapter_id)?;
+        builder = register_in_process_protocol_adapter(builder, adapter_id)?;
     }
-    register_in_process_supporting_plugins(&mut catalog);
-
-    let plugin_host = build_in_process_plugin_host(
-        catalog,
-        PluginAbiRange::default(),
-        PluginFailureMatrix::default(),
-    );
+    let plugin_host = register_in_process_supporting_plugins(builder)
+        .abi_range(PluginAbiRange::default())
+        .failure_matrix(PluginFailureMatrix::default())
+        .build();
     let config = ServerConfig {
         auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
         ..ServerConfig::default()
@@ -409,36 +405,35 @@ fn in_process_online_auth_registries(
 fn in_process_failing_storage_registries(
     failure_action: PluginFailureAction,
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
-    let mut catalog = PluginCatalog::default();
-    register_in_process_protocol_adapter(&mut catalog, JE_1_7_10_ADAPTER_ID)?;
-    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
-        plugin_id: "gameplay-canonical".to_string(),
-        manifest: canonical_gameplay_entrypoints().manifest,
-        api: canonical_gameplay_entrypoints().api,
-    });
-    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
-        plugin_id: "gameplay-readonly".to_string(),
-        manifest: readonly_gameplay_entrypoints().manifest,
-        api: readonly_gameplay_entrypoints().api,
-    });
-    catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
-        plugin_id: failing_storage_plugin::PLUGIN_ID.to_string(),
-        manifest: failing_storage_plugin::in_process_storage_entrypoints().manifest,
-        api: failing_storage_plugin::in_process_storage_entrypoints().api,
-    });
-    catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
-        plugin_id: "auth-offline".to_string(),
-        manifest: offline_auth_entrypoints().manifest,
-        api: offline_auth_entrypoints().api,
-    });
-    let plugin_host = build_in_process_plugin_host(
-        catalog,
-        PluginAbiRange::default(),
-        PluginFailureMatrix {
+    let builder =
+        register_in_process_protocol_adapter(TestPluginHostBuilder::new(), JE_1_7_10_ADAPTER_ID)?;
+    let plugin_host = builder
+        .gameplay_raw(InProcessGameplayPlugin {
+            plugin_id: "gameplay-canonical".to_string(),
+            manifest: canonical_gameplay_entrypoints().manifest,
+            api: canonical_gameplay_entrypoints().api,
+        })
+        .gameplay_raw(InProcessGameplayPlugin {
+            plugin_id: "gameplay-readonly".to_string(),
+            manifest: readonly_gameplay_entrypoints().manifest,
+            api: readonly_gameplay_entrypoints().api,
+        })
+        .storage_raw(InProcessStoragePlugin {
+            plugin_id: failing_storage_plugin::PLUGIN_ID.to_string(),
+            manifest: failing_storage_plugin::in_process_storage_entrypoints().manifest,
+            api: failing_storage_plugin::in_process_storage_entrypoints().api,
+        })
+        .auth_raw(InProcessAuthPlugin {
+            plugin_id: "auth-offline".to_string(),
+            manifest: offline_auth_entrypoints().manifest,
+            api: offline_auth_entrypoints().api,
+        })
+        .abi_range(PluginAbiRange::default())
+        .failure_matrix(PluginFailureMatrix {
             storage: failure_action,
             ..PluginFailureMatrix::default()
-        },
-    );
+        })
+        .build();
     let config = ServerConfig {
         storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
         ..ServerConfig::default()

@@ -14,7 +14,6 @@ use mc_core::{
 };
 use mc_plugin_api::abi::{
     ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind,
-    Utf8Slice,
 };
 use mc_plugin_api::codec::auth::{
     AuthMode, AuthRequest, AuthResponse, BedrockAuthResult, decode_auth_response,
@@ -22,9 +21,7 @@ use mc_plugin_api::codec::auth::{
 };
 use mc_plugin_api::codec::gameplay::{
     GameplayRequest, GameplayResponse, GameplaySessionSnapshot, decode_gameplay_response,
-    decode_host_block_pos_blob, decode_host_can_edit_block_key, decode_host_player_id_blob,
-    encode_gameplay_request, encode_host_block_state_blob, encode_host_player_snapshot_blob,
-    encode_host_world_meta_blob,
+    encode_gameplay_request,
 };
 use mc_plugin_api::codec::protocol::{
     ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot, WireFrameDecodeResult,
@@ -34,8 +31,8 @@ use mc_plugin_api::codec::storage::{
     StorageRequest, StorageResponse, decode_storage_response, encode_storage_request,
 };
 use mc_plugin_api::host_api::{
-    AuthPluginApiV1, GameplayPluginApiV1, HostApiTableV1, PluginFreeBufferFn, PluginInvokeFn,
-    ProtocolPluginApiV1, StoragePluginApiV1,
+    AuthPluginApiV1, GameplayPluginApiV1, PluginFreeBufferFn, PluginInvokeFn, ProtocolPluginApiV1,
+    StoragePluginApiV1,
 };
 use mc_plugin_api::manifest::{
     PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1, PLUGIN_MANIFEST_SYMBOL_V1,
@@ -48,15 +45,17 @@ use mc_proto_common::{
     WireFormatKind,
 };
 use serde::{Deserialize, Serialize};
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 #[path = "plugin_host/activation.rs"]
 mod activation;
+#[path = "plugin_host/callbacks.rs"]
+mod callbacks;
+#[path = "plugin_host/catalog.rs"]
+mod catalog;
 #[path = "plugin_host/loader.rs"]
 mod loader;
 #[path = "plugin_host/reload.rs"]
@@ -64,6 +63,20 @@ mod reload;
 #[path = "plugin_host/support.rs"]
 mod support;
 
+use self::callbacks::gameplay_host_api;
+#[cfg(test)]
+pub(crate) use self::callbacks::with_current_gameplay_query;
+pub(crate) use self::callbacks::with_gameplay_query;
+pub(crate) use self::catalog::PluginCatalog;
+#[cfg(test)]
+pub(crate) use self::catalog::current_artifact_key;
+use self::catalog::{
+    ArtifactIdentity, DynamicCatalogSource, PluginPackage, PluginSource, system_time_ms,
+};
+#[cfg(any(test, feature = "in-process-testing"))]
+pub use self::catalog::{
+    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+};
 use self::support::{
     DecodedManifest, decode_manifest, decode_utf8_slice, ensure_known_profiles,
     ensure_profile_known, expect_auth_capabilities, expect_auth_descriptor,
@@ -334,317 +347,8 @@ impl PluginAbiRange {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct InProcessProtocolPlugin {
-    pub plugin_id: String,
-    pub manifest: &'static PluginManifestV1,
-    pub api: &'static ProtocolPluginApiV1,
-}
-
-#[derive(Clone, Debug)]
-pub struct InProcessGameplayPlugin {
-    pub plugin_id: String,
-    pub manifest: &'static PluginManifestV1,
-    pub api: &'static GameplayPluginApiV1,
-}
-
-#[derive(Clone, Debug)]
-pub struct InProcessStoragePlugin {
-    pub plugin_id: String,
-    pub manifest: &'static PluginManifestV1,
-    pub api: &'static StoragePluginApiV1,
-}
-
-#[derive(Clone, Debug)]
-pub struct InProcessAuthPlugin {
-    pub plugin_id: String,
-    pub manifest: &'static PluginManifestV1,
-    pub api: &'static AuthPluginApiV1,
-}
-
-#[derive(Clone, Debug)]
-enum PluginSource {
-    DynamicLibrary {
-        manifest_path: PathBuf,
-        library_path: PathBuf,
-    },
-    InProcessProtocol(InProcessProtocolPlugin),
-    InProcessGameplay(InProcessGameplayPlugin),
-    InProcessStorage(InProcessStoragePlugin),
-    InProcessAuth(InProcessAuthPlugin),
-}
-
-#[derive(Clone, Debug)]
-struct PluginPackage {
-    plugin_id: String,
-    plugin_kind: PluginKind,
-    source: PluginSource,
-}
-
-#[derive(Clone, Debug)]
-struct DynamicCatalogSource {
-    root: PathBuf,
-    allowlist: Option<HashSet<String>>,
-}
-
-impl PluginPackage {
-    fn modified_at(&self) -> Result<SystemTime, RuntimeError> {
-        match &self.source {
-            PluginSource::DynamicLibrary {
-                manifest_path,
-                library_path,
-            } => Ok(fs::metadata(manifest_path)?
-                .modified()?
-                .max(fs::metadata(library_path)?.modified()?)),
-            PluginSource::InProcessProtocol(_)
-            | PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_) => Ok(SystemTime::UNIX_EPOCH),
-        }
-    }
-
-    fn refresh_dynamic_manifest(&mut self) -> Result<(), RuntimeError> {
-        let PluginSource::DynamicLibrary {
-            manifest_path,
-            library_path,
-        } = &mut self.source
-        else {
-            return Ok(());
-        };
-        let document: PluginPackageDocument = toml::from_str(&fs::read_to_string(&*manifest_path)?)
-            .map_err(|error| {
-                RuntimeError::Config(format!(
-                    "failed to parse plugin manifest {}: {error}",
-                    manifest_path.display()
-                ))
-            })?;
-        let plugin_kind = parse_plugin_kind(&document.plugin.kind)?;
-        if document.plugin.id != self.plugin_id {
-            return Err(RuntimeError::Config(format!(
-                "plugin manifest id `{}` does not match package id `{}`",
-                document.plugin.id, self.plugin_id
-            )));
-        }
-        if plugin_kind != self.plugin_kind {
-            return Err(RuntimeError::Config(format!(
-                "plugin `{}` manifest kind mismatch",
-                self.plugin_id
-            )));
-        }
-        let relative_library_path =
-            document
-                .artifacts
-                .get(&current_artifact_key())
-                .ok_or_else(|| {
-                    RuntimeError::Config(format!(
-                        "plugin `{}` does not provide an artifact for {}",
-                        self.plugin_id,
-                        current_artifact_key()
-                    ))
-                })?;
-        *library_path = manifest_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(relative_library_path);
-        Ok(())
-    }
-
-    fn artifact_identity(&self, modified_at: SystemTime) -> ArtifactIdentity {
-        let source = match &self.source {
-            PluginSource::DynamicLibrary {
-                manifest_path,
-                library_path,
-            } => format!("{}|{}", manifest_path.display(), library_path.display()),
-            PluginSource::InProcessProtocol(_)
-            | PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_) => "in-process".to_string(),
-        };
-        ArtifactIdentity {
-            source,
-            modified_at,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct PluginCatalog {
-    packages: HashMap<String, PluginPackage>,
-}
-
-impl PluginCatalog {
-    /// Discovers dynamic plugin packages from the configured plugin root.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the plugin root cannot be read or when any discovered manifest is
-    /// invalid.
-    pub fn discover(
-        root: &Path,
-        allowlist: Option<&HashSet<String>>,
-    ) -> Result<Self, RuntimeError> {
-        if !root.exists() {
-            return Ok(Self::default());
-        }
-
-        let mut packages = HashMap::new();
-        for entry in fs::read_dir(root)? {
-            let entry = entry?;
-            if let Some(package) = discover_dynamic_plugin_package(&entry.path(), allowlist)? {
-                let plugin_id = package.plugin_id.clone();
-                match packages.entry(plugin_id.clone()) {
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(package);
-                    }
-                    std::collections::hash_map::Entry::Occupied(_) => {
-                        return Err(RuntimeError::Config(format!(
-                            "duplicate plugin id `{plugin_id}` discovered in {}",
-                            root.display()
-                        )));
-                    }
-                }
-            }
-        }
-
-        Ok(Self { packages })
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub fn register_in_process_protocol_plugin(&mut self, plugin: InProcessProtocolPlugin) {
-        self.packages.insert(
-            plugin.plugin_id.clone(),
-            PluginPackage {
-                plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::Protocol,
-                source: PluginSource::InProcessProtocol(plugin),
-            },
-        );
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub fn register_in_process_gameplay_plugin(&mut self, plugin: InProcessGameplayPlugin) {
-        self.packages.insert(
-            plugin.plugin_id.clone(),
-            PluginPackage {
-                plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::Gameplay,
-                source: PluginSource::InProcessGameplay(plugin),
-            },
-        );
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub fn register_in_process_storage_plugin(&mut self, plugin: InProcessStoragePlugin) {
-        self.packages.insert(
-            plugin.plugin_id.clone(),
-            PluginPackage {
-                plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::Storage,
-                source: PluginSource::InProcessStorage(plugin),
-            },
-        );
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub fn register_in_process_auth_plugin(&mut self, plugin: InProcessAuthPlugin) {
-        self.packages.insert(
-            plugin.plugin_id.clone(),
-            PluginPackage {
-                plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::Auth,
-                source: PluginSource::InProcessAuth(plugin),
-            },
-        );
-    }
-
-    fn packages(&self) -> impl Iterator<Item = &PluginPackage> {
-        self.packages.values()
-    }
-}
-
-fn discover_dynamic_plugin_package(
-    plugin_dir: &Path,
-    allowlist: Option<&HashSet<String>>,
-) -> Result<Option<PluginPackage>, RuntimeError> {
-    if !plugin_dir.is_dir() {
-        return Ok(None);
-    }
-    let manifest_path = plugin_dir.join("plugin.toml");
-    if !manifest_path.exists() {
-        return Ok(None);
-    }
-    let document = parse_plugin_package_document(&manifest_path)?;
-    if let Some(allowlist) = allowlist
-        && !allowlist.contains(&document.plugin.id)
-    {
-        return Ok(None);
-    }
-    let Some(relative_library_path) = document.artifacts.get(&current_artifact_key()) else {
-        return Ok(None);
-    };
-    Ok(Some(PluginPackage {
-        plugin_id: document.plugin.id.clone(),
-        plugin_kind: parse_plugin_kind(&document.plugin.kind)?,
-        source: PluginSource::DynamicLibrary {
-            manifest_path: manifest_path.clone(),
-            library_path: manifest_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(relative_library_path),
-        },
-    }))
-}
-
-fn parse_plugin_package_document(
-    manifest_path: &Path,
-) -> Result<PluginPackageDocument, RuntimeError> {
-    toml::from_str(&fs::read_to_string(manifest_path)?).map_err(|error| {
-        RuntimeError::Config(format!(
-            "failed to parse plugin manifest {}: {error}",
-            manifest_path.display()
-        ))
-    })
-}
-
-#[derive(Deserialize)]
-struct PluginPackageDocument {
-    plugin: PluginPackageMetadata,
-    artifacts: HashMap<String, String>,
-}
-
-#[derive(Deserialize)]
-struct PluginPackageMetadata {
-    id: String,
-    kind: String,
-}
-
-fn parse_plugin_kind(value: &str) -> Result<PluginKind, RuntimeError> {
-    match value {
-        "protocol" => Ok(PluginKind::Protocol),
-        "storage" => Ok(PluginKind::Storage),
-        "auth" => Ok(PluginKind::Auth),
-        "gameplay" => Ok(PluginKind::Gameplay),
-        _ => Err(RuntimeError::Config(format!(
-            "unsupported plugin kind `{value}`"
-        ))),
-    }
-}
-
-fn current_artifact_key() -> String {
-    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
-}
-
-fn system_time_ms(time: SystemTime) -> u64 {
-    u64::try_from(
-        time.duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis(),
-    )
-    .unwrap_or_default()
-}
-
 #[derive(Default)]
-pub struct GenerationManager {
+pub(crate) struct GenerationManager {
     next_generation_id: Mutex<u64>,
 }
 
@@ -661,7 +365,7 @@ impl GenerationManager {
 }
 
 #[derive(Default)]
-pub struct ActiveQuarantineManager {
+pub(crate) struct ActiveQuarantineManager {
     reasons: Mutex<HashMap<String, String>>,
 }
 
@@ -698,12 +402,6 @@ impl ActiveQuarantineManager {
             .get(plugin_id)
             .cloned()
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ArtifactIdentity {
-    source: String,
-    modified_at: SystemTime,
 }
 
 #[derive(Clone, Debug)]
@@ -990,6 +688,20 @@ fn decode_plugin_error(
     }
 }
 
+pub(crate) fn write_owned_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
+    if output.is_null() {
+        return;
+    }
+    unsafe {
+        *output = OwnedBuffer {
+            ptr: bytes.as_mut_ptr(),
+            len: bytes.len(),
+            cap: bytes.capacity(),
+        };
+        std::mem::forget(bytes);
+    }
+}
+
 impl ProtocolGeneration {
     fn invoke(&self, request: &ProtocolRequest) -> Result<ProtocolResponse, ProtocolError> {
         let request_bytes = encode_protocol_request(request)
@@ -1024,189 +736,8 @@ impl ProtocolGeneration {
     }
 }
 
-#[derive(Clone, Copy)]
-struct GameplayQueryScope<'a> {
-    query: &'a dyn GameplayQuery,
-}
-
-thread_local! {
-    static CURRENT_GAMEPLAY_QUERY: Cell<Option<*const ()>> = const { Cell::new(None) };
-}
-
-/// Runs plugin gameplay code with the current query temporarily published in thread-local state.
-///
-/// # Safety invariants
-///
-/// The stored pointer borrows `query`, so it is only valid for the dynamic extent of `f`.
-/// Gameplay host callbacks must therefore remain synchronous, stay on the same thread, and never
-/// retain the pointer beyond the callback.
-fn with_gameplay_query<T>(
-    query: &dyn GameplayQuery,
-    f: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
-    CURRENT_GAMEPLAY_QUERY.with(|slot| {
-        // The pointer is only published while `f` runs, and nested invocations restore the
-        // previous pointer before returning.
-        let scope = GameplayQueryScope { query };
-        let previous = slot.replace(Some(std::ptr::from_ref(&scope).cast()));
-        let result = f();
-        let _ = slot.replace(previous);
-        result
-    })
-}
-
-/// Resolves the gameplay query currently published by [`with_gameplay_query`].
-///
-/// # Safety invariants
-///
-/// This function may only be reached while `with_gameplay_query` is active on the current thread;
-/// otherwise the stored pointer would be dangling or absent. Nested calls are safe because the
-/// thread-local slot restores the previous pointer before returning.
-fn with_current_gameplay_query<T>(
-    f: impl FnOnce(&dyn GameplayQuery) -> Result<T, String>,
-) -> Result<T, String> {
-    CURRENT_GAMEPLAY_QUERY.with(|slot| {
-        let query_scope_ptr = slot
-            .get()
-            .ok_or_else(|| "gameplay host callback invoked without an active query".to_string())?;
-        // SAFETY: `with_gameplay_query` only publishes a pointer to its stack-local
-        // `GameplayQueryScope` for the duration of the callback, and this accessor is only used
-        // synchronously from that dynamic extent on the same thread.
-        let query = unsafe { (&*query_scope_ptr.cast::<GameplayQueryScope<'_>>()).query };
-        f(query)
-    })
-}
-
-unsafe extern "C" fn gameplay_host_log(level: u32, message: Utf8Slice) {
-    if let Ok(message) = decode_utf8_slice(message) {
-        eprintln!("gameplay[{level}]: {message}");
-    }
-}
-
-unsafe extern "C" fn gameplay_host_read_player_snapshot(
-    _context: *mut std::ffi::c_void,
-    payload: ByteSlice,
-    output: *mut OwnedBuffer,
-    error_out: *mut OwnedBuffer,
-) -> PluginErrorCode {
-    let payload = unsafe { std::slice::from_raw_parts(payload.ptr, payload.len) };
-    let result = with_current_gameplay_query(|query| {
-        let player_id = decode_host_player_id_blob(payload).map_err(|error| error.to_string())?;
-        let bytes = encode_host_player_snapshot_blob(query.player_snapshot(player_id).as_ref())
-            .map_err(|error| error.to_string())?;
-        write_owned_buffer(output, bytes);
-        Ok(())
-    });
-    match result {
-        Ok(()) => PluginErrorCode::Ok,
-        Err(error) => {
-            write_error_buffer(error_out, error);
-            PluginErrorCode::Internal
-        }
-    }
-}
-
-unsafe extern "C" fn gameplay_host_read_world_meta(
-    _context: *mut std::ffi::c_void,
-    output: *mut OwnedBuffer,
-    error_out: *mut OwnedBuffer,
-) -> PluginErrorCode {
-    let result = with_current_gameplay_query(|query| {
-        let world_meta = query.world_meta();
-        let bytes = encode_host_world_meta_blob(&world_meta).map_err(|error| error.to_string())?;
-        write_owned_buffer(output, bytes);
-        Ok(())
-    });
-    match result {
-        Ok(()) => PluginErrorCode::Ok,
-        Err(error) => {
-            write_error_buffer(error_out, error);
-            PluginErrorCode::Internal
-        }
-    }
-}
-
-unsafe extern "C" fn gameplay_host_read_block_state(
-    _context: *mut std::ffi::c_void,
-    payload: ByteSlice,
-    output: *mut OwnedBuffer,
-    error_out: *mut OwnedBuffer,
-) -> PluginErrorCode {
-    let payload = unsafe { std::slice::from_raw_parts(payload.ptr, payload.len) };
-    let result = with_current_gameplay_query(|query| {
-        let position = decode_host_block_pos_blob(payload).map_err(|error| error.to_string())?;
-        let bytes = encode_host_block_state_blob(&query.block_state(position))
-            .map_err(|error| error.to_string())?;
-        write_owned_buffer(output, bytes);
-        Ok(())
-    });
-    match result {
-        Ok(()) => PluginErrorCode::Ok,
-        Err(error) => {
-            write_error_buffer(error_out, error);
-            PluginErrorCode::Internal
-        }
-    }
-}
-
-unsafe extern "C" fn gameplay_host_can_edit_block(
-    _context: *mut std::ffi::c_void,
-    payload: ByteSlice,
-    out: *mut bool,
-    error_out: *mut OwnedBuffer,
-) -> PluginErrorCode {
-    let payload = unsafe { std::slice::from_raw_parts(payload.ptr, payload.len) };
-    let result = with_current_gameplay_query(|query| {
-        let (player_id, position) =
-            decode_host_can_edit_block_key(payload).map_err(|error| error.to_string())?;
-        if !out.is_null() {
-            unsafe {
-                *out = query.can_edit_block(player_id, position);
-            }
-        }
-        Ok(())
-    });
-    match result {
-        Ok(()) => PluginErrorCode::Ok,
-        Err(error) => {
-            write_error_buffer(error_out, error);
-            PluginErrorCode::Internal
-        }
-    }
-}
-
-fn gameplay_host_api() -> HostApiTableV1 {
-    HostApiTableV1 {
-        abi: CURRENT_PLUGIN_ABI,
-        context: std::ptr::null_mut(),
-        log: Some(gameplay_host_log),
-        read_player_snapshot: Some(gameplay_host_read_player_snapshot),
-        read_world_meta: Some(gameplay_host_read_world_meta),
-        read_block_state: Some(gameplay_host_read_block_state),
-        can_edit_block: Some(gameplay_host_can_edit_block),
-    }
-}
-
-fn write_owned_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
-    if output.is_null() {
-        return;
-    }
-    unsafe {
-        *output = OwnedBuffer {
-            ptr: bytes.as_mut_ptr(),
-            len: bytes.len(),
-            cap: bytes.capacity(),
-        };
-        std::mem::forget(bytes);
-    }
-}
-
-fn write_error_buffer(error_out: *mut OwnedBuffer, message: String) {
-    write_owned_buffer(error_out, message.into_bytes());
-}
-
 #[derive(Clone)]
-pub struct GameplayGeneration {
+pub(crate) struct GameplayGeneration {
     generation_id: PluginGenerationId,
     plugin_id: String,
     profile_id: GameplayProfileId,
@@ -1294,7 +825,7 @@ impl StorageGeneration {
 }
 
 #[derive(Clone)]
-pub struct AuthGeneration {
+pub(crate) struct AuthGeneration {
     pub generation_id: PluginGenerationId,
     plugin_id: String,
     profile_id: String,
@@ -1424,7 +955,7 @@ impl AuthGenerationHandle for AuthGeneration {
     }
 }
 
-pub struct PluginLoader {
+pub(crate) struct PluginLoader {
     abi_range: PluginAbiRange,
 }
 
@@ -1471,6 +1002,7 @@ impl HotSwappableProtocolAdapter {
             .clone())
     }
 
+    #[cfg(any(test, feature = "in-process-testing"))]
     fn swap_generation(&self, generation: Arc<ProtocolGeneration>) {
         let _guard = self
             .reload_gate
@@ -1510,6 +1042,10 @@ impl HotSwappableProtocolAdapter {
     }
 
     #[allow(dead_code)]
+    #[allow(dead_code)]
+    #[allow(dead_code)]
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     pub fn export_session_state(
         &self,
         session: &ProtocolSessionSnapshot,
@@ -1527,6 +1063,10 @@ impl HotSwappableProtocolAdapter {
         .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
+    #[allow(dead_code)]
+    #[allow(dead_code)]
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     #[allow(dead_code)]
     pub fn import_session_state(
         &self,
@@ -1809,7 +1349,7 @@ impl ProtocolAdapter for HotSwappableProtocolAdapter {
     }
 }
 
-pub struct HotSwappableGameplayProfile {
+pub(crate) struct HotSwappableGameplayProfile {
     plugin_id: String,
     profile_id: GameplayProfileId,
     generation: RwLock<Arc<GameplayGeneration>>,
@@ -1859,6 +1399,7 @@ impl HotSwappableGameplayProfile {
         Some(self.current_generation().generation_id)
     }
 
+    #[allow(dead_code)]
     pub fn export_session_state(
         &self,
         session: &GameplaySessionSnapshot,
@@ -1881,6 +1422,7 @@ impl HotSwappableGameplayProfile {
         }
     }
 
+    #[allow(dead_code)]
     pub fn import_session_state(
         &self,
         session: &GameplaySessionSnapshot,
@@ -2102,7 +1644,7 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
     }
 }
 
-pub struct HotSwappableStorageProfile {
+pub(crate) struct HotSwappableStorageProfile {
     plugin_id: String,
     #[allow(dead_code)]
     profile_id: String,
@@ -2139,6 +1681,7 @@ impl HotSwappableStorageProfile {
             .expect("storage generation lock should not be poisoned") = generation;
     }
 
+    #[allow(dead_code)]
     pub fn profile_id(&self) -> &str {
         &self.profile_id
     }
@@ -2198,6 +1741,7 @@ impl HotSwappableStorageProfile {
         }
     }
 
+    #[allow(dead_code)]
     pub fn import_runtime_state(
         &self,
         world_dir: &Path,
@@ -2260,7 +1804,7 @@ impl StorageProfileHandle for HotSwappableStorageProfile {
     }
 }
 
-pub struct HotSwappableAuthProfile {
+pub(crate) struct HotSwappableAuthProfile {
     plugin_id: String,
     #[allow(dead_code)]
     profile_id: String,
@@ -2298,6 +1842,7 @@ impl HotSwappableAuthProfile {
             .expect("auth generation lock should not be poisoned") = generation;
     }
 
+    #[allow(dead_code)]
     pub fn profile_id(&self) -> &str {
         &self.profile_id
     }
@@ -2503,6 +2048,7 @@ pub struct PluginHost {
 
 impl PluginHost {
     #[must_use]
+    #[cfg(any(test, feature = "in-process-testing"))]
     pub(crate) fn new(
         catalog: PluginCatalog,
         abi_range: PluginAbiRange,
@@ -2638,6 +2184,7 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the gameplay plugin registry mutex is poisoned.
+    #[cfg(any(test, feature = "in-process-testing"))]
     pub(crate) fn resolve_gameplay_profile(
         &self,
         profile_id: &str,
@@ -2654,6 +2201,7 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the storage plugin registry mutex is poisoned.
+    #[cfg(any(test, feature = "in-process-testing"))]
     pub(crate) fn resolve_storage_profile(
         &self,
         profile_id: &str,
@@ -2670,6 +2218,7 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the auth plugin registry mutex is poisoned.
+    #[cfg(any(test, feature = "in-process-testing"))]
     pub(crate) fn resolve_auth_profile(
         &self,
         profile_id: &str,
@@ -2975,7 +2524,7 @@ pub fn plugin_host_from_config(
         .as_ref()
         .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
     let catalog = PluginCatalog::discover(&config.plugins_dir, allowlist.as_ref())?;
-    if catalog.packages.is_empty() {
+    if catalog.is_empty() {
         return Ok(None);
     }
     Ok(Some(Arc::new(PluginHost::new_with_dynamic_catalog_source(

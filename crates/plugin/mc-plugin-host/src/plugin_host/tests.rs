@@ -5,8 +5,8 @@ use crate::host::plugin_host_from_config;
 use crate::runtime::{ProtocolReloadSession, RuntimeReloadContext};
 use crate::test_support::{
     self, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
-    InProcessStoragePlugin, PluginAbiRange, PluginCatalog, PluginFailureAction,
-    PluginFailureMatrix,
+    InProcessStoragePlugin, PluginAbiRange, PluginFailureAction, PluginFailureMatrix,
+    TestPluginHostBuilder,
 };
 use mc_core::{
     BlockPos, BlockState, ConnectionId, CoreConfig, DimensionId, EntityId, GameplayQuery, PlayerId,
@@ -32,6 +32,17 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tempfile::tempdir;
 use uuid::Uuid;
+
+fn build_test_plugin_host(
+    builder: TestPluginHostBuilder,
+    abi_range: PluginAbiRange,
+    failure_matrix: PluginFailureMatrix,
+) -> std::sync::Arc<crate::host::PluginHost> {
+    builder
+        .abi_range(abi_range)
+        .failure_matrix(failure_matrix)
+        .build()
+}
 
 mod entity_id_probe_gameplay_plugin {
     use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
@@ -586,15 +597,12 @@ impl GameplayQuery for StubGameplayQuery {
 #[test]
 fn in_process_protocol_plugin_swaps_generation() {
     let entrypoints = in_process_protocol_entrypoints();
-    let mut catalog = PluginCatalog::default();
-    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
-        plugin_id: "je-1_7_10".to_string(),
-        manifest: entrypoints.manifest,
-        api: entrypoints.api,
-    });
-
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
+            plugin_id: "je-1_7_10".to_string(),
+            manifest: entrypoints.manifest,
+            api: entrypoints.api,
+        }),
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
@@ -645,8 +653,13 @@ fn discover_rejects_duplicate_plugin_ids() -> Result<(), RuntimeError> {
         )?;
     }
 
-    let error = PluginCatalog::discover(temp_dir.path(), None)
-        .expect_err("duplicate plugin ids should fail discovery");
+    let error = match plugin_host_from_config(&ServerConfig {
+        plugins_dir: temp_dir.path().to_path_buf(),
+        ..ServerConfig::default()
+    }) {
+        Ok(_) => panic!("duplicate plugin ids should fail discovery"),
+        Err(error) => error,
+    };
     assert!(matches!(
         error,
         RuntimeError::Config(message) if message.contains("duplicate plugin id `duplicate-plugin`")
@@ -656,22 +669,22 @@ fn discover_rejects_duplicate_plugin_ids() -> Result<(), RuntimeError> {
 
 #[test]
 fn all_protocol_plugins_register_and_resolve() {
-    let mut catalog = PluginCatalog::default();
+    let mut builder = TestPluginHostBuilder::new();
     for (plugin_id, entrypoints) in [
         ("je-1_7_10", in_process_protocol_entrypoints()),
         ("je-1_8_x", je_1_8_x_entrypoints()),
         ("je-1_12_2", je_1_12_2_entrypoints()),
         ("be-placeholder", be_placeholder_entrypoints()),
     ] {
-        catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+        builder = builder.protocol_raw(InProcessProtocolPlugin {
             plugin_id: plugin_id.to_string(),
             manifest: entrypoints.manifest,
             api: entrypoints.api,
         });
     }
 
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        builder,
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
@@ -707,21 +720,21 @@ fn all_protocol_plugins_register_and_resolve() {
 
 #[test]
 fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata() {
-    let mut catalog = PluginCatalog::default();
+    let mut builder = TestPluginHostBuilder::new();
     for (plugin_id, entrypoints) in [
         ("je-1_7_10", in_process_protocol_entrypoints()),
         ("be-26_3", be_26_3_entrypoints()),
         ("be-placeholder", be_placeholder_entrypoints()),
     ] {
-        catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
+        builder = builder.protocol_raw(InProcessProtocolPlugin {
             plugin_id: plugin_id.to_string(),
             manifest: entrypoints.manifest,
             api: entrypoints.api,
         });
     }
 
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        builder,
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
@@ -766,16 +779,13 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
 fn protocol_plugins_can_override_host_wire_codec_framing() {
     use bytes::BytesMut;
 
-    let mut catalog = PluginCatalog::default();
     let entrypoints = custom_wire_codec_protocol_plugin::in_process_entrypoints();
-    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
-        plugin_id: "protocol-custom-wire".to_string(),
-        manifest: entrypoints.manifest,
-        api: entrypoints.api,
-    });
-
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
+            plugin_id: "protocol-custom-wire".to_string(),
+            manifest: entrypoints.manifest,
+            api: entrypoints.api,
+        }),
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
@@ -816,14 +826,12 @@ fn protocol_plugins_can_override_host_wire_codec_framing() {
 #[test]
 fn abi_mismatch_is_rejected_before_registration() {
     let entrypoints = in_process_protocol_entrypoints();
-    let mut catalog = PluginCatalog::default();
-    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
-        plugin_id: "je-1_7_10".to_string(),
-        manifest: manifest_with_abi("je-1_7_10", PluginAbiVersion { major: 9, minor: 0 }),
-        api: entrypoints.api,
-    });
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
+            plugin_id: "je-1_7_10".to_string(),
+            manifest: manifest_with_abi("je-1_7_10", PluginAbiVersion { major: 9, minor: 0 }),
+            api: entrypoints.api,
+        }),
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
@@ -843,14 +851,12 @@ fn abi_mismatch_is_rejected_before_registration() {
 #[test]
 fn protocol_plugins_require_reload_manifest_capability() {
     let entrypoints = in_process_protocol_entrypoints();
-    let mut catalog = PluginCatalog::default();
-    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
-        plugin_id: "je-1_7_10".to_string(),
-        manifest: manifest_without_reload_capability("je-1_7_10"),
-        api: entrypoints.api,
-    });
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
+            plugin_id: "je-1_7_10".to_string(),
+            manifest: manifest_without_reload_capability("je-1_7_10"),
+            api: entrypoints.api,
+        }),
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
@@ -869,21 +875,20 @@ fn protocol_plugins_require_reload_manifest_capability() {
 
 #[test]
 fn storage_and_auth_plugins_are_managed_without_quarantine() {
-    let mut catalog = PluginCatalog::default();
     let storage = storage_entrypoints();
-    catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
-        plugin_id: "storage-je-anvil-1_7_10".to_string(),
-        manifest: storage.manifest,
-        api: storage.api,
-    });
     let auth = offline_auth_entrypoints();
-    catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
-        plugin_id: "auth-offline".to_string(),
-        manifest: auth.manifest,
-        api: auth.api,
-    });
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new()
+            .storage_raw(InProcessStoragePlugin {
+                plugin_id: "storage-je-anvil-1_7_10".to_string(),
+                manifest: storage.manifest,
+                api: storage.api,
+            })
+            .auth_raw(InProcessAuthPlugin {
+                plugin_id: "auth-offline".to_string(),
+                manifest: auth.manifest,
+                api: auth.api,
+            }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
@@ -911,22 +916,20 @@ fn storage_and_auth_plugins_are_managed_without_quarantine() {
 
 #[test]
 fn gameplay_profiles_activate_and_resolve() {
-    let mut catalog = PluginCatalog::default();
     let canonical = canonical_gameplay_entrypoints();
-    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
-        plugin_id: "gameplay-canonical".to_string(),
-        manifest: canonical.manifest,
-        api: canonical.api,
-    });
     let readonly = readonly_gameplay_entrypoints();
-    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
-        plugin_id: "gameplay-readonly".to_string(),
-        manifest: readonly.manifest,
-        api: readonly.api,
-    });
-
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new()
+            .gameplay_raw(InProcessGameplayPlugin {
+                plugin_id: "gameplay-canonical".to_string(),
+                manifest: canonical.manifest,
+                api: canonical.api,
+            })
+            .gameplay_raw(InProcessGameplayPlugin {
+                plugin_id: "gameplay-readonly".to_string(),
+                manifest: readonly.manifest,
+                api: readonly.api,
+            }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
@@ -950,34 +953,32 @@ fn gameplay_profiles_activate_and_resolve() {
 
 #[test]
 fn load_plugin_set_activates_runtime_profiles() {
-    let mut catalog = PluginCatalog::default();
     let protocol = in_process_protocol_entrypoints();
-    catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
-        plugin_id: "je-1_7_10".to_string(),
-        manifest: protocol.manifest,
-        api: protocol.api,
-    });
     let canonical = canonical_gameplay_entrypoints();
-    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
-        plugin_id: "gameplay-canonical".to_string(),
-        manifest: canonical.manifest,
-        api: canonical.api,
-    });
     let storage = storage_entrypoints();
-    catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
-        plugin_id: "storage-je-anvil-1_7_10".to_string(),
-        manifest: storage.manifest,
-        api: storage.api,
-    });
     let auth = offline_auth_entrypoints();
-    catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
-        plugin_id: "auth-offline".to_string(),
-        manifest: auth.manifest,
-        api: auth.api,
-    });
-
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new()
+            .protocol_raw(InProcessProtocolPlugin {
+                plugin_id: "je-1_7_10".to_string(),
+                manifest: protocol.manifest,
+                api: protocol.api,
+            })
+            .gameplay_raw(InProcessGameplayPlugin {
+                plugin_id: "gameplay-canonical".to_string(),
+                manifest: canonical.manifest,
+                api: canonical.api,
+            })
+            .storage_raw(InProcessStoragePlugin {
+                plugin_id: "storage-je-anvil-1_7_10".to_string(),
+                manifest: storage.manifest,
+                api: storage.api,
+            })
+            .auth_raw(InProcessAuthPlugin {
+                plugin_id: "auth-offline".to_string(),
+                manifest: auth.manifest,
+                api: auth.api,
+            }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
@@ -1041,16 +1042,13 @@ fn gameplay_command_snapshot_preserves_entity_id() {
 
     let _ = entity_id_probe_gameplay_plugin::take_recorded_session();
 
-    let mut catalog = PluginCatalog::default();
     let probe = entity_id_probe_gameplay_plugin::in_process_gameplay_entrypoints();
-    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
-        plugin_id: "gameplay-entity-aware".to_string(),
-        manifest: probe.manifest,
-        api: probe.api,
-    });
-
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
+            plugin_id: "gameplay-entity-aware".to_string(),
+            manifest: probe.manifest,
+            api: probe.api,
+        }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
@@ -1103,14 +1101,12 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
 
     for (action, expect_quarantine, expect_fatal, expected_version_name) in cases {
         let entrypoints = failing_protocol_plugin::in_process_entrypoints();
-        let mut catalog = PluginCatalog::default();
-        catalog.register_in_process_protocol_plugin(InProcessProtocolPlugin {
-            plugin_id: failing_protocol_plugin::PLUGIN_ID.to_string(),
-            manifest: entrypoints.manifest,
-            api: entrypoints.api,
-        });
-        let host = test_support::build_in_process_plugin_host(
-            catalog,
+        let host = build_test_plugin_host(
+            TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
+                plugin_id: failing_protocol_plugin::PLUGIN_ID.to_string(),
+                manifest: entrypoints.manifest,
+                api: entrypoints.api,
+            }),
             PluginAbiRange::default(),
             PluginFailureMatrix {
                 protocol: action,
@@ -1163,14 +1159,12 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
 
     for (action, expect_quarantine, expect_fatal) in cases {
         let entrypoints = failing_gameplay_plugin::in_process_gameplay_entrypoints();
-        let mut catalog = PluginCatalog::default();
-        catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
-            plugin_id: "gameplay-failing".to_string(),
-            manifest: entrypoints.manifest,
-            api: entrypoints.api,
-        });
-        let host = test_support::build_in_process_plugin_host(
-            catalog,
+        let host = build_test_plugin_host(
+            TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
+                plugin_id: "gameplay-failing".to_string(),
+                manifest: entrypoints.manifest,
+                api: entrypoints.api,
+            }),
             PluginAbiRange::default(),
             PluginFailureMatrix {
                 gameplay: action,
@@ -1266,14 +1260,12 @@ fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
 
     for (action, expect_fatal) in cases {
         let entrypoints = failing_auth_plugin::in_process_auth_entrypoints();
-        let mut catalog = PluginCatalog::default();
-        catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
-            plugin_id: "auth-failing".to_string(),
-            manifest: entrypoints.manifest,
-            api: entrypoints.api,
-        });
-        let host = test_support::build_in_process_plugin_host(
-            catalog,
+        let host = build_test_plugin_host(
+            TestPluginHostBuilder::new().auth_raw(InProcessAuthPlugin {
+                plugin_id: "auth-failing".to_string(),
+                manifest: entrypoints.manifest,
+                api: entrypoints.api,
+            }),
             PluginAbiRange::default(),
             PluginFailureMatrix {
                 auth: action,
@@ -1306,16 +1298,13 @@ fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
 
 #[test]
 fn unknown_gameplay_profile_fails_activation() {
-    let mut catalog = PluginCatalog::default();
     let canonical = canonical_gameplay_entrypoints();
-    catalog.register_in_process_gameplay_plugin(InProcessGameplayPlugin {
-        plugin_id: "gameplay-canonical".to_string(),
-        manifest: canonical.manifest,
-        api: canonical.api,
-    });
-
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
+            plugin_id: "gameplay-canonical".to_string(),
+            manifest: canonical.manifest,
+            api: canonical.api,
+        }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
@@ -1335,22 +1324,20 @@ fn unknown_gameplay_profile_fails_activation() {
 
 #[test]
 fn storage_and_auth_profiles_activate_and_resolve() {
-    let mut catalog = PluginCatalog::default();
     let storage = storage_entrypoints();
-    catalog.register_in_process_storage_plugin(InProcessStoragePlugin {
-        plugin_id: "storage-je-anvil-1_7_10".to_string(),
-        manifest: storage.manifest,
-        api: storage.api,
-    });
     let auth = offline_auth_entrypoints();
-    catalog.register_in_process_auth_plugin(InProcessAuthPlugin {
-        plugin_id: "auth-offline".to_string(),
-        manifest: auth.manifest,
-        api: auth.api,
-    });
-
-    let host = test_support::build_in_process_plugin_host(
-        catalog,
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new()
+            .storage_raw(InProcessStoragePlugin {
+                plugin_id: "storage-je-anvil-1_7_10".to_string(),
+                manifest: storage.manifest,
+                api: storage.api,
+            })
+            .auth_raw(InProcessAuthPlugin {
+                plugin_id: "auth-offline".to_string(),
+                manifest: auth.manifest,
+                api: auth.api,
+            }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
@@ -1365,8 +1352,8 @@ fn storage_and_auth_profiles_activate_and_resolve() {
 
 #[test]
 fn unknown_storage_and_auth_profiles_fail_activation() {
-    let host = test_support::build_in_process_plugin_host(
-        PluginCatalog::default(),
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new(),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );

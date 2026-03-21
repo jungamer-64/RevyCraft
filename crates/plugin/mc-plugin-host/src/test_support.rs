@@ -1,5 +1,6 @@
 use crate::PluginHostError;
 use crate::config::ServerConfig;
+use crate::plugin_host::PluginCatalog;
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use crate::runtime::{
     AuthProfileHandle, GameplayProfileHandle, RuntimeReloadContext, StorageProfileHandle,
@@ -10,16 +11,81 @@ use std::sync::Arc;
 pub use crate::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix, PluginHost};
 pub use crate::plugin_host::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
-    PluginCatalog,
 };
 
-#[must_use]
-pub fn build_in_process_plugin_host(
-    catalog: PluginCatalog,
+#[derive(Default)]
+pub struct TestPluginHostBuilder {
+    protocol_plugins: Vec<InProcessProtocolPlugin>,
+    gameplay_plugins: Vec<InProcessGameplayPlugin>,
+    storage_plugins: Vec<InProcessStoragePlugin>,
+    auth_plugins: Vec<InProcessAuthPlugin>,
     abi_range: PluginAbiRange,
     failure_matrix: PluginFailureMatrix,
-) -> Arc<PluginHost> {
-    Arc::new(PluginHost::new(catalog, abi_range, failure_matrix))
+}
+
+impl TestPluginHostBuilder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn protocol_raw(mut self, plugin: InProcessProtocolPlugin) -> Self {
+        self.protocol_plugins.push(plugin);
+        self
+    }
+
+    #[must_use]
+    pub fn gameplay_raw(mut self, plugin: InProcessGameplayPlugin) -> Self {
+        self.gameplay_plugins.push(plugin);
+        self
+    }
+
+    #[must_use]
+    pub fn storage_raw(mut self, plugin: InProcessStoragePlugin) -> Self {
+        self.storage_plugins.push(plugin);
+        self
+    }
+
+    #[must_use]
+    pub fn auth_raw(mut self, plugin: InProcessAuthPlugin) -> Self {
+        self.auth_plugins.push(plugin);
+        self
+    }
+
+    #[must_use]
+    pub const fn abi_range(mut self, abi_range: PluginAbiRange) -> Self {
+        self.abi_range = abi_range;
+        self
+    }
+
+    #[must_use]
+    pub const fn failure_matrix(mut self, failure_matrix: PluginFailureMatrix) -> Self {
+        self.failure_matrix = failure_matrix;
+        self
+    }
+
+    #[must_use]
+    pub fn build(self) -> Arc<PluginHost> {
+        let mut catalog = PluginCatalog::default();
+        for plugin in self.protocol_plugins {
+            catalog.register_in_process_protocol_plugin(plugin);
+        }
+        for plugin in self.gameplay_plugins {
+            catalog.register_in_process_gameplay_plugin(plugin);
+        }
+        for plugin in self.storage_plugins {
+            catalog.register_in_process_storage_plugin(plugin);
+        }
+        for plugin in self.auth_plugins {
+            catalog.register_in_process_auth_plugin(plugin);
+        }
+        Arc::new(PluginHost::new(
+            catalog,
+            self.abi_range,
+            self.failure_matrix,
+        ))
+    }
 }
 
 /// # Errors
