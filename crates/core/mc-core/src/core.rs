@@ -155,7 +155,7 @@ impl ServerCore {
         }
     }
 
-    pub fn set_max_players(&mut self, max_players: u8) {
+    pub const fn set_max_players(&mut self, max_players: u8) {
         self.config.max_players = max_players;
         self.world_meta.max_players = max_players;
     }

@@ -7,6 +7,10 @@ declare_protocol_plugin!(
     BePlaceholderAdapter,
     "be-placeholder",
     "Bedrock Placeholder Protocol Plugin",
-    &["protocol.be", "protocol.be.placeholder", "runtime.reload.protocol"],
+    &[
+        "protocol.be",
+        "protocol.be.placeholder",
+        "runtime.reload.protocol"
+    ],
     &["runtime.reload.protocol"],
 );

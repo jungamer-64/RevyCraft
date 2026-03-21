@@ -2,6 +2,7 @@ mod auth;
 mod gameplay;
 mod managed;
 mod protocol;
+mod shared;
 mod storage;
 
 use super::{
@@ -25,4 +26,5 @@ pub(crate) use self::managed::{
     ManagedAuthPlugin, ManagedGameplayPlugin, ManagedProtocolPlugin, ManagedStoragePlugin,
 };
 pub(crate) use self::protocol::HotSwappableProtocolAdapter;
+pub(crate) use self::shared::{GenerationSlot, ReloadableGenerationSlot};
 pub(crate) use self::storage::HotSwappableStorageProfile;

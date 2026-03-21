@@ -10,12 +10,6 @@ pub(crate) fn migrate_gameplay_sessions(
     generation: &Arc<GameplayGeneration>,
     runtime: &RuntimeReloadContext,
 ) -> Result<bool, RuntimeError> {
-    let _reload_guard = managed
-        .profile
-        .reload_gate
-        .write()
-        .expect("gameplay reload gate should not be poisoned");
-    let current_generation = managed.profile.current_generation();
     let relevant_sessions = runtime
         .gameplay_sessions
         .iter()
@@ -23,17 +17,22 @@ pub(crate) fn migrate_gameplay_sessions(
         .cloned()
         .collect::<Vec<_>>();
 
-    for session in &relevant_sessions {
-        let Some(blob) =
-            export_gameplay_session_blob(&managed.package.plugin_id, &current_generation, session)
-        else {
-            return Ok(false);
-        };
-        if !import_gameplay_session_blob(&managed.package.plugin_id, generation, session, blob) {
-            return Ok(false);
+    Ok(managed.profile.with_reload_write(|current_generation| {
+        for session in &relevant_sessions {
+            let Some(blob) = export_gameplay_session_blob(
+                &managed.package.plugin_id,
+                &current_generation,
+                session,
+            ) else {
+                return false;
+            };
+            if !import_gameplay_session_blob(&managed.package.plugin_id, generation, session, blob)
+            {
+                return false;
+            }
         }
-    }
-    Ok(true)
+        true
+    }))
 }
 
 pub(crate) fn protocol_reload_compatible(

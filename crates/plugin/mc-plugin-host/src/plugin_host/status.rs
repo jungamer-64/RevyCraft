@@ -190,12 +190,7 @@ impl PluginHost {
             .expect("plugin host mutex should not be poisoned")
             .values()
             .map(|managed| {
-                let generation = managed
-                    .profile
-                    .generation
-                    .read()
-                    .expect("gameplay generation lock should not be poisoned")
-                    .clone();
+                let generation = managed.profile.current_generation();
                 GameplayPluginStatusSnapshot {
                     plugin_id: managed.package.plugin_id.clone(),
                     profile_id: managed.profile_id.clone(),
@@ -224,12 +219,7 @@ impl PluginHost {
             .expect("plugin host mutex should not be poisoned")
             .values()
             .map(|managed| {
-                let generation = managed
-                    .profile
-                    .generation
-                    .read()
-                    .expect("storage generation lock should not be poisoned")
-                    .clone();
+                let generation = managed.profile.current_generation();
                 StoragePluginStatusSnapshot {
                     plugin_id: managed.package.plugin_id.clone(),
                     profile_id: managed.profile_id.clone(),
@@ -258,12 +248,7 @@ impl PluginHost {
             .expect("plugin host mutex should not be poisoned")
             .values()
             .map(|managed| {
-                let generation = managed
-                    .profile
-                    .generation
-                    .read()
-                    .expect("auth generation lock should not be poisoned")
-                    .clone();
+                let generation = managed.profile.current_generation();
                 AuthPluginStatusSnapshot {
                     plugin_id: managed.package.plugin_id.clone(),
                     profile_id: managed.profile_id.clone(),

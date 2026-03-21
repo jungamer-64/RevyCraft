@@ -512,22 +512,30 @@ mod declared_protocol_plugin {
         }
 
         fn decode_status(&self, _frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused declared protocol method",
+            ))
         }
 
         fn decode_login(&self, _frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused declared protocol method",
+            ))
         }
 
         fn encode_status_response(
             &self,
             _status: &ServerListStatus,
         ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused declared protocol method",
+            ))
         }
 
         fn encode_status_pong(&self, _payload: i64) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused declared protocol method",
+            ))
         }
 
         fn encode_disconnect(
@@ -535,7 +543,9 @@ mod declared_protocol_plugin {
             _phase: ConnectionPhase,
             _reason: &str,
         ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused declared protocol method",
+            ))
         }
 
         fn encode_encryption_request(
@@ -544,21 +554,24 @@ mod declared_protocol_plugin {
             _public_key_der: &[u8],
             _verify_token: &[u8],
         ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused declared protocol method",
+            ))
         }
 
         fn encode_network_settings(
             &self,
             _compression_threshold: u16,
         ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused declared protocol method",
+            ))
         }
 
-        fn encode_login_success(
-            &self,
-            _player: &PlayerSnapshot,
-        ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        fn encode_login_success(&self, _player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket(
+                "unused declared protocol method",
+            ))
         }
     }
 
@@ -568,7 +581,9 @@ mod declared_protocol_plugin {
             _player_id: PlayerId,
             _frame: &[u8],
         ) -> Result<Option<CoreCommand>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused declared protocol method",
+            ))
         }
 
         fn encode_play_event(
@@ -576,7 +591,9 @@ mod declared_protocol_plugin {
             _event: &CoreEvent,
             _context: &PlayEncodingContext,
         ) -> Result<Vec<Vec<u8>>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused declared protocol method",
+            ))
         }
     }
 

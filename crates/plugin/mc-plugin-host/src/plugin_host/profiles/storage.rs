@@ -1,36 +1,41 @@
 use super::{
-    Arc, CapabilitySet, Path, PluginGenerationId, RwLock, StorageAdapter, StorageError,
-    StorageProfileHandle, StorageRequest, StorageResponse, WorldSnapshot,
+    Arc, CapabilitySet, Path, PluginGenerationId, ReloadableGenerationSlot, StorageAdapter,
+    StorageError, StorageProfileHandle, StorageRequest, StorageResponse, WorldSnapshot,
 };
 
 pub(crate) struct HotSwappableStorageProfile {
     plugin_id: String,
-    pub(crate) generation: RwLock<Arc<super::StorageGeneration>>,
-    pub(crate) reload_gate: RwLock<()>,
+    generation: ReloadableGenerationSlot<super::StorageGeneration>,
 }
 
 impl HotSwappableStorageProfile {
     pub(crate) const fn new(plugin_id: String, generation: Arc<super::StorageGeneration>) -> Self {
         Self {
             plugin_id,
-            generation: RwLock::new(generation),
-            reload_gate: RwLock::new(()),
+            generation: ReloadableGenerationSlot::new(
+                generation,
+                "storage generation lock should not be poisoned",
+                "storage reload gate should not be poisoned",
+            ),
         }
     }
 
-    pub(crate) fn current_generation(&self) -> Result<Arc<super::StorageGeneration>, StorageError> {
-        Ok(self
-            .generation
-            .read()
-            .expect("storage generation lock should not be poisoned")
-            .clone())
+    pub(crate) fn current_generation(&self) -> Arc<super::StorageGeneration> {
+        self.generation.current()
     }
 
-    pub(crate) fn swap_generation(&self, generation: Arc<super::StorageGeneration>) {
-        *self
-            .generation
-            .write()
-            .expect("storage generation lock should not be poisoned") = generation;
+    pub(crate) fn swap_generation_while_reloading(
+        &self,
+        generation: Arc<super::StorageGeneration>,
+    ) {
+        self.generation.swap_while_reloading(generation);
+    }
+
+    pub(crate) fn with_reload_write<T>(
+        &self,
+        f: impl FnOnce(Arc<super::StorageGeneration>) -> T,
+    ) -> T {
+        self.generation.with_reload_write(f)
     }
 
     fn plugin_id(&self) -> &str {
@@ -38,31 +43,44 @@ impl HotSwappableStorageProfile {
     }
 
     fn capability_set(&self) -> CapabilitySet {
-        self.current_generation()
-            .map(|generation| generation.capabilities.clone())
-            .unwrap_or_default()
+        self.generation.capability_set()
     }
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
-        self.current_generation()
-            .ok()
-            .map(|generation| generation.generation_id)
+        Some(self.generation.generation_id())
+    }
+
+    fn with_generation<T>(
+        &self,
+        f: impl FnOnce(&super::StorageGeneration) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        self.generation
+            .with_reload_read(|generation| f(&generation))
+    }
+
+    fn invoke<T>(
+        &self,
+        request: StorageRequest,
+        map_response: impl FnOnce(StorageResponse) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        self.with_generation(|generation| {
+            let response = generation.invoke(&request)?;
+            map_response(response)
+        })
     }
 
     fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError> {
-        let _guard = self
-            .reload_gate
-            .read()
-            .expect("storage reload gate should not be poisoned");
-        let generation = self.current_generation()?;
-        match generation.invoke(&StorageRequest::LoadSnapshot {
-            world_dir: world_dir.display().to_string(),
-        })? {
-            StorageResponse::Snapshot(snapshot) => Ok(snapshot),
-            other => Err(StorageError::Plugin(format!(
-                "unexpected storage load_snapshot payload: {other:?}"
-            ))),
-        }
+        self.invoke(
+            StorageRequest::LoadSnapshot {
+                world_dir: world_dir.display().to_string(),
+            },
+            |response| match response {
+                StorageResponse::Snapshot(snapshot) => Ok(snapshot),
+                other => Err(StorageError::Plugin(format!(
+                    "unexpected storage load_snapshot payload: {other:?}"
+                ))),
+            },
+        )
     }
 
     fn save_snapshot(
@@ -70,20 +88,18 @@ impl HotSwappableStorageProfile {
         world_dir: &Path,
         snapshot: &WorldSnapshot,
     ) -> Result<(), StorageError> {
-        let _guard = self
-            .reload_gate
-            .read()
-            .expect("storage reload gate should not be poisoned");
-        let generation = self.current_generation()?;
-        match generation.invoke(&StorageRequest::SaveSnapshot {
-            world_dir: world_dir.display().to_string(),
-            snapshot: snapshot.clone(),
-        })? {
-            StorageResponse::Empty => Ok(()),
-            other => Err(StorageError::Plugin(format!(
-                "unexpected storage save_snapshot payload: {other:?}"
-            ))),
-        }
+        self.invoke(
+            StorageRequest::SaveSnapshot {
+                world_dir: world_dir.display().to_string(),
+                snapshot: snapshot.clone(),
+            },
+            |response| match response {
+                StorageResponse::Empty => Ok(()),
+                other => Err(StorageError::Plugin(format!(
+                    "unexpected storage save_snapshot payload: {other:?}"
+                ))),
+            },
+        )
     }
 }
 

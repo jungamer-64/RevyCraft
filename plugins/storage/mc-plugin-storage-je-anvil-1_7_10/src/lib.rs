@@ -2,8 +2,7 @@
 use mc_core::CapabilitySet;
 use mc_plugin_api::codec::storage::StorageDescriptor;
 use mc_plugin_sdk_rust::capabilities::{
-    build_tag_contains,
-    capability_set as build_capability_set,
+    build_tag_contains, capability_set as build_capability_set,
 };
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;

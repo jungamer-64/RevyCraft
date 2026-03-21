@@ -7,6 +7,10 @@ declare_protocol_plugin!(
     Je1122Adapter,
     "je-1_12_2",
     "JE 1.12.2 Protocol Plugin",
-    &["protocol.je", "protocol.je.1_12_2", "runtime.reload.protocol"],
+    &[
+        "protocol.je",
+        "protocol.je.1_12_2",
+        "runtime.reload.protocol"
+    ],
     &["runtime.reload.protocol"],
 );

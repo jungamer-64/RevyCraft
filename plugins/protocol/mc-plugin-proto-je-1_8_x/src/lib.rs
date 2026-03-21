@@ -7,6 +7,10 @@ declare_protocol_plugin!(
     Je18xAdapter,
     "je-1_8_x",
     "JE 1.8.x Protocol Plugin",
-    &["protocol.je", "protocol.je.1_8_x", "runtime.reload.protocol"],
+    &[
+        "protocol.je",
+        "protocol.je.1_8_x",
+        "runtime.reload.protocol"
+    ],
     &["runtime.reload.protocol"],
 );

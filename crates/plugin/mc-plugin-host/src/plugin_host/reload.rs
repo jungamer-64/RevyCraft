@@ -348,13 +348,15 @@ impl PluginHost {
         else {
             return Ok(());
         };
-        let _reload_guard = managed
-            .profile
-            .reload_gate
-            .write()
-            .expect("storage reload gate should not be poisoned");
-        if import_storage_runtime_state(&managed.package.plugin_id, &generation, runtime) {
-            managed.profile.swap_generation(generation);
+        let profile = Arc::clone(&managed.profile);
+        if profile.with_reload_write(|_| {
+            if import_storage_runtime_state(&managed.package.plugin_id, &generation, runtime) {
+                profile.swap_generation_while_reloading(generation);
+                true
+            } else {
+                false
+            }
+        }) {
             self.failures.clear_plugin_state(&managed.package.plugin_id);
             managed.loaded_at = modified_at;
             managed.active_loaded_at = modified_at;

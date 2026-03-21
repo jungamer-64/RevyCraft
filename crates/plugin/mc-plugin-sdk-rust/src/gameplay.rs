@@ -1,7 +1,5 @@
 use super::*;
-use mc_core::{
-    GameplayPolicyResolver, GameplayProfileId, GameplayQuery, SessionCapabilitySet,
-};
+use mc_core::{GameplayPolicyResolver, GameplayProfileId, GameplayQuery, SessionCapabilitySet};
 
 struct HostQuery<'a> {
     host: &'a dyn GameplayHost,

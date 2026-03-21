@@ -2,8 +2,7 @@
 use mc_core::{CapabilitySet, CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_sdk_rust::capabilities::{
-    build_tag_contains,
-    capability_set as build_capability_set,
+    build_tag_contains, capability_set as build_capability_set,
 };
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
@@ -152,7 +151,11 @@ impl ProtocolAdapter for Je1710ReloadTestProtocolPlugin {
     }
 
     fn capability_set(&self) -> CapabilitySet {
-        build_capability_set(&["protocol.je", "protocol.je.1_7_10", "runtime.reload.protocol"])
+        build_capability_set(&[
+            "protocol.je",
+            "protocol.je.1_7_10",
+            "runtime.reload.protocol",
+        ])
     }
 }
 

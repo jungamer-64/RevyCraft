@@ -11,7 +11,7 @@ enum PackagedPluginKind {
 }
 
 impl PackagedPluginKind {
-    fn manifest_kind(self) -> &'static str {
+    const fn manifest_kind(self) -> &'static str {
         match self {
             Self::Protocol => "protocol",
             Self::Gameplay => "gameplay",

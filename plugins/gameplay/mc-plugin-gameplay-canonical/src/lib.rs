@@ -12,8 +12,7 @@ impl PolicyGameplayPlugin for CanonicalGameplayPlugin {
 
     const PROFILE_ID: &'static str = "canonical";
     const EXPORT_TAG: &'static str = "canonical";
-    const IMPORT_REJECT_MESSAGE: &'static str =
-        "canonical gameplay plugin refused session import";
+    const IMPORT_REJECT_MESSAGE: &'static str = "canonical gameplay plugin refused session import";
 
     fn capability_names() -> &'static [&'static str] {
         &["gameplay.profile.canonical", "runtime.reload.gameplay"]

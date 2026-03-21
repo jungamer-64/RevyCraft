@@ -1,11 +1,11 @@
 use super::{
     Arc, AuthGeneration, AuthGenerationHandle, AuthMode, BedrockAuthResult, CapabilitySet,
-    PlayerId, PluginFailureDispatch, PluginGenerationId, PluginKind, RuntimeError, RwLock,
+    GenerationSlot, PlayerId, PluginFailureDispatch, PluginGenerationId, PluginKind, RuntimeError,
 };
 
 pub(crate) struct HotSwappableAuthProfile {
     plugin_id: String,
-    pub(crate) generation: RwLock<Arc<AuthGeneration>>,
+    generation: GenerationSlot<AuthGeneration>,
     failures: Arc<PluginFailureDispatch>,
 }
 
@@ -17,51 +17,41 @@ impl HotSwappableAuthProfile {
     ) -> Self {
         Self {
             plugin_id,
-            generation: RwLock::new(generation),
+            generation: GenerationSlot::new(
+                generation,
+                "auth generation lock should not be poisoned",
+            ),
             failures,
         }
     }
 
-    fn current_generation(&self) -> Result<Arc<AuthGeneration>, String> {
-        Ok(self
-            .generation
-            .read()
-            .expect("auth generation lock should not be poisoned")
-            .clone())
+    pub(crate) fn current_generation(&self) -> Arc<AuthGeneration> {
+        self.generation.current()
     }
 
     pub(crate) fn swap_generation(&self, generation: Arc<AuthGeneration>) {
-        *self
-            .generation
-            .write()
-            .expect("auth generation lock should not be poisoned") = generation;
+        self.generation.swap(generation);
     }
 
     fn capability_set(&self) -> CapabilitySet {
-        self.current_generation()
-            .map(|generation| generation.capabilities.clone())
-            .unwrap_or_default()
+        self.generation.capability_set()
     }
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
-        self.current_generation()
-            .ok()
-            .map(|generation| generation.generation_id)
+        Some(self.generation.generation_id())
     }
 
     fn mode(&self) -> Result<AuthMode, RuntimeError> {
-        self.current_generation()
-            .map(|generation| generation.mode())
-            .map_err(RuntimeError::Config)
+        Ok(self.current_generation().mode())
     }
 
     fn capture_generation(&self) -> Result<Arc<AuthGeneration>, RuntimeError> {
-        self.current_generation().map_err(RuntimeError::Config)
+        Ok(self.current_generation())
     }
 
-    fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
-        match self.capture_generation()?.authenticate_offline(username) {
-            Ok(player_id) => Ok(player_id),
+    fn handle_auth_result<T>(&self, result: Result<T, RuntimeError>) -> Result<T, RuntimeError> {
+        match result {
+            Ok(value) => Ok(value),
             Err(RuntimeError::Config(message)) => {
                 let _ = self.failures.handle_runtime_failure(
                     PluginKind::Auth,
@@ -72,6 +62,18 @@ impl HotSwappableAuthProfile {
             }
             Err(error) => Err(error),
         }
+    }
+
+    fn with_captured_generation<T>(
+        &self,
+        f: impl FnOnce(&AuthGeneration) -> Result<T, RuntimeError>,
+    ) -> Result<T, RuntimeError> {
+        let generation = self.capture_generation()?;
+        self.handle_auth_result(f(&generation))
+    }
+
+    fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
+        self.with_captured_generation(|generation| generation.authenticate_offline(username))
     }
 
     fn authenticate_online(
@@ -79,42 +81,18 @@ impl HotSwappableAuthProfile {
         username: &str,
         server_hash: &str,
     ) -> Result<PlayerId, RuntimeError> {
-        match self
-            .capture_generation()?
-            .authenticate_online(username, server_hash)
-        {
-            Ok(player_id) => Ok(player_id),
-            Err(RuntimeError::Config(message)) => {
-                let _ = self.failures.handle_runtime_failure(
-                    PluginKind::Auth,
-                    &self.plugin_id,
-                    &message,
-                );
-                Err(RuntimeError::Config(message))
-            }
-            Err(error) => Err(error),
-        }
+        self.with_captured_generation(|generation| {
+            generation.authenticate_online(username, server_hash)
+        })
     }
 
     fn authenticate_bedrock_offline(
         &self,
         display_name: &str,
     ) -> Result<BedrockAuthResult, RuntimeError> {
-        match self
-            .capture_generation()?
-            .authenticate_bedrock_offline(display_name)
-        {
-            Ok(result) => Ok(result),
-            Err(RuntimeError::Config(message)) => {
-                let _ = self.failures.handle_runtime_failure(
-                    PluginKind::Auth,
-                    &self.plugin_id,
-                    &message,
-                );
-                Err(RuntimeError::Config(message))
-            }
-            Err(error) => Err(error),
-        }
+        self.with_captured_generation(|generation| {
+            generation.authenticate_bedrock_offline(display_name)
+        })
     }
 
     fn authenticate_bedrock_xbl(
@@ -122,21 +100,9 @@ impl HotSwappableAuthProfile {
         chain_jwts: &[String],
         client_data_jwt: &str,
     ) -> Result<BedrockAuthResult, RuntimeError> {
-        match self
-            .capture_generation()?
-            .authenticate_bedrock_xbl(chain_jwts, client_data_jwt)
-        {
-            Ok(result) => Ok(result),
-            Err(RuntimeError::Config(message)) => {
-                let _ = self.failures.handle_runtime_failure(
-                    PluginKind::Auth,
-                    &self.plugin_id,
-                    &message,
-                );
-                Err(RuntimeError::Config(message))
-            }
-            Err(error) => Err(error),
-        }
+        self.with_captured_generation(|generation| {
+            generation.authenticate_bedrock_xbl(chain_jwts, client_data_jwt)
+        })
     }
 }
 
