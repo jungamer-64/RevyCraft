@@ -108,7 +108,7 @@ plugin crate の in-process helper は production public surface ではなく、
 
 plugin host と SDK が共有する gameplay host blob helper は `mc_plugin_api::codec::gameplay::host_blob::*` にまとまっていて、runtime/host integration 専用の surface として扱います。
 
-`mc_plugin_sdk_rust::__macro_support` と `mc_plugin_api::codec::__internal` は実装都合の unsupported path です。workspace 外からの直接利用や互換は保証しません。
+`mc_plugin_sdk_rust::__macro_support` は exported macro を支える実装都合の unsupported path です。binary / semantic codec の分離は `mc-plugin-api` crate 内部実装で、workspace 外からの直接利用や互換は保証しません。
 
 ## Notes
 

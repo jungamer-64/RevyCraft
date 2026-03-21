@@ -1553,6 +1553,9 @@ version = "0.1.0"
 dependencies = [
  "mc-core",
  "mc-plugin-host",
+ "mc-plugin-proto-je-1_7_10",
+ "mc-plugin-test-support",
+ "mc-proto-je-1_7_10",
 ]
 
 [[package]]

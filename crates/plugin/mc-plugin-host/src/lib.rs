@@ -16,7 +16,7 @@ pub mod runtime;
 #[cfg(test)]
 mod test_support;
 
-#[cfg(feature = "in-process-testing")]
+#[cfg(any(test, feature = "in-process-testing"))]
 #[doc(hidden)]
 pub mod __test_hooks;
 

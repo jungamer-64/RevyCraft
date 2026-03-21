@@ -221,3 +221,85 @@ pub mod raw {
         InProcessStoragePlugin,
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PluginAbiRange, TestPluginHost, TestPluginHostBuilder};
+    use crate::raw::InProcessProtocolPlugin;
+    use mc_core::{CoreConfig, ServerCore};
+    use mc_plugin_host::config::ServerConfig;
+    use mc_plugin_host::runtime::RuntimeReloadContext;
+    use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints as je_1_7_10_entrypoints;
+    use mc_plugin_test_support::PackagedPluginHarness;
+    use mc_proto_je_1_7_10::JE_1_7_10_ADAPTER_ID;
+    use std::path::PathBuf;
+
+    fn je_1_7_10_protocol_plugin() -> InProcessProtocolPlugin {
+        InProcessProtocolPlugin {
+            plugin_id: JE_1_7_10_ADAPTER_ID.to_string(),
+            manifest: je_1_7_10_entrypoints().manifest,
+            api: je_1_7_10_entrypoints().api,
+        }
+    }
+
+    #[test]
+    fn builder_runtime_host_and_protocol_snapshot_work() {
+        let host = TestPluginHostBuilder::new()
+            .protocol_raw(je_1_7_10_protocol_plugin())
+            .abi_range(PluginAbiRange::default())
+            .build();
+        let runtime_host = host.runtime_host();
+        let protocols = host
+            .load_protocol_plugin_set()
+            .expect("in-process protocol plugin set should load");
+        assert!(
+            runtime_host
+                .managed_protocol_ids()
+                .contains(&JE_1_7_10_ADAPTER_ID.to_string())
+        );
+        assert!(
+            protocols
+                .protocols()
+                .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn discover_and_reload_wrappers_work_for_packaged_plugins() {
+        let harness = PackagedPluginHarness::shared().expect("packaged harness should exist");
+        let config = ServerConfig {
+            plugins_dir: harness.dist_dir().to_path_buf(),
+            plugin_allowlist: Some(vec![JE_1_7_10_ADAPTER_ID.to_string()]),
+            ..ServerConfig::default()
+        };
+        let host = TestPluginHost::discover(&config)
+            .expect("packaged discovery should succeed")
+            .expect("expected packaged host");
+        let protocols = host
+            .load_protocol_plugin_set()
+            .expect("packaged protocol plugin set should load");
+        assert!(
+            protocols
+                .protocols()
+                .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+                .is_some()
+        );
+        assert_eq!(
+            host.reload_modified()
+                .expect("reload with no modified artifacts should succeed"),
+            Vec::<String>::new()
+        );
+        let runtime = RuntimeReloadContext {
+            protocol_sessions: Vec::new(),
+            gameplay_sessions: Vec::new(),
+            snapshot: ServerCore::new(CoreConfig::default()).snapshot(),
+            world_dir: PathBuf::from("."),
+        };
+        assert_eq!(
+            host.reload_modified_with_context(&runtime)
+                .expect("context reload with no modified artifacts should succeed"),
+            Vec::<String>::new()
+        );
+    }
+}

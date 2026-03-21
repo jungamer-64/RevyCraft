@@ -1,8 +1,8 @@
+use crate::__test_hooks as hooks;
 use crate::PluginHostError;
 use crate::config::ServerConfig;
-use crate::host::{PluginHost, PluginHostStatusSnapshot, plugin_host_from_config};
-use crate::plugin_host::PluginCatalog;
-use crate::registry::{LoadedPluginSet, ProtocolRegistry};
+use crate::host::PluginHostStatusSnapshot;
+use crate::registry::LoadedPluginSet;
 use crate::runtime::{
     AuthProfileHandle, GameplayProfileHandle, RuntimeReloadContext, StorageProfileHandle,
 };
@@ -16,7 +16,7 @@ pub use crate::plugin_host::{
 
 #[derive(Clone)]
 pub struct TestPluginHost {
-    inner: Arc<PluginHost>,
+    inner: hooks::BuiltTestHost,
 }
 
 impl TestPluginHost {
@@ -24,12 +24,12 @@ impl TestPluginHost {
     ///
     /// Returns [`PluginHostError`] when packaged plugin discovery fails.
     pub fn discover(config: &ServerConfig) -> Result<Option<Self>, PluginHostError> {
-        plugin_host_from_config(config).map(|host| host.map(|inner| Self { inner }))
+        hooks::discover(config).map(|host| host.map(|inner| Self { inner }))
     }
 
     #[must_use]
     pub fn status(&self) -> PluginHostStatusSnapshot {
-        self.inner.status()
+        hooks::status(&self.inner)
     }
 
     /// # Errors
@@ -39,45 +39,35 @@ impl TestPluginHost {
         &self,
         config: &ServerConfig,
     ) -> Result<LoadedPluginSet, PluginHostError> {
-        self.inner.load_plugin_set(config)
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`PluginHostError`] when the host cannot materialize the protocol snapshot.
-    pub fn load_protocol_registry(&self) -> Result<ProtocolRegistry, PluginHostError> {
-        self.inner.load_protocol_registry()
+        hooks::load_plugin_set(&self.inner, config)
     }
 
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the host cannot materialize the protocol-only plugin set.
     pub fn load_protocol_plugin_set(&self) -> Result<LoadedPluginSet, PluginHostError> {
-        let protocols = self.load_protocol_registry()?;
-        let mut loaded_plugins = LoadedPluginSet::new();
-        loaded_plugins.replace_protocols(protocols);
-        Ok(loaded_plugins)
+        hooks::load_protocol_plugin_set(&self.inner)
     }
 
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the gameplay profiles cannot be activated.
     pub fn activate_gameplay_profiles(&self, config: &ServerConfig) -> Result<(), PluginHostError> {
-        self.inner.activate_gameplay_profiles(config)
+        hooks::activate_gameplay_profiles(&self.inner, config)
     }
 
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the storage profile cannot be activated.
     pub fn activate_storage_profile(&self, profile_id: &str) -> Result<(), PluginHostError> {
-        self.inner.activate_storage_profile(profile_id)
+        hooks::activate_storage_profile(&self.inner, profile_id)
     }
 
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the auth profile cannot be activated.
     pub fn activate_auth_profile(&self, profile_id: &str) -> Result<(), PluginHostError> {
-        self.inner.activate_auth_profile(profile_id)
+        hooks::activate_auth_profile(&self.inner, profile_id)
     }
 
     #[must_use]
@@ -85,9 +75,7 @@ impl TestPluginHost {
         &self,
         profile_id: &str,
     ) -> Option<Arc<dyn GameplayProfileHandle>> {
-        self.inner
-            .resolve_gameplay_profile(profile_id)
-            .map(|profile| profile as Arc<dyn GameplayProfileHandle>)
+        hooks::resolve_gameplay_profile(&self.inner, profile_id)
     }
 
     #[must_use]
@@ -95,16 +83,12 @@ impl TestPluginHost {
         &self,
         profile_id: &str,
     ) -> Option<Arc<dyn StorageProfileHandle>> {
-        self.inner
-            .resolve_storage_profile(profile_id)
-            .map(|profile| profile as Arc<dyn StorageProfileHandle>)
+        hooks::resolve_storage_profile(&self.inner, profile_id)
     }
 
     #[must_use]
     pub fn resolve_auth_profile(&self, profile_id: &str) -> Option<Arc<dyn AuthProfileHandle>> {
-        self.inner
-            .resolve_auth_profile(profile_id)
-            .map(|profile| profile as Arc<dyn AuthProfileHandle>)
+        hooks::resolve_auth_profile(&self.inner, profile_id)
     }
 
     /// # Errors
@@ -114,14 +98,14 @@ impl TestPluginHost {
         &self,
         plugin: InProcessProtocolPlugin,
     ) -> Result<PluginGenerationId, PluginHostError> {
-        self.inner.replace_in_process_protocol_plugin(plugin)
+        hooks::replace_in_process_protocol_plugin(&self.inner, plugin)
     }
 
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when a modified packaged plugin cannot be reloaded.
     pub fn reload_modified(&self) -> Result<Vec<String>, PluginHostError> {
-        self.inner.reload_modified()
+        hooks::reload_modified(&self.inner)
     }
 
     /// # Errors
@@ -131,12 +115,12 @@ impl TestPluginHost {
         &self,
         runtime: &RuntimeReloadContext,
     ) -> Result<Vec<String>, PluginHostError> {
-        self.inner.reload_modified_with_context(runtime)
+        hooks::reload_modified_with_context(&self.inner, runtime)
     }
 
     #[must_use]
     pub fn take_pending_fatal_error(&self) -> Option<PluginHostError> {
-        self.inner.take_pending_fatal_error()
+        hooks::take_pending_fatal_error(&self.inner)
     }
 }
 
@@ -194,25 +178,15 @@ impl TestPluginHostBuilder {
 
     #[must_use]
     pub fn build(self) -> TestPluginHost {
-        let mut catalog = PluginCatalog::default();
-        for plugin in self.protocol_plugins {
-            catalog.register_in_process_protocol_plugin(plugin);
-        }
-        for plugin in self.gameplay_plugins {
-            catalog.register_in_process_gameplay_plugin(plugin);
-        }
-        for plugin in self.storage_plugins {
-            catalog.register_in_process_storage_plugin(plugin);
-        }
-        for plugin in self.auth_plugins {
-            catalog.register_in_process_auth_plugin(plugin);
-        }
         TestPluginHost {
-            inner: Arc::new(PluginHost::new(
-                catalog,
-                self.abi_range,
-                self.failure_matrix,
-            )),
+            inner: hooks::build_in_process_host(hooks::InProcessHostBuildInput {
+                protocol_plugins: self.protocol_plugins,
+                gameplay_plugins: self.gameplay_plugins,
+                storage_plugins: self.storage_plugins,
+                auth_plugins: self.auth_plugins,
+                abi_range: self.abi_range,
+                failure_matrix: self.failure_matrix,
+            }),
         }
     }
 }

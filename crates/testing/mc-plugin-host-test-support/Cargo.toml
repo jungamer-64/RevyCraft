@@ -13,5 +13,10 @@ description = "Shared in-process plugin-host test fixtures for RevyCraft workspa
 mc-core = { path = "../../core/mc-core" }
 mc-plugin-host = { path = "../../plugin/mc-plugin-host", features = ["in-process-testing"] }
 
+[dev-dependencies]
+mc-plugin-test-support = { path = "../mc-plugin-test-support" }
+mc-plugin-proto-je-1_7_10 = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_7_10", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-proto-je-1_7_10 = { path = "../../protocol/mc-proto-je-1_7_10" }
+
 [lints]
 workspace = true
