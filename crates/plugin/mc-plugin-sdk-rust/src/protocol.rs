@@ -1,6 +1,6 @@
 use super::*;
 
-pub use crate::{delegate_protocol_adapter, export_protocol_plugin};
+pub use crate::{declare_protocol_plugin, delegate_protocol_adapter, export_protocol_plugin};
 
 pub trait RustProtocolPlugin: HandshakeProbe + ProtocolAdapter + Send + Sync + 'static {
     /// Exports protocol plugin session state into an opaque transfer blob.

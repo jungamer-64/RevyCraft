@@ -1,8 +1,9 @@
-use super::{__macro_support, gameplay, manifest, protocol};
+use super::{__macro_support, capabilities, gameplay, manifest, protocol};
 use bytes::BytesMut;
 use mc_core::{
-    BlockPos, CapabilitySet, CoreCommand, CoreEvent, DimensionId, GameplayEffect,
-    GameplayProfileId, PlayerId, PlayerSnapshot, WorldMeta,
+    BlockPos, CoreCommand, CoreEvent, DimensionId, GameplayEffect, GameplayJoinEffect,
+    GameplayPolicyResolver, GameplayProfileId, GameplayQuery, PlayerId, PlayerSnapshot,
+    SessionCapabilitySet, WorldMeta,
 };
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
 use mc_plugin_api::codec::gameplay::{
@@ -222,6 +223,29 @@ impl ProtocolAdapter for DirectProtocolPlugin {
 
 impl protocol::RustProtocolPlugin for DirectProtocolPlugin {}
 
+fn utf8_slice_to_string(slice: mc_plugin_api::abi::Utf8Slice) -> String {
+    let bytes = unsafe { std::slice::from_raw_parts(slice.ptr, slice.len) };
+    std::str::from_utf8(bytes)
+        .expect("manifest utf8 slice should be valid")
+        .to_string()
+}
+
+fn manifest_capability_names(manifest: &mc_plugin_api::manifest::PluginManifestV1) -> Vec<String> {
+    if manifest.capabilities.is_null() {
+        return Vec::new();
+    }
+    let descriptors =
+        unsafe { std::slice::from_raw_parts(manifest.capabilities, manifest.capabilities_len) };
+    descriptors
+        .iter()
+        .map(|descriptor| utf8_slice_to_string(descriptor.name))
+        .collect()
+}
+
+fn test_player_id() -> PlayerId {
+    PlayerId(unsafe { std::mem::zeroed() })
+}
+
 #[test]
 fn direct_protocol_requests_route_wire_codec_ops_through_plugin_codec() {
     assert_eq!(
@@ -278,6 +302,31 @@ fn direct_gameplay_requests_require_host_api_for_host_callbacks() {
     assert!(error.contains("gameplay host api is not configured"));
 }
 
+#[test]
+fn capability_helpers_add_build_tags_without_changing_base_names() {
+    let capabilities = capabilities::capability_set_for_build_tag(
+        &["runtime.reload.protocol", "protocol.test"],
+        Some("protocol-reload-v2"),
+    );
+
+    assert!(capabilities.contains("runtime.reload.protocol"));
+    assert!(capabilities.contains("protocol.test"));
+    assert!(capabilities.contains("build-tag:protocol-reload-v2"));
+}
+
+#[test]
+fn build_tag_contains_uses_the_pure_helper_logic() {
+    assert!(capabilities::build_tag_contains_in(
+        Some("protocol-reload-fail-v2"),
+        "reload-fail",
+    ));
+    assert!(!capabilities::build_tag_contains_in(
+        Some("protocol-reload-v2"),
+        "reload-fail",
+    ));
+    assert!(!capabilities::build_tag_contains_in(None, "reload-fail"));
+}
+
 #[allow(unexpected_cfgs)]
 mod plugin_a {
     use super::*;
@@ -298,30 +347,52 @@ mod plugin_a {
             .take()
     }
 
-    impl gameplay::RustGameplayPlugin for PluginA {
-        fn descriptor(&self) -> GameplayDescriptor {
-            GameplayDescriptor {
-                profile: GameplayProfileId::new("plugin-a"),
-            }
+    #[derive(Default)]
+    pub struct PolicyA;
+
+    impl GameplayPolicyResolver for PolicyA {
+        fn handle_player_join(
+            &self,
+            _query: &dyn GameplayQuery,
+            _session: &SessionCapabilitySet,
+            _player: &PlayerSnapshot,
+        ) -> Result<GameplayJoinEffect, String> {
+            Ok(GameplayJoinEffect::default())
         }
 
-        fn capability_set(&self) -> CapabilitySet {
-            let mut capabilities = CapabilitySet::new();
-            let _ = capabilities.insert("runtime.reload.gameplay");
-            capabilities
+        fn handle_command(
+            &self,
+            _query: &dyn GameplayQuery,
+            _session: &SessionCapabilitySet,
+            _command: &CoreCommand,
+        ) -> Result<GameplayEffect, String> {
+            Ok(GameplayEffect::default())
         }
 
         fn handle_tick(
             &self,
-            host: &dyn gameplay::GameplayHost,
-            _session: &GameplaySessionSnapshot,
+            query: &dyn GameplayQuery,
+            _session: &SessionCapabilitySet,
+            _player_id: PlayerId,
             _now_ms: u64,
         ) -> Result<GameplayEffect, String> {
             *recorded_slot()
                 .lock()
                 .expect("recorded level name mutex should not be poisoned") =
-                Some(host.read_world_meta()?.level_name);
+                Some(query.world_meta().level_name);
             Ok(GameplayEffect::default())
+        }
+    }
+
+    impl gameplay::PolicyGameplayPlugin for PluginA {
+        type Policy = PolicyA;
+
+        const PROFILE_ID: &'static str = "plugin-a";
+        const EXPORT_TAG: &'static str = "plugin-a";
+        const IMPORT_REJECT_MESSAGE: &'static str = "plugin-a refused session import";
+
+        fn capability_names() -> &'static [&'static str] {
+            &["runtime.reload.gameplay"]
         }
     }
 
@@ -354,30 +425,52 @@ mod plugin_b {
             .take()
     }
 
-    impl gameplay::RustGameplayPlugin for PluginB {
-        fn descriptor(&self) -> GameplayDescriptor {
-            GameplayDescriptor {
-                profile: GameplayProfileId::new("plugin-b"),
-            }
+    #[derive(Default)]
+    pub struct PolicyB;
+
+    impl GameplayPolicyResolver for PolicyB {
+        fn handle_player_join(
+            &self,
+            _query: &dyn GameplayQuery,
+            _session: &SessionCapabilitySet,
+            _player: &PlayerSnapshot,
+        ) -> Result<GameplayJoinEffect, String> {
+            Ok(GameplayJoinEffect::default())
         }
 
-        fn capability_set(&self) -> CapabilitySet {
-            let mut capabilities = CapabilitySet::new();
-            let _ = capabilities.insert("runtime.reload.gameplay");
-            capabilities
+        fn handle_command(
+            &self,
+            _query: &dyn GameplayQuery,
+            _session: &SessionCapabilitySet,
+            _command: &CoreCommand,
+        ) -> Result<GameplayEffect, String> {
+            Ok(GameplayEffect::default())
         }
 
         fn handle_tick(
             &self,
-            host: &dyn gameplay::GameplayHost,
-            _session: &GameplaySessionSnapshot,
+            query: &dyn GameplayQuery,
+            _session: &SessionCapabilitySet,
+            _player_id: PlayerId,
             _now_ms: u64,
         ) -> Result<GameplayEffect, String> {
             *recorded_slot()
                 .lock()
                 .expect("recorded level name mutex should not be poisoned") =
-                Some(host.read_world_meta()?.level_name);
+                Some(query.world_meta().level_name);
             Ok(GameplayEffect::default())
+        }
+    }
+
+    impl gameplay::PolicyGameplayPlugin for PluginB {
+        type Policy = PolicyB;
+
+        const PROFILE_ID: &'static str = "plugin-b";
+        const EXPORT_TAG: &'static str = "plugin-b";
+        const IMPORT_REJECT_MESSAGE: &'static str = "plugin-b refused session import";
+
+        fn capability_names() -> &'static [&'static str] {
+            &["runtime.reload.gameplay"]
         }
     }
 
@@ -388,6 +481,126 @@ mod plugin_b {
     );
 
     export_gameplay_plugin!(PluginB, MANIFEST);
+}
+
+#[allow(unexpected_cfgs)]
+mod declared_protocol_plugin {
+    use super::*;
+    use crate::protocol::declare_protocol_plugin;
+
+    #[derive(Default)]
+    struct DeclaredProtocolAdapter;
+
+    impl HandshakeProbe for DeclaredProtocolAdapter {
+        fn transport_kind(&self) -> TransportKind {
+            TransportKind::Tcp
+        }
+
+        fn adapter_id(&self) -> Option<&'static str> {
+            Some("declared-probe")
+        }
+
+        fn try_route(&self, _frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
+            Ok(None)
+        }
+    }
+
+    impl SessionAdapter for DeclaredProtocolAdapter {
+        fn wire_codec(&self) -> &dyn WireCodec {
+            static CODEC: TestProtocolWireCodec = TestProtocolWireCodec;
+            &CODEC
+        }
+
+        fn decode_status(&self, _frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        }
+
+        fn decode_login(&self, _frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        }
+
+        fn encode_status_response(
+            &self,
+            _status: &ServerListStatus,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        }
+
+        fn encode_status_pong(&self, _payload: i64) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        }
+
+        fn encode_disconnect(
+            &self,
+            _phase: ConnectionPhase,
+            _reason: &str,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        }
+
+        fn encode_encryption_request(
+            &self,
+            _server_id: &str,
+            _public_key_der: &[u8],
+            _verify_token: &[u8],
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        }
+
+        fn encode_network_settings(
+            &self,
+            _compression_threshold: u16,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        }
+
+        fn encode_login_success(
+            &self,
+            _player: &PlayerSnapshot,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        }
+    }
+
+    impl mc_proto_common::PlaySyncAdapter for DeclaredProtocolAdapter {
+        fn decode_play(
+            &self,
+            _player_id: PlayerId,
+            _frame: &[u8],
+        ) -> Result<Option<CoreCommand>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        }
+
+        fn encode_play_event(
+            &self,
+            _event: &CoreEvent,
+            _context: &PlayEncodingContext,
+        ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused declared protocol method"))
+        }
+    }
+
+    impl ProtocolAdapter for DeclaredProtocolAdapter {
+        fn descriptor(&self) -> ProtocolDescriptor {
+            ProtocolDescriptor {
+                adapter_id: "declared-probe".to_string(),
+                transport: TransportKind::Tcp,
+                wire_format: WireFormatKind::MinecraftFramed,
+                edition: Edition::Je,
+                version_name: "test".to_string(),
+                protocol_number: 0,
+            }
+        }
+    }
+
+    declare_protocol_plugin!(
+        DeclaredProtocolPlugin,
+        DeclaredProtocolAdapter,
+        "declared-probe",
+        "Declared Probe Protocol Plugin",
+        &["protocol.test", "runtime.reload.protocol"],
+        &["runtime.reload.protocol"],
+    );
 }
 
 unsafe fn invoke_gameplay(
@@ -452,7 +665,7 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
     let request_a = GameplayRequest::HandleTick {
         session: GameplaySessionSnapshot {
             phase: ConnectionPhase::Play,
-            player_id: None,
+            player_id: Some(test_player_id()),
             entity_id: None,
             gameplay_profile: GameplayProfileId::new("plugin-a"),
         },
@@ -461,7 +674,7 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
     let request_b = GameplayRequest::HandleTick {
         session: GameplaySessionSnapshot {
             phase: ConnectionPhase::Play,
-            player_id: None,
+            player_id: Some(test_player_id()),
             entity_id: None,
             gameplay_profile: GameplayProfileId::new("plugin-b"),
         },
@@ -484,4 +697,36 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
         plugin_b::take_recorded_level_name().as_deref(),
         Some("host-b")
     );
+}
+
+#[test]
+fn declared_protocol_plugins_delegate_wire_codec_and_keep_manifest_capabilities() {
+    assert_eq!(
+        __macro_support::handle_protocol_request(
+            &declared_protocol_plugin::DeclaredProtocolPlugin::default(),
+            ProtocolRequest::EncodeWireFrame {
+                payload: vec![0x10, 0x20],
+            },
+        )
+        .expect("declared wire frame should encode"),
+        ProtocolResponse::Frame(vec![2, 0x10, 0x20])
+    );
+
+    assert_eq!(
+        __macro_support::handle_protocol_request(
+            &declared_protocol_plugin::DeclaredProtocolPlugin::default(),
+            ProtocolRequest::TryDecodeWireFrame {
+                buffer: vec![2, 0x10, 0x20, 0xff],
+            },
+        )
+        .expect("declared wire frame should decode"),
+        ProtocolResponse::WireFrameDecodeResult(Some(WireFrameDecodeResult {
+            frame: vec![0x10, 0x20],
+            bytes_consumed: 3,
+        }))
+    );
+
+    let entrypoints = declared_protocol_plugin::in_process_protocol_entrypoints();
+    let capabilities = manifest_capability_names(entrypoints.manifest);
+    assert_eq!(capabilities, vec!["runtime.reload.protocol".to_string()]);
 }

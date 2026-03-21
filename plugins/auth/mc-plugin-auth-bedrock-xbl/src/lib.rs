@@ -7,6 +7,7 @@ use bedrock_jwt::verifier::{
 use bedrockrs_proto::info::MOJANG_PUBLIC_KEY;
 use mc_core::{CapabilitySet, PlayerId};
 use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode, BedrockAuthResult};
+use mc_plugin_sdk_rust::capabilities::capability_set as build_capability_set;
 use mc_plugin_sdk_rust::auth::{RustAuthPlugin, export_auth_plugin};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use p384::ecdsa::{Signature as EcdsaSignature, VerifyingKey, signature::Verifier};
@@ -28,15 +29,12 @@ impl RustAuthPlugin for BedrockXblAuthPlugin {
     }
 
     fn capability_set(&self) -> CapabilitySet {
-        let mut capabilities = CapabilitySet::new();
-        let _ = capabilities.insert("auth.bedrock");
-        let _ = capabilities.insert("auth.bedrock.xbl");
-        let _ = capabilities.insert("auth.profile.bedrock-xbl-v1");
-        let _ = capabilities.insert("runtime.reload.auth");
-        if let Some(build_tag) = option_env!("REVY_PLUGIN_BUILD_TAG") {
-            let _ = capabilities.insert(format!("build-tag:{build_tag}"));
-        }
-        capabilities
+        build_capability_set(&[
+            "auth.bedrock",
+            "auth.bedrock.xbl",
+            "auth.profile.bedrock-xbl-v1",
+            "runtime.reload.auth",
+        ])
     }
 
     fn authenticate_offline(&self, _username: &str) -> Result<PlayerId, String> {

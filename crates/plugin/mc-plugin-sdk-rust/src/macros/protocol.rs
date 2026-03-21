@@ -1,4 +1,34 @@
 #[macro_export]
+macro_rules! declare_protocol_plugin {
+    (
+        $plugin_ty:ident,
+        $adapter_ty:ty,
+        $plugin_id:expr,
+        $display_name:expr,
+        $capabilities:expr,
+        $manifest_capabilities:expr $(,)?
+    ) => {
+        #[derive(Default)]
+        pub struct $plugin_ty {
+            adapter: $adapter_ty,
+        }
+
+        $crate::delegate_protocol_adapter!($plugin_ty, adapter, {
+            $crate::capabilities::capability_set($capabilities)
+        });
+
+        $crate::export_protocol_plugin!(
+            $plugin_ty,
+            $crate::manifest::StaticPluginManifest::protocol_with_capabilities(
+                $plugin_id,
+                $display_name,
+                $manifest_capabilities,
+            )
+        );
+    };
+}
+
+#[macro_export]
 macro_rules! delegate_protocol_adapter {
     ($plugin_ty:ty, $field:ident, $capability_body:block $(,)?) => {
         impl $crate::protocol::RustProtocolPlugin for $plugin_ty {}

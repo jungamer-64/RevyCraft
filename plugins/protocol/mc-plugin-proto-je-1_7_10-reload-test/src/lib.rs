@@ -1,6 +1,10 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::{CapabilitySet, CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_sdk_rust::capabilities::{
+    build_tag_contains,
+    capability_set as build_capability_set,
+};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::protocol::{RustProtocolPlugin, export_protocol_plugin};
 use mc_proto_common::{
@@ -40,7 +44,7 @@ impl RustProtocolPlugin for Je1710ReloadTestProtocolPlugin {
         session: &ProtocolSessionSnapshot,
         blob: &[u8],
     ) -> Result<(), ProtocolError> {
-        if option_env!("REVY_PLUGIN_BUILD_TAG").is_some_and(|tag| tag.contains("reload-fail")) {
+        if build_tag_contains("reload-fail") {
             return Err(ProtocolError::Plugin(
                 "reload test protocol plugin refused session import".to_string(),
             ));
@@ -147,14 +151,7 @@ impl ProtocolAdapter for Je1710ReloadTestProtocolPlugin {
     }
 
     fn capability_set(&self) -> CapabilitySet {
-        let mut capabilities = CapabilitySet::new();
-        let _ = capabilities.insert("protocol.je");
-        let _ = capabilities.insert("protocol.je.1_7_10");
-        let _ = capabilities.insert("runtime.reload.protocol");
-        if let Some(build_tag) = option_env!("REVY_PLUGIN_BUILD_TAG") {
-            let _ = capabilities.insert(format!("build-tag:{build_tag}"));
-        }
-        capabilities
+        build_capability_set(&["protocol.je", "protocol.je.1_7_10", "runtime.reload.protocol"])
     }
 }
 

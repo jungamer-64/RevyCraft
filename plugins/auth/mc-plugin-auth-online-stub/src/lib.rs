@@ -1,6 +1,7 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::{CapabilitySet, PlayerId};
 use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode};
+use mc_plugin_sdk_rust::capabilities::capability_set as build_capability_set;
 use mc_plugin_sdk_rust::auth::{RustAuthPlugin, export_auth_plugin};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use uuid::Uuid;
@@ -20,14 +21,7 @@ impl RustAuthPlugin for OnlineStubAuthPlugin {
     }
 
     fn capability_set(&self) -> CapabilitySet {
-        let mut capabilities = CapabilitySet::new();
-        let _ = capabilities.insert("auth.online");
-        let _ = capabilities.insert("auth.profile.mojang-online-v1");
-        let _ = capabilities.insert("runtime.reload.auth");
-        if let Some(build_tag) = option_env!("REVY_PLUGIN_BUILD_TAG") {
-            let _ = capabilities.insert(format!("build-tag:{build_tag}"));
-        }
-        capabilities
+        build_capability_set(&["auth.online", "auth.profile.mojang-online-v1", "runtime.reload.auth"])
     }
 
     fn authenticate_offline(&self, _username: &str) -> Result<PlayerId, String> {

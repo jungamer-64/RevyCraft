@@ -1,6 +1,10 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::CapabilitySet;
 use mc_plugin_api::codec::storage::StorageDescriptor;
+use mc_plugin_sdk_rust::capabilities::{
+    build_tag_contains,
+    capability_set as build_capability_set,
+};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::storage::{RustStoragePlugin, export_storage_plugin};
 use mc_proto_common::{StorageAdapter, StorageError};
@@ -22,14 +26,11 @@ impl RustStoragePlugin for Je1710StoragePlugin {
     }
 
     fn capability_set(&self) -> CapabilitySet {
-        let mut capabilities = CapabilitySet::new();
-        let _ = capabilities.insert("storage.je-anvil");
-        let _ = capabilities.insert("storage.profile.je-anvil-1_7_10");
-        let _ = capabilities.insert("runtime.reload.storage");
-        if let Some(build_tag) = option_env!("REVY_PLUGIN_BUILD_TAG") {
-            let _ = capabilities.insert(format!("build-tag:{build_tag}"));
-        }
-        capabilities
+        build_capability_set(&[
+            "storage.je-anvil",
+            "storage.profile.je-anvil-1_7_10",
+            "runtime.reload.storage",
+        ])
     }
 
     fn load_snapshot(
@@ -52,7 +53,7 @@ impl RustStoragePlugin for Je1710StoragePlugin {
         world_dir: &Path,
         snapshot: &mc_core::WorldSnapshot,
     ) -> Result<(), StorageError> {
-        if option_env!("REVY_PLUGIN_BUILD_TAG").is_some_and(|tag| tag.contains("reload-fail")) {
+        if build_tag_contains("reload-fail") {
             return Err(StorageError::Plugin(
                 "storage plugin refused runtime state import".to_string(),
             ));

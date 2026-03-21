@@ -20,6 +20,7 @@ use std::path::Path;
 pub mod __macro_support;
 pub mod auth;
 pub mod buffers;
+pub mod capabilities;
 pub mod gameplay;
 mod macros;
 pub mod manifest;

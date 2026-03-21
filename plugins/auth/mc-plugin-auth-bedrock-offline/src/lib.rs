@@ -1,6 +1,7 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::CapabilitySet;
 use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode, BedrockAuthResult};
+use mc_plugin_sdk_rust::capabilities::capability_set as build_capability_set;
 use mc_plugin_sdk_rust::auth::{RustAuthPlugin, export_auth_plugin};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use md5::{Digest, Md5};
@@ -21,15 +22,12 @@ impl RustAuthPlugin for BedrockOfflineAuthPlugin {
     }
 
     fn capability_set(&self) -> CapabilitySet {
-        let mut capabilities = CapabilitySet::new();
-        let _ = capabilities.insert("auth.bedrock");
-        let _ = capabilities.insert("auth.bedrock.offline");
-        let _ = capabilities.insert("auth.profile.bedrock-offline-v1");
-        let _ = capabilities.insert("runtime.reload.auth");
-        if let Some(build_tag) = option_env!("REVY_PLUGIN_BUILD_TAG") {
-            let _ = capabilities.insert(format!("build-tag:{build_tag}"));
-        }
-        capabilities
+        build_capability_set(&[
+            "auth.bedrock",
+            "auth.bedrock.offline",
+            "auth.profile.bedrock-offline-v1",
+            "runtime.reload.auth",
+        ])
     }
 
     fn authenticate_offline(&self, _username: &str) -> Result<mc_core::PlayerId, String> {
