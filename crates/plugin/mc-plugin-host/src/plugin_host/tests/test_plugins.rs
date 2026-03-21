@@ -1,0 +1,455 @@
+pub(super) mod entity_id_probe_gameplay_plugin {
+    use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
+    use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
+    use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin, export_gameplay_plugin};
+    use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+    use std::sync::{Mutex, OnceLock};
+
+    #[derive(Default)]
+    pub struct EntityIdProbeGameplayPlugin;
+
+    fn recorded_session_slot() -> &'static Mutex<Option<GameplaySessionSnapshot>> {
+        static RECORDED_SESSION: OnceLock<Mutex<Option<GameplaySessionSnapshot>>> = OnceLock::new();
+        RECORDED_SESSION.get_or_init(|| Mutex::new(None))
+    }
+
+    pub fn take_recorded_session() -> Option<GameplaySessionSnapshot> {
+        recorded_session_slot()
+            .lock()
+            .expect("recorded gameplay session mutex should not be poisoned")
+            .take()
+    }
+
+    impl RustGameplayPlugin for EntityIdProbeGameplayPlugin {
+        fn descriptor(&self) -> GameplayDescriptor {
+            GameplayDescriptor {
+                profile: GameplayProfileId::new("entity-aware"),
+            }
+        }
+
+        fn capability_set(&self) -> CapabilitySet {
+            let mut capabilities = CapabilitySet::new();
+            let _ = capabilities.insert("gameplay.profile.entity-aware");
+            let _ = capabilities.insert("runtime.reload.gameplay");
+            capabilities
+        }
+
+        fn handle_command(
+            &self,
+            _host: &dyn GameplayHost,
+            session: &GameplaySessionSnapshot,
+            _command: &CoreCommand,
+        ) -> Result<GameplayEffect, String> {
+            *recorded_session_slot()
+                .lock()
+                .expect("recorded gameplay session mutex should not be poisoned") =
+                Some(session.clone());
+            Ok(GameplayEffect::default())
+        }
+
+        fn handle_player_join(
+            &self,
+            _host: &dyn GameplayHost,
+            _session: &GameplaySessionSnapshot,
+            _player: &PlayerSnapshot,
+        ) -> Result<mc_core::GameplayJoinEffect, String> {
+            Ok(mc_core::GameplayJoinEffect::default())
+        }
+    }
+
+    const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
+        "gameplay-entity-aware",
+        "Entity Aware Gameplay Plugin",
+        &["gameplay.profile:entity-aware", "runtime.reload.gameplay"],
+    );
+
+    export_gameplay_plugin!(EntityIdProbeGameplayPlugin, MANIFEST);
+}
+
+pub(super) mod custom_wire_codec_protocol_plugin {
+    use mc_core::CapabilitySet;
+    use mc_plugin_api::abi::{
+        ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
+        PluginKind, Utf8Slice,
+    };
+    use mc_plugin_api::codec::protocol::{
+        ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_protocol_request,
+        encode_protocol_response,
+    };
+    use mc_plugin_api::host_api::ProtocolPluginApiV1;
+    use mc_plugin_api::manifest::PluginManifestV1;
+    use mc_plugin_sdk_rust::test_support::InProcessProtocolEntrypoints;
+    use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use std::sync::OnceLock;
+
+    const PLUGIN_ID: &str = "protocol-custom-wire";
+
+    fn descriptor() -> ProtocolDescriptor {
+        ProtocolDescriptor {
+            adapter_id: PLUGIN_ID.to_string(),
+            transport: TransportKind::Tcp,
+            wire_format: WireFormatKind::MinecraftFramed,
+            edition: Edition::Je,
+            version_name: "custom-wire".to_string(),
+            protocol_number: 1234,
+        }
+    }
+
+    fn write_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
+        if output.is_null() {
+            return;
+        }
+        unsafe {
+            *output = OwnedBuffer {
+                ptr: bytes.as_mut_ptr(),
+                len: bytes.len(),
+                cap: bytes.capacity(),
+            };
+        }
+        std::mem::forget(bytes);
+    }
+
+    fn write_error(error_out: *mut OwnedBuffer, message: String) {
+        write_buffer(error_out, message.into_bytes());
+    }
+
+    fn handle_request(request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+        match request {
+            ProtocolRequest::Describe => Ok(ProtocolResponse::Descriptor(descriptor())),
+            ProtocolRequest::DescribeBedrockListener => {
+                Ok(ProtocolResponse::BedrockListenerDescriptor(None))
+            }
+            ProtocolRequest::CapabilitySet => {
+                Ok(ProtocolResponse::CapabilitySet(CapabilitySet::new()))
+            }
+            ProtocolRequest::EncodeWireFrame { payload } => {
+                let length = u8::try_from(payload.len())
+                    .map_err(|_| "payload too large for test wire codec".to_string())?;
+                let mut frame = vec![0xc0, length];
+                frame.extend_from_slice(&payload);
+                Ok(ProtocolResponse::Frame(frame))
+            }
+            ProtocolRequest::TryDecodeWireFrame { buffer } => {
+                if buffer.is_empty() || buffer[0] != 0xc0 {
+                    return Ok(ProtocolResponse::WireFrameDecodeResult(None));
+                }
+                if buffer.len() < 2 {
+                    return Ok(ProtocolResponse::WireFrameDecodeResult(None));
+                }
+                let payload_len = usize::from(buffer[1]);
+                let frame_len = 2 + payload_len;
+                if buffer.len() < frame_len {
+                    return Ok(ProtocolResponse::WireFrameDecodeResult(None));
+                }
+                Ok(ProtocolResponse::WireFrameDecodeResult(Some(
+                    WireFrameDecodeResult {
+                        frame: buffer[2..frame_len].to_vec(),
+                        bytes_consumed: frame_len,
+                    },
+                )))
+            }
+            other => Err(format!(
+                "unsupported protocol request in test plugin: {other:?}"
+            )),
+        }
+    }
+
+    unsafe extern "C" fn invoke(
+        request: ByteSlice,
+        output: *mut OwnedBuffer,
+        error_out: *mut OwnedBuffer,
+    ) -> PluginErrorCode {
+        let request_bytes = unsafe { std::slice::from_raw_parts(request.ptr, request.len) };
+        let request = match decode_protocol_request(request_bytes) {
+            Ok(request) => request,
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                return PluginErrorCode::InvalidInput;
+            }
+        };
+        let response = match handle_request(request.clone()) {
+            Ok(response) => response,
+            Err(message) => {
+                write_error(error_out, message);
+                return PluginErrorCode::Internal;
+            }
+        };
+        match encode_protocol_response(&request, &response) {
+            Ok(bytes) => {
+                write_buffer(output, bytes);
+                PluginErrorCode::Ok
+            }
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                PluginErrorCode::Internal
+            }
+        }
+    }
+
+    unsafe extern "C" fn free_buffer(buffer: OwnedBuffer) {
+        if buffer.ptr.is_null() {
+            return;
+        }
+        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
+    }
+
+    pub fn in_process_entrypoints() -> InProcessProtocolEntrypoints {
+        static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+        static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
+        static API: OnceLock<ProtocolPluginApiV1> = OnceLock::new();
+        InProcessProtocolEntrypoints {
+            manifest: MANIFEST.get_or_init(|| PluginManifestV1 {
+                plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
+                display_name: Utf8Slice::from_static_str("Custom Wire Codec Protocol Plugin"),
+                plugin_kind: PluginKind::Protocol,
+                plugin_abi: CURRENT_PLUGIN_ABI,
+                min_host_abi: CURRENT_PLUGIN_ABI,
+                max_host_abi: CURRENT_PLUGIN_ABI,
+                capabilities: CAPABILITIES
+                    .get_or_init(|| {
+                        Box::leak(
+                            vec![CapabilityDescriptorV1 {
+                                name: Utf8Slice::from_static_str("runtime.reload.protocol"),
+                            }]
+                            .into_boxed_slice(),
+                        )
+                    })
+                    .as_ptr(),
+                capabilities_len: 1,
+            }),
+            api: API.get_or_init(|| ProtocolPluginApiV1 {
+                invoke,
+                free_buffer,
+            }),
+        }
+    }
+}
+
+pub(super) mod failing_protocol_plugin {
+    use mc_core::CapabilitySet;
+    use mc_plugin_api::abi::{
+        ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
+        PluginKind, Utf8Slice,
+    };
+    use mc_plugin_api::codec::protocol::{
+        ProtocolRequest, ProtocolResponse, decode_protocol_request, encode_protocol_response,
+    };
+    use mc_plugin_api::host_api::ProtocolPluginApiV1;
+    use mc_plugin_api::manifest::PluginManifestV1;
+    use mc_plugin_sdk_rust::test_support::InProcessProtocolEntrypoints;
+    use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use std::sync::OnceLock;
+
+    pub const PLUGIN_ID: &str = "protocol-failing-runtime";
+
+    fn descriptor() -> ProtocolDescriptor {
+        ProtocolDescriptor {
+            adapter_id: PLUGIN_ID.to_string(),
+            transport: TransportKind::Tcp,
+            wire_format: WireFormatKind::MinecraftFramed,
+            edition: Edition::Je,
+            version_name: "failing-runtime".to_string(),
+            protocol_number: 4242,
+        }
+    }
+
+    fn write_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
+        if output.is_null() {
+            return;
+        }
+        unsafe {
+            *output = OwnedBuffer {
+                ptr: bytes.as_mut_ptr(),
+                len: bytes.len(),
+                cap: bytes.capacity(),
+            };
+        }
+        std::mem::forget(bytes);
+    }
+
+    fn write_error(error_out: *mut OwnedBuffer, message: String) {
+        write_buffer(error_out, message.into_bytes());
+    }
+
+    fn handle_request(request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+        match request {
+            ProtocolRequest::Describe => Ok(ProtocolResponse::Descriptor(descriptor())),
+            ProtocolRequest::DescribeBedrockListener => {
+                Ok(ProtocolResponse::BedrockListenerDescriptor(None))
+            }
+            ProtocolRequest::CapabilitySet => {
+                let mut capabilities = CapabilitySet::new();
+                let _ = capabilities.insert("runtime.reload.protocol");
+                Ok(ProtocolResponse::CapabilitySet(capabilities))
+            }
+            ProtocolRequest::TryRoute { .. } => Err("protocol runtime failure".to_string()),
+            other => Err(format!(
+                "unsupported protocol request in failing test plugin: {other:?}"
+            )),
+        }
+    }
+
+    unsafe extern "C" fn invoke(
+        request: ByteSlice,
+        output: *mut OwnedBuffer,
+        error_out: *mut OwnedBuffer,
+    ) -> PluginErrorCode {
+        let request_bytes = unsafe { std::slice::from_raw_parts(request.ptr, request.len) };
+        let request = match decode_protocol_request(request_bytes) {
+            Ok(request) => request,
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                return PluginErrorCode::InvalidInput;
+            }
+        };
+        let response = match handle_request(request.clone()) {
+            Ok(response) => response,
+            Err(message) => {
+                write_error(error_out, message);
+                return PluginErrorCode::Internal;
+            }
+        };
+        match encode_protocol_response(&request, &response) {
+            Ok(bytes) => {
+                write_buffer(output, bytes);
+                PluginErrorCode::Ok
+            }
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                PluginErrorCode::Internal
+            }
+        }
+    }
+
+    unsafe extern "C" fn free_buffer(buffer: OwnedBuffer) {
+        if buffer.ptr.is_null() {
+            return;
+        }
+        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
+    }
+
+    pub fn in_process_entrypoints() -> InProcessProtocolEntrypoints {
+        static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+        static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
+        static API: OnceLock<ProtocolPluginApiV1> = OnceLock::new();
+        InProcessProtocolEntrypoints {
+            manifest: MANIFEST.get_or_init(|| PluginManifestV1 {
+                plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
+                display_name: Utf8Slice::from_static_str("Failing Protocol Plugin"),
+                plugin_kind: PluginKind::Protocol,
+                plugin_abi: CURRENT_PLUGIN_ABI,
+                min_host_abi: CURRENT_PLUGIN_ABI,
+                max_host_abi: CURRENT_PLUGIN_ABI,
+                capabilities: CAPABILITIES
+                    .get_or_init(|| {
+                        Box::leak(
+                            vec![CapabilityDescriptorV1 {
+                                name: Utf8Slice::from_static_str("runtime.reload.protocol"),
+                            }]
+                            .into_boxed_slice(),
+                        )
+                    })
+                    .as_ptr(),
+                capabilities_len: 1,
+            }),
+            api: API.get_or_init(|| ProtocolPluginApiV1 {
+                invoke,
+                free_buffer,
+            }),
+        }
+    }
+}
+
+pub(super) mod failing_gameplay_plugin {
+    use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
+    use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
+    use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin, export_gameplay_plugin};
+    use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+
+    #[derive(Default)]
+    pub struct FailingGameplayPlugin;
+
+    impl RustGameplayPlugin for FailingGameplayPlugin {
+        fn descriptor(&self) -> GameplayDescriptor {
+            GameplayDescriptor {
+                profile: GameplayProfileId::new("failing"),
+            }
+        }
+
+        fn capability_set(&self) -> CapabilitySet {
+            let mut capabilities = CapabilitySet::new();
+            let _ = capabilities.insert("gameplay.profile.failing");
+            let _ = capabilities.insert("runtime.reload.gameplay");
+            capabilities
+        }
+
+        fn handle_command(
+            &self,
+            _host: &dyn GameplayHost,
+            _session: &GameplaySessionSnapshot,
+            _command: &CoreCommand,
+        ) -> Result<GameplayEffect, String> {
+            Err("gameplay runtime failure".to_string())
+        }
+
+        fn handle_player_join(
+            &self,
+            _host: &dyn GameplayHost,
+            _session: &GameplaySessionSnapshot,
+            _player: &PlayerSnapshot,
+        ) -> Result<mc_core::GameplayJoinEffect, String> {
+            Ok(mc_core::GameplayJoinEffect::default())
+        }
+    }
+
+    const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
+        "gameplay-failing",
+        "Failing Gameplay Plugin",
+        &["gameplay.profile:failing", "runtime.reload.gameplay"],
+    );
+
+    export_gameplay_plugin!(FailingGameplayPlugin, MANIFEST);
+}
+
+pub(super) mod failing_auth_plugin {
+    use mc_core::{CapabilitySet, PlayerId};
+    use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode};
+    use mc_plugin_sdk_rust::auth::{RustAuthPlugin, export_auth_plugin};
+    use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+
+    pub const PROFILE_ID: &str = "failing-auth";
+
+    #[derive(Default)]
+    pub struct FailingAuthPlugin;
+
+    impl RustAuthPlugin for FailingAuthPlugin {
+        fn descriptor(&self) -> AuthDescriptor {
+            AuthDescriptor {
+                auth_profile: PROFILE_ID.to_string(),
+                mode: AuthMode::Offline,
+            }
+        }
+
+        fn capability_set(&self) -> CapabilitySet {
+            let mut capabilities = CapabilitySet::new();
+            let _ = capabilities.insert("runtime.reload.auth");
+            capabilities
+        }
+
+        fn authenticate_offline(&self, _username: &str) -> Result<PlayerId, String> {
+            Err("auth runtime failure".to_string())
+        }
+    }
+
+    const MANIFEST: StaticPluginManifest = StaticPluginManifest::auth(
+        "auth-failing",
+        "Failing Auth Plugin",
+        &[
+            "auth.profile:failing-auth",
+            "auth.mode:offline",
+            "runtime.reload.auth",
+        ],
+    );
+
+    export_auth_plugin!(FailingAuthPlugin, MANIFEST);
+}

@@ -14,8 +14,8 @@ use mc_core::{
 };
 use mc_plugin_host::registry::{ListenerBinding, LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_host::runtime::{
-    AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle, ProtocolReloadSession,
-    RuntimePluginHost, RuntimeReloadContext, StorageProfileHandle,
+    AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
+    RuntimeReloadContext, StorageProfileHandle,
 };
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use serde::{Deserialize, Serialize};
