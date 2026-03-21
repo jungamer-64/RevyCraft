@@ -62,13 +62,13 @@ mod failure;
 mod generation;
 #[path = "plugin_host/loader.rs"]
 mod loader;
-#[path = "plugin_host/profiles.rs"]
+#[path = "plugin_host/profiles/mod.rs"]
 mod profiles;
 #[path = "plugin_host/reload.rs"]
 mod reload;
 #[path = "plugin_host/status.rs"]
 mod status;
-#[path = "plugin_host/support.rs"]
+#[path = "plugin_host/support/mod.rs"]
 mod support;
 #[path = "plugin_host/topology.rs"]
 mod topology;
