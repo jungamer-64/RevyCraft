@@ -164,7 +164,7 @@ fn gameplay_command_snapshot_preserves_entity_id() {
 
     let _ = entity_id_probe_gameplay_plugin::take_recorded_session();
 
-    let probe = entity_id_probe_gameplay_plugin::in_process_gameplay_entrypoints();
+    let probe = entity_id_probe_gameplay_plugin::in_process_plugin_entrypoints();
     let host = build_test_plugin_host(
         TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-entity-aware".to_string(),

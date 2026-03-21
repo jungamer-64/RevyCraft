@@ -5,8 +5,9 @@ use mc_plugin_sdk_rust::capabilities::{
     build_tag_contains,
     capability_set as build_capability_set,
 };
+use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
-use mc_plugin_sdk_rust::storage::{RustStoragePlugin, export_storage_plugin};
+use mc_plugin_sdk_rust::storage::RustStoragePlugin;
 use mc_proto_common::{StorageAdapter, StorageError};
 use mc_proto_je_1_7_10::{JE_1_7_10_STORAGE_PROFILE_ID, Je1710StorageAdapter};
 use std::path::Path;
@@ -68,4 +69,4 @@ const MANIFEST: StaticPluginManifest = StaticPluginManifest::storage(
     &["storage.profile:je-anvil-1_7_10", "runtime.reload.storage"],
 );
 
-export_storage_plugin!(Je1710StoragePlugin, MANIFEST);
+export_plugin!(storage, Je1710StoragePlugin, MANIFEST);

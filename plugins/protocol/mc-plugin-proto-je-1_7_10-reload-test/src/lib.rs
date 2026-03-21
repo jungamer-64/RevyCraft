@@ -5,8 +5,9 @@ use mc_plugin_sdk_rust::capabilities::{
     build_tag_contains,
     capability_set as build_capability_set,
 };
+use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
-use mc_plugin_sdk_rust::protocol::{RustProtocolPlugin, export_protocol_plugin};
+use mc_plugin_sdk_rust::protocol::RustProtocolPlugin;
 use mc_proto_common::{
     BedrockListenerDescriptor, HandshakeIntent, HandshakeProbe, LoginRequest, PlayEncodingContext,
     PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus,
@@ -161,4 +162,4 @@ const MANIFEST: StaticPluginManifest = StaticPluginManifest::protocol_with_capab
     &["runtime.reload.protocol"],
 );
 
-export_protocol_plugin!(Je1710ReloadTestProtocolPlugin, MANIFEST);
+export_plugin!(protocol, Je1710ReloadTestProtocolPlugin, MANIFEST);

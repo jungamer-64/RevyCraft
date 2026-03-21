@@ -186,7 +186,7 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
 fn protocol_plugins_can_override_host_wire_codec_framing() {
     use bytes::BytesMut;
 
-    let entrypoints = custom_wire_codec_protocol_plugin::in_process_entrypoints();
+    let entrypoints = custom_wire_codec_protocol_plugin::in_process_plugin_entrypoints();
     let host = build_test_plugin_host(
         TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
             plugin_id: "protocol-custom-wire".to_string(),

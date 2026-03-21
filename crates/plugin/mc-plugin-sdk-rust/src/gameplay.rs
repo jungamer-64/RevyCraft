@@ -3,8 +3,6 @@ use mc_core::{
     GameplayPolicyResolver, GameplayProfileId, GameplayQuery, SessionCapabilitySet,
 };
 
-pub use crate::export_gameplay_plugin;
-
 struct HostQuery<'a> {
     host: &'a dyn GameplayHost,
 }

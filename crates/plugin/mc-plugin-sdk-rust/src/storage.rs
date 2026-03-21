@@ -1,7 +1,5 @@
 use super::*;
 
-pub use crate::export_storage_plugin;
-
 pub trait RustStoragePlugin: Send + Sync + 'static {
     fn descriptor(&self) -> StorageDescriptor;
 

@@ -229,7 +229,7 @@ mod tests {
     use mc_core::{CoreConfig, ServerCore};
     use mc_plugin_host::config::ServerConfig;
     use mc_plugin_host::runtime::RuntimeReloadContext;
-    use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints as je_1_7_10_entrypoints;
+    use mc_plugin_proto_je_1_7_10::in_process_plugin_entrypoints as je_1_7_10_entrypoints;
     use mc_plugin_test_support::PackagedPluginHarness;
     use mc_proto_je_1_7_10::JE_1_7_10_ADAPTER_ID;
     use std::path::PathBuf;

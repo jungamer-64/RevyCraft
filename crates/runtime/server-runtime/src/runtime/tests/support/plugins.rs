@@ -3,8 +3,9 @@ use super::*;
 pub(crate) mod failing_storage_plugin {
     use mc_core::{CapabilitySet, WorldSnapshot};
     use mc_plugin_api::codec::storage::StorageDescriptor;
+    use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
-    use mc_plugin_sdk_rust::storage::{RustStoragePlugin, export_storage_plugin};
+    use mc_plugin_sdk_rust::storage::RustStoragePlugin;
     use mc_proto_common::StorageError;
     use std::path::Path;
 
@@ -46,7 +47,7 @@ pub(crate) mod failing_storage_plugin {
         &["storage.profile:failing-storage", "runtime.reload.storage"],
     );
 
-    export_storage_plugin!(FailingStoragePlugin, MANIFEST);
+    export_plugin!(storage, FailingStoragePlugin, MANIFEST);
 }
 
 pub(crate) const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
@@ -273,8 +274,8 @@ pub(crate) fn in_process_failing_storage_registries(
         })
         .storage_raw(InProcessStoragePlugin {
             plugin_id: failing_storage_plugin::PLUGIN_ID.to_string(),
-            manifest: failing_storage_plugin::in_process_storage_entrypoints().manifest,
-            api: failing_storage_plugin::in_process_storage_entrypoints().api,
+            manifest: failing_storage_plugin::in_process_plugin_entrypoints().manifest,
+            api: failing_storage_plugin::in_process_plugin_entrypoints().api,
         })
         .auth_raw(InProcessAuthPlugin {
             plugin_id: "auth-offline".to_string(),

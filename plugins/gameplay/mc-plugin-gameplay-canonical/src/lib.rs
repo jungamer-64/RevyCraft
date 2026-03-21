@@ -1,6 +1,7 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::CanonicalGameplayPolicy;
-use mc_plugin_sdk_rust::gameplay::{PolicyGameplayPlugin, export_gameplay_plugin};
+use mc_plugin_sdk_rust::export_plugin;
+use mc_plugin_sdk_rust::gameplay::PolicyGameplayPlugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 
 #[derive(Default)]
@@ -25,4 +26,4 @@ const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
     &["gameplay.profile:canonical", "runtime.reload.gameplay"],
 );
 
-export_gameplay_plugin!(CanonicalGameplayPlugin, MANIFEST);
+export_plugin!(gameplay, CanonicalGameplayPlugin, MANIFEST);

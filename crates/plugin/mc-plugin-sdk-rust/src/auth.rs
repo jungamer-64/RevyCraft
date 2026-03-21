@@ -1,7 +1,5 @@
 use super::*;
 
-pub use crate::export_auth_plugin;
-
 pub trait RustAuthPlugin: Send + Sync + 'static {
     fn descriptor(&self) -> AuthDescriptor;
 

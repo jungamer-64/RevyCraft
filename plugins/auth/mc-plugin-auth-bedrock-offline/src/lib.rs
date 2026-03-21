@@ -2,7 +2,8 @@
 use mc_core::CapabilitySet;
 use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode, BedrockAuthResult};
 use mc_plugin_sdk_rust::capabilities::capability_set as build_capability_set;
-use mc_plugin_sdk_rust::auth::{RustAuthPlugin, export_auth_plugin};
+use mc_plugin_sdk_rust::auth::RustAuthPlugin;
+use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use md5::{Digest, Md5};
 use uuid::Uuid;
@@ -65,4 +66,4 @@ const MANIFEST: StaticPluginManifest = StaticPluginManifest::auth(
     ],
 );
 
-export_auth_plugin!(BedrockOfflineAuthPlugin, MANIFEST);
+export_plugin!(auth, BedrockOfflineAuthPlugin, MANIFEST);

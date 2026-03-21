@@ -14,7 +14,7 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
     ];
 
     for (action, expect_quarantine, expect_fatal, expected_version_name) in cases {
-        let entrypoints = failing_protocol_plugin::in_process_entrypoints();
+        let entrypoints = failing_protocol_plugin::in_process_plugin_entrypoints();
         let host = build_test_plugin_host(
             TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
                 plugin_id: failing_protocol_plugin::PLUGIN_ID.to_string(),
@@ -70,7 +70,7 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
     ];
 
     for (action, expect_quarantine, expect_fatal) in cases {
-        let entrypoints = failing_gameplay_plugin::in_process_gameplay_entrypoints();
+        let entrypoints = failing_gameplay_plugin::in_process_plugin_entrypoints();
         let host = build_test_plugin_host(
             TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
                 plugin_id: "gameplay-failing".to_string(),
@@ -166,7 +166,7 @@ fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
     ];
 
     for (action, expect_fatal) in cases {
-        let entrypoints = failing_auth_plugin::in_process_auth_entrypoints();
+        let entrypoints = failing_auth_plugin::in_process_plugin_entrypoints();
         let host = build_test_plugin_host(
             TestPluginHostBuilder::new().auth_raw(InProcessAuthPlugin {
                 plugin_id: "auth-failing".to_string(),

@@ -1,7 +1,8 @@
 pub(super) mod entity_id_probe_gameplay_plugin {
     use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
     use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
-    use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin, export_gameplay_plugin};
+    use mc_plugin_sdk_rust::export_plugin;
+    use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin};
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
     use std::sync::{Mutex, OnceLock};
 
@@ -63,7 +64,7 @@ pub(super) mod entity_id_probe_gameplay_plugin {
         &["gameplay.profile:entity-aware", "runtime.reload.gameplay"],
     );
 
-    export_gameplay_plugin!(EntityIdProbeGameplayPlugin, MANIFEST);
+    export_plugin!(gameplay, EntityIdProbeGameplayPlugin, MANIFEST);
 }
 
 pub(super) mod custom_wire_codec_protocol_plugin {
@@ -78,7 +79,7 @@ pub(super) mod custom_wire_codec_protocol_plugin {
     };
     use mc_plugin_api::host_api::ProtocolPluginApiV1;
     use mc_plugin_api::manifest::PluginManifestV1;
-    use mc_plugin_sdk_rust::test_support::InProcessProtocolEntrypoints;
+    use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
     use std::sync::OnceLock;
 
@@ -193,12 +194,12 @@ pub(super) mod custom_wire_codec_protocol_plugin {
         let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
     }
 
-    pub fn in_process_entrypoints() -> InProcessProtocolEntrypoints {
+    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV1> {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
         static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
         static API: OnceLock<ProtocolPluginApiV1> = OnceLock::new();
-        InProcessProtocolEntrypoints {
-            manifest: MANIFEST.get_or_init(|| PluginManifestV1 {
+        InProcessPluginEntrypoints::new(
+            MANIFEST.get_or_init(|| PluginManifestV1 {
                 plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
                 display_name: Utf8Slice::from_static_str("Custom Wire Codec Protocol Plugin"),
                 plugin_kind: PluginKind::Protocol,
@@ -217,11 +218,11 @@ pub(super) mod custom_wire_codec_protocol_plugin {
                     .as_ptr(),
                 capabilities_len: 1,
             }),
-            api: API.get_or_init(|| ProtocolPluginApiV1 {
+            API.get_or_init(|| ProtocolPluginApiV1 {
                 invoke,
                 free_buffer,
             }),
-        }
+        )
     }
 }
 
@@ -236,7 +237,7 @@ pub(super) mod failing_protocol_plugin {
     };
     use mc_plugin_api::host_api::ProtocolPluginApiV1;
     use mc_plugin_api::manifest::PluginManifestV1;
-    use mc_plugin_sdk_rust::test_support::InProcessProtocolEntrypoints;
+    use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
     use std::sync::OnceLock;
 
@@ -328,12 +329,12 @@ pub(super) mod failing_protocol_plugin {
         let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
     }
 
-    pub fn in_process_entrypoints() -> InProcessProtocolEntrypoints {
+    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV1> {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
         static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
         static API: OnceLock<ProtocolPluginApiV1> = OnceLock::new();
-        InProcessProtocolEntrypoints {
-            manifest: MANIFEST.get_or_init(|| PluginManifestV1 {
+        InProcessPluginEntrypoints::new(
+            MANIFEST.get_or_init(|| PluginManifestV1 {
                 plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
                 display_name: Utf8Slice::from_static_str("Failing Protocol Plugin"),
                 plugin_kind: PluginKind::Protocol,
@@ -352,18 +353,19 @@ pub(super) mod failing_protocol_plugin {
                     .as_ptr(),
                 capabilities_len: 1,
             }),
-            api: API.get_or_init(|| ProtocolPluginApiV1 {
+            API.get_or_init(|| ProtocolPluginApiV1 {
                 invoke,
                 free_buffer,
             }),
-        }
+        )
     }
 }
 
 pub(super) mod failing_gameplay_plugin {
     use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
     use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
-    use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin, export_gameplay_plugin};
+    use mc_plugin_sdk_rust::export_plugin;
+    use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin};
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 
     #[derive(Default)]
@@ -408,13 +410,14 @@ pub(super) mod failing_gameplay_plugin {
         &["gameplay.profile:failing", "runtime.reload.gameplay"],
     );
 
-    export_gameplay_plugin!(FailingGameplayPlugin, MANIFEST);
+    export_plugin!(gameplay, FailingGameplayPlugin, MANIFEST);
 }
 
 pub(super) mod failing_auth_plugin {
     use mc_core::{CapabilitySet, PlayerId};
     use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode};
-    use mc_plugin_sdk_rust::auth::{RustAuthPlugin, export_auth_plugin};
+    use mc_plugin_sdk_rust::auth::RustAuthPlugin;
+    use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 
     pub const PROFILE_ID: &str = "failing-auth";
@@ -451,5 +454,5 @@ pub(super) mod failing_auth_plugin {
         ],
     );
 
-    export_auth_plugin!(FailingAuthPlugin, MANIFEST);
+    export_plugin!(auth, FailingAuthPlugin, MANIFEST);
 }

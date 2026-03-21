@@ -330,7 +330,7 @@ fn build_tag_contains_uses_the_pure_helper_logic() {
 #[allow(unexpected_cfgs)]
 mod plugin_a {
     use super::*;
-    use crate::export_gameplay_plugin;
+    use crate::export_plugin;
 
     #[derive(Default)]
     pub struct PluginA;
@@ -402,13 +402,13 @@ mod plugin_a {
         &["runtime.reload.gameplay"],
     );
 
-    export_gameplay_plugin!(PluginA, MANIFEST);
+    export_plugin!(gameplay, PluginA, MANIFEST);
 }
 
 #[allow(unexpected_cfgs)]
 mod plugin_b {
     use super::*;
-    use crate::export_gameplay_plugin;
+    use crate::export_plugin;
 
     #[derive(Default)]
     pub struct PluginB;
@@ -480,7 +480,7 @@ mod plugin_b {
         &["runtime.reload.gameplay"],
     );
 
-    export_gameplay_plugin!(PluginB, MANIFEST);
+    export_plugin!(gameplay, PluginB, MANIFEST);
 }
 
 #[allow(unexpected_cfgs)]
@@ -650,8 +650,8 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
     let host_api_a = host_api_for(&context_a);
     let host_api_b = host_api_for(&context_b);
 
-    let entrypoints_a = plugin_a::in_process_gameplay_entrypoints();
-    let entrypoints_b = plugin_b::in_process_gameplay_entrypoints();
+    let entrypoints_a = plugin_a::in_process_plugin_entrypoints();
+    let entrypoints_b = plugin_b::in_process_plugin_entrypoints();
 
     assert_eq!(
         unsafe { (entrypoints_a.api.set_host_api)(&raw const host_api_a) },
@@ -726,7 +726,7 @@ fn declared_protocol_plugins_delegate_wire_codec_and_keep_manifest_capabilities(
         }))
     );
 
-    let entrypoints = declared_protocol_plugin::in_process_protocol_entrypoints();
+    let entrypoints = declared_protocol_plugin::in_process_plugin_entrypoints();
     let capabilities = manifest_capability_names(entrypoints.manifest);
     assert_eq!(capabilities, vec!["runtime.reload.protocol".to_string()]);
 }
