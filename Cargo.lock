@@ -1548,6 +1548,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-host-test-support"
+version = "0.1.0"
+dependencies = [
+ "mc-plugin-host",
+]
+
+[[package]]
 name = "mc-plugin-proto-be-26_3"
 version = "0.1.0"
 dependencies = [
@@ -2702,6 +2709,7 @@ dependencies = [
  "mc-plugin-gameplay-canonical",
  "mc-plugin-gameplay-readonly",
  "mc-plugin-host",
+ "mc-plugin-host-test-support",
  "mc-plugin-proto-be-26_3",
  "mc-plugin-proto-be-placeholder",
  "mc-plugin-proto-je-1_12_2",

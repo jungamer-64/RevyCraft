@@ -4,13 +4,14 @@ use crate::host::{PluginHost, PluginHostStatusSnapshot, plugin_host_from_config}
 use crate::plugin_host::PluginCatalog;
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use crate::runtime::{
-    AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost, RuntimeReloadContext,
-    StorageProfileHandle,
+    AuthProfileHandle, GameplayProfileHandle, RuntimeReloadContext, StorageProfileHandle,
 };
+#[cfg(feature = "in-process-testing")]
+use crate::runtime::RuntimePluginHost;
 use mc_core::PluginGenerationId;
 use std::sync::Arc;
 
-pub use crate::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
+pub use crate::host::{PluginAbiRange, PluginFailureMatrix};
 pub use crate::plugin_host::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
 };
@@ -28,6 +29,7 @@ impl TestPluginHost {
         plugin_host_from_config(config).map(|host| host.map(|inner| Self { inner }))
     }
 
+    #[cfg(feature = "in-process-testing")]
     #[must_use]
     pub fn runtime_host(&self) -> Arc<dyn RuntimePluginHost> {
         Arc::clone(&self.inner) as Arc<dyn RuntimePluginHost>

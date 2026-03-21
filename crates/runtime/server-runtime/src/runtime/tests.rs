@@ -95,10 +95,11 @@ use mc_plugin_auth_online_stub::{
 use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
 use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
 use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
-use mc_plugin_host::test_support::{
+use mc_plugin_host_test_support::raw::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
-    PluginAbiRange, PluginFailureAction, PluginFailureMatrix, TestPluginHost,
-    TestPluginHostBuilder,
+};
+use mc_plugin_host_test_support::{
+    PluginAbiRange, PluginFailureAction, PluginFailureMatrix, TestPluginHost, TestPluginHostBuilder,
 };
 use mc_plugin_proto_be_26_3::in_process_protocol_entrypoints as be_26_3_entrypoints;
 use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;

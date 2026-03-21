@@ -104,7 +104,7 @@ cargo test --workspace
 
 `server-runtime` と `mc-plugin-host` の packaged integration tests は `mc-plugin-test-support` crate が共有する packaged-plugin harness を使い、`PackagedPluginHarness::shared()` を入口に `xtask package-all-plugins` を source of truth として扱います。
 
-plugin crate の in-process helper は production public surface ではなく、`in-process-testing` feature を有効にした test/dev build でだけ使う前提です。`mc-plugin-host` 側の test-only helper は `mc_plugin_host::test_support::TestPluginHostBuilder` と `TestPluginHost::discover(...)` を中心にした method-based API を正規入口に固定し、custom fake plugin を差し込む raw escape hatch だけを同 module に残しています。
+plugin crate の in-process helper は production public surface ではなく、`in-process-testing` feature を有効にした test/dev build でだけ使う前提です。reusable な host fixture は `mc-plugin-host` 本体ではなく `mc-plugin-host-test-support` crate に分離されていて、`mc_plugin_host_test_support::TestPluginHostBuilder` と `TestPluginHost::discover(...)` を中心にした method-based API が正規入口です。custom fake plugin を差し込む raw escape hatch も `mc_plugin_host_test_support::raw::*` に集約されています。
 
 plugin host と SDK が共有する gameplay host blob helper は `mc_plugin_api::codec::gameplay::host_blob::*` にまとまっていて、runtime/host integration 専用の surface として扱います。
 
