@@ -134,6 +134,7 @@ async fn build_server(
         config_source,
         loaded_plugins,
         reload_host,
+        consistency_gate: tokio::sync::RwLock::new(()),
         topology: std::sync::RwLock::new(RuntimeTopologyState {
             active: topology_generation,
             draining: Vec::new(),

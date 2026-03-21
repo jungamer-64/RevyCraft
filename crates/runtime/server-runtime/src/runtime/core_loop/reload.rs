@@ -3,6 +3,7 @@ use crate::runtime::{RuntimeReloadContext, RuntimeServer};
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_host::runtime::{ProtocolReloadSession, RuntimePluginHost};
+use tokio::sync::RwLockWriteGuard;
 
 impl RuntimeServer {
     pub(in crate::runtime) fn take_pending_plugin_fatal_error(&self) -> Option<RuntimeError> {
@@ -28,49 +29,45 @@ impl RuntimeServer {
         Err(error)
     }
 
-    async fn reload_context(&self) -> RuntimeReloadContext {
-        let protocol_sessions = {
-            self.sessions
-                .lock()
-                .await
-                .iter()
-                .filter_map(|(connection_id, handle)| {
-                    let adapter_id = handle.adapter_id.clone()?;
-                    if !matches!(
-                        handle.phase,
-                        mc_proto_common::ConnectionPhase::Status
-                            | mc_proto_common::ConnectionPhase::Login
-                            | mc_proto_common::ConnectionPhase::Play
-                    ) {
-                        return None;
-                    }
-                    Some(ProtocolReloadSession {
-                        adapter_id,
-                        session: ProtocolSessionSnapshot {
-                            connection_id: *connection_id,
-                            phase: handle.phase,
-                            player_id: handle.player_id,
-                            entity_id: handle.entity_id,
-                        },
-                    })
-                })
-                .collect::<Vec<_>>()
-        };
-        let gameplay_sessions = {
-            self.sessions
-                .lock()
-                .await
-                .values()
-                .filter_map(|handle| {
-                    Some(GameplaySessionSnapshot {
+    async fn reload_context(
+        &self,
+        _consistency_guard: &RwLockWriteGuard<'_, ()>,
+    ) -> RuntimeReloadContext {
+        let sessions = self.sessions.lock().await;
+        let protocol_sessions = sessions
+            .iter()
+            .filter_map(|(connection_id, handle)| {
+                let adapter_id = handle.adapter_id.clone()?;
+                if !matches!(
+                    handle.phase,
+                    mc_proto_common::ConnectionPhase::Status
+                        | mc_proto_common::ConnectionPhase::Login
+                        | mc_proto_common::ConnectionPhase::Play
+                ) {
+                    return None;
+                }
+                Some(ProtocolReloadSession {
+                    adapter_id,
+                    session: ProtocolSessionSnapshot {
+                        connection_id: *connection_id,
                         phase: handle.phase,
-                        player_id: Some(handle.player_id?),
+                        player_id: handle.player_id,
                         entity_id: handle.entity_id,
-                        gameplay_profile: handle.gameplay_profile.clone()?,
-                    })
+                    },
                 })
-                .collect::<Vec<_>>()
-        };
+            })
+            .collect::<Vec<_>>();
+        let gameplay_sessions = sessions
+            .values()
+            .filter_map(|handle| {
+                Some(GameplaySessionSnapshot {
+                    phase: handle.phase,
+                    player_id: Some(handle.player_id?),
+                    entity_id: handle.entity_id,
+                    gameplay_profile: handle.gameplay_profile.clone()?,
+                })
+            })
+            .collect::<Vec<_>>();
         let snapshot = { self.state.lock().await.core.snapshot() };
         RuntimeReloadContext {
             protocol_sessions,
@@ -84,7 +81,8 @@ impl RuntimeServer {
         &self,
         reload_host: &dyn RuntimePluginHost,
     ) -> Result<Vec<String>, RuntimeError> {
-        let context = self.reload_context().await;
+        let consistency_guard = self.consistency_gate.write().await;
+        let context = self.reload_context(&consistency_guard).await;
         Ok(reload_host.reload_modified_with_context(&context)?)
     }
 }

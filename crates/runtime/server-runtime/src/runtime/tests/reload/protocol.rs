@@ -50,6 +50,78 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
 }
 
 #[tokio::test]
+async fn manual_protocol_reload_waits_for_consistency_readers() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let (server, dist_dir, target_dir, before_generation) =
+        spawn_protocol_reload_server(&temp_dir, "protocol-reload-consistency-manual").await?;
+    let consistency_guard = server.runtime.consistency_gate.read().await;
+
+    std::thread::sleep(Duration::from_secs(1));
+    PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            JE_1_7_10_ADAPTER_ID,
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+
+    {
+        let reload = server.reload_plugins();
+        tokio::pin!(reload);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut reload)
+                .await
+                .is_err(),
+            "manual reload should wait for in-flight consistency readers"
+        );
+
+        let adapter = active_protocol_registry(&server)
+            .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+            .expect("runtime should still resolve the adapter");
+        assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
+
+        drop(consistency_guard);
+
+        let reloaded = tokio::time::timeout(Duration::from_secs(3), &mut reload)
+            .await
+            .map_err(|_| RuntimeError::Config("manual reload did not resume".to_string()))??;
+        assert!(
+            reloaded
+                .iter()
+                .any(|plugin_id| plugin_id == JE_1_7_10_ADAPTER_ID),
+            "manual reload should complete after the consistency reader releases"
+        );
+    }
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn consistency_gate_write_lock_blocks_session_commands() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let (server, _dist_dir, _target_dir, _before_generation) =
+        spawn_protocol_reload_server(&temp_dir, "protocol-reload-command-block").await?;
+    let codec = MinecraftWireCodec;
+    let addr = listener_addr(&server);
+    let (mut alpha, mut alpha_buffer) =
+        connect_and_login_java_client(addr, &codec, 5, "protoblock", 0x30, 12).await?;
+    let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
+
+    let consistency_guard = server.runtime.consistency_gate.write().await;
+    write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
+    assert_no_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09).await?;
+    drop(consistency_guard);
+
+    let held_item = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
+    assert_eq!(held_item_from_packet(&held_item)?, 4);
+
+    server.shutdown().await
+}
+
+#[tokio::test]
 async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let (server, dist_dir, target_dir, before_generation) =
@@ -93,6 +165,97 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
     write_packet(&mut alpha, &codec, &held_item_change(6)).await?;
     let held_item = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
     assert_eq!(held_item_from_packet(&held_item)?, 6);
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("protocol-reload-watch");
+    seed_runtime_plugins(
+        &dist_dir,
+        &[JE_1_7_10_ADAPTER_ID],
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+    )?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            JE_1_7_10_ADAPTER_ID,
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v1",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+
+    let server = build_reloadable_test_server(
+        ServerConfig {
+            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
+            server_port: 0,
+            game_mode: 1,
+            plugin_reload_watch: true,
+            plugins_dir: dist_dir.clone(),
+            world_dir: temp_dir.path().join("world"),
+            ..ServerConfig::default()
+        },
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+    )
+    .await?;
+    let before_generation = active_protocol_registry(&server)
+        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .and_then(|adapter| adapter.plugin_generation_id())
+        .expect("watch server should report a protocol generation");
+
+    let consistency_guard = server.runtime.consistency_gate.read().await;
+    std::thread::sleep(Duration::from_secs(1));
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            JE_1_7_10_ADAPTER_ID,
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+
+    tokio::time::sleep(Duration::from_millis(
+        mc_plugin_host::host::plugin_reload_poll_interval_ms() + 200,
+    ))
+    .await;
+    let adapter = active_protocol_registry(&server)
+        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .expect("watch server should still resolve the adapter");
+    assert_eq!(
+        adapter.plugin_generation_id(),
+        Some(before_generation),
+        "watch reload should be blocked while a consistency reader is active"
+    );
+
+    drop(consistency_guard);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let adapter = active_protocol_registry(&server)
+            .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+            .expect("watch server should resolve the adapter after reload");
+        if adapter.plugin_generation_id() != Some(before_generation) {
+            assert!(
+                adapter
+                    .capability_set()
+                    .contains("build-tag:protocol-reload-v2")
+            );
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(RuntimeError::Config(
+                "watch reload did not resume after the consistency reader released".to_string(),
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 
     server.shutdown().await
 }

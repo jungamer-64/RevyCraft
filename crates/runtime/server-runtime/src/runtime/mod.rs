@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio::sync::{Mutex, RwLock as AsyncRwLock, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 pub use self::bootstrap::{ReloadableServerBuilder, ServerBuilder};
@@ -202,6 +202,7 @@ pub(crate) struct RuntimeServer {
     pub(crate) config_source: ServerConfigSource,
     pub(crate) loaded_plugins: LoadedPluginSet,
     pub(crate) reload_host: Option<Arc<dyn RuntimePluginHost>>,
+    pub(crate) consistency_gate: AsyncRwLock<()>,
     pub(crate) topology: RwLock<RuntimeTopologyState>,
     pub(crate) auth_profile: Arc<dyn AuthProfileHandle>,
     pub(crate) bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,

@@ -35,6 +35,7 @@ struct CargoTarget {
 struct PackageArgs {
     dist_dir: PathBuf,
     release: bool,
+    properties_path: Option<PathBuf>,
 }
 
 fn main() -> Result<(), String> {
@@ -53,7 +54,7 @@ fn main() -> Result<(), String> {
 fn help() -> String {
     [
         "usage:",
-        "  cargo run -p xtask -- package-plugins [--release] [--dist-dir <path>]",
+        "  cargo run -p xtask -- package-plugins [--release] [--dist-dir <path>] [--properties <path>]",
         "  cargo run -p xtask -- package-all-plugins [--release] [--dist-dir <path>]",
     ]
     .join("\n")
@@ -62,23 +63,40 @@ fn help() -> String {
 fn package_plugins(args: &[String]) -> Result<(), String> {
     let package_args = parse_package_args(args)?;
     let workspace_root = workspace_root()?;
-    let plugins = filter_plugins_by_ids(
-        discover_plugins(&workspace_root)?,
-        &sample_plugin_allowlist(&workspace_root)?,
-    )?;
-    package_plugin_specs(&workspace_root, &plugins, &package_args)
+    let discovered_plugins = discover_plugins(&workspace_root)?;
+    let properties_path =
+        resolve_package_properties_path(&workspace_root, package_args.properties_path.as_deref())?;
+    let plugin_allowlist = plugin_allowlist_from_properties(&properties_path)?;
+    println!(
+        "using plugin allowlist from {}: {}",
+        properties_path.display(),
+        plugin_allowlist.join(", ")
+    );
+    let plugins = filter_plugins_by_ids(discovered_plugins.clone(), &plugin_allowlist)?;
+    package_plugin_specs(
+        &workspace_root,
+        &plugins,
+        &managed_plugin_ids(&discovered_plugins),
+        &package_args,
+    )
 }
 
 fn package_all_plugins(args: &[String]) -> Result<(), String> {
     let package_args = parse_package_args(args)?;
     let workspace_root = workspace_root()?;
     let plugins = discover_plugins(&workspace_root)?;
-    package_plugin_specs(&workspace_root, &plugins, &package_args)
+    package_plugin_specs(
+        &workspace_root,
+        &plugins,
+        &managed_plugin_ids(&plugins),
+        &package_args,
+    )
 }
 
 fn parse_package_args(args: &[String]) -> Result<PackageArgs, String> {
     let mut release = false;
     let mut dist_dir = PathBuf::from("runtime/plugins");
+    let mut properties_path = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -93,37 +111,71 @@ fn parse_package_args(args: &[String]) -> Result<PackageArgs, String> {
                 dist_dir = PathBuf::from(value);
                 index += 2;
             }
+            "--properties" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("--properties requires a value".to_string());
+                };
+                properties_path = Some(PathBuf::from(value));
+                index += 2;
+            }
             unknown => {
                 return Err(format!("unknown xtask option `{unknown}`"));
             }
         }
     }
-    Ok(PackageArgs { dist_dir, release })
+    Ok(PackageArgs {
+        dist_dir,
+        release,
+        properties_path,
+    })
 }
 
 fn package_plugin_specs(
     workspace_root: &Path,
     plugins: &[PluginSpec],
+    managed_plugin_ids: &BTreeSet<String>,
     package_args: &PackageArgs,
 ) -> Result<(), String> {
     let dist_dir = workspace_root.join(&package_args.dist_dir);
-    if dist_dir.exists() {
-        fs::remove_dir_all(&dist_dir).map_err(|error| {
-            format!(
-                "failed to remove existing plugin dist dir {}: {error}",
-                dist_dir.display()
-            )
-        })?;
-    }
     fs::create_dir_all(&dist_dir).map_err(|error| error.to_string())?;
+    let stage_dir = staging_dir_for_dist_dir(&dist_dir);
+    remove_path_if_exists(&stage_dir)?;
+    fs::create_dir_all(&stage_dir).map_err(|error| {
+        format!(
+            "failed to create staging dir {}: {error}",
+            stage_dir.display()
+        )
+    })?;
 
-    for plugin in plugins {
-        build_plugin(workspace_root, plugin, package_args.release)?;
-        package_plugin(workspace_root, &dist_dir, plugin, package_args.release)?;
-    }
+    let selected_plugin_ids = plugins
+        .iter()
+        .map(|plugin| plugin.plugin_id.clone())
+        .collect::<BTreeSet<_>>();
+    let result = (|| -> Result<(), String> {
+        for plugin in plugins {
+            build_plugin(workspace_root, plugin, package_args.release)?;
+            package_plugin(workspace_root, &stage_dir, plugin, package_args.release)?;
+        }
+        reconcile_packaged_plugins(
+            &dist_dir,
+            &stage_dir,
+            managed_plugin_ids,
+            &selected_plugin_ids,
+        )
+    })();
+    let cleanup_result = remove_path_if_exists(&stage_dir);
+    result?;
+    cleanup_result?;
 
     println!("packaged plugins into {}", dist_dir.display());
     Ok(())
+}
+
+fn managed_plugin_ids(plugins: &[PluginSpec]) -> BTreeSet<String> {
+    plugins
+        .iter()
+        .map(|plugin| plugin.plugin_id.clone())
+        .collect()
 }
 
 fn workspace_root() -> Result<PathBuf, String> {
@@ -146,6 +198,46 @@ fn workspace_root() -> Result<PathBuf, String> {
     Err(format!(
         "failed to locate workspace root from {}",
         manifest_dir.display()
+    ))
+}
+
+fn resolve_package_properties_path(
+    workspace_root: &Path,
+    explicit_path: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let resolve = |path: &Path| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            workspace_root.join(path)
+        }
+    };
+    if let Some(path) = explicit_path {
+        let resolved = resolve(path);
+        if resolved.is_file() {
+            return Ok(resolved);
+        }
+        return Err(format!(
+            "properties file {} does not exist",
+            resolved.display()
+        ));
+    }
+
+    let active_properties = workspace_root.join("runtime").join("server.properties");
+    if active_properties.is_file() {
+        return Ok(active_properties);
+    }
+
+    let example_properties = workspace_root
+        .join("runtime")
+        .join("server.properties.example");
+    if example_properties.is_file() {
+        return Ok(example_properties);
+    }
+
+    Err(format!(
+        "no default properties file found under {}",
+        workspace_root.join("runtime").display()
     ))
 }
 
@@ -177,13 +269,10 @@ fn discover_plugins(workspace_root: &Path) -> Result<Vec<PluginSpec>, String> {
     Ok(plugins)
 }
 
-fn sample_plugin_allowlist(workspace_root: &Path) -> Result<Vec<String>, String> {
-    let properties_path = workspace_root
-        .join("runtime")
-        .join("server.properties.example");
+fn plugin_allowlist_from_properties(properties_path: &Path) -> Result<Vec<String>, String> {
     let contents = fs::read_to_string(&properties_path).map_err(|error| {
         format!(
-            "failed to read sample server properties {}: {error}",
+            "failed to read server properties {}: {error}",
             properties_path.display()
         )
     })?;
@@ -193,7 +282,7 @@ fn sample_plugin_allowlist(workspace_root: &Path) -> Result<Vec<String>, String>
         .find(|line| !line.starts_with('#') && line.starts_with("plugin-allowlist="))
         .ok_or_else(|| {
             format!(
-                "sample server properties {} did not define plugin-allowlist",
+                "server properties {} did not define plugin-allowlist",
                 properties_path.display()
             )
         })?;
@@ -233,11 +322,64 @@ fn filter_plugins_by_ids(
         .collect::<Vec<_>>();
     if !missing.is_empty() {
         return Err(format!(
-            "sample allowlist referenced unknown plugin ids: {}",
+            "plugin allowlist referenced unknown plugin ids: {}",
             missing.join(", ")
         ));
     }
     Ok(filtered)
+}
+
+fn reconcile_packaged_plugins(
+    dist_dir: &Path,
+    stage_dir: &Path,
+    managed_plugin_ids: &BTreeSet<String>,
+    selected_plugin_ids: &BTreeSet<String>,
+) -> Result<(), String> {
+    for plugin_id in managed_plugin_ids {
+        if selected_plugin_ids.contains(plugin_id) {
+            continue;
+        }
+        remove_path_if_exists(&dist_dir.join(plugin_id))?;
+    }
+
+    for plugin_id in selected_plugin_ids {
+        let staged_plugin_dir = stage_dir.join(plugin_id);
+        if !staged_plugin_dir.is_dir() {
+            return Err(format!(
+                "staged plugin dir {} was not created",
+                staged_plugin_dir.display()
+            ));
+        }
+        let dist_plugin_dir = dist_dir.join(plugin_id);
+        remove_path_if_exists(&dist_plugin_dir)?;
+        fs::rename(&staged_plugin_dir, &dist_plugin_dir).map_err(|error| {
+            format!(
+                "failed to move {} into {}: {error}",
+                staged_plugin_dir.display(),
+                dist_plugin_dir.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn staging_dir_for_dist_dir(dist_dir: &Path) -> PathBuf {
+    let parent = dist_dir.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!(".revycraft-xtask-staging-{}", std::process::id()))
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        fs::remove_dir_all(path)
+            .map_err(|error| format!("failed to remove {}: {error}", path.display()))
+    } else {
+        fs::remove_file(path)
+            .map_err(|error| format!("failed to remove {}: {error}", path.display()))
+    }
 }
 
 fn is_plugin_package(package: &CargoPackage, plugins_root: &Path) -> bool {
@@ -409,9 +551,13 @@ fn packaged_artifact_name_with_tag(base_name: &str, build_tag: Option<String>) -
 mod tests {
     use super::{
         PackageArgs, PluginSpec, filter_plugins_by_ids, packaged_artifact_name_with_tag,
-        parse_package_args, plugin_spec_from_package_name,
+        parse_package_args, plugin_allowlist_from_properties, plugin_spec_from_package_name,
+        reconcile_packaged_plugins, resolve_package_properties_path,
     };
+    use std::collections::BTreeSet;
+    use std::fs;
     use std::path::PathBuf;
+    use tempfile::tempdir;
 
     #[test]
     fn plugin_spec_maps_protocol_packages_to_adapter_ids() {
@@ -451,17 +597,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_package_args_reads_release_and_dist_dir() {
+    fn parse_package_args_reads_release_dist_dir_and_properties() {
         assert_eq!(
             parse_package_args(&[
                 "--release".to_string(),
                 "--dist-dir".to_string(),
                 "target/plugins".to_string(),
+                "--properties".to_string(),
+                "runtime/custom.properties".to_string(),
             ])
             .expect("xtask args should parse"),
             PackageArgs {
                 dist_dir: PathBuf::from("target/plugins"),
                 release: true,
+                properties_path: Some(PathBuf::from("runtime/custom.properties")),
             }
         );
     }
@@ -478,5 +627,116 @@ mod tests {
         )
         .expect_err("unknown sample plugin ids should fail");
         assert!(error.contains("missing-plugin"));
+    }
+
+    #[test]
+    fn resolve_package_properties_path_prefers_active_runtime_properties() {
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let runtime_dir = temp_dir.path().join("runtime");
+        fs::create_dir_all(&runtime_dir).expect("runtime dir should be created");
+        let active = runtime_dir.join("server.properties");
+        let example = runtime_dir.join("server.properties.example");
+        fs::write(&active, "plugin-allowlist=je-1_7_10\n")
+            .expect("active properties should be written");
+        fs::write(&example, "plugin-allowlist=je-1_8_x\n")
+            .expect("example properties should be written");
+
+        assert_eq!(
+            resolve_package_properties_path(temp_dir.path(), None)
+                .expect("active properties should be preferred"),
+            active
+        );
+    }
+
+    #[test]
+    fn resolve_package_properties_path_falls_back_to_example() {
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let runtime_dir = temp_dir.path().join("runtime");
+        fs::create_dir_all(&runtime_dir).expect("runtime dir should be created");
+        let example = runtime_dir.join("server.properties.example");
+        fs::write(&example, "plugin-allowlist=je-1_8_x\n")
+            .expect("example properties should be written");
+
+        assert_eq!(
+            resolve_package_properties_path(temp_dir.path(), None)
+                .expect("example properties should be used as fallback"),
+            example
+        );
+    }
+
+    #[test]
+    fn plugin_allowlist_from_properties_reads_deduplicated_ids() {
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let properties = temp_dir.path().join("server.properties");
+        fs::write(
+            &properties,
+            "# ignored\nplugin-allowlist=je-1_7_10,je-1_7_10,auth-offline\n",
+        )
+        .expect("properties should be written");
+
+        assert_eq!(
+            plugin_allowlist_from_properties(&properties)
+                .expect("allowlist should be parsed successfully"),
+            vec!["je-1_7_10".to_string(), "auth-offline".to_string()]
+        );
+    }
+
+    #[test]
+    fn reconcile_packaged_plugins_keeps_third_party_plugins_and_removes_unselected_managed() {
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let dist_dir = temp_dir.path().join("runtime").join("plugins");
+        let stage_dir = temp_dir.path().join("runtime").join(".stage");
+        fs::create_dir_all(&dist_dir).expect("dist dir should be created");
+        fs::create_dir_all(&stage_dir).expect("stage dir should be created");
+
+        let selected_dist_dir = dist_dir.join("je-1_7_10");
+        fs::create_dir_all(&selected_dist_dir).expect("selected dist dir should be created");
+        fs::write(selected_dist_dir.join("stale.txt"), "stale")
+            .expect("stale file should be written");
+
+        let removed_dist_dir = dist_dir.join("je-1_8_x");
+        fs::create_dir_all(&removed_dist_dir).expect("removed dist dir should be created");
+        fs::write(removed_dist_dir.join("plugin.toml"), "old")
+            .expect("old manifest should be written");
+
+        let third_party_dir = dist_dir.join("third-party");
+        fs::create_dir_all(&third_party_dir).expect("third-party dir should be created");
+        fs::write(third_party_dir.join("plugin.toml"), "external")
+            .expect("external manifest should be written");
+
+        let staged_plugin_dir = stage_dir.join("je-1_7_10");
+        fs::create_dir_all(&staged_plugin_dir).expect("staged plugin dir should be created");
+        fs::write(staged_plugin_dir.join("plugin.toml"), "new")
+            .expect("new manifest should be written");
+
+        reconcile_packaged_plugins(
+            &dist_dir,
+            &stage_dir,
+            &["je-1_7_10".to_string(), "je-1_8_x".to_string()]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            &["je-1_7_10".to_string()]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+        )
+        .expect("reconcile should succeed");
+
+        assert_eq!(
+            fs::read_to_string(dist_dir.join("je-1_7_10").join("plugin.toml"))
+                .expect("selected plugin manifest should exist"),
+            "new"
+        );
+        assert!(
+            !dist_dir.join("je-1_7_10").join("stale.txt").exists(),
+            "selected managed plugin should be fully replaced"
+        );
+        assert!(
+            !dist_dir.join("je-1_8_x").exists(),
+            "unselected managed plugin should be removed"
+        );
+        assert!(
+            dist_dir.join("third-party").exists(),
+            "third-party plugin dirs should be preserved"
+        );
     }
 }

@@ -74,6 +74,16 @@ impl RuntimeServer {
         transport_session: AcceptedTransportSession,
         session: SessionState,
     ) {
+        let _consistency_guard = self.consistency_gate.read().await;
+        self.spawn_session_with_state_guarded(transport_session, session)
+            .await;
+    }
+
+    async fn spawn_session_with_state_guarded(
+        self: &Arc<Self>,
+        transport_session: AcceptedTransportSession,
+        session: SessionState,
+    ) {
         let connection_id = {
             let mut next_connection_id = self.next_connection_id.lock().await;
             let connection_id = ConnectionId(*next_connection_id);

@@ -9,6 +9,15 @@ impl RuntimeServer {
         command: CoreCommand,
         session: Option<&SessionState>,
     ) -> Result<(), RuntimeError> {
+        let _consistency_guard = self.consistency_gate.read().await;
+        self.apply_command_guarded(command, session).await
+    }
+
+    async fn apply_command_guarded(
+        &self,
+        command: CoreCommand,
+        session: Option<&SessionState>,
+    ) -> Result<(), RuntimeError> {
         let should_persist = matches!(
             command,
             CoreCommand::LoginStart { .. }
@@ -57,6 +66,11 @@ impl RuntimeServer {
     }
 
     pub(in crate::runtime) async fn tick(&self) -> Result<(), RuntimeError> {
+        let _consistency_guard = self.consistency_gate.read().await;
+        self.tick_guarded().await
+    }
+
+    async fn tick_guarded(&self) -> Result<(), RuntimeError> {
         let gameplay_sessions = {
             self.sessions
                 .lock()
@@ -152,6 +166,16 @@ impl RuntimeServer {
         connection_id: mc_core::ConnectionId,
         session: &SessionState,
     ) -> Result<(), RuntimeError> {
+        let _consistency_guard = self.consistency_gate.read().await;
+        self.unregister_session_guarded(connection_id, session)
+            .await
+    }
+
+    async fn unregister_session_guarded(
+        &self,
+        connection_id: mc_core::ConnectionId,
+        session: &SessionState,
+    ) -> Result<(), RuntimeError> {
         if let (Some(gameplay), Some(gameplay_profile), Some(player_id)) = (
             session.gameplay.as_ref(),
             session
@@ -169,7 +193,7 @@ impl RuntimeServer {
         }
         self.sessions.lock().await.remove(&connection_id);
         if let Some(player_id) = session.player_id {
-            self.apply_command(CoreCommand::Disconnect { player_id }, None)
+            self.apply_command_guarded(CoreCommand::Disconnect { player_id }, None)
                 .await?;
         }
         let _ = self.retire_drained_topologies().await;

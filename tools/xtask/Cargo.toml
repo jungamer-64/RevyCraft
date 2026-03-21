@@ -13,5 +13,8 @@ description = "Workspace automation tasks for packaging RevyCraft protocol plugi
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

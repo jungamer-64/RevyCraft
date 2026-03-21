@@ -58,6 +58,7 @@ impl RuntimeServer {
         connection_id: ConnectionId,
         session: &SessionState,
     ) {
+        let _consistency_guard = self.consistency_gate.read().await;
         if let Some(handle) = self.sessions.lock().await.get_mut(&connection_id) {
             handle.topology_generation_id = session.topology_generation_id;
             handle.transport = session.transport;
