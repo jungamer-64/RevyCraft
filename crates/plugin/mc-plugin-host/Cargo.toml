@@ -29,6 +29,7 @@ mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline"
 mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gameplay-canonical", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-sdk-rust = { path = "../mc-plugin-sdk-rust", features = ["in-process-testing"] }
+mc-plugin-test-support = { path = "../../testing/mc-plugin-test-support" }
 mc-plugin-proto-be-26_3 = { path = "../../../plugins/protocol/mc-plugin-proto-be-26_3", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-je-1_12_2 = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_12_2", features = ["disable-exported-symbols", "in-process-testing"] }

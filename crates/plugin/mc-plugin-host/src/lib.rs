@@ -17,13 +17,5 @@ pub mod runtime;
 pub mod test_support;
 
 pub use self::error::PluginHostError;
-#[cfg(test)]
-pub(crate) use self::error::PluginHostError as RuntimeError;
-
-#[cfg(test)]
-#[path = "../../../runtime/server-runtime/src/test_harness.rs"]
-mod test_harness;
 
 mod plugin_host;
-#[cfg(test)]
-pub(crate) use self::test_harness::*;

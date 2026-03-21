@@ -4,9 +4,9 @@ use crate::config::ServerConfig;
 use crate::host::plugin_host_from_config;
 use crate::runtime::{ProtocolReloadSession, RuntimeReloadContext};
 use crate::test_support::{
-    self, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
-    InProcessStoragePlugin, PluginAbiRange, PluginFailureAction, PluginFailureMatrix,
-    TestPluginHost, TestPluginHostBuilder,
+    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    PluginAbiRange, PluginFailureAction, PluginFailureMatrix, TestPluginHost,
+    TestPluginHostBuilder,
 };
 use mc_core::{
     BlockPos, BlockState, ConnectionId, CoreConfig, DimensionId, EntityId, GameplayQuery, PlayerId,
@@ -26,12 +26,22 @@ use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints;
 use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entrypoints;
 use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
 use mc_plugin_storage_je_anvil_1_7_10::in_process_storage_entrypoints as storage_entrypoints;
+use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_common::{ConnectionPhase, Edition, PacketWriter, TransportKind, WireFormatKind};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tempfile::tempdir;
 use uuid::Uuid;
+
+const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
+
+fn seed_packaged_plugins(dist_dir: &Path, plugin_ids: &[&str]) -> Result<(), RuntimeError> {
+    PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .seed_subset(dist_dir, plugin_ids)
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
 
 fn build_test_plugin_host(
     builder: TestPluginHostBuilder,
@@ -609,8 +619,9 @@ fn in_process_protocol_plugin_swaps_generation() {
             ..PluginFailureMatrix::default()
         },
     );
-    let registries =
-        test_support::load_protocol_plugin_set(&host).expect("in-process plugin should load");
+    let registries = host
+        .load_protocol_plugin_set()
+        .expect("in-process plugin should load");
 
     let adapter = registries
         .protocols()
@@ -620,15 +631,13 @@ fn in_process_protocol_plugin_swaps_generation() {
         .plugin_generation_id()
         .expect("plugin-backed adapter should report generation");
 
-    let next_generation = test_support::replace_in_process_protocol_plugin(
-        &host,
-        InProcessProtocolPlugin {
+    let next_generation = host
+        .replace_in_process_protocol_plugin(InProcessProtocolPlugin {
             plugin_id: "je-1_7_10".to_string(),
             manifest: entrypoints.manifest,
             api: entrypoints.api,
-        },
-    )
-    .expect("replacing in-process plugin should succeed");
+        })
+        .expect("replacing in-process plugin should succeed");
 
     let adapter = registries
         .protocols()
@@ -691,8 +700,9 @@ fn all_protocol_plugins_register_and_resolve() {
             ..PluginFailureMatrix::default()
         },
     );
-    let registries =
-        test_support::load_protocol_plugin_set(&host).expect("protocol plugins should load");
+    let registries = host
+        .load_protocol_plugin_set()
+        .expect("protocol plugins should load");
 
     for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
         assert!(
@@ -741,8 +751,9 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
             ..PluginFailureMatrix::default()
         },
     );
-    let registries =
-        test_support::load_protocol_plugin_set(&host).expect("protocol plugins should load");
+    let registries = host
+        .load_protocol_plugin_set()
+        .expect("protocol plugins should load");
 
     let je_adapter = registries
         .protocols()
@@ -792,7 +803,8 @@ fn protocol_plugins_can_override_host_wire_codec_framing() {
             ..PluginFailureMatrix::default()
         },
     );
-    let registries = test_support::load_protocol_plugin_set(&host)
+    let registries = host
+        .load_protocol_plugin_set()
         .expect("custom wire codec plugin should load");
 
     let adapter = registries
@@ -838,7 +850,7 @@ fn abi_mismatch_is_rejected_before_registration() {
             ..PluginFailureMatrix::default()
         },
     );
-    let error = match test_support::load_protocol_plugin_set(&host) {
+    let error = match host.load_protocol_plugin_set() {
         Ok(_) => panic!("ABI mismatch should fail before registration"),
         Err(error) => error,
     };
@@ -863,7 +875,7 @@ fn protocol_plugins_require_reload_manifest_capability() {
             ..PluginFailureMatrix::default()
         },
     );
-    let error = match test_support::load_protocol_plugin_set(&host) {
+    let error = match host.load_protocol_plugin_set() {
         Ok(_) => panic!("protocol plugin without runtime.reload.protocol should fail"),
         Err(error) => error,
     };
@@ -892,7 +904,8 @@ fn storage_and_auth_plugins_are_managed_without_quarantine() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
-    let _loaded_plugins = test_support::load_protocol_plugin_set(&host)
+    let _loaded_plugins = host
+        .load_protocol_plugin_set()
         .expect("storage/auth plugin kinds should register with the host");
 
     let status = host.status();
@@ -933,22 +946,16 @@ fn gameplay_profiles_activate_and_resolve() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
-    test_support::activate_gameplay_profiles(
-        &host,
-        &ServerConfig {
-            default_gameplay_profile: "canonical".to_string(),
-            gameplay_profile_map: std::iter::once((
-                "je-1_7_10".to_string(),
-                "readonly".to_string(),
-            ))
+    host.activate_gameplay_profiles(&ServerConfig {
+        default_gameplay_profile: "canonical".to_string(),
+        gameplay_profile_map: std::iter::once(("je-1_7_10".to_string(), "readonly".to_string()))
             .collect(),
-            ..ServerConfig::default()
-        },
-    )
+        ..ServerConfig::default()
+    })
     .expect("known gameplay profiles should activate");
 
-    assert!(test_support::resolve_gameplay_profile(&host, "canonical").is_some());
-    assert!(test_support::resolve_gameplay_profile(&host, "readonly").is_some());
+    assert!(host.resolve_gameplay_profile("canonical").is_some());
+    assert!(host.resolve_gameplay_profile("readonly").is_some());
 }
 
 #[test]
@@ -997,9 +1004,9 @@ fn load_plugin_set_activates_runtime_profiles() {
             .resolve_storage_profile("je-anvil-1_7_10")
             .is_some()
     );
-    assert!(test_support::resolve_gameplay_profile(&host, "canonical").is_some());
-    assert!(test_support::resolve_storage_profile(&host, "je-anvil-1_7_10").is_some());
-    assert!(test_support::resolve_auth_profile(&host, "offline-v1").is_some());
+    assert!(host.resolve_gameplay_profile("canonical").is_some());
+    assert!(host.resolve_storage_profile("je-anvil-1_7_10").is_some());
+    assert!(host.resolve_auth_profile("offline-v1").is_some());
 }
 
 #[test]
@@ -1052,16 +1059,14 @@ fn gameplay_command_snapshot_preserves_entity_id() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
-    test_support::activate_gameplay_profiles(
-        &host,
-        &ServerConfig {
-            default_gameplay_profile: "entity-aware".to_string(),
-            ..ServerConfig::default()
-        },
-    )
+    host.activate_gameplay_profiles(&ServerConfig {
+        default_gameplay_profile: "entity-aware".to_string(),
+        ..ServerConfig::default()
+    })
     .expect("entity-aware gameplay profile should activate");
 
-    let profile = test_support::resolve_gameplay_profile(&host, "entity-aware")
+    let profile = host
+        .resolve_gameplay_profile("entity-aware")
         .expect("entity-aware gameplay profile should resolve");
     let player_id = PlayerId(Uuid::from_u128(7));
     profile
@@ -1113,7 +1118,8 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
                 ..PluginFailureMatrix::default()
             },
         );
-        let registries = test_support::load_protocol_plugin_set(&host)
+        let registries = host
+            .load_protocol_plugin_set()
             .expect("failing protocol plugin should still register");
 
         let error = registries
@@ -1133,10 +1139,7 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
         );
         assert!(status.protocols[0].artifact_quarantine.is_none());
         assert_eq!(status.pending_fatal_error.is_some(), expect_fatal);
-        assert_eq!(
-            test_support::take_pending_fatal_error(&host).is_some(),
-            expect_fatal
-        );
+        assert_eq!(host.take_pending_fatal_error().is_some(), expect_fatal);
         let adapter = registries
             .protocols()
             .resolve_adapter(failing_protocol_plugin::PLUGIN_ID)
@@ -1171,16 +1174,14 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
                 ..PluginFailureMatrix::default()
             },
         );
-        test_support::activate_gameplay_profiles(
-            &host,
-            &ServerConfig {
-                default_gameplay_profile: "failing".to_string(),
-                ..ServerConfig::default()
-            },
-        )
+        host.activate_gameplay_profiles(&ServerConfig {
+            default_gameplay_profile: "failing".to_string(),
+            ..ServerConfig::default()
+        })
         .expect("failing gameplay profile should activate");
 
-        let profile = test_support::resolve_gameplay_profile(&host, "failing")
+        let profile = host
+            .resolve_gameplay_profile("failing")
             .expect("failing gameplay profile should resolve");
         let result = profile.handle_command(
             &StubGameplayQuery {
@@ -1220,10 +1221,7 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
             expect_quarantine
         );
         assert_eq!(status.pending_fatal_error.is_some(), expect_fatal);
-        assert_eq!(
-            test_support::take_pending_fatal_error(&host).is_some(),
-            expect_fatal
-        );
+        assert_eq!(host.take_pending_fatal_error().is_some(), expect_fatal);
         if action == PluginFailureAction::Quarantine {
             assert!(
                 profile
@@ -1272,9 +1270,10 @@ fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
                 ..PluginFailureMatrix::default()
             },
         );
-        test_support::activate_auth_profile(&host, failing_auth_plugin::PROFILE_ID)
+        host.activate_auth_profile(failing_auth_plugin::PROFILE_ID)
             .expect("failing auth profile should activate");
-        let profile = test_support::resolve_auth_profile(&host, failing_auth_plugin::PROFILE_ID)
+        let profile = host
+            .resolve_auth_profile(failing_auth_plugin::PROFILE_ID)
             .expect("failing auth profile should resolve");
 
         let error = profile
@@ -1289,10 +1288,7 @@ fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
         assert_eq!(status.auth[0].failure_action, action);
         assert!(status.auth[0].active_quarantine_reason.is_none());
         assert_eq!(status.pending_fatal_error.is_some(), expect_fatal);
-        assert_eq!(
-            test_support::take_pending_fatal_error(&host).is_some(),
-            expect_fatal
-        );
+        assert_eq!(host.take_pending_fatal_error().is_some(), expect_fatal);
     }
 }
 
@@ -1308,14 +1304,12 @@ fn unknown_gameplay_profile_fails_activation() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
-    let error = test_support::activate_gameplay_profiles(
-        &host,
-        &ServerConfig {
+    let error = host
+        .activate_gameplay_profiles(&ServerConfig {
             default_gameplay_profile: "readonly".to_string(),
             ..ServerConfig::default()
-        },
-    )
-    .expect_err("unknown gameplay profile should fail fast");
+        })
+        .expect_err("unknown gameplay profile should fail fast");
     assert!(matches!(
         error,
         RuntimeError::Config(message) if message.contains("unknown gameplay profile")
@@ -1341,13 +1335,13 @@ fn storage_and_auth_profiles_activate_and_resolve() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
-    test_support::activate_storage_profile(&host, "je-anvil-1_7_10")
+    host.activate_storage_profile("je-anvil-1_7_10")
         .expect("known storage profile should activate");
-    test_support::activate_auth_profile(&host, "offline-v1")
+    host.activate_auth_profile("offline-v1")
         .expect("known auth profile should activate");
 
-    assert!(test_support::resolve_storage_profile(&host, "je-anvil-1_7_10").is_some());
-    assert!(test_support::resolve_auth_profile(&host, "offline-v1").is_some());
+    assert!(host.resolve_storage_profile("je-anvil-1_7_10").is_some());
+    assert!(host.resolve_auth_profile("offline-v1").is_some());
 }
 
 #[test]
@@ -1357,14 +1351,16 @@ fn unknown_storage_and_auth_profiles_fail_activation() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
-    let storage = test_support::activate_storage_profile(&host, "missing")
+    let storage = host
+        .activate_storage_profile("missing")
         .expect_err("unknown storage profile should fail fast");
     assert!(matches!(
         storage,
         RuntimeError::Config(message) if message.contains("unknown storage profile")
     ));
 
-    let auth = test_support::activate_auth_profile(&host, "missing")
+    let auth = host
+        .activate_auth_profile("missing")
         .expect_err("unknown auth profile should fail fast");
     assert!(matches!(
         auth,
@@ -1377,7 +1373,7 @@ fn unknown_storage_and_auth_profiles_fail_activation() {
 fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    crate::seed_packaged_plugins_from_test_harness(
+    seed_packaged_plugins(
         &dist_dir,
         &["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"],
     )?;
@@ -1386,10 +1382,8 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
         plugins_dir: dist_dir,
         ..ServerConfig::default()
     };
-    let host = TestPluginHost::from_packaged(
-        plugin_host_from_config(&config)?.expect("packaged plugins should be discovered"),
-    );
-    let registries = test_support::load_protocol_plugin_set(&host)?;
+    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+    let registries = host.load_protocol_plugin_set()?;
 
     for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
         let adapter = registries
@@ -1397,10 +1391,9 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
             .resolve_adapter(adapter_id)
             .expect("packaged plugin adapter should resolve");
         assert!(
-            adapter.capability_set().contains(&format!(
-                "build-tag:{}",
-                crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
-            )),
+            adapter
+                .capability_set()
+                .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG)),
             "adapter `{adapter_id}` should expose build tag capability"
         );
     }
@@ -1413,17 +1406,17 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
 fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-reload");
-    crate::seed_packaged_plugins_from_test_harness(&dist_dir, &["je-1_7_10"])?;
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("plugin-host-reload");
+    seed_packaged_plugins(&dist_dir, &["je-1_7_10"])?;
 
     let config = ServerConfig {
         plugins_dir: dist_dir.clone(),
         ..ServerConfig::default()
     };
-    let host = TestPluginHost::from_packaged(
-        plugin_host_from_config(&config)?.expect("packaged plugins should be discovered"),
-    );
-    let registries = test_support::load_protocol_plugin_set(&host)?;
+    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+    let registries = host.load_protocol_plugin_set()?;
 
     let adapter = registries
         .protocols()
@@ -1432,21 +1425,24 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
     let first_generation = adapter
         .plugin_generation_id()
         .expect("packaged adapter should report plugin generation");
-    assert!(adapter.capability_set().contains(&format!(
-        "build-tag:{}",
-        crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
-    )));
+    assert!(
+        adapter
+            .capability_set()
+            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    );
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_protocol_plugin(
-        "mc-plugin-proto-je-1_7_10",
-        "je-1_7_10",
-        &dist_dir,
-        &target_dir,
-        "reload-v2",
-    )?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10",
+            "je-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = test_support::reload_modified(&host)?;
+    let reloaded = host.reload_modified()?;
     assert_eq!(reloaded, vec!["je-1_7_10".to_string()]);
 
     let adapter = registries
@@ -1466,24 +1462,26 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
 fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-migrate");
-    crate::seed_packaged_plugins_from_test_harness(&dist_dir, &["je-1_7_10"])?;
-    package_single_protocol_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        "je-1_7_10",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-v1",
-    )?;
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("plugin-host-protocol-migrate");
+    seed_packaged_plugins(&dist_dir, &["je-1_7_10"])?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            "je-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v1",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let config = ServerConfig {
         plugins_dir: dist_dir.clone(),
         ..ServerConfig::default()
     };
-    let host = TestPluginHost::from_packaged(
-        plugin_host_from_config(&config)?.expect("packaged plugins should be discovered"),
-    );
-    let registries = test_support::load_protocol_plugin_set(&host)?;
+    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+    let registries = host.load_protocol_plugin_set()?;
 
     let adapter = registries
         .protocols()
@@ -1510,15 +1508,17 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
     ]);
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_protocol_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        "je-1_7_10",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-v2",
-    )?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            "je-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = test_support::reload_modified_with_context(&host, &context)?;
+    let reloaded = host.reload_modified_with_context(&context)?;
     assert!(
         reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
         "protocol reload should report the migrated adapter"
@@ -1545,24 +1545,26 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
 fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-all-or-nothing");
-    crate::seed_packaged_plugins_from_test_harness(&dist_dir, &["je-1_7_10"])?;
-    package_single_protocol_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        "je-1_7_10",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-v1",
-    )?;
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("plugin-host-protocol-all-or-nothing");
+    seed_packaged_plugins(&dist_dir, &["je-1_7_10"])?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            "je-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v1",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let config = ServerConfig {
         plugins_dir: dist_dir.clone(),
         ..ServerConfig::default()
     };
-    let host = TestPluginHost::from_packaged(
-        plugin_host_from_config(&config)?.expect("packaged plugins should be discovered"),
-    );
-    let registries = test_support::load_protocol_plugin_set(&host)?;
+    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+    let registries = host.load_protocol_plugin_set()?;
 
     let adapter = registries
         .protocols()
@@ -1584,15 +1586,17 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
     ]);
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_protocol_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        "je-1_7_10",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-fail",
-    )?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            "je-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-fail",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = test_support::reload_modified_with_context(&host, &context)?;
+    let reloaded = host.reload_modified_with_context(&context)?;
     assert!(
         !reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
         "failed protocol migration should keep the current generation"
@@ -1616,24 +1620,26 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
 fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("plugin-host-protocol-incompatible");
-    crate::seed_packaged_plugins_from_test_harness(&dist_dir, &["je-1_7_10"])?;
-    package_single_protocol_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        "je-1_7_10",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-v1",
-    )?;
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("plugin-host-protocol-incompatible");
+    seed_packaged_plugins(&dist_dir, &["je-1_7_10"])?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            "je-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v1",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let config = ServerConfig {
         plugins_dir: dist_dir.clone(),
         ..ServerConfig::default()
     };
-    let host = TestPluginHost::from_packaged(
-        plugin_host_from_config(&config)?.expect("packaged plugins should be discovered"),
-    );
-    let registries = test_support::load_protocol_plugin_set(&host)?;
+    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+    let registries = host.load_protocol_plugin_set()?;
 
     let adapter = registries
         .protocols()
@@ -1644,15 +1650,17 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
         .expect("packaged adapter should report plugin generation");
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_protocol_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        "je-1_7_10",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-incompatible",
-    )?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            "je-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-incompatible",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = test_support::reload_modified(&host)?;
+    let reloaded = host.reload_modified()?;
     assert!(
         !reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
         "incompatible protocol candidate should be rejected"
@@ -1685,14 +1693,16 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
     assert!(protocol.current_artifact.reason.is_none());
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_protocol_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        "je-1_7_10",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-v2",
-    )?;
-    let reloaded = test_support::reload_modified(&host)?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            "je-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let reloaded = host.reload_modified()?;
     assert!(
         reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
         "successful replacement should clear the quarantined artifact"
@@ -1768,22 +1778,4 @@ fn raknet_unconnected_ping() -> Vec<u8> {
     ]);
     frame.extend_from_slice(&456_i64.to_be_bytes());
     frame
-}
-
-#[cfg(target_os = "linux")]
-fn package_single_protocol_plugin(
-    cargo_package: &str,
-    plugin_id: &str,
-    dist_dir: &Path,
-    target_dir: &Path,
-    build_tag: &str,
-) -> Result<(), RuntimeError> {
-    crate::install_packaged_plugin_from_test_cache(
-        cargo_package,
-        plugin_id,
-        "protocol",
-        dist_dir,
-        target_dir,
-        build_tag,
-    )
 }

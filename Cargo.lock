@@ -1533,6 +1533,7 @@ dependencies = [
  "mc-plugin-proto-je-1_8_x",
  "mc-plugin-sdk-rust",
  "mc-plugin-storage-je-anvil-1_7_10",
+ "mc-plugin-test-support",
  "mc-proto-be-26_3",
  "mc-proto-be-placeholder",
  "mc-proto-common",
@@ -1631,6 +1632,14 @@ dependencies = [
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-1_7_10",
+]
+
+[[package]]
+name = "mc-plugin-test-support"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]
@@ -2700,6 +2709,7 @@ dependencies = [
  "mc-plugin-proto-je-1_8_x",
  "mc-plugin-sdk-rust",
  "mc-plugin-storage-je-anvil-1_7_10",
+ "mc-plugin-test-support",
  "mc-proto-be-26_3",
  "mc-proto-be-common",
  "mc-proto-be-placeholder",

@@ -1,6 +1,6 @@
 use crate::PluginHostError;
 use crate::config::ServerConfig;
-use crate::host::{PluginHost, PluginHostStatusSnapshot};
+use crate::host::{PluginHost, PluginHostStatusSnapshot, plugin_host_from_config};
 use crate::plugin_host::PluginCatalog;
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use crate::runtime::{
@@ -21,9 +21,11 @@ pub struct TestPluginHost {
 }
 
 impl TestPluginHost {
-    #[must_use]
-    pub fn from_packaged(host: Arc<PluginHost>) -> Self {
-        Self { inner: host }
+    /// # Errors
+    ///
+    /// Returns [`PluginHostError`] when packaged plugin discovery fails.
+    pub fn discover(config: &ServerConfig) -> Result<Option<Self>, PluginHostError> {
+        plugin_host_from_config(config).map(|host| host.map(|inner| Self { inner }))
     }
 
     #[must_use]
@@ -219,104 +221,4 @@ impl TestPluginHostBuilder {
             )),
         }
     }
-}
-
-/// # Errors
-///
-/// Returns [`PluginHostError`] when the host cannot materialize the protocol snapshot.
-pub fn load_protocol_registry(host: &TestPluginHost) -> Result<ProtocolRegistry, PluginHostError> {
-    host.load_protocol_registry()
-}
-
-/// # Errors
-///
-/// Returns [`PluginHostError`] when the host cannot materialize the protocol-only plugin set.
-pub fn load_protocol_plugin_set(host: &TestPluginHost) -> Result<LoadedPluginSet, PluginHostError> {
-    host.load_protocol_plugin_set()
-}
-
-/// # Errors
-///
-/// Returns [`PluginHostError`] when the gameplay profiles cannot be activated.
-pub fn activate_gameplay_profiles(
-    host: &TestPluginHost,
-    config: &ServerConfig,
-) -> Result<(), PluginHostError> {
-    host.activate_gameplay_profiles(config)
-}
-
-/// # Errors
-///
-/// Returns [`PluginHostError`] when the storage profile cannot be activated.
-pub fn activate_storage_profile(
-    host: &TestPluginHost,
-    profile_id: &str,
-) -> Result<(), PluginHostError> {
-    host.activate_storage_profile(profile_id)
-}
-
-/// # Errors
-///
-/// Returns [`PluginHostError`] when the auth profile cannot be activated.
-pub fn activate_auth_profile(
-    host: &TestPluginHost,
-    profile_id: &str,
-) -> Result<(), PluginHostError> {
-    host.activate_auth_profile(profile_id)
-}
-
-#[must_use]
-pub fn resolve_gameplay_profile(
-    host: &TestPluginHost,
-    profile_id: &str,
-) -> Option<Arc<dyn GameplayProfileHandle>> {
-    host.resolve_gameplay_profile(profile_id)
-}
-
-#[must_use]
-pub fn resolve_storage_profile(
-    host: &TestPluginHost,
-    profile_id: &str,
-) -> Option<Arc<dyn StorageProfileHandle>> {
-    host.resolve_storage_profile(profile_id)
-}
-
-#[must_use]
-pub fn resolve_auth_profile(
-    host: &TestPluginHost,
-    profile_id: &str,
-) -> Option<Arc<dyn AuthProfileHandle>> {
-    host.resolve_auth_profile(profile_id)
-}
-
-/// # Errors
-///
-/// Returns [`PluginHostError`] when the replacement generation cannot be loaded.
-pub fn replace_in_process_protocol_plugin(
-    host: &TestPluginHost,
-    plugin: InProcessProtocolPlugin,
-) -> Result<PluginGenerationId, PluginHostError> {
-    host.replace_in_process_protocol_plugin(plugin)
-}
-
-/// # Errors
-///
-/// Returns [`PluginHostError`] when a modified packaged plugin cannot be reloaded.
-pub fn reload_modified(host: &TestPluginHost) -> Result<Vec<String>, PluginHostError> {
-    host.reload_modified()
-}
-
-/// # Errors
-///
-/// Returns [`PluginHostError`] when a modified packaged plugin cannot be reloaded.
-pub fn reload_modified_with_context(
-    host: &TestPluginHost,
-    runtime: &RuntimeReloadContext,
-) -> Result<Vec<String>, PluginHostError> {
-    host.reload_modified_with_context(runtime)
-}
-
-#[must_use]
-pub fn take_pending_fatal_error(host: &TestPluginHost) -> Option<PluginHostError> {
-    host.take_pending_fatal_error()
 }

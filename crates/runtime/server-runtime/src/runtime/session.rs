@@ -1,6 +1,6 @@
 use super::{
     LOGIN_SERVER_ID, LOGIN_VERIFY_TOKEN_LEN, LoginChallengeState, OnlineAuthKeys, RuntimeServer,
-    SessionHandle, SessionMessage, SessionState, now_ms,
+    SessionHandle, SessionMessage, SessionState,
 };
 use crate::RuntimeError;
 use crate::transport::{
@@ -202,7 +202,6 @@ impl RuntimeServer {
                 username,
                 verify_token,
                 auth_generation,
-                challenge_started_at: now_ms(),
             });
             write_payload(transport_io, current.wire_codec(), &encryption_request).await?;
             return Ok(false);

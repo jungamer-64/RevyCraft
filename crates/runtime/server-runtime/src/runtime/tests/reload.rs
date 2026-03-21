@@ -1,6 +1,7 @@
 use super::*;
 use crate::runtime::ReloadableRunningServer;
 use mc_core::PluginGenerationId;
+use mc_plugin_test_support::PackagedPluginHarness;
 
 type EncryptedLoginChallenge = ([u8; 16], Vec<u8>, Vec<u8>);
 
@@ -34,20 +35,24 @@ async fn spawn_protocol_reload_server(
     RuntimeError,
 > {
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir(scenario);
+    let target_dir = PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .scoped_target_dir(scenario);
     seed_runtime_plugins(
         &dist_dir,
         &[JE_1_7_10_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    package_single_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        JE_1_7_10_ADAPTER_ID,
-        "protocol",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-v1",
-    )?;
+    PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            JE_1_7_10_ADAPTER_ID,
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v1",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
@@ -86,20 +91,24 @@ async fn spawn_online_auth_reload_server(
     RuntimeError,
 > {
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("auth-online-reload");
+    let target_dir = PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .scoped_target_dir("auth-online-reload");
     seed_runtime_plugins(
         &dist_dir,
         &[JE_1_7_10_ADAPTER_ID],
         &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
     )?;
-    package_single_plugin(
-        "mc-plugin-auth-online-stub",
-        ONLINE_STUB_AUTH_PLUGIN_ID,
-        "auth",
-        &dist_dir,
-        &target_dir,
-        "online-auth-v1",
-    )?;
+    PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .install_auth_plugin(
+            "mc-plugin-auth-online-stub",
+            ONLINE_STUB_AUTH_PLUGIN_ID,
+            &dist_dir,
+            &target_dir,
+            "online-auth-v1",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
@@ -186,14 +195,16 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
     let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        JE_1_7_10_ADAPTER_ID,
-        "protocol",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-v2",
-    )?;
+    PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            JE_1_7_10_ADAPTER_ID,
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let reloaded = server.reload_plugins().await?;
     assert!(
@@ -233,14 +244,16 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
     let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        JE_1_7_10_ADAPTER_ID,
-        "protocol",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-fail",
-    )?;
+    PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            JE_1_7_10_ADAPTER_ID,
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-fail",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let reloaded = server.reload_plugins().await?;
     assert!(
@@ -272,7 +285,9 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
 async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("gameplay-reload-success");
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("gameplay-reload-success");
     seed_runtime_plugins(
         &dist_dir,
         &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
@@ -319,10 +334,11 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
     let readonly_generation = readonly_before
         .plugin_generation_id()
         .expect("readonly profile should report generation");
-    assert!(canonical_before.capability_set().contains(&format!(
-        "build-tag:{}",
-        crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
-    )));
+    assert!(
+        canonical_before
+            .capability_set()
+            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    );
 
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
@@ -334,13 +350,15 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
     let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_gameplay_plugin(
-        "mc-plugin-gameplay-canonical",
-        "gameplay-canonical",
-        &dist_dir,
-        &target_dir,
-        "gameplay-reload-v2",
-    )?;
+    harness
+        .install_gameplay_plugin(
+            "mc-plugin-gameplay-canonical",
+            "gameplay-canonical",
+            &dist_dir,
+            &target_dir,
+            "gameplay-reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let reloaded = server.reload_plugins().await?;
     assert!(
@@ -392,7 +410,9 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
 async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("gameplay-reload-failure");
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("gameplay-reload-failure");
     seed_runtime_plugins(
         &dist_dir,
         &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
@@ -431,10 +451,11 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
     let before_generation = canonical_before
         .plugin_generation_id()
         .expect("canonical profile should report generation");
-    assert!(canonical_before.capability_set().contains(&format!(
-        "build-tag:{}",
-        crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
-    )));
+    assert!(
+        canonical_before
+            .capability_set()
+            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    );
 
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
@@ -446,13 +467,15 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
     let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_gameplay_plugin(
-        "mc-plugin-gameplay-canonical",
-        "gameplay-canonical",
-        &dist_dir,
-        &target_dir,
-        "gameplay-reload-fail",
-    )?;
+    harness
+        .install_gameplay_plugin(
+            "mc-plugin-gameplay-canonical",
+            "gameplay-canonical",
+            &dist_dir,
+            &target_dir,
+            "gameplay-reload-fail",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let reloaded = server.reload_plugins().await?;
     assert!(
@@ -471,10 +494,11 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         canonical_after.plugin_generation_id(),
         Some(before_generation)
     );
-    assert!(canonical_after.capability_set().contains(&format!(
-        "build-tag:{}",
-        crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
-    )));
+    assert!(
+        canonical_after
+            .capability_set()
+            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    );
 
     write_packet(
         &mut modern,
@@ -494,7 +518,9 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
 async fn storage_reload_updates_generation_and_preserves_persistence() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("storage-reload-success");
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("storage-reload-success");
     let world_dir = temp_dir.path().join("world");
     seed_runtime_plugins(
         &dist_dir,
@@ -522,10 +548,11 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     let before_generation = storage_before
         .plugin_generation_id()
         .expect("storage profile should report generation");
-    assert!(storage_before.capability_set().contains(&format!(
-        "build-tag:{}",
-        crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
-    )));
+    assert!(
+        storage_before
+            .capability_set()
+            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    );
 
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
@@ -540,14 +567,15 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_plugin(
-        "mc-plugin-storage-je-anvil-1_7_10",
-        "storage-je-anvil-1_7_10",
-        "storage",
-        &dist_dir,
-        &target_dir,
-        "storage-reload-v2",
-    )?;
+    harness
+        .install_storage_plugin(
+            "mc-plugin-storage-je-anvil-1_7_10",
+            "storage-je-anvil-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "storage-reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let reloaded = server.reload_plugins().await?;
     assert!(
@@ -602,7 +630,9 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
 async fn storage_reload_failure_keeps_existing_generation() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("storage-reload-failure");
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("storage-reload-failure");
     seed_runtime_plugins(
         &dist_dir,
         &[JE_1_7_10_ADAPTER_ID],
@@ -633,14 +663,15 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
         .expect("storage profile should report generation");
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_plugin(
-        "mc-plugin-storage-je-anvil-1_7_10",
-        "storage-je-anvil-1_7_10",
-        "storage",
-        &dist_dir,
-        &target_dir,
-        "storage-reload-fail",
-    )?;
+    harness
+        .install_storage_plugin(
+            "mc-plugin-storage-je-anvil-1_7_10",
+            "storage-je-anvil-1_7_10",
+            &dist_dir,
+            &target_dir,
+            "storage-reload-fail",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let reloaded = server.reload_plugins().await?;
     assert!(
@@ -659,10 +690,11 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
         storage_after.plugin_generation_id(),
         Some(before_generation)
     );
-    assert!(storage_after.capability_set().contains(&format!(
-        "build-tag:{}",
-        crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
-    )));
+    assert!(
+        storage_after
+            .capability_set()
+            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    );
 
     server.shutdown().await
 }
@@ -672,7 +704,9 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
 async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("auth-reload-offline");
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("auth-reload-offline");
     seed_runtime_plugins(
         &dist_dir,
         &[JE_1_7_10_ADAPTER_ID],
@@ -698,10 +732,11 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     let before_generation = auth_before
         .plugin_generation_id()
         .expect("auth profile should report generation");
-    assert!(auth_before.capability_set().contains(&format!(
-        "build-tag:{}",
-        crate::PACKAGED_PLUGIN_TEST_HARNESS_TAG
-    )));
+    assert!(
+        auth_before
+            .capability_set()
+            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    );
 
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
@@ -710,14 +745,15 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_plugin(
-        "mc-plugin-auth-offline",
-        "auth-offline",
-        "auth",
-        &dist_dir,
-        &target_dir,
-        "auth-reload-v2",
-    )?;
+    harness
+        .install_auth_plugin(
+            "mc-plugin-auth-offline",
+            "auth-offline",
+            &dist_dir,
+            &target_dir,
+            "auth-reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let reloaded = server.reload_plugins().await?;
     assert!(
@@ -756,7 +792,9 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
 async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("auth-online-packaged");
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("auth-online-packaged");
     seed_runtime_plugins(
         &dist_dir,
         &[
@@ -766,14 +804,15 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
         ],
         &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
     )?;
-    package_single_plugin(
-        "mc-plugin-auth-online-stub",
-        ONLINE_STUB_AUTH_PLUGIN_ID,
-        "auth",
-        &dist_dir,
-        &target_dir,
-        "online-stub-v1",
-    )?;
+    harness
+        .install_auth_plugin(
+            "mc-plugin-auth-online-stub",
+            ONLINE_STUB_AUTH_PLUGIN_ID,
+            &dist_dir,
+            &target_dir,
+            "online-stub-v1",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
@@ -849,14 +888,16 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
     let addr = listener_addr(&server);
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_plugin(
-        "mc-plugin-auth-online-stub",
-        ONLINE_STUB_AUTH_PLUGIN_ID,
-        "auth",
-        &dist_dir,
-        &target_dir,
-        "online-auth-v2",
-    )?;
+    PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .install_auth_plugin(
+            "mc-plugin-auth-online-stub",
+            ONLINE_STUB_AUTH_PLUGIN_ID,
+            &dist_dir,
+            &target_dir,
+            "online-auth-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let reloaded = server.reload_plugins().await?;
     assert!(
         reloaded
@@ -915,20 +956,23 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
 async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let target_dir = crate::packaged_plugin_test_target_dir("topology-inline-manual");
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("topology-inline-manual");
     seed_runtime_plugins(
         &dist_dir,
         &[JE_1_7_10_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    package_single_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        JE_1_7_10_ADAPTER_ID,
-        "protocol",
-        &dist_dir,
-        &target_dir,
-        "protocol-reload-v1",
-    )?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            JE_1_7_10_ADAPTER_ID,
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v1",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
@@ -947,14 +991,15 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
     let before_protocol_number = before_adapter.descriptor().protocol_number;
 
     std::thread::sleep(Duration::from_secs(1));
-    package_single_plugin(
-        "mc-plugin-proto-je-1_7_10-reload-test",
-        JE_1_7_10_ADAPTER_ID,
-        "protocol",
-        &dist_dir,
-        &target_dir,
-        "reload-incompatible",
-    )?;
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-1_7_10-reload-test",
+            JE_1_7_10_ADAPTER_ID,
+            &dist_dir,
+            &target_dir,
+            "reload-incompatible",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let result = server.reload_topology().await?;
     assert_ne!(

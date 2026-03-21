@@ -94,7 +94,6 @@ use mc_plugin_auth_online_stub::{
 };
 use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
 use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
-use mc_plugin_host::host::plugin_host_from_config;
 use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_host::test_support::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
@@ -107,6 +106,7 @@ use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints as je_1_7_10_entr
 use mc_plugin_proto_je_1_8_x::in_process_protocol_entrypoints as je_1_8_x_entrypoints;
 use mc_plugin_proto_je_1_12_2::in_process_protocol_entrypoints as je_1_12_2_entrypoints;
 use mc_plugin_storage_je_anvil_1_7_10::in_process_storage_entrypoints as storage_entrypoints;
+use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_be_26_3::BE_26_3_ADAPTER_ID;
 use mc_proto_be_placeholder::BE_PLACEHOLDER_ADAPTER_ID;
 use mc_proto_common::{
@@ -219,13 +219,15 @@ const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &[
     "auth-bedrock-offline",
     "auth-bedrock-xbl",
 ];
+const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
 
 fn plugin_test_registries_with_allowlist(
     allowlist: &[&str],
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
-    let dist_dir = crate::packaged_plugin_test_harness_dist_dir()
-        .map_err(RuntimeError::Config)?
-        .clone();
+    let dist_dir = PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .dist_dir()
+        .to_path_buf();
     plugin_test_registries_from_dist(dist_dir, allowlist)
 }
 
@@ -277,10 +279,9 @@ fn plugin_test_registries_from_dist_with_supporting_plugins(
     if supporting_plugin_ids.contains(&ONLINE_STUB_AUTH_PLUGIN_ID) {
         config.auth_profile = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
     }
-    let plugin_host = plugin_host_from_config(&config.plugin_host_config())?.ok_or_else(|| {
+    let plugin_host = TestPluginHost::discover(&config.plugin_host_config())?.ok_or_else(|| {
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
-    let plugin_host = TestPluginHost::from_packaged(plugin_host);
     Ok(LoadedPluginTestEnvironment {
         loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
         plugin_host: Some(plugin_host),
@@ -290,10 +291,9 @@ fn plugin_test_registries_from_dist_with_supporting_plugins(
 fn plugin_test_registries_from_config(
     config: &ServerConfig,
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
-    let plugin_host = plugin_host_from_config(&config.plugin_host_config())?.ok_or_else(|| {
+    let plugin_host = TestPluginHost::discover(&config.plugin_host_config())?.ok_or_else(|| {
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
-    let plugin_host = TestPluginHost::from_packaged(plugin_host);
     Ok(LoadedPluginTestEnvironment {
         loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
         plugin_host: Some(plugin_host),
@@ -309,7 +309,10 @@ fn seed_runtime_plugins(
     plugin_ids.extend_from_slice(allowlist);
     plugin_ids.extend_from_slice(GAMEPLAY_PLUGIN_IDS);
     plugin_ids.extend_from_slice(supporting_plugin_ids);
-    crate::seed_packaged_plugins_from_test_harness(dist_dir, &plugin_ids)
+    PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .seed_subset(dist_dir, &plugin_ids)
+        .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
 fn plugin_test_registries_tcp_only() -> Result<LoadedPluginTestEnvironment, RuntimeError> {
@@ -451,43 +454,6 @@ fn gameplay_profile_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
         .iter()
         .map(|(adapter_id, profile_id)| ((*adapter_id).to_string(), (*profile_id).to_string()))
         .collect()
-}
-
-#[cfg(target_os = "linux")]
-fn package_single_plugin(
-    cargo_package: &str,
-    plugin_id: &str,
-    plugin_kind: &str,
-    dist_dir: &Path,
-    target_dir: &Path,
-    build_tag: &str,
-) -> Result<(), RuntimeError> {
-    crate::install_packaged_plugin_from_test_cache(
-        cargo_package,
-        plugin_id,
-        plugin_kind,
-        dist_dir,
-        target_dir,
-        build_tag,
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn package_single_gameplay_plugin(
-    cargo_package: &str,
-    plugin_id: &str,
-    dist_dir: &Path,
-    target_dir: &Path,
-    build_tag: &str,
-) -> Result<(), RuntimeError> {
-    package_single_plugin(
-        cargo_package,
-        plugin_id,
-        "gameplay",
-        dist_dir,
-        target_dir,
-        build_tag,
-    )
 }
 
 async fn write_packet(
@@ -750,74 +716,6 @@ async fn perform_online_login(
     let response = login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
     write_packet(stream, codec, &response).await?;
     Ok((TestClientEncryptionState::new(shared_secret), buffer))
-}
-
-#[test]
-fn plugin_test_harness_is_packaged_once_per_process() -> Result<(), RuntimeError> {
-    let _ = plugin_test_registries_tcp_only()?;
-    let _ = plugin_test_registries_all()?;
-    assert_eq!(crate::packaged_plugin_test_harness_build_count(), 1);
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn packaged_plugin_seed_subset_copies_only_requested_plugins() -> Result<(), RuntimeError> {
-    let temp_dir = tempdir()?;
-    let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    crate::seed_packaged_plugins_from_test_harness(
-        &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID, "auth-offline"],
-    )?;
-
-    assert!(dist_dir.join(JE_1_7_10_ADAPTER_ID).is_dir());
-    assert!(dist_dir.join("auth-offline").is_dir());
-    assert!(!dist_dir.join(JE_1_8_X_ADAPTER_ID).exists());
-    assert!(!dist_dir.join("gameplay-canonical").exists());
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn packaged_plugin_variant_cache_reuses_same_package_and_tag() -> Result<(), RuntimeError> {
-    let cache_dir = crate::packaged_plugin_test_artifact_cache_dir()
-        .join("mc-plugin-proto-je-1_7_10")
-        .join("cache-hit-v1");
-    if cache_dir.exists() {
-        fs::remove_dir_all(&cache_dir)?;
-    }
-
-    let target_dir = crate::packaged_plugin_test_target_dir("variant-cache");
-    let first_temp_dir = tempdir()?;
-    let second_temp_dir = tempdir()?;
-    let before_builds = crate::packaged_plugin_test_variant_build_count();
-
-    package_single_plugin(
-        "mc-plugin-proto-je-1_7_10",
-        JE_1_7_10_ADAPTER_ID,
-        "protocol",
-        &first_temp_dir.path().join("runtime").join("plugins"),
-        &target_dir,
-        "cache-hit-v1",
-    )?;
-    let after_first = crate::packaged_plugin_test_variant_build_count();
-
-    package_single_plugin(
-        "mc-plugin-proto-je-1_7_10",
-        JE_1_7_10_ADAPTER_ID,
-        "protocol",
-        &second_temp_dir.path().join("runtime").join("plugins"),
-        &target_dir,
-        "cache-hit-v1",
-    )?;
-    let after_second = crate::packaged_plugin_test_variant_build_count();
-
-    let cached_artifact =
-        cache_dir.join(crate::dynamic_library_filename("mc-plugin-proto-je-1_7_10"));
-    assert!(cached_artifact.is_file());
-    assert!(after_first >= before_builds);
-    assert_eq!(after_second, after_first);
-    Ok(())
 }
 
 #[test]

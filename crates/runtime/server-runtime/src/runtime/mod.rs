@@ -223,8 +223,6 @@ pub(crate) struct LoginChallengeState {
     pub(crate) username: String,
     pub(crate) verify_token: [u8; LOGIN_VERIFY_TOKEN_LEN],
     pub(crate) auth_generation: Arc<dyn AuthGenerationHandle>,
-    #[allow(dead_code)]
-    pub(crate) challenge_started_at: u64,
 }
 
 pub(crate) fn now_ms() -> u64 {
