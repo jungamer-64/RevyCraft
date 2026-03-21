@@ -3,10 +3,10 @@ use super::{
     GameplayGeneration, GameplayPluginApiV1, GameplayRequest, Library, Mutex,
     PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1, PLUGIN_MANIFEST_SYMBOL_V1,
     PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginErrorCode,
-    PluginGenerationId, PluginLoader, PluginManifestV1, PluginPackage, PluginSource,
-    ProtocolGeneration, ProtocolPluginApiV1, ProtocolRequest, RuntimeError, StorageGeneration,
-    StoragePluginApiV1, StorageRequest, decode_manifest, expect_auth_capabilities,
-    expect_auth_descriptor, expect_gameplay_capabilities, expect_gameplay_descriptor,
+    PluginGenerationId, PluginManifestV1, PluginPackage, PluginSource, ProtocolGeneration,
+    ProtocolPluginApiV1, ProtocolRequest, RuntimeError, StorageGeneration, StoragePluginApiV1,
+    StorageRequest, decode_manifest, expect_auth_capabilities, expect_auth_descriptor,
+    expect_gameplay_capabilities, expect_gameplay_descriptor,
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
     gameplay_host_api, gameplay_profile_id_from_manifest, invoke_auth, invoke_gameplay,
@@ -18,6 +18,17 @@ type LoadedProtocolApi = (LibraryGuard, DecodedManifest, ProtocolPluginApiV1);
 type LoadedGameplayApi = (LibraryGuard, DecodedManifest, GameplayPluginApiV1);
 type LoadedStorageApi = (LibraryGuard, DecodedManifest, StoragePluginApiV1);
 type LoadedAuthApi = (LibraryGuard, DecodedManifest, AuthPluginApiV1);
+
+pub(crate) struct PluginLoader {
+    abi_range: super::PluginAbiRange,
+}
+
+impl PluginLoader {
+    #[must_use]
+    pub(crate) const fn new(abi_range: super::PluginAbiRange) -> Self {
+        Self { abi_range }
+    }
+}
 
 impl PluginLoader {
     fn load_protocol_api(package: &PluginPackage) -> Result<LoadedProtocolApi, RuntimeError> {
