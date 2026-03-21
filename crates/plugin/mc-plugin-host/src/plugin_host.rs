@@ -1,7 +1,10 @@
 use crate::PluginHostError as RuntimeError;
 use crate::config::ServerConfig;
 use crate::registry::ProtocolRegistry;
-use crate::runtime::RuntimeReloadContext;
+use crate::runtime::{
+    AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
+    RuntimeProtocolTopologyCandidate, RuntimeReloadContext, StorageProfileHandle,
+};
 use bytes::BytesMut;
 use libloading::Library;
 use mc_core::{
@@ -1407,6 +1410,20 @@ impl AuthGeneration {
     }
 }
 
+impl AuthGenerationHandle for AuthGeneration {
+    fn generation_id(&self) -> PluginGenerationId {
+        self.generation_id
+    }
+
+    fn authenticate_online(
+        &self,
+        username: &str,
+        server_hash: &str,
+    ) -> Result<PlayerId, RuntimeError> {
+        Self::authenticate_online(self, username, server_hash)
+    }
+}
+
 pub struct PluginLoader {
     abi_range: PluginAbiRange,
 }
@@ -2067,6 +2084,24 @@ impl GameplayPolicyResolver for HotSwappableGameplayProfile {
     }
 }
 
+impl GameplayProfileHandle for HotSwappableGameplayProfile {
+    fn profile_id(&self) -> GameplayProfileId {
+        Self::profile_id(self)
+    }
+
+    fn capability_set(&self) -> CapabilitySet {
+        Self::capability_set(self)
+    }
+
+    fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+        Self::plugin_generation_id(self)
+    }
+
+    fn session_closed(&self, session: &GameplaySessionSnapshot) -> Result<(), RuntimeError> {
+        Self::session_closed(self, session)
+    }
+}
+
 pub struct HotSwappableStorageProfile {
     plugin_id: String,
     #[allow(dead_code)]
@@ -2186,6 +2221,32 @@ impl HotSwappableStorageProfile {
 }
 
 impl StorageAdapter for HotSwappableStorageProfile {
+    fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError> {
+        Self::load_snapshot(self, world_dir)
+    }
+
+    fn save_snapshot(
+        &self,
+        world_dir: &Path,
+        snapshot: &WorldSnapshot,
+    ) -> Result<(), StorageError> {
+        Self::save_snapshot(self, world_dir, snapshot)
+    }
+}
+
+impl StorageProfileHandle for HotSwappableStorageProfile {
+    fn plugin_id(&self) -> &str {
+        Self::plugin_id(self)
+    }
+
+    fn capability_set(&self) -> CapabilitySet {
+        Self::capability_set(self)
+    }
+
+    fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+        Self::plugin_generation_id(self)
+    }
+
     fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError> {
         Self::load_snapshot(self, world_dir)
     }
@@ -2346,6 +2407,51 @@ impl HotSwappableAuthProfile {
     }
 }
 
+impl AuthProfileHandle for HotSwappableAuthProfile {
+    fn capability_set(&self) -> CapabilitySet {
+        Self::capability_set(self)
+    }
+
+    fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
+        Self::plugin_generation_id(self)
+    }
+
+    fn mode(&self) -> Result<AuthMode, RuntimeError> {
+        Self::mode(self)
+    }
+
+    fn capture_generation(&self) -> Result<Arc<dyn AuthGenerationHandle>, RuntimeError> {
+        Self::capture_generation(self).map(|generation| generation as Arc<dyn AuthGenerationHandle>)
+    }
+
+    fn authenticate_offline(&self, username: &str) -> Result<PlayerId, RuntimeError> {
+        Self::authenticate_offline(self, username)
+    }
+
+    fn authenticate_online(
+        &self,
+        username: &str,
+        server_hash: &str,
+    ) -> Result<PlayerId, RuntimeError> {
+        Self::authenticate_online(self, username, server_hash)
+    }
+
+    fn authenticate_bedrock_offline(
+        &self,
+        display_name: &str,
+    ) -> Result<BedrockAuthResult, RuntimeError> {
+        Self::authenticate_bedrock_offline(self, display_name)
+    }
+
+    fn authenticate_bedrock_xbl(
+        &self,
+        chain_jwts: &[String],
+        client_data_jwt: &str,
+    ) -> Result<BedrockAuthResult, RuntimeError> {
+        Self::authenticate_bedrock_xbl(self, chain_jwts, client_data_jwt)
+    }
+}
+
 struct ManagedProtocolPlugin {
     package: PluginPackage,
     adapter: Arc<HotSwappableProtocolAdapter>,
@@ -2353,9 +2459,9 @@ struct ManagedProtocolPlugin {
     active_loaded_at: SystemTime,
 }
 
-pub struct PreparedProtocolTopology {
-    pub registry: ProtocolRegistry,
-    pub adapter_ids: Vec<String>,
+pub(crate) struct PreparedProtocolTopology {
+    pub(crate) registry: ProtocolRegistry,
+    pub(crate) adapter_ids: Vec<String>,
     managed: HashMap<String, ManagedProtocolPlugin>,
 }
 
@@ -2397,7 +2503,7 @@ pub struct PluginHost {
 
 impl PluginHost {
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         catalog: PluginCatalog,
         abi_range: PluginAbiRange,
         failure_matrix: PluginFailureMatrix,
@@ -2406,7 +2512,7 @@ impl PluginHost {
     }
 
     #[must_use]
-    pub fn new_with_dynamic_catalog_source(
+    pub(crate) fn new_with_dynamic_catalog_source(
         catalog: PluginCatalog,
         abi_range: PluginAbiRange,
         failure_matrix: PluginFailureMatrix,
@@ -2514,13 +2620,13 @@ impl PluginHost {
         self.prepare_protocol_topology_with_stage(PluginFailureStage::Boot)
     }
 
-    pub fn prepare_protocol_topology_for_reload(
+    pub(crate) fn prepare_protocol_topology_for_reload(
         &self,
     ) -> Result<PreparedProtocolTopology, RuntimeError> {
         self.prepare_protocol_topology_with_stage(PluginFailureStage::Reload)
     }
 
-    pub fn activate_protocol_topology(&self, candidate: PreparedProtocolTopology) {
+    pub(crate) fn activate_protocol_topology(&self, candidate: PreparedProtocolTopology) {
         *self
             .protocols
             .lock()
@@ -2532,7 +2638,7 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the gameplay plugin registry mutex is poisoned.
-    pub fn resolve_gameplay_profile(
+    pub(crate) fn resolve_gameplay_profile(
         &self,
         profile_id: &str,
     ) -> Option<Arc<HotSwappableGameplayProfile>> {
@@ -2548,7 +2654,7 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the storage plugin registry mutex is poisoned.
-    pub fn resolve_storage_profile(
+    pub(crate) fn resolve_storage_profile(
         &self,
         profile_id: &str,
     ) -> Option<Arc<HotSwappableStorageProfile>> {
@@ -2564,7 +2670,10 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the auth plugin registry mutex is poisoned.
-    pub fn resolve_auth_profile(&self, profile_id: &str) -> Option<Arc<HotSwappableAuthProfile>> {
+    pub(crate) fn resolve_auth_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<HotSwappableAuthProfile>> {
         self.auth
             .lock()
             .expect("plugin host mutex should not be poisoned")
@@ -2739,7 +2848,7 @@ impl PluginHost {
     ///
     /// Panics if the protocol plugin registry mutex is poisoned.
     #[cfg(any(test, feature = "in-process-testing"))]
-    pub fn replace_in_process_protocol_plugin(
+    pub(crate) fn replace_in_process_protocol_plugin(
         &self,
         plugin: InProcessProtocolPlugin,
     ) -> Result<PluginGenerationId, RuntimeError> {
@@ -2768,11 +2877,11 @@ impl PluginHost {
         Ok(generation_id)
     }
 
-    pub fn take_pending_fatal_error(&self) -> Option<RuntimeError> {
+    pub(crate) fn take_pending_fatal_error(&self) -> Option<RuntimeError> {
         self.failures.take_pending_fatal_error()
     }
 
-    pub fn handle_runtime_failure(
+    pub(crate) fn handle_runtime_failure(
         &self,
         kind: PluginKind,
         plugin_id: &str,
@@ -2782,7 +2891,7 @@ impl PluginHost {
             .handle_runtime_failure(kind, plugin_id, reason)
     }
 
-    pub fn managed_protocol_ids(&self) -> Vec<String> {
+    pub(crate) fn managed_protocol_ids(&self) -> Vec<String> {
         let mut ids = self
             .protocols
             .lock()
@@ -2792,6 +2901,47 @@ impl PluginHost {
             .collect::<Vec<_>>();
         ids.sort();
         ids
+    }
+}
+
+impl RuntimePluginHost for PluginHost {
+    fn reload_modified_with_context(
+        &self,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<Vec<String>, RuntimeError> {
+        Self::reload_modified_with_context(self, runtime)
+    }
+
+    fn prepare_protocol_topology_for_reload(
+        &self,
+    ) -> Result<RuntimeProtocolTopologyCandidate, RuntimeError> {
+        self.prepare_protocol_topology_for_reload()
+            .map(RuntimeProtocolTopologyCandidate::new)
+    }
+
+    fn activate_protocol_topology(&self, candidate: RuntimeProtocolTopologyCandidate) {
+        Self::activate_protocol_topology(self, candidate.into_prepared());
+    }
+
+    fn take_pending_fatal_error(&self) -> Option<RuntimeError> {
+        Self::take_pending_fatal_error(self)
+    }
+
+    fn handle_runtime_failure(
+        &self,
+        kind: PluginKind,
+        plugin_id: &str,
+        reason: &str,
+    ) -> PluginFailureAction {
+        Self::handle_runtime_failure(self, kind, plugin_id, reason)
+    }
+
+    fn managed_protocol_ids(&self) -> Vec<String> {
+        Self::managed_protocol_ids(self)
+    }
+
+    fn status(&self) -> PluginHostStatusSnapshot {
+        Self::status(self)
     }
 }
 

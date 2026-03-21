@@ -9,7 +9,7 @@ use crate::transport::{
 use bytes::BytesMut;
 use mc_core::{ConnectionId, CoreCommand, CoreEvent, SessionCapabilitySet};
 use mc_plugin_api::codec::auth::{AuthMode, BedrockAuthResult};
-use mc_plugin_host::host::{HotSwappableAuthProfile, HotSwappableGameplayProfile};
+use mc_plugin_host::runtime::{AuthProfileHandle, GameplayProfileHandle};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeNextState, LoginRequest, PlayEncodingContext,
     ProtocolAdapter, ServerListStatus, StatusRequest, TransportKind, WireCodec,
@@ -277,7 +277,7 @@ impl RuntimeServer {
         let username = challenge.username.clone();
         let login_username = challenge.username;
         let auth_generation = Arc::clone(&challenge.auth_generation);
-        let captured_generation_id = auth_generation.generation_id;
+        let captured_generation_id = auth_generation.generation_id();
         let auth_profile = Arc::clone(&self.auth_profile);
         let authenticated = match tokio::task::spawn_blocking(move || {
             let current_generation_id = auth_profile
@@ -347,12 +347,10 @@ impl RuntimeServer {
     pub(super) fn resolve_gameplay_for_adapter(
         &self,
         adapter_id: &str,
-    ) -> Result<Arc<HotSwappableGameplayProfile>, RuntimeError> {
+    ) -> Result<Arc<dyn GameplayProfileHandle>, RuntimeError> {
         let profile_id = self.gameplay_profile_for_adapter(adapter_id);
-        self.plugin_host
-            .as_ref()
-            .and_then(|plugin_host| plugin_host.resolve_gameplay_profile(profile_id))
-            .or_else(|| self.loaded_plugins.resolve_gameplay_profile(profile_id))
+        self.loaded_plugins
+            .resolve_gameplay_profile(profile_id)
             .ok_or_else(|| {
                 RuntimeError::Config(format!(
                     "gameplay profile `{profile_id}` for adapter `{adapter_id}` is not active"
@@ -360,7 +358,7 @@ impl RuntimeServer {
             })
     }
 
-    fn resolve_bedrock_auth_profile(&self) -> Result<Arc<HotSwappableAuthProfile>, RuntimeError> {
+    fn resolve_bedrock_auth_profile(&self) -> Result<Arc<dyn AuthProfileHandle>, RuntimeError> {
         self.bedrock_auth_profile
             .clone()
             .ok_or_else(|| RuntimeError::Config("bedrock auth profile is not active".to_string()))

@@ -1,13 +1,13 @@
-use super::{
-    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
-    PluginAbiRange, PluginCatalog, PluginFailureAction, PluginFailureMatrix, PluginHost,
-    current_artifact_key, with_current_gameplay_query, with_gameplay_query,
-};
+use super::{current_artifact_key, with_current_gameplay_query, with_gameplay_query};
 use crate::PluginHostError as RuntimeError;
 use crate::config::ServerConfig;
 use crate::host::plugin_host_from_config;
-use crate::registry::LoadedPluginSet;
 use crate::runtime::{ProtocolReloadSession, RuntimeReloadContext};
+use crate::test_support::{
+    self, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
+    InProcessStoragePlugin, PluginAbiRange, PluginCatalog, PluginFailureAction,
+    PluginFailureMatrix,
+};
 use mc_core::{
     BlockPos, BlockState, ConnectionId, CoreConfig, DimensionId, EntityId, GameplayQuery, PlayerId,
     ServerCore, WorldMeta,
@@ -29,7 +29,6 @@ use mc_plugin_storage_je_anvil_1_7_10::in_process_storage_entrypoints as storage
 use mc_proto_common::{ConnectionPhase, Edition, PacketWriter, TransportKind, WireFormatKind};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
 use uuid::Uuid;
@@ -584,14 +583,6 @@ impl GameplayQuery for StubGameplayQuery {
     }
 }
 
-fn load_protocol_plugin_set(host: &Arc<PluginHost>) -> Result<LoadedPluginSet, RuntimeError> {
-    let protocols = host.load_protocol_registry()?;
-    let mut loaded_plugins = LoadedPluginSet::new();
-    loaded_plugins.replace_protocols(protocols);
-    loaded_plugins.attach_plugin_host(Arc::clone(host));
-    Ok(loaded_plugins)
-}
-
 #[test]
 fn in_process_protocol_plugin_swaps_generation() {
     let entrypoints = in_process_protocol_entrypoints();
@@ -602,15 +593,16 @@ fn in_process_protocol_plugin_swaps_generation() {
         api: entrypoints.api,
     });
 
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
             ..PluginFailureMatrix::default()
         },
-    ));
-    let registries = load_protocol_plugin_set(&host).expect("in-process plugin should load");
+    );
+    let registries =
+        test_support::load_protocol_plugin_set(&host).expect("in-process plugin should load");
 
     let adapter = registries
         .protocols()
@@ -620,13 +612,15 @@ fn in_process_protocol_plugin_swaps_generation() {
         .plugin_generation_id()
         .expect("plugin-backed adapter should report generation");
 
-    let next_generation = host
-        .replace_in_process_protocol_plugin(InProcessProtocolPlugin {
+    let next_generation = test_support::replace_in_process_protocol_plugin(
+        &host,
+        InProcessProtocolPlugin {
             plugin_id: "je-1_7_10".to_string(),
             manifest: entrypoints.manifest,
             api: entrypoints.api,
-        })
-        .expect("replacing in-process plugin should succeed");
+        },
+    )
+    .expect("replacing in-process plugin should succeed");
 
     let adapter = registries
         .protocols()
@@ -676,15 +670,16 @@ fn all_protocol_plugins_register_and_resolve() {
         });
     }
 
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
             ..PluginFailureMatrix::default()
         },
-    ));
-    let registries = load_protocol_plugin_set(&host).expect("protocol plugins should load");
+    );
+    let registries =
+        test_support::load_protocol_plugin_set(&host).expect("protocol plugins should load");
 
     for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
         assert!(
@@ -725,15 +720,16 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
         });
     }
 
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
             ..PluginFailureMatrix::default()
         },
-    ));
-    let registries = load_protocol_plugin_set(&host).expect("protocol plugins should load");
+    );
+    let registries =
+        test_support::load_protocol_plugin_set(&host).expect("protocol plugins should load");
 
     let je_adapter = registries
         .protocols()
@@ -778,15 +774,16 @@ fn protocol_plugins_can_override_host_wire_codec_framing() {
         api: entrypoints.api,
     });
 
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
             ..PluginFailureMatrix::default()
         },
-    ));
-    let registries = load_protocol_plugin_set(&host).expect("custom wire codec plugin should load");
+    );
+    let registries = test_support::load_protocol_plugin_set(&host)
+        .expect("custom wire codec plugin should load");
 
     let adapter = registries
         .protocols()
@@ -825,15 +822,15 @@ fn abi_mismatch_is_rejected_before_registration() {
         manifest: manifest_with_abi("je-1_7_10", PluginAbiVersion { major: 9, minor: 0 }),
         api: entrypoints.api,
     });
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
             ..PluginFailureMatrix::default()
         },
-    ));
-    let error = match load_protocol_plugin_set(&host) {
+    );
+    let error = match test_support::load_protocol_plugin_set(&host) {
         Ok(_) => panic!("ABI mismatch should fail before registration"),
         Err(error) => error,
     };
@@ -852,15 +849,15 @@ fn protocol_plugins_require_reload_manifest_capability() {
         manifest: manifest_without_reload_capability("je-1_7_10"),
         api: entrypoints.api,
     });
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix {
             protocol: PluginFailureAction::FailFast,
             ..PluginFailureMatrix::default()
         },
-    ));
-    let error = match load_protocol_plugin_set(&host) {
+    );
+    let error = match test_support::load_protocol_plugin_set(&host) {
         Ok(_) => panic!("protocol plugin without runtime.reload.protocol should fail"),
         Err(error) => error,
     };
@@ -885,12 +882,12 @@ fn storage_and_auth_plugins_are_managed_without_quarantine() {
         manifest: auth.manifest,
         api: auth.api,
     });
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
-    ));
-    let _loaded_plugins = load_protocol_plugin_set(&host)
+    );
+    let _loaded_plugins = test_support::load_protocol_plugin_set(&host)
         .expect("storage/auth plugin kinds should register with the host");
 
     let status = host.status();
@@ -928,21 +925,27 @@ fn gameplay_profiles_activate_and_resolve() {
         api: readonly.api,
     });
 
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
-    ));
-    host.activate_gameplay_profiles(&ServerConfig {
-        default_gameplay_profile: "canonical".to_string(),
-        gameplay_profile_map: std::iter::once(("je-1_7_10".to_string(), "readonly".to_string()))
+    );
+    test_support::activate_gameplay_profiles(
+        &host,
+        &ServerConfig {
+            default_gameplay_profile: "canonical".to_string(),
+            gameplay_profile_map: std::iter::once((
+                "je-1_7_10".to_string(),
+                "readonly".to_string(),
+            ))
             .collect(),
-        ..ServerConfig::default()
-    })
+            ..ServerConfig::default()
+        },
+    )
     .expect("known gameplay profiles should activate");
 
-    assert!(host.resolve_gameplay_profile("canonical").is_some());
-    assert!(host.resolve_gameplay_profile("readonly").is_some());
+    assert!(test_support::resolve_gameplay_profile(&host, "canonical").is_some());
+    assert!(test_support::resolve_gameplay_profile(&host, "readonly").is_some());
 }
 
 #[test]
@@ -973,11 +976,11 @@ fn load_plugin_set_activates_runtime_profiles() {
         api: auth.api,
     });
 
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
-    ));
+    );
     let registries = host
         .load_plugin_set(&ServerConfig::default())
         .expect("load_plugin_set should initialize runtime profiles");
@@ -988,19 +991,21 @@ fn load_plugin_set_activates_runtime_profiles() {
             .resolve_adapter("je-1_7_10")
             .is_some()
     );
-    assert!(registries.plugin_host().is_some());
-    assert!(registries.storage().resolve("je-anvil-1_7_10").is_some());
-    assert!(host.resolve_gameplay_profile("canonical").is_some());
-    assert!(host.resolve_storage_profile("je-anvil-1_7_10").is_some());
-    assert!(host.resolve_auth_profile("offline-v1").is_some());
+    assert!(
+        registries
+            .resolve_storage_profile("je-anvil-1_7_10")
+            .is_some()
+    );
+    assert!(test_support::resolve_gameplay_profile(&host, "canonical").is_some());
+    assert!(test_support::resolve_storage_profile(&host, "je-anvil-1_7_10").is_some());
+    assert!(test_support::resolve_auth_profile(&host, "offline-v1").is_some());
 }
 
 #[test]
 fn gameplay_command_snapshot_preserves_entity_id() {
     use mc_core::{
-        BlockPos, BlockState, CapabilitySet, CoreCommand, DimensionId, EntityId,
-        GameplayPolicyResolver, GameplayProfileId, GameplayQuery, PlayerId, SessionCapabilitySet,
-        WorldMeta,
+        BlockPos, BlockState, CapabilitySet, CoreCommand, DimensionId, EntityId, GameplayProfileId,
+        GameplayQuery, PlayerId, SessionCapabilitySet, WorldMeta,
     };
 
     struct NoopQuery;
@@ -1044,19 +1049,21 @@ fn gameplay_command_snapshot_preserves_entity_id() {
         api: probe.api,
     });
 
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
-    ));
-    host.activate_gameplay_profiles(&ServerConfig {
-        default_gameplay_profile: "entity-aware".to_string(),
-        ..ServerConfig::default()
-    })
+    );
+    test_support::activate_gameplay_profiles(
+        &host,
+        &ServerConfig {
+            default_gameplay_profile: "entity-aware".to_string(),
+            ..ServerConfig::default()
+        },
+    )
     .expect("entity-aware gameplay profile should activate");
 
-    let profile = host
-        .resolve_gameplay_profile("entity-aware")
+    let profile = test_support::resolve_gameplay_profile(&host, "entity-aware")
         .expect("entity-aware gameplay profile should resolve");
     let player_id = PlayerId(Uuid::from_u128(7));
     profile
@@ -1102,16 +1109,16 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
             manifest: entrypoints.manifest,
             api: entrypoints.api,
         });
-        let host = Arc::new(PluginHost::new(
+        let host = test_support::build_in_process_plugin_host(
             catalog,
             PluginAbiRange::default(),
             PluginFailureMatrix {
                 protocol: action,
                 ..PluginFailureMatrix::default()
             },
-        ));
-        let registries =
-            load_protocol_plugin_set(&host).expect("failing protocol plugin should still register");
+        );
+        let registries = test_support::load_protocol_plugin_set(&host)
+            .expect("failing protocol plugin should still register");
 
         let error = registries
             .protocols()
@@ -1130,7 +1137,10 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
         );
         assert!(status.protocols[0].artifact_quarantine.is_none());
         assert_eq!(status.pending_fatal_error.is_some(), expect_fatal);
-        assert_eq!(host.take_pending_fatal_error().is_some(), expect_fatal);
+        assert_eq!(
+            test_support::take_pending_fatal_error(&host).is_some(),
+            expect_fatal
+        );
         let adapter = registries
             .protocols()
             .resolve_adapter(failing_protocol_plugin::PLUGIN_ID)
@@ -1142,8 +1152,7 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
 #[test]
 fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
     use mc_core::{
-        CapabilitySet, CoreCommand, EntityId, GameplayPolicyResolver, GameplayProfileId, PlayerId,
-        SessionCapabilitySet,
+        CapabilitySet, CoreCommand, EntityId, GameplayProfileId, PlayerId, SessionCapabilitySet,
     };
 
     let cases = [
@@ -1160,22 +1169,24 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
             manifest: entrypoints.manifest,
             api: entrypoints.api,
         });
-        let host = Arc::new(PluginHost::new(
+        let host = test_support::build_in_process_plugin_host(
             catalog,
             PluginAbiRange::default(),
             PluginFailureMatrix {
                 gameplay: action,
                 ..PluginFailureMatrix::default()
             },
-        ));
-        host.activate_gameplay_profiles(&ServerConfig {
-            default_gameplay_profile: "failing".to_string(),
-            ..ServerConfig::default()
-        })
+        );
+        test_support::activate_gameplay_profiles(
+            &host,
+            &ServerConfig {
+                default_gameplay_profile: "failing".to_string(),
+                ..ServerConfig::default()
+            },
+        )
         .expect("failing gameplay profile should activate");
 
-        let profile = host
-            .resolve_gameplay_profile("failing")
+        let profile = test_support::resolve_gameplay_profile(&host, "failing")
             .expect("failing gameplay profile should resolve");
         let result = profile.handle_command(
             &StubGameplayQuery {
@@ -1215,7 +1226,10 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
             expect_quarantine
         );
         assert_eq!(status.pending_fatal_error.is_some(), expect_fatal);
-        assert_eq!(host.take_pending_fatal_error().is_some(), expect_fatal);
+        assert_eq!(
+            test_support::take_pending_fatal_error(&host).is_some(),
+            expect_fatal
+        );
         if action == PluginFailureAction::Quarantine {
             assert!(
                 profile
@@ -1258,18 +1272,17 @@ fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
             manifest: entrypoints.manifest,
             api: entrypoints.api,
         });
-        let host = Arc::new(PluginHost::new(
+        let host = test_support::build_in_process_plugin_host(
             catalog,
             PluginAbiRange::default(),
             PluginFailureMatrix {
                 auth: action,
                 ..PluginFailureMatrix::default()
             },
-        ));
-        host.activate_auth_profile(failing_auth_plugin::PROFILE_ID)
+        );
+        test_support::activate_auth_profile(&host, failing_auth_plugin::PROFILE_ID)
             .expect("failing auth profile should activate");
-        let profile = host
-            .resolve_auth_profile(failing_auth_plugin::PROFILE_ID)
+        let profile = test_support::resolve_auth_profile(&host, failing_auth_plugin::PROFILE_ID)
             .expect("failing auth profile should resolve");
 
         let error = profile
@@ -1284,7 +1297,10 @@ fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
         assert_eq!(status.auth[0].failure_action, action);
         assert!(status.auth[0].active_quarantine_reason.is_none());
         assert_eq!(status.pending_fatal_error.is_some(), expect_fatal);
-        assert_eq!(host.take_pending_fatal_error().is_some(), expect_fatal);
+        assert_eq!(
+            test_support::take_pending_fatal_error(&host).is_some(),
+            expect_fatal
+        );
     }
 }
 
@@ -1298,17 +1314,19 @@ fn unknown_gameplay_profile_fails_activation() {
         api: canonical.api,
     });
 
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
-    ));
-    let error = host
-        .activate_gameplay_profiles(&ServerConfig {
+    );
+    let error = test_support::activate_gameplay_profiles(
+        &host,
+        &ServerConfig {
             default_gameplay_profile: "readonly".to_string(),
             ..ServerConfig::default()
-        })
-        .expect_err("unknown gameplay profile should fail fast");
+        },
+    )
+    .expect_err("unknown gameplay profile should fail fast");
     assert!(matches!(
         error,
         RuntimeError::Config(message) if message.contains("unknown gameplay profile")
@@ -1331,37 +1349,35 @@ fn storage_and_auth_profiles_activate_and_resolve() {
         api: auth.api,
     });
 
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
-    ));
-    host.activate_storage_profile("je-anvil-1_7_10")
+    );
+    test_support::activate_storage_profile(&host, "je-anvil-1_7_10")
         .expect("known storage profile should activate");
-    host.activate_auth_profile("offline-v1")
+    test_support::activate_auth_profile(&host, "offline-v1")
         .expect("known auth profile should activate");
 
-    assert!(host.resolve_storage_profile("je-anvil-1_7_10").is_some());
-    assert!(host.resolve_auth_profile("offline-v1").is_some());
+    assert!(test_support::resolve_storage_profile(&host, "je-anvil-1_7_10").is_some());
+    assert!(test_support::resolve_auth_profile(&host, "offline-v1").is_some());
 }
 
 #[test]
 fn unknown_storage_and_auth_profiles_fail_activation() {
-    let host = Arc::new(PluginHost::new(
+    let host = test_support::build_in_process_plugin_host(
         PluginCatalog::default(),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
-    ));
-    let storage = host
-        .activate_storage_profile("missing")
+    );
+    let storage = test_support::activate_storage_profile(&host, "missing")
         .expect_err("unknown storage profile should fail fast");
     assert!(matches!(
         storage,
         RuntimeError::Config(message) if message.contains("unknown storage profile")
     ));
 
-    let auth = host
-        .activate_auth_profile("missing")
+    let auth = test_support::activate_auth_profile(&host, "missing")
         .expect_err("unknown auth profile should fail fast");
     assert!(matches!(
         auth,
@@ -1384,7 +1400,7 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let registries = load_protocol_plugin_set(&host)?;
+    let registries = test_support::load_protocol_plugin_set(&host)?;
 
     for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
         let adapter = registries
@@ -1416,7 +1432,7 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let registries = load_protocol_plugin_set(&host)?;
+    let registries = test_support::load_protocol_plugin_set(&host)?;
 
     let adapter = registries
         .protocols()
@@ -1439,7 +1455,7 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
         "reload-v2",
     )?;
 
-    let reloaded = host.reload_modified()?;
+    let reloaded = test_support::reload_modified(&host)?;
     assert_eq!(reloaded, vec!["je-1_7_10".to_string()]);
 
     let adapter = registries
@@ -1474,7 +1490,7 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let registries = load_protocol_plugin_set(&host)?;
+    let registries = test_support::load_protocol_plugin_set(&host)?;
 
     let adapter = registries
         .protocols()
@@ -1509,7 +1525,7 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
         "protocol-reload-v2",
     )?;
 
-    let reloaded = host.reload_modified_with_context(&context)?;
+    let reloaded = test_support::reload_modified_with_context(&host, &context)?;
     assert!(
         reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
         "protocol reload should report the migrated adapter"
@@ -1551,7 +1567,7 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let registries = load_protocol_plugin_set(&host)?;
+    let registries = test_support::load_protocol_plugin_set(&host)?;
 
     let adapter = registries
         .protocols()
@@ -1581,7 +1597,7 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
         "protocol-reload-fail",
     )?;
 
-    let reloaded = host.reload_modified_with_context(&context)?;
+    let reloaded = test_support::reload_modified_with_context(&host, &context)?;
     assert!(
         !reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
         "failed protocol migration should keep the current generation"
@@ -1620,7 +1636,7 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
         ..ServerConfig::default()
     };
     let host = plugin_host_from_config(&config)?.expect("packaged plugins should be discovered");
-    let registries = load_protocol_plugin_set(&host)?;
+    let registries = test_support::load_protocol_plugin_set(&host)?;
 
     let adapter = registries
         .protocols()
@@ -1639,7 +1655,7 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
         "protocol-reload-incompatible",
     )?;
 
-    let reloaded = host.reload_modified()?;
+    let reloaded = test_support::reload_modified(&host)?;
     assert!(
         !reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
         "incompatible protocol candidate should be rejected"
@@ -1679,7 +1695,7 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
         &target_dir,
         "protocol-reload-v2",
     )?;
-    let reloaded = host.reload_modified()?;
+    let reloaded = test_support::reload_modified(&host)?;
     assert!(
         reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
         "successful replacement should clear the quarantined artifact"

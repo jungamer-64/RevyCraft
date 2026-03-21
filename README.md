@@ -2,6 +2,8 @@
 
 Minecraft JE `1.7.10` / `1.8.x` / `1.12.2` と Bedrock `be-26_3` を同一プロセス・同一ポート番号で扱う Rust 製 server-only workspace です。runtime は protocol / gameplay / storage / auth plugin を packaged artifact から読み込み、`mc-plugin-host` がそれを `LoadedPluginSet` にまとめ、`ServerBuilder` が listener / topology / session supervision を起動します。
 
+`LoadedPluginSet` は pure snapshot で、reload capability は別です。reload を使うときだけ `ServerBuilder::with_reload_host(...)` から `ReloadableRunningServer` を作ります。
+
 ## Workspace
 
 - `apps/server`: `server-bootstrap` binary
@@ -51,7 +53,7 @@ cargo run -p xtask -- package-all-plugins
 2. `mc-plugin-host` 構築
 3. plugin activation
 4. `LoadedPluginSet` snapshot 取得
-5. `ServerBuilder` で listener / topology / session 起動
+5. `ServerBuilder` または `ServerBuilder::with_reload_host(...)` で listener / topology / session 起動
 
 ## Configuration Notes
 
@@ -60,8 +62,8 @@ cargo run -p xtask -- package-all-plugins
 - `enabled-adapters=je-1_7_10,je-1_8_x,je-1_12_2` で JE multi-version routing を有効化できます。
 - `enabled-bedrock-adapters=be-26_3` で Bedrock baseline listener を有効化できます。
 - `default-gameplay-profile` と `gameplay-profile-map` で adapter ごとの gameplay profile を固定できます。
-- `plugin-reload-watch=true` または `RunningServer::reload_plugins().await` で plugin generation reload を有効化できます。
-- `topology-reload-watch=true` または `RunningServer::reload_topology().await` で live topology reload を有効化できます。
+- `plugin-reload-watch=true` と `topology-reload-watch=true` は reload host を渡した `ReloadableRunningServer` でだけ使えます。
+- 手動 reload も `ReloadableRunningServer::reload_plugins().await` / `ReloadableRunningServer::reload_topology().await` に限定されます。
 - `RunningServer::status().await` は active/draining topology、listener、session summary、plugin health を返します。
 
 sample config は offline-first です。JE online auth や Bedrock XBL を使うときは `package-all-plugins` 実行後に allowlist と profile を明示してください。
@@ -102,7 +104,7 @@ cargo test --workspace
 
 `server-runtime` integration tests use the packaged-plugin harness and now package the full plugin set through `xtask package-all-plugins`.
 
-plugin crate の in-process helper は production public surface ではなく、`in-process-testing` feature を有効にした test/dev build でだけ使う前提です。
+plugin crate の in-process helper は production public surface ではなく、`in-process-testing` feature を有効にした test/dev build でだけ使う前提です。`mc-plugin-host` 側の test-only helper も `mc_plugin_host::test_support` に集約しています。
 
 ## Notes
 

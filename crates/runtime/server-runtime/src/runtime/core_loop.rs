@@ -9,8 +9,9 @@ use mc_core::{ConnectionId, CoreCommand, CoreEvent, EventTarget, PlayerSummary, 
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
-use mc_plugin_host::host::{PluginFailureAction, PluginHost};
+use mc_plugin_host::host::PluginFailureAction;
 use mc_plugin_host::registry::{ListenerBinding, ProtocolRegistry};
+use mc_plugin_host::runtime::RuntimePluginHost;
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, TransportKind, WireFormatKind,
 };
@@ -102,8 +103,8 @@ fn can_reuse_listener(
 
 impl RuntimeServer {
     pub(crate) fn take_pending_plugin_fatal_error(&self) -> Option<RuntimeError> {
-        self.plugin_host.as_ref().and_then(|plugin_host| {
-            plugin_host
+        self.reload_host.as_ref().and_then(|reload_host| {
+            reload_host
                 .take_pending_fatal_error()
                 .map(RuntimeError::from)
         })
@@ -243,15 +244,8 @@ impl RuntimeServer {
             let mut events = state.core.tick(now);
             for (player_id, session_capabilities, gameplay_profile) in &gameplay_sessions {
                 let Some(gameplay) = self
-                    .plugin_host
-                    .as_ref()
-                    .and_then(|plugin_host| {
-                        plugin_host.resolve_gameplay_profile(gameplay_profile.as_str())
-                    })
-                    .or_else(|| {
-                        self.loaded_plugins
-                            .resolve_gameplay_profile(gameplay_profile.as_str())
-                    })
+                    .loaded_plugins
+                    .resolve_gameplay_profile(gameplay_profile.as_str())
                 else {
                     continue;
                 };
@@ -291,10 +285,10 @@ impl RuntimeServer {
                 Ok(())
             }
             Err(mc_proto_common::StorageError::Plugin(message)) => {
-                let action = self.plugin_host.as_ref().map_or(
+                let action = self.reload_host.as_ref().map_or(
                     PluginFailureAction::FailFast,
-                    |plugin_host| {
-                        plugin_host.handle_runtime_failure(
+                    |reload_host| {
+                        reload_host.handle_runtime_failure(
                             PluginKind::Storage,
                             self.storage_profile.plugin_id(),
                             &message,
@@ -457,10 +451,10 @@ impl RuntimeServer {
 
     pub(super) async fn reload_plugins(
         &self,
-        plugin_host: &PluginHost,
+        reload_host: &dyn RuntimePluginHost,
     ) -> Result<Vec<String>, RuntimeError> {
         let context = self.reload_context().await;
-        Ok(plugin_host.reload_modified_with_context(&context)?)
+        Ok(reload_host.reload_modified_with_context(&context)?)
     }
 
     fn next_topology_generation_id(&self) -> TopologyGenerationId {
@@ -512,48 +506,49 @@ impl RuntimeServer {
 
     pub(super) async fn maybe_reload_topology_watch(
         &self,
-        plugin_host: &PluginHost,
+        reload_host: &dyn RuntimePluginHost,
     ) -> Result<TopologyReloadResult, RuntimeError> {
         let loaded = self.config_source.load()?;
         let active = self.active_topology();
         if !loaded.topology_reload_watch && !active.config.topology_reload_watch {
             return Ok(self.noop_topology_reload_result());
         }
-        self.reload_topology_with_config(plugin_host, loaded).await
+        self.reload_topology_with_config(reload_host, loaded).await
     }
 
     pub(super) async fn reload_topology(
         &self,
-        plugin_host: &PluginHost,
+        reload_host: &dyn RuntimePluginHost,
     ) -> Result<TopologyReloadResult, RuntimeError> {
         let loaded = self.config_source.load()?;
-        self.reload_topology_with_config(plugin_host, loaded).await
+        self.reload_topology_with_config(reload_host, loaded).await
     }
 
     async fn reload_topology_with_config(
         &self,
-        plugin_host: &PluginHost,
+        reload_host: &dyn RuntimePluginHost,
         loaded_config: crate::config::ServerConfig,
     ) -> Result<TopologyReloadResult, RuntimeError> {
         let active = self.active_topology();
         let mut candidate_config = active.config.clone();
         let applied_config_change = candidate_config.apply_topology_from(&loaded_config);
 
-        let prepared = plugin_host.prepare_protocol_topology_for_reload()?;
+        let prepared = reload_host.prepare_protocol_topology_for_reload()?;
         let current_signature = protocol_topology_signature(&active.protocol_registry);
-        let candidate_active_protocols = activate_protocols(&candidate_config, &prepared.registry)?;
+        let candidate_active_protocols =
+            activate_protocols(&candidate_config, prepared.registry())?;
         let candidate_signature =
             protocol_topology_signature(&candidate_active_protocols.protocols);
-        let current_managed_ids = plugin_host.managed_protocol_ids();
+        let current_managed_ids = reload_host.managed_protocol_ids();
         let reconfigured_adapter_ids = reconfigured_adapter_ids(
             &current_signature,
             &candidate_signature,
             &current_managed_ids,
-            &prepared.adapter_ids,
+            prepared.managed_protocol_ids(),
         );
         if !applied_config_change && current_signature == candidate_signature {
-            if current_managed_ids != prepared.adapter_ids {
-                plugin_host.activate_protocol_topology(prepared);
+            if current_managed_ids != prepared.managed_protocol_ids() {
+                reload_host.activate_protocol_topology(prepared);
                 return Ok(TopologyReloadResult {
                     activated_generation_id: active.generation_id,
                     retired_generation_ids: Vec::new(),
@@ -674,7 +669,7 @@ impl RuntimeServer {
             workers_to_shutdown
         };
 
-        plugin_host.activate_protocol_topology(prepared);
+        reload_host.activate_protocol_topology(prepared);
         {
             let mut state = self.state.lock().await;
             state.core.set_max_players(candidate_config.max_players);

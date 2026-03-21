@@ -20,6 +20,7 @@ async fn main() -> Result<(), RuntimeError> {
         ServerConfigSource::Properties(Path::new("runtime/server.properties").to_path_buf()),
         loaded_plugins,
     )
+    .with_reload_host(plugin_host)
     .build()
     .await?;
     for binding in server.listener_bindings() {

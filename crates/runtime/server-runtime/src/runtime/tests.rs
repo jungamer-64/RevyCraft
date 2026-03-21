@@ -78,7 +78,9 @@ fn encode_handshake(protocol_version: i32, next_state: i32) -> Result<Vec<u8>, R
     Ok(writer.into_inner())
 }
 
-use super::{ServerBuilder, TopologyStatusState, format_runtime_status_summary};
+use super::{
+    ReloadableRunningServer, ServerBuilder, TopologyStatusState, format_runtime_status_summary,
+};
 use crate::RuntimeError;
 use crate::config::{BEDROCK_OFFLINE_AUTH_PROFILE_ID, LevelType, ServerConfig, ServerConfigSource};
 use crate::transport::{MinecraftStreamCipher, build_listener_plans, default_wire_codec};
@@ -92,12 +94,13 @@ use mc_plugin_auth_online_stub::{
 };
 use mc_plugin_gameplay_canonical::in_process_gameplay_entrypoints as canonical_gameplay_entrypoints;
 use mc_plugin_gameplay_readonly::in_process_gameplay_entrypoints as readonly_gameplay_entrypoints;
-use mc_plugin_host::host::{
+use mc_plugin_host::host::plugin_host_from_config;
+use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
+use mc_plugin_host::test_support::{
     InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
     PluginAbiRange, PluginCatalog, PluginFailureAction, PluginFailureMatrix, PluginHost,
-    plugin_host_from_config,
+    build_in_process_plugin_host,
 };
-use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_proto_be_26_3::in_process_protocol_entrypoints as be_26_3_entrypoints;
 use mc_plugin_proto_be_placeholder::in_process_protocol_entrypoints as be_placeholder_entrypoints;
 use mc_plugin_proto_je_1_7_10::in_process_protocol_entrypoints as je_1_7_10_entrypoints;
@@ -149,15 +152,49 @@ async fn build_test_server_from_source(
     source: ServerConfigSource,
     loaded_plugins: LoadedPluginTestEnvironment,
 ) -> Result<super::RunningServer, RuntimeError> {
-    let builder = match loaded_plugins.plugin_host {
+    match loaded_plugins.plugin_host {
         Some(plugin_host) => {
             let config = source.load()?;
             let loaded_plugins = plugin_host.load_plugin_set(&config.plugin_host_config())?;
             ServerBuilder::new(source, loaded_plugins)
+                .with_reload_host(plugin_host)
+                .build()
+                .await
+                .map(ReloadableRunningServer::into_running_server)
         }
-        None => ServerBuilder::new(source, loaded_plugins.loaded_plugins),
-    };
-    builder.build().await
+        None => {
+            ServerBuilder::new(source, loaded_plugins.loaded_plugins)
+                .build()
+                .await
+        }
+    }
+}
+
+async fn build_reloadable_test_server(
+    config: ServerConfig,
+    loaded_plugins: LoadedPluginTestEnvironment,
+) -> Result<ReloadableRunningServer, RuntimeError> {
+    build_reloadable_test_server_from_source(ServerConfigSource::Inline(config), loaded_plugins)
+        .await
+}
+
+async fn build_reloadable_test_server_from_source(
+    source: ServerConfigSource,
+    loaded_plugins: LoadedPluginTestEnvironment,
+) -> Result<ReloadableRunningServer, RuntimeError> {
+    let LoadedPluginTestEnvironment {
+        loaded_plugins: _loaded_plugins,
+        plugin_host,
+    } = loaded_plugins;
+    let plugin_host = plugin_host.ok_or_else(|| {
+        RuntimeError::Config("reloadable test server requires a reload host".to_string())
+    })?;
+    let config = source.load()?;
+    let loaded_plugins = plugin_host.load_plugin_set(&config.plugin_host_config())?;
+    ServerBuilder::new(source, loaded_plugins)
+        .with_reload_host(plugin_host)
+        .build()
+        .await
 }
 
 fn active_protocol_registry(server: &super::RunningServer) -> ProtocolRegistry {
@@ -354,11 +391,11 @@ fn in_process_online_auth_registries(
     }
     register_in_process_supporting_plugins(&mut catalog);
 
-    let plugin_host = Arc::new(PluginHost::new(
+    let plugin_host = build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
-    ));
+    );
     let config = ServerConfig {
         auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
         ..ServerConfig::default()
@@ -394,14 +431,14 @@ fn in_process_failing_storage_registries(
         manifest: offline_auth_entrypoints().manifest,
         api: offline_auth_entrypoints().api,
     });
-    let plugin_host = Arc::new(PluginHost::new(
+    let plugin_host = build_in_process_plugin_host(
         catalog,
         PluginAbiRange::default(),
         PluginFailureMatrix {
             storage: failure_action,
             ..PluginFailureMatrix::default()
         },
-    ));
+    );
     let config = ServerConfig {
         storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
         ..ServerConfig::default()
@@ -1200,34 +1237,36 @@ async fn storage_skip_keeps_dirty_state_after_runtime_save_failure() -> Result<(
 }
 
 #[tokio::test]
-async fn server_builder_auto_adopts_embedded_plugin_host() -> Result<(), RuntimeError> {
+async fn plain_server_builder_rejects_reload_watch_without_reload_host() -> Result<(), RuntimeError>
+{
     let temp_dir = tempdir()?;
     let config = ServerConfig {
         server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
         server_port: 0,
-        storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
-        plugin_failure_policy_storage: PluginFailureAction::Skip,
+        plugin_reload_watch: true,
         world_dir: temp_dir.path().join("world"),
         ..ServerConfig::default()
     };
     let LoadedPluginTestEnvironment { loaded_plugins, .. } =
         in_process_failing_storage_registries(PluginFailureAction::Skip)?;
-    let server = ServerBuilder::new(ServerConfigSource::Inline(config), loaded_plugins)
+    let error = match ServerBuilder::new(ServerConfigSource::Inline(config), loaded_plugins)
         .build()
-        .await?;
-
+        .await
     {
-        let mut state = server.runtime.state.lock().await;
-        state.dirty = true;
-    }
-    server.runtime.maybe_save().await?;
-    assert!(server.runtime.state.lock().await.dirty);
-
-    server.shutdown().await
+        Ok(_) => panic!("plain server builder should reject reload watch settings"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        RuntimeError::Config(message)
+            if message.contains("plugin-reload-watch requires ServerBuilder::with_reload_host")
+    ));
+    Ok(())
 }
 
 #[tokio::test]
-async fn explicit_plugin_host_overrides_embedded_plugin_host() -> Result<(), RuntimeError> {
+async fn reloadable_server_builder_applies_reload_host_failure_policy() -> Result<(), RuntimeError>
+{
     let temp_dir = tempdir()?;
     let config = ServerConfig {
         server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
@@ -1240,14 +1279,14 @@ async fn explicit_plugin_host_overrides_embedded_plugin_host() -> Result<(), Run
     let LoadedPluginTestEnvironment { loaded_plugins, .. } =
         in_process_failing_storage_registries(PluginFailureAction::Skip)?;
     let LoadedPluginTestEnvironment {
-        plugin_host: Some(plugin_host),
+        plugin_host: Some(reload_host),
         ..
     } = in_process_failing_storage_registries(PluginFailureAction::FailFast)?
     else {
         panic!("failing storage registries should include a plugin host");
     };
     let server = ServerBuilder::new(ServerConfigSource::Inline(config), loaded_plugins)
-        .with_plugin_host(plugin_host)
+        .with_reload_host(reload_host)
         .build()
         .await?;
 
@@ -1259,7 +1298,7 @@ async fn explicit_plugin_host_overrides_embedded_plugin_host() -> Result<(), Run
         .runtime
         .maybe_save()
         .await
-        .expect_err("explicit plugin host should override embedded host failure policy");
+        .expect_err("reload host should apply fail-fast failure policy");
     assert!(
         matches!(error, RuntimeError::PluginFatal(message) if message.contains("failed during runtime"))
     );

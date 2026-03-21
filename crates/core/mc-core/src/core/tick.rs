@@ -37,7 +37,7 @@ impl ServerCore {
     /// # Errors
     ///
     /// Returns an error when the gameplay policy resolver rejects the tick.
-    pub fn tick_player_with_policy<R: GameplayPolicyResolver>(
+    pub fn tick_player_with_policy<R: GameplayPolicyResolver + ?Sized>(
         &mut self,
         player_id: PlayerId,
         now_ms: u64,

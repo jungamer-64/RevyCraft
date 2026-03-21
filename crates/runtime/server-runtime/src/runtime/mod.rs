@@ -12,11 +12,11 @@ use mc_core::{
     ConnectionId, CoreEvent, EntityId, GameplayProfileId, PlayerId, ServerCore,
     SessionCapabilitySet,
 };
-use mc_plugin_host::host::{
-    AuthGeneration, HotSwappableAuthProfile, HotSwappableGameplayProfile,
-    HotSwappableStorageProfile, PluginHost,
-};
 use mc_plugin_host::registry::{ListenerBinding, LoadedPluginSet, ProtocolRegistry};
+use mc_plugin_host::runtime::{
+    AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle, ProtocolReloadSession,
+    RuntimePluginHost, RuntimeReloadContext, StorageProfileHandle,
+};
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -25,9 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-pub(crate) use mc_plugin_host::runtime::{ProtocolReloadSession, RuntimeReloadContext};
-
-pub use self::bootstrap::ServerBuilder;
+pub use self::bootstrap::{ReloadableServerBuilder, ServerBuilder};
 pub use self::status::{
     OptionalNamedCountSnapshot, PhaseCountSnapshot, RuntimeStatusSnapshot, SessionStatusSnapshot,
     SessionSummarySnapshot, TopologyGenerationCountSnapshot, TopologyStatusSnapshot,
@@ -38,7 +36,6 @@ pub(crate) const LOGIN_SERVER_ID: &str = "";
 pub(crate) const LOGIN_VERIFY_TOKEN_LEN: usize = 4;
 
 pub struct RunningServer {
-    plugin_host: Option<Arc<PluginHost>>,
     runtime: Arc<RuntimeServer>,
     shutdown_tx: Option<oneshot::Sender<()>>,
     join_handle: JoinHandle<Result<(), RuntimeError>>,
@@ -52,13 +49,35 @@ impl RunningServer {
 
     /// # Errors
     ///
+    /// Returns [`RuntimeError`] when the server task fails while shutting down.
+    pub async fn shutdown(mut self) -> Result<(), RuntimeError> {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        self.join_handle.await?
+    }
+}
+
+pub struct ReloadableRunningServer {
+    running: RunningServer,
+    reload_host: Arc<dyn RuntimePluginHost>,
+}
+
+impl ReloadableRunningServer {
+    #[must_use]
+    pub fn into_running_server(self) -> RunningServer {
+        self.running
+    }
+
+    /// # Errors
+    ///
     /// Returns [`RuntimeError`] when a loaded protocol plugin cannot be
     /// reloaded successfully.
     pub async fn reload_plugins(&self) -> Result<Vec<String>, RuntimeError> {
-        match &self.plugin_host {
-            Some(plugin_host) => self.runtime.reload_plugins(plugin_host).await,
-            None => Ok(Vec::new()),
-        }
+        self.running
+            .runtime
+            .reload_plugins(self.reload_host.as_ref())
+            .await
     }
 
     /// # Errors
@@ -66,20 +85,25 @@ impl RunningServer {
     /// Returns [`RuntimeError`] when the runtime cannot materialize a candidate
     /// topology or bind the required listeners.
     pub async fn reload_topology(&self) -> Result<TopologyReloadResult, RuntimeError> {
-        match &self.plugin_host {
-            Some(plugin_host) => self.runtime.reload_topology(plugin_host).await,
-            None => Ok(self.runtime.noop_topology_reload_result()),
-        }
+        self.running
+            .runtime
+            .reload_topology(self.reload_host.as_ref())
+            .await
     }
 
     /// # Errors
     ///
     /// Returns [`RuntimeError`] when the server task fails while shutting down.
-    pub async fn shutdown(mut self) -> Result<(), RuntimeError> {
-        if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            let _ = shutdown_tx.send(());
-        }
-        self.join_handle.await?
+    pub async fn shutdown(self) -> Result<(), RuntimeError> {
+        self.running.shutdown().await
+    }
+}
+
+impl std::ops::Deref for ReloadableRunningServer {
+    type Target = RunningServer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.running
     }
 }
 
@@ -107,7 +131,7 @@ pub(crate) struct SessionState {
     pub(crate) transport: TransportKind,
     pub(crate) phase: ConnectionPhase,
     pub(crate) adapter: Option<Arc<dyn ProtocolAdapter>>,
-    pub(crate) gameplay: Option<Arc<HotSwappableGameplayProfile>>,
+    pub(crate) gameplay: Option<Arc<dyn GameplayProfileHandle>>,
     pub(crate) login_challenge: Option<LoginChallengeState>,
     pub(crate) player_id: Option<PlayerId>,
     pub(crate) entity_id: Option<EntityId>,
@@ -177,12 +201,12 @@ pub(crate) struct RuntimeServer {
     pub(crate) config: ServerConfig,
     pub(crate) config_source: ServerConfigSource,
     pub(crate) loaded_plugins: LoadedPluginSet,
-    pub(crate) plugin_host: Option<Arc<PluginHost>>,
+    pub(crate) reload_host: Option<Arc<dyn RuntimePluginHost>>,
     pub(crate) topology: RwLock<RuntimeTopologyState>,
-    pub(crate) auth_profile: Arc<HotSwappableAuthProfile>,
-    pub(crate) bedrock_auth_profile: Option<Arc<HotSwappableAuthProfile>>,
+    pub(crate) auth_profile: Arc<dyn AuthProfileHandle>,
+    pub(crate) bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,
     pub(crate) online_auth_keys: Option<Arc<OnlineAuthKeys>>,
-    pub(crate) storage_profile: Arc<HotSwappableStorageProfile>,
+    pub(crate) storage_profile: Arc<dyn StorageProfileHandle>,
     pub(crate) state: Mutex<RuntimeState>,
     pub(crate) sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
     pub(crate) next_connection_id: Mutex<u64>,
@@ -198,7 +222,7 @@ pub(crate) struct OnlineAuthKeys {
 pub(crate) struct LoginChallengeState {
     pub(crate) username: String,
     pub(crate) verify_token: [u8; LOGIN_VERIFY_TOKEN_LEN],
-    pub(crate) auth_generation: Arc<AuthGeneration>,
+    pub(crate) auth_generation: Arc<dyn AuthGenerationHandle>,
     #[allow(dead_code)]
     pub(crate) challenge_started_at: u64,
 }

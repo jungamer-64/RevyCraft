@@ -135,9 +135,9 @@ impl RuntimeServer {
             session_summary,
             dirty,
             plugin_host: self
-                .plugin_host
+                .reload_host
                 .as_ref()
-                .map(|plugin_host| plugin_host.status()),
+                .map(|reload_host| reload_host.status()),
         }
     }
 

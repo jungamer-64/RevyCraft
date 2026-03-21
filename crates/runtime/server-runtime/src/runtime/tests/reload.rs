@@ -1,5 +1,5 @@
 use super::*;
-use crate::runtime::RunningServer;
+use crate::runtime::ReloadableRunningServer;
 use mc_core::PluginGenerationId;
 
 type EncryptedLoginChallenge = ([u8; 16], Vec<u8>, Vec<u8>);
@@ -26,7 +26,7 @@ async fn spawn_protocol_reload_server(
     scenario: &str,
 ) -> Result<
     (
-        RunningServer,
+        ReloadableRunningServer,
         std::path::PathBuf,
         std::path::PathBuf,
         PluginGenerationId,
@@ -48,7 +48,7 @@ async fn spawn_protocol_reload_server(
         &target_dir,
         "protocol-reload-v1",
     )?;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -78,7 +78,7 @@ async fn spawn_online_auth_reload_server(
     temp_dir: &tempfile::TempDir,
 ) -> Result<
     (
-        RunningServer,
+        ReloadableRunningServer,
         std::path::PathBuf,
         std::path::PathBuf,
         PluginGenerationId,
@@ -100,7 +100,7 @@ async fn spawn_online_auth_reload_server(
         &target_dir,
         "online-auth-v1",
     )?;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -117,11 +117,9 @@ async fn spawn_online_auth_reload_server(
         )?,
     )
     .await?;
-    let plugin_host = server
-        .plugin_host
-        .as_ref()
-        .expect("runtime should keep plugin host");
-    let auth_before = plugin_host
+    let auth_before = server
+        .runtime
+        .loaded_plugins
         .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
         .expect("online auth profile should resolve");
     let before_generation = auth_before
@@ -136,7 +134,7 @@ async fn spawn_online_auth_reload_server(
 }
 
 async fn begin_online_auth_handshake(
-    server: &RunningServer,
+    server: &ReloadableRunningServer,
 ) -> Result<(tokio::net::TcpStream, BytesMut, RsaPublicKey, Vec<u8>), RuntimeError> {
     let addr = listener_addr(server);
     let codec = MinecraftWireCodec;
@@ -284,7 +282,7 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         dist_dir.clone(),
         &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
     )?;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -305,14 +303,14 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         registries,
     )
     .await?;
-    let plugin_host = server
-        .plugin_host
-        .as_ref()
-        .expect("runtime should keep plugin host");
-    let canonical_before = plugin_host
+    let canonical_before = server
+        .runtime
+        .loaded_plugins
         .resolve_gameplay_profile("canonical")
         .expect("canonical gameplay profile should resolve");
-    let readonly_before = plugin_host
+    let readonly_before = server
+        .runtime
+        .loaded_plugins
         .resolve_gameplay_profile("readonly")
         .expect("readonly gameplay profile should resolve");
     let canonical_generation = canonical_before
@@ -352,10 +350,14 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         "gameplay reload should report canonical plugin reload"
     );
 
-    let canonical_after = plugin_host
+    let canonical_after = server
+        .runtime
+        .loaded_plugins
         .resolve_gameplay_profile("canonical")
         .expect("canonical gameplay profile should still resolve");
-    let readonly_after = plugin_host
+    let readonly_after = server
+        .runtime
+        .loaded_plugins
         .resolve_gameplay_profile("readonly")
         .expect("readonly gameplay profile should still resolve");
     assert_ne!(
@@ -400,7 +402,7 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         dist_dir.clone(),
         &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
     )?;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -421,11 +423,9 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         registries,
     )
     .await?;
-    let plugin_host = server
-        .plugin_host
-        .as_ref()
-        .expect("runtime should keep plugin host");
-    let canonical_before = plugin_host
+    let canonical_before = server
+        .runtime
+        .loaded_plugins
         .resolve_gameplay_profile("canonical")
         .expect("canonical gameplay profile should resolve");
     let before_generation = canonical_before
@@ -462,7 +462,9 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         "failed gameplay migration should not swap the canonical generation"
     );
 
-    let canonical_after = plugin_host
+    let canonical_after = server
+        .runtime
+        .loaded_plugins
         .resolve_gameplay_profile("canonical")
         .expect("canonical gameplay profile should still resolve");
     assert_eq!(
@@ -500,7 +502,7 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let registries = plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -512,11 +514,9 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
         registries,
     )
     .await?;
-    let plugin_host = server
-        .plugin_host
-        .as_ref()
-        .expect("runtime should keep plugin host");
-    let storage_before = plugin_host
+    let storage_before = server
+        .runtime
+        .loaded_plugins
         .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
         .expect("storage profile should resolve");
     let before_generation = storage_before
@@ -557,7 +557,9 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
         "storage reload should report generation swap"
     );
 
-    let storage_after = plugin_host
+    let storage_after = server
+        .runtime
+        .loaded_plugins
         .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
         .expect("storage profile should still resolve");
     assert_ne!(
@@ -619,12 +621,11 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
         ..ServerConfig::default()
     };
     let server =
-        build_test_server(config.clone(), plugin_test_registries_from_config(&config)?).await?;
-    let plugin_host = server
-        .plugin_host
-        .as_ref()
-        .expect("runtime should keep plugin host");
-    let storage_before = plugin_host
+        build_reloadable_test_server(config.clone(), plugin_test_registries_from_config(&config)?)
+            .await?;
+    let storage_before = server
+        .runtime
+        .loaded_plugins
         .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
         .expect("storage profile should resolve");
     let before_generation = storage_before
@@ -649,7 +650,9 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
         "failed storage migration should not swap the storage generation"
     );
 
-    let storage_after = plugin_host
+    let storage_after = server
+        .runtime
+        .loaded_plugins
         .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
         .expect("storage profile should still resolve");
     assert_eq!(
@@ -675,7 +678,7 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
         &[JE_1_7_10_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -687,11 +690,9 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
     )
     .await?;
-    let plugin_host = server
-        .plugin_host
-        .as_ref()
-        .expect("runtime should keep plugin host");
-    let auth_before = plugin_host
+    let auth_before = server
+        .runtime
+        .loaded_plugins
         .resolve_auth_profile(OFFLINE_AUTH_PROFILE_ID)
         .expect("auth profile should resolve");
     let before_generation = auth_before
@@ -724,7 +725,9 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
         "auth reload should report generation swap"
     );
 
-    let auth_after = plugin_host
+    let auth_after = server
+        .runtime
+        .loaded_plugins
         .resolve_auth_profile(OFFLINE_AUTH_PROFILE_ID)
         .expect("auth profile should still resolve");
     assert_ne!(auth_after.plugin_generation_id(), Some(before_generation));
@@ -771,7 +774,7 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
         &target_dir,
         "online-stub-v1",
     )?;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -840,10 +843,6 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
     let temp_dir = tempdir()?;
     let (server, dist_dir, target_dir, before_generation) =
         spawn_online_auth_reload_server(&temp_dir).await?;
-    let plugin_host = server
-        .plugin_host
-        .as_ref()
-        .expect("runtime should keep plugin host");
     let codec = MinecraftWireCodec;
     let (mut alpha, mut alpha_buffer, public_key, verify_token) =
         begin_online_auth_handshake(&server).await?;
@@ -865,7 +864,9 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
             .any(|plugin_id| plugin_id == ONLINE_STUB_AUTH_PLUGIN_ID)
     );
 
-    let auth_after = plugin_host
+    let auth_after = server
+        .runtime
+        .loaded_plugins
         .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
         .expect("online auth profile should still resolve");
     assert_ne!(auth_after.plugin_generation_id(), Some(before_generation));
@@ -928,7 +929,7 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
         &target_dir,
         "protocol-reload-v1",
     )?;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         ServerConfig {
             server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
             server_port: 0,
@@ -1005,7 +1006,7 @@ async fn topology_reload_properties_source_reads_updated_server_properties()
             "topology-drain-grace-secs=30",
         ],
     )?;
-    let server = build_test_server_from_source(
+    let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Properties(properties_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),
@@ -1079,7 +1080,7 @@ async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result
             "topology-drain-grace-secs=30",
         ],
     )?;
-    let server = build_test_server_from_source(
+    let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Properties(properties_path.clone()),
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
     )
@@ -1135,7 +1136,7 @@ async fn topology_reload_status_reports_draining_generation() -> Result<(), Runt
             "topology-drain-grace-secs=30",
         ],
     )?;
-    let server = build_test_server_from_source(
+    let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Properties(properties_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),
@@ -1215,7 +1216,7 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
             "topology-drain-grace-secs=0",
         ],
     )?;
-    let server = build_test_server_from_source(
+    let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Properties(properties_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),

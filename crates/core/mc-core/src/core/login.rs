@@ -6,7 +6,7 @@ use crate::world::{BlockPos, ChunkColumn, DimensionId, Vec3};
 use crate::{ConnectionId, EntityId, PlayerId, SessionCapabilitySet};
 
 impl ServerCore {
-    pub(super) fn login_player_with_policy<R: GameplayPolicyResolver>(
+    pub(super) fn login_player_with_policy<R: GameplayPolicyResolver + ?Sized>(
         &mut self,
         connection_id: ConnectionId,
         username: String,

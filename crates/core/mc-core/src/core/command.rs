@@ -23,7 +23,7 @@ impl ServerCore {
     ///
     /// Returns an error when the command requires session capabilities that are not present,
     /// or when the gameplay policy resolver rejects the command.
-    pub fn apply_command_with_policy<R: GameplayPolicyResolver>(
+    pub fn apply_command_with_policy<R: GameplayPolicyResolver + ?Sized>(
         &mut self,
         command: CoreCommand,
         now_ms: u64,

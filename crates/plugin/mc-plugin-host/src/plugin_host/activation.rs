@@ -17,7 +17,10 @@ impl PluginHost {
                 .lock()
                 .expect("plugin host mutex should not be poisoned");
             for (profile_id, managed) in gameplay.iter() {
-                loaded.register_gameplay_profile(profile_id.clone(), Arc::clone(&managed.profile));
+                loaded.register_gameplay_profile(
+                    profile_id.clone(),
+                    Arc::clone(&managed.profile) as Arc<dyn crate::runtime::GameplayProfileHandle>,
+                );
             }
         }
 
@@ -27,7 +30,10 @@ impl PluginHost {
                 .lock()
                 .expect("plugin host mutex should not be poisoned");
             for (profile_id, managed) in storage.iter() {
-                loaded.register_storage_profile(profile_id.clone(), Arc::clone(&managed.profile));
+                loaded.register_storage_profile(
+                    profile_id.clone(),
+                    Arc::clone(&managed.profile) as Arc<dyn crate::runtime::StorageProfileHandle>,
+                );
             }
         }
 
@@ -37,7 +43,10 @@ impl PluginHost {
                 .lock()
                 .expect("plugin host mutex should not be poisoned");
             for (profile_id, managed) in auth.iter() {
-                loaded.register_auth_profile(profile_id.clone(), Arc::clone(&managed.profile));
+                loaded.register_auth_profile(
+                    profile_id.clone(),
+                    Arc::clone(&managed.profile) as Arc<dyn crate::runtime::AuthProfileHandle>,
+                );
             }
         }
 
@@ -197,7 +206,10 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the gameplay plugin registry mutex is poisoned.
-    pub fn activate_gameplay_profiles(&self, config: &ServerConfig) -> Result<(), RuntimeError> {
+    pub(crate) fn activate_gameplay_profiles(
+        &self,
+        config: &ServerConfig,
+    ) -> Result<(), RuntimeError> {
         let required_profiles = Self::required_gameplay_profiles(config);
 
         let mut gameplay = self
@@ -228,7 +240,10 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the storage plugin registry mutex is poisoned.
-    pub fn activate_storage_profile(&self, storage_profile: &str) -> Result<(), RuntimeError> {
+    pub(crate) fn activate_storage_profile(
+        &self,
+        storage_profile: &str,
+    ) -> Result<(), RuntimeError> {
         let mut storage = self
             .storage
             .lock()
@@ -257,7 +272,10 @@ impl PluginHost {
     /// # Panics
     ///
     /// Panics if the auth plugin registry mutex is poisoned.
-    pub fn activate_auth_profiles(&self, auth_profiles: &[String]) -> Result<(), RuntimeError> {
+    pub(crate) fn activate_auth_profiles(
+        &self,
+        auth_profiles: &[String],
+    ) -> Result<(), RuntimeError> {
         let requested = Self::requested_auth_profiles(auth_profiles)?;
         let mut auth = self
             .auth
@@ -282,7 +300,7 @@ impl PluginHost {
     /// # Errors
     ///
     /// Returns an error when the requested auth profile cannot be activated.
-    pub fn activate_auth_profile(&self, auth_profile: &str) -> Result<(), RuntimeError> {
+    pub(crate) fn activate_auth_profile(&self, auth_profile: &str) -> Result<(), RuntimeError> {
         self.activate_auth_profiles(&[auth_profile.to_string()])
     }
 
@@ -291,7 +309,10 @@ impl PluginHost {
     /// # Errors
     ///
     /// Returns an error when any configured runtime profile cannot be activated.
-    pub fn activate_runtime_profiles(&self, config: &ServerConfig) -> Result<(), RuntimeError> {
+    pub(crate) fn activate_runtime_profiles(
+        &self,
+        config: &ServerConfig,
+    ) -> Result<(), RuntimeError> {
         self.activate_gameplay_profiles(config)?;
         self.activate_storage_profile(&config.storage_profile)?;
         self.activate_auth_profiles(&Self::runtime_auth_profiles(config))
@@ -309,9 +330,7 @@ impl PluginHost {
     ) -> Result<LoadedPluginSet, RuntimeError> {
         let protocols = self.load_protocol_registry()?;
         self.activate_runtime_profiles(config)?;
-        let mut loaded = self.loaded_plugin_set(protocols);
-        loaded.attach_plugin_host(Arc::clone(self));
-        Ok(loaded)
+        Ok(self.loaded_plugin_set(protocols))
     }
 
     /// Loads and activates the protocol registry snapshot used for initial server boot.
@@ -319,7 +338,7 @@ impl PluginHost {
     /// # Errors
     ///
     /// Returns an error when the protocol topology cannot be prepared.
-    pub fn load_protocol_registry(
+    pub(crate) fn load_protocol_registry(
         self: &Arc<Self>,
     ) -> Result<super::ProtocolRegistry, RuntimeError> {
         let prepared = self.prepare_protocol_topology_for_boot()?;

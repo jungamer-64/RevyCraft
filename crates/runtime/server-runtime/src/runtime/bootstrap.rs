@@ -1,6 +1,7 @@
 use super::{
-    AcceptedTopologySession, OnlineAuthKeys, RunningServer, RuntimeServer, RuntimeState,
-    RuntimeTopologyGeneration, RuntimeTopologyState, TopologyGenerationId, TopologyListenerWorker,
+    AcceptedTopologySession, OnlineAuthKeys, ReloadableRunningServer, RunningServer, RuntimeServer,
+    RuntimeState, RuntimeTopologyGeneration, RuntimeTopologyState, TopologyGenerationId,
+    TopologyListenerWorker,
 };
 use crate::RuntimeError;
 use crate::config::{ServerConfig, ServerConfigSource};
@@ -10,10 +11,9 @@ use crate::transport::{
 };
 use mc_core::{CoreConfig, ServerCore};
 use mc_plugin_api::codec::auth::AuthMode;
-use mc_plugin_host::host::{
-    HotSwappableAuthProfile, HotSwappableStorageProfile, PluginHost, plugin_reload_poll_interval_ms,
-};
+use mc_plugin_host::host::plugin_reload_poll_interval_ms;
 use mc_plugin_host::registry::{ListenerBinding, LoadedPluginSet, ProtocolRegistry};
+use mc_plugin_host::runtime::{AuthProfileHandle, RuntimePluginHost, StorageProfileHandle};
 use mc_proto_common::{Edition, ProtocolAdapter, TransportKind};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -25,24 +25,33 @@ use tokio::task::JoinHandle;
 pub struct ServerBuilder {
     config_source: ServerConfigSource,
     loaded_plugins: LoadedPluginSet,
-    plugin_host: Option<Arc<PluginHost>>,
+}
+
+pub struct ReloadableServerBuilder {
+    config_source: ServerConfigSource,
+    loaded_plugins: LoadedPluginSet,
+    reload_host: Arc<dyn RuntimePluginHost>,
 }
 
 impl ServerBuilder {
     #[must_use]
     pub fn new(config_source: ServerConfigSource, loaded_plugins: LoadedPluginSet) -> Self {
-        let plugin_host = loaded_plugins.plugin_host();
         Self {
             config_source,
             loaded_plugins,
-            plugin_host,
         }
     }
 
     #[must_use]
-    pub fn with_plugin_host(mut self, plugin_host: Arc<PluginHost>) -> Self {
-        self.plugin_host = Some(plugin_host);
-        self
+    pub fn with_reload_host(
+        self,
+        reload_host: Arc<dyn RuntimePluginHost>,
+    ) -> ReloadableServerBuilder {
+        ReloadableServerBuilder {
+            config_source: self.config_source,
+            loaded_plugins: self.loaded_plugins,
+            reload_host,
+        }
     }
 
     /// # Errors
@@ -51,67 +60,31 @@ impl ServerBuilder {
     /// world state, or starts with unsupported configuration such as an auth
     /// profile mode mismatch.
     pub async fn build(self) -> Result<RunningServer, RuntimeError> {
+        build_server(self.config_source, self.loaded_plugins, None).await
+    }
+}
+
+impl ReloadableServerBuilder {
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the server cannot bind, load its persisted
+    /// world state, or starts with unsupported configuration such as an auth
+    /// profile mode mismatch.
+    pub async fn build(self) -> Result<ReloadableRunningServer, RuntimeError> {
         let Self {
             config_source,
             loaded_plugins,
-            plugin_host,
+            reload_host,
         } = self;
-        let config = config_source.load()?;
-        let active_protocols = activate_protocols(&config, loaded_plugins.protocols())?;
-        let RuntimeProfiles {
-            storage_profile,
-            auth_profile,
-            bedrock_auth_profile,
-            online_auth_keys,
-            core,
-        } = resolve_runtime_profiles(&config, &loaded_plugins)?;
-        let BoundListeners {
-            listener_bindings,
-            bound_listeners,
-        } = bind_runtime_listeners(&config, &active_protocols.protocols).await?;
-        let initial_generation_id = TopologyGenerationId(1);
-        let topology_generation = Arc::new(RuntimeTopologyGeneration {
-            generation_id: initial_generation_id,
-            config: config.clone(),
-            protocol_registry: active_protocols.protocols,
-            default_adapter: active_protocols.default_adapter,
-            default_bedrock_adapter: active_protocols.default_bedrock_adapter,
-            listener_bindings: listener_bindings.clone(),
-        });
-        let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
-        let listener_workers =
-            spawn_listener_workers(bound_listeners, initial_generation_id, accepted_tx.clone())?;
-
-        let server = Arc::new(RuntimeServer {
-            config,
+        let running = build_server(
             config_source,
             loaded_plugins,
-            plugin_host: plugin_host.clone(),
-            topology: std::sync::RwLock::new(RuntimeTopologyState {
-                active: topology_generation,
-                draining: Vec::new(),
-                listener_workers,
-                next_generation_id: 2,
-            }),
-            auth_profile,
-            bedrock_auth_profile,
-            online_auth_keys,
-            storage_profile,
-            state: Mutex::new(RuntimeState { core, dirty: false }),
-            sessions: Mutex::new(HashMap::new()),
-            next_connection_id: Mutex::new(1),
-            accepted_tx,
-        });
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let run_server = Arc::clone(&server);
-        let join_handle = spawn_runtime_loop(run_server, shutdown_rx, accepted_rx);
-
-        Ok(RunningServer {
-            plugin_host,
-            runtime: server,
-            shutdown_tx: Some(shutdown_tx),
-            join_handle,
+            Some(Arc::clone(&reload_host)),
+        )
+        .await?;
+        Ok(ReloadableRunningServer {
+            running,
+            reload_host,
         })
     }
 }
@@ -123,9 +96,9 @@ pub(super) struct ActiveProtocols {
 }
 
 struct RuntimeProfiles {
-    storage_profile: Arc<HotSwappableStorageProfile>,
-    auth_profile: Arc<HotSwappableAuthProfile>,
-    bedrock_auth_profile: Option<Arc<HotSwappableAuthProfile>>,
+    storage_profile: Arc<dyn StorageProfileHandle>,
+    auth_profile: Arc<dyn AuthProfileHandle>,
+    bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,
     online_auth_keys: Option<Arc<OnlineAuthKeys>>,
     core: ServerCore,
 }
@@ -133,6 +106,82 @@ struct RuntimeProfiles {
 struct BoundListeners {
     listener_bindings: Vec<ListenerBinding>,
     bound_listeners: Vec<BoundTransportListener>,
+}
+
+async fn build_server(
+    config_source: ServerConfigSource,
+    loaded_plugins: LoadedPluginSet,
+    reload_host: Option<Arc<dyn RuntimePluginHost>>,
+) -> Result<RunningServer, RuntimeError> {
+    let config = config_source.load()?;
+    if reload_host.is_none() {
+        if config.plugin_reload_watch {
+            return Err(RuntimeError::Config(
+                "plugin-reload-watch requires ServerBuilder::with_reload_host(...)".to_string(),
+            ));
+        }
+        if config.topology_reload_watch {
+            return Err(RuntimeError::Config(
+                "topology-reload-watch requires ServerBuilder::with_reload_host(...)".to_string(),
+            ));
+        }
+    }
+
+    let active_protocols = activate_protocols(&config, loaded_plugins.protocols())?;
+    let RuntimeProfiles {
+        storage_profile,
+        auth_profile,
+        bedrock_auth_profile,
+        online_auth_keys,
+        core,
+    } = resolve_runtime_profiles(&config, &loaded_plugins)?;
+    let BoundListeners {
+        listener_bindings,
+        bound_listeners,
+    } = bind_runtime_listeners(&config, &active_protocols.protocols).await?;
+    let initial_generation_id = TopologyGenerationId(1);
+    let topology_generation = Arc::new(RuntimeTopologyGeneration {
+        generation_id: initial_generation_id,
+        config: config.clone(),
+        protocol_registry: active_protocols.protocols,
+        default_adapter: active_protocols.default_adapter,
+        default_bedrock_adapter: active_protocols.default_bedrock_adapter,
+        listener_bindings: listener_bindings.clone(),
+    });
+    let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
+    let listener_workers =
+        spawn_listener_workers(bound_listeners, initial_generation_id, accepted_tx.clone())?;
+
+    let server = Arc::new(RuntimeServer {
+        config,
+        config_source,
+        loaded_plugins,
+        reload_host,
+        topology: std::sync::RwLock::new(RuntimeTopologyState {
+            active: topology_generation,
+            draining: Vec::new(),
+            listener_workers,
+            next_generation_id: 2,
+        }),
+        auth_profile,
+        bedrock_auth_profile,
+        online_auth_keys,
+        storage_profile,
+        state: Mutex::new(RuntimeState { core, dirty: false }),
+        sessions: Mutex::new(HashMap::new()),
+        next_connection_id: Mutex::new(1),
+        accepted_tx,
+    });
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let run_server = Arc::clone(&server);
+    let join_handle = spawn_runtime_loop(run_server, shutdown_rx, accepted_rx);
+
+    Ok(RunningServer {
+        runtime: server,
+        shutdown_tx: Some(shutdown_tx),
+        join_handle,
+    })
 }
 
 pub(super) fn activate_protocols(
@@ -483,10 +532,10 @@ fn spawn_runtime_loop(
                         return run_server.finish_with_runtime_error(error).await;
                     }
                 }
-                _ = topology_reload_interval.tick(), if run_server.plugin_host.is_some() => {
-                    if let Some(plugin_host) = run_server.plugin_host.as_ref() {
+                _ = topology_reload_interval.tick(), if run_server.reload_host.is_some() => {
+                    if let Some(reload_host) = run_server.reload_host.as_ref() {
                         let previous_generation = run_server.active_topology_generation_id();
-                        match run_server.maybe_reload_topology_watch(plugin_host).await {
+                        match run_server.maybe_reload_topology_watch(reload_host.as_ref()).await {
                             Ok(result) => {
                                 if result.changed(previous_generation) {
                                     run_server
@@ -511,9 +560,9 @@ fn spawn_runtime_loop(
                         }
                     }
                 }
-                _ = plugin_reload_interval.tick(), if run_server.config.plugin_reload_watch && run_server.plugin_host.is_some() => {
-                    if let Some(plugin_host) = run_server.plugin_host.as_ref() {
-                        match run_server.reload_plugins(plugin_host).await {
+                _ = plugin_reload_interval.tick(), if run_server.config.plugin_reload_watch && run_server.reload_host.is_some() => {
+                    if let Some(reload_host) = run_server.reload_host.as_ref() {
+                        match run_server.reload_plugins(reload_host.as_ref()).await {
                             Ok(reloaded) => {
                                 if !reloaded.is_empty() {
                                     run_server

@@ -5,20 +5,16 @@ mod error;
 pub mod config;
 pub mod host {
     pub use crate::plugin_host::{
-        AuthGeneration, AuthPluginStatusSnapshot, GameplayGeneration, GameplayPluginStatusSnapshot,
-        HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableStorageProfile,
-        PluginAbiRange, PluginArtifactStatusSnapshot, PluginCatalog, PluginFailureAction,
-        PluginFailureMatrix, PluginHost, PluginHostStatusSnapshot, ProtocolPluginStatusSnapshot,
-        StoragePluginStatusSnapshot, plugin_host_from_config, plugin_reload_poll_interval_ms,
-    };
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub use crate::plugin_host::{
-        InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
-        InProcessStoragePlugin,
+        AuthPluginStatusSnapshot, GameplayPluginStatusSnapshot, PluginAbiRange,
+        PluginArtifactStatusSnapshot, PluginFailureAction, PluginFailureMatrix, PluginHost,
+        PluginHostStatusSnapshot, ProtocolPluginStatusSnapshot, StoragePluginStatusSnapshot,
+        plugin_host_from_config, plugin_reload_poll_interval_ms,
     };
 }
 pub mod registry;
 pub mod runtime;
+#[cfg(any(test, feature = "in-process-testing"))]
+pub mod test_support;
 
 pub use self::error::PluginHostError;
 #[cfg(test)]
