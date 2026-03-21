@@ -6,7 +6,7 @@ use crate::{
 };
 use mc_core::{BlockFace, CoreCommand, InteractionHand, PlayerId, Vec3};
 use mc_proto_common::{PacketReader, ProtocolError};
-use mc_proto_je_common::internal::{
+use mc_proto_je_common::__version_support::{
     modern_inventory_slot, read_legacy_slot, unpack_block_position,
 };
 

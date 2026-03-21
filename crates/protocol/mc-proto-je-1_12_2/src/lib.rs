@@ -18,8 +18,8 @@ use mc_core::{
 };
 use mc_proto_common::{ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
 use mc_proto_je_common::{
+    __version_support::{modern_window_slot, player_window_id},
     JavaEditionAdapter, JavaEditionProfile,
-    internal::{modern_window_slot, player_window_id},
 };
 use serde_json::json;
 

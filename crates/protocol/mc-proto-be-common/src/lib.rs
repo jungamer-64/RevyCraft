@@ -415,7 +415,7 @@ impl<P: BedrockProfile> ProtocolAdapter for BedrockAdapter<P> {
 }
 
 #[doc(hidden)]
-pub mod internal {
+pub mod __version_support {
     use super::*;
 
     pub use super::{BedrockLoginError, ParsedBedrockLogin};

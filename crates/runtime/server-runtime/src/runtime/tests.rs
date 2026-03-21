@@ -988,15 +988,36 @@ fn creative_inventory_action_1_12(slot: i16, item_id: i16, count: u8, damage: i1
 fn player_block_placement_1_12(x: i32, y: i32, z: i32, face: i32, hand: i32) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(0x1f);
-    writer.write_i64(mc_proto_je_common::internal::pack_block_position(
-        mc_core::BlockPos::new(x, y, z),
-    ));
+    writer.write_i64(pack_block_position(mc_core::BlockPos::new(x, y, z)));
     writer.write_varint(face);
     writer.write_varint(hand);
     writer.write_f32(0.5);
     writer.write_f32(0.5);
     writer.write_f32(0.5);
     writer.into_inner()
+}
+
+fn pack_block_position(position: mc_core::BlockPos) -> i64 {
+    let x = i64::from(position.x) & 0x3ff_ffff;
+    let y = i64::from(position.y) & 0xfff;
+    let z = i64::from(position.z) & 0x3ff_ffff;
+    (x << 38) | (y << 26) | z
+}
+
+fn unpack_block_position(packed: i64) -> mc_core::BlockPos {
+    fn sign_extend(value: i64, bits: u8) -> i64 {
+        let shift = 64 - i64::from(bits);
+        (value << shift) >> shift
+    }
+
+    let x = sign_extend((packed >> 38) & 0x3ff_ffff, 26);
+    let y = sign_extend((packed >> 26) & 0xfff, 12);
+    let z = sign_extend(packed & 0x3ff_ffff, 26);
+    mc_core::BlockPos::new(
+        i32::try_from(x).expect("packed x should fit into i32"),
+        i32::try_from(y).expect("packed y should fit into i32"),
+        i32::try_from(z).expect("packed z should fit into i32"),
+    )
 }
 
 fn read_slot(reader: &mut PacketReader<'_>) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
@@ -1091,7 +1112,7 @@ fn block_change_from_packet_1_8(packet: &[u8]) -> Result<(i32, i32, i32, i32), R
             "expected 1.8 block change packet".to_string(),
         ));
     }
-    let position = mc_proto_je_common::internal::unpack_block_position(reader.read_i64()?);
+    let position = unpack_block_position(reader.read_i64()?);
     let block_state = reader.read_varint()?;
     Ok((position.x, position.y, position.z, block_state))
 }

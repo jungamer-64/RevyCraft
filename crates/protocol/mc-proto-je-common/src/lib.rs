@@ -812,7 +812,7 @@ fn rounded_f32_to_i32(value: f32) -> i32 {
 }
 
 #[doc(hidden)]
-pub mod internal {
+pub mod __version_support {
     use super::*;
 
     pub fn build_chunk_data_1_7(chunk: &ChunkColumn, include_biomes: bool) -> (u16, Vec<u8>) {

@@ -25,11 +25,11 @@ use bedrockrs_proto::v924::types::LevelSettings;
 use mc_core::catalog::{BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_PLANKS, SAND};
 use mc_core::{BlockState, CoreCommand, EntityId, PlayerId, PlayerSnapshot, WorldMeta};
 use mc_proto_be_common::{
-    BedrockAdapter, BedrockProfile,
-    internal::{
+    __version_support::{
         bedrock_actor_id, block_face_from_i32, block_pos_from_network, block_pos_to_network,
         parse_bedrock_login_payload, protocol_error, vec3_to_bedrock,
     },
+    BedrockAdapter, BedrockProfile,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, LoginRequest, ProtocolDescriptor,
