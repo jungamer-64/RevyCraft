@@ -2,16 +2,16 @@ use crate::{
     PACKET_SB_CLIENT_COMMAND, PACKET_SB_CREATIVE_INVENTORY_ACTION, PACKET_SB_FLYING,
     PACKET_SB_HELD_ITEM_CHANGE, PACKET_SB_KEEP_ALIVE, PACKET_SB_LOOK,
     PACKET_SB_PLAYER_BLOCK_PLACEMENT, PACKET_SB_PLAYER_DIGGING, PACKET_SB_POSITION,
-    PACKET_SB_POSITION_LOOK, PACKET_SB_SETTINGS, PACKET_SB_USE_ITEM,
+    PACKET_SB_POSITION_LOOK, PACKET_SB_SETTINGS,
 };
 use mc_core::{BlockFace, CoreCommand, InteractionHand, PlayerId, Vec3};
 use mc_proto_common::{PacketReader, ProtocolError};
 use mc_proto_je_common::__version_support::{
-    inventory::{modern_inventory_slot, read_legacy_slot},
+    inventory::{legacy_inventory_slot, read_legacy_slot},
     positions::unpack_block_position,
 };
 
-pub fn decode_play_packet(
+pub(crate) fn decode_play_packet(
     player_id: PlayerId,
     frame: &[u8],
 ) -> Result<Option<CoreCommand>, ProtocolError> {
@@ -20,8 +20,7 @@ pub fn decode_play_packet(
     match packet_id {
         PACKET_SB_KEEP_ALIVE => Ok(Some(CoreCommand::KeepAliveResponse {
             player_id,
-            keep_alive_id: i32::try_from(reader.read_i64()?)
-                .map_err(|_| ProtocolError::InvalidPacket("keepalive id out of range"))?,
+            keep_alive_id: reader.read_varint()?,
         })),
         PACKET_SB_FLYING => Ok(Some(CoreCommand::MoveIntent {
             player_id,
@@ -40,6 +39,7 @@ pub fn decode_play_packet(
         })),
         PACKET_SB_POSITION_LOOK => Ok(Some(decode_position_look_packet(player_id, &mut reader)?)),
         PACKET_SB_PLAYER_DIGGING => Ok(Some(decode_digging_packet(player_id, &mut reader)?)),
+        PACKET_SB_PLAYER_BLOCK_PLACEMENT => decode_place_block_packet(player_id, &mut reader),
         PACKET_SB_HELD_ITEM_CHANGE => Ok(Some(CoreCommand::SetHeldSlot {
             player_id,
             slot: reader.read_i16()?,
@@ -48,17 +48,12 @@ pub fn decode_play_packet(
             let slot = reader.read_i16()?;
             let stack = read_legacy_slot(&mut reader)?;
             Ok(
-                modern_inventory_slot(slot).map(|slot| CoreCommand::CreativeInventorySet {
+                legacy_inventory_slot(slot).map(|slot| CoreCommand::CreativeInventorySet {
                     player_id,
                     slot,
                     stack,
                 }),
             )
-        }
-        PACKET_SB_PLAYER_BLOCK_PLACEMENT => decode_place_block_packet(player_id, &mut reader),
-        PACKET_SB_USE_ITEM => {
-            let _hand = decode_interaction_hand(reader.read_varint()?)?;
-            Ok(None)
         }
         PACKET_SB_SETTINGS => Ok(Some(decode_client_settings_packet(player_id, &mut reader)?)),
         PACKET_SB_CLIENT_COMMAND => Ok(Some(CoreCommand::ClientStatus {
@@ -124,18 +119,22 @@ fn decode_place_block_packet(
     reader: &mut PacketReader<'_>,
 ) -> Result<Option<CoreCommand>, ProtocolError> {
     let position = unpack_block_position(reader.read_i64()?);
-    let face = u8::try_from(reader.read_varint()?)
-        .map_err(|_| ProtocolError::InvalidPacket("face out of range"))?;
-    let hand = decode_interaction_hand(reader.read_varint()?)?;
-    let _cursor_x = reader.read_f32()?;
-    let _cursor_y = reader.read_f32()?;
-    let _cursor_z = reader.read_f32()?;
+    let direction = reader.read_i8()?;
+    let held_item = read_legacy_slot(reader)?;
+    let _cursor_x = reader.read_i8()?;
+    let _cursor_y = reader.read_i8()?;
+    let _cursor_z = reader.read_i8()?;
+    if position.x == -1 && position.z == -1 && position.y == 255 && direction == -1 {
+        return Ok(None);
+    }
     Ok(Some(CoreCommand::PlaceBlock {
         player_id,
-        hand,
+        hand: InteractionHand::Main,
         position,
-        face: BlockFace::from_protocol_byte(face),
-        held_item: None,
+        face: u8::try_from(direction)
+            .ok()
+            .and_then(BlockFace::from_protocol_byte),
+        held_item,
     }))
 }
 
@@ -145,22 +144,13 @@ fn decode_client_settings_packet(
 ) -> Result<CoreCommand, ProtocolError> {
     let _locale = reader.read_string(16)?;
     let view_distance = i8_to_u8(reader.read_i8()?);
-    let _chat_flags = reader.read_varint()?;
+    let _chat_flags = reader.read_i8()?;
     let _chat_colors = reader.read_bool()?;
     let _skin_parts = reader.read_u8()?;
-    let _main_hand = reader.read_varint()?;
     Ok(CoreCommand::UpdateClientView {
         player_id,
         view_distance: view_distance.max(1),
     })
-}
-
-const fn decode_interaction_hand(hand: i32) -> Result<InteractionHand, ProtocolError> {
-    match hand {
-        0 => Ok(InteractionHand::Main),
-        1 => Ok(InteractionHand::Offhand),
-        _ => Err(ProtocolError::InvalidPacket("invalid interaction hand")),
-    }
 }
 
 const fn i8_to_u8(value: i8) -> u8 {

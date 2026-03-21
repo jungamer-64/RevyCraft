@@ -1,4 +1,3 @@
-use crate::{get_nibble, legacy_block, semantic_block};
 use flate2::Compression;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::GzEncoder;
@@ -7,6 +6,10 @@ use mc_core::{
     WorldMeta, WorldSnapshot, expand_block_index,
 };
 use mc_proto_common::{StorageAdapter, StorageError};
+use mc_proto_je_common::__version_support::{
+    blocks::{legacy_block, legacy_item, semantic_block, semantic_item},
+    chunks::get_nibble,
+};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{Cursor, Read, Write};
@@ -249,7 +252,7 @@ fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
         .enumerate()
         .filter_map(|(window_slot, stack)| {
             let stack = stack.as_ref()?;
-            let (item_id, damage) = crate::legacy_item(stack)?;
+            let (item_id, damage) = legacy_item(stack)?;
             let nbt_slot = window_slot_to_playerdata_slot(
                 u8::try_from(window_slot).expect("window slot should fit into u8"),
             )?;
@@ -268,7 +271,7 @@ fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
         })
         .collect();
     if let Some(stack) = inventory.offhand.as_ref()
-        && let Some((item_id, damage)) = crate::legacy_item(stack)
+        && let Some((item_id, damage)) = legacy_item(stack)
     {
         let mut compound = BTreeMap::new();
         compound.insert("Slot".to_string(), NbtTag::Byte(PLAYERDATA_OFFHAND_SLOT));
@@ -302,7 +305,7 @@ fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
         }
         let item_id = short_field(compound, "id")?;
         let damage = u16::from_be_bytes(short_field(compound, "Damage").unwrap_or(0).to_be_bytes());
-        let stack = crate::semantic_item(item_id, damage, count.cast_unsigned());
+        let stack = semantic_item(item_id, damage, count.cast_unsigned());
         if stack.key.as_str() == "minecraft:unsupported" {
             continue;
         }
