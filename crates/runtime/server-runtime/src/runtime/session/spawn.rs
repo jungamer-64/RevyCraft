@@ -41,6 +41,7 @@ impl RuntimeServer {
                 };
                 let gameplay = match self
                     .resolve_gameplay_for_adapter(&adapter.descriptor().adapter_id)
+                    .await
                 {
                     Ok(gameplay) => gameplay,
                     Err(error) => {

@@ -54,13 +54,9 @@ fn listener_plan_includes_tcp_binding_and_registered_adapter() -> Result<(), Run
 #[test]
 fn listener_plan_includes_udp_binding_when_bedrock_is_enabled() -> Result<(), RuntimeError> {
     let registries = plugin_test_registries_all()?;
-    let plans = build_listener_plans(
-        &ServerConfig {
-            be_enabled: true,
-            ..ServerConfig::default()
-        },
-        registries.protocols(),
-    )?;
+    let mut config = ServerConfig::default();
+    config.topology.be_enabled = true;
+    let plans = build_listener_plans(&config, registries.protocols())?;
 
     assert_eq!(plans.len(), 2);
     assert_eq!(plans[1].transport, TransportKind::Udp);

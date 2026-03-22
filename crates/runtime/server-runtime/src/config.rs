@@ -1,6 +1,11 @@
 use crate::RuntimeError;
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
-use mc_plugin_host::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
+use mc_plugin_host::config::{
+    BootstrapConfig as PluginHostBootstrapConfig,
+    RuntimeSelectionConfig as PluginHostRuntimeSelectionConfig,
+};
+use mc_plugin_host::host::{PluginAbiRange, PluginFailureMatrix};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -13,7 +18,7 @@ pub(crate) const DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS: u64 = 30;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerConfigSource {
     Inline(ServerConfig),
-    Properties(PathBuf),
+    Toml(PathBuf),
 }
 
 impl ServerConfigSource {
@@ -24,7 +29,7 @@ impl ServerConfigSource {
     pub fn load(&self) -> Result<ServerConfig, RuntimeError> {
         match self {
             Self::Inline(config) => Ok(config.clone()),
-            Self::Properties(path) => ServerConfig::from_properties(path),
+            Self::Toml(path) => ServerConfig::from_toml(path),
         }
     }
 }
@@ -40,84 +45,150 @@ impl LevelType {
             Ok(Self::Flat)
         } else {
             Err(RuntimeError::Unsupported(format!(
-                "level-type={value} is not supported; only FLAT is implemented"
+                "level_type={value} is not supported; only `flat` is implemented"
             )))
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ServerConfig {
-    pub server_ip: Option<IpAddr>,
-    pub server_port: u16,
-    pub be_enabled: bool,
-    pub motd: String,
-    pub max_players: u8,
+pub struct BootstrapConfig {
     pub online_mode: bool,
     pub level_name: String,
     pub level_type: LevelType,
     pub game_mode: u8,
     pub difficulty: u8,
     pub view_distance: u8,
-    pub default_adapter: String,
-    pub enabled_adapters: Option<Vec<String>>,
-    pub default_bedrock_adapter: String,
-    pub enabled_bedrock_adapters: Option<Vec<String>>,
+    pub world_dir: PathBuf,
     pub storage_profile: String,
-    pub auth_profile: String,
-    pub bedrock_auth_profile: String,
-    pub default_gameplay_profile: String,
-    pub gameplay_profile_map: HashMap<String, String>,
     pub plugins_dir: PathBuf,
-    pub plugin_allowlist: Option<Vec<String>>,
-    pub plugin_failure_policy_protocol: PluginFailureAction,
-    pub plugin_failure_policy_gameplay: PluginFailureAction,
-    pub plugin_failure_policy_storage: PluginFailureAction,
-    pub plugin_failure_policy_auth: PluginFailureAction,
-    pub plugin_reload_watch: bool,
-    pub topology_reload_watch: bool,
-    pub topology_drain_grace_secs: u64,
     pub plugin_abi_min: PluginAbiVersion,
     pub plugin_abi_max: PluginAbiVersion,
-    pub world_dir: PathBuf,
 }
 
-impl Default for ServerConfig {
+impl Default for BootstrapConfig {
     fn default() -> Self {
-        let failure_matrix = PluginFailureMatrix::default();
         Self {
-            server_ip: None,
-            server_port: 25565,
-            be_enabled: false,
-            motd: "Multi-version Rust server".to_string(),
-            max_players: 20,
             online_mode: false,
             level_name: "world".to_string(),
             level_type: LevelType::Flat,
             game_mode: 0,
             difficulty: 1,
             view_distance: 2,
+            world_dir: PathBuf::from("runtime").join("world"),
+            storage_profile: "je-anvil-1_7_10".to_string(),
+            plugins_dir: PathBuf::from("runtime").join("plugins"),
+            plugin_abi_min: CURRENT_PLUGIN_ABI,
+            plugin_abi_max: CURRENT_PLUGIN_ABI,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkConfig {
+    pub server_ip: Option<IpAddr>,
+    pub server_port: u16,
+    pub motd: String,
+    pub max_players: u8,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            server_ip: None,
+            server_port: 25565,
+            motd: "Multi-version Rust server".to_string(),
+            max_players: 20,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologyConfig {
+    pub be_enabled: bool,
+    pub default_adapter: String,
+    pub enabled_adapters: Option<Vec<String>>,
+    pub default_bedrock_adapter: String,
+    pub enabled_bedrock_adapters: Option<Vec<String>>,
+    pub reload_watch: bool,
+    pub drain_grace_secs: u64,
+}
+
+impl Default for TopologyConfig {
+    fn default() -> Self {
+        Self {
+            be_enabled: false,
             default_adapter: "je-1_7_10".to_string(),
             enabled_adapters: None,
             default_bedrock_adapter: BEDROCK_BASELINE_ADAPTER_ID.to_string(),
             enabled_bedrock_adapters: None,
-            storage_profile: "je-anvil-1_7_10".to_string(),
-            auth_profile: "offline-v1".to_string(),
-            bedrock_auth_profile: BEDROCK_OFFLINE_AUTH_PROFILE_ID.to_string(),
-            default_gameplay_profile: "canonical".to_string(),
-            gameplay_profile_map: HashMap::new(),
-            plugins_dir: PathBuf::from("runtime").join("plugins"),
-            plugin_allowlist: None,
-            plugin_failure_policy_protocol: failure_matrix.protocol,
-            plugin_failure_policy_gameplay: failure_matrix.gameplay,
-            plugin_failure_policy_storage: failure_matrix.storage,
-            plugin_failure_policy_auth: failure_matrix.auth,
-            plugin_reload_watch: false,
-            topology_reload_watch: false,
-            topology_drain_grace_secs: DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS,
-            plugin_abi_min: CURRENT_PLUGIN_ABI,
-            plugin_abi_max: CURRENT_PLUGIN_ABI,
-            world_dir: PathBuf::from("runtime").join("world"),
+            reload_watch: false,
+            drain_grace_secs: DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginsConfig {
+    pub allowlist: Option<Vec<String>>,
+    pub reload_watch: bool,
+    pub failure_policy: PluginFailureMatrix,
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            allowlist: None,
+            reload_watch: false,
+            failure_policy: PluginFailureMatrix::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfilesConfig {
+    pub auth: String,
+    pub bedrock_auth: String,
+    pub default_gameplay: String,
+    pub gameplay_map: HashMap<String, String>,
+}
+
+impl Default for ProfilesConfig {
+    fn default() -> Self {
+        Self {
+            auth: "offline-v1".to_string(),
+            bedrock_auth: BEDROCK_OFFLINE_AUTH_PROFILE_ID.to_string(),
+            default_gameplay: "canonical".to_string(),
+            gameplay_map: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiveConfig {
+    pub network: NetworkConfig,
+    pub topology: TopologyConfig,
+    pub plugins: PluginsConfig,
+    pub profiles: ProfilesConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerConfig {
+    pub bootstrap: BootstrapConfig,
+    pub network: NetworkConfig,
+    pub topology: TopologyConfig,
+    pub plugins: PluginsConfig,
+    pub profiles: ProfilesConfig,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            bootstrap: BootstrapConfig::default(),
+            network: NetworkConfig::default(),
+            topology: TopologyConfig::default(),
+            plugins: PluginsConfig::default(),
+            profiles: ProfilesConfig::default(),
         }
     }
 }
@@ -125,234 +196,349 @@ impl Default for ServerConfig {
 impl ServerConfig {
     /// # Errors
     ///
-    /// Returns [`RuntimeError`] when `server.properties` cannot be read or
-    /// parsed, or when it contains unsupported configuration values.
-    pub fn from_properties(path: &Path) -> Result<Self, RuntimeError> {
-        let mut config = Self::default();
-        if path.exists() {
-            let contents = fs::read_to_string(path)?;
-            for raw_line in contents.lines() {
-                apply_property_line(&mut config, raw_line)?;
-            }
+    /// Returns [`RuntimeError`] when `server.toml` cannot be read or parsed, or
+    /// when it contains unsupported configuration values.
+    pub fn from_toml(path: &Path) -> Result<Self, RuntimeError> {
+        if !path.exists() {
+            return Ok(Self::default());
         }
-        finalize_relative_paths(&mut config, path.parent().unwrap_or_else(|| Path::new(".")));
-        Ok(config)
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let document: ServerConfigDocument =
+            toml::from_str(&fs::read_to_string(path)?).map_err(|error| {
+                RuntimeError::Config(format!(
+                    "failed to parse config {}: {error}",
+                    path.display()
+                ))
+            })?;
+        let level_name = document
+            .bootstrap
+            .level_name
+            .clone()
+            .unwrap_or_else(|| "world".to_string());
+        Ok(Self {
+            bootstrap: BootstrapConfig {
+                online_mode: document.bootstrap.online_mode.unwrap_or(false),
+                level_name: level_name.clone(),
+                level_type: LevelType::parse(
+                    document.bootstrap.level_type.as_deref().unwrap_or("flat"),
+                )?,
+                game_mode: document.bootstrap.game_mode.unwrap_or(0),
+                difficulty: document.bootstrap.difficulty.unwrap_or(1),
+                view_distance: document.bootstrap.view_distance.unwrap_or(2),
+                world_dir: resolve_world_dir(
+                    parent,
+                    document.bootstrap.world_dir.as_deref(),
+                    Some(level_name.as_str()),
+                ),
+                storage_profile: document
+                    .bootstrap
+                    .storage_profile
+                    .unwrap_or_else(|| "je-anvil-1_7_10".to_string()),
+                plugins_dir: resolve_config_path(
+                    parent,
+                    document.bootstrap.plugins_dir.as_deref(),
+                    Path::new("plugins"),
+                ),
+                plugin_abi_min: parse_plugin_abi(
+                    document.bootstrap.plugin_abi_min.as_deref(),
+                    "bootstrap.plugin_abi_min",
+                )?
+                .unwrap_or(CURRENT_PLUGIN_ABI),
+                plugin_abi_max: parse_plugin_abi(
+                    document.bootstrap.plugin_abi_max.as_deref(),
+                    "bootstrap.plugin_abi_max",
+                )?
+                .unwrap_or(CURRENT_PLUGIN_ABI),
+            },
+            network: NetworkConfig {
+                server_ip: parse_server_ip(document.network.server_ip.as_deref())?,
+                server_port: document.network.server_port.unwrap_or(25565),
+                motd: document
+                    .network
+                    .motd
+                    .unwrap_or_else(|| "Multi-version Rust server".to_string()),
+                max_players: document.network.max_players.unwrap_or(20),
+            },
+            topology: TopologyConfig {
+                be_enabled: document.topology.be_enabled.unwrap_or(false),
+                default_adapter: document
+                    .topology
+                    .default_adapter
+                    .unwrap_or_else(|| "je-1_7_10".to_string()),
+                enabled_adapters: normalize_optional_vec(document.topology.enabled_adapters),
+                default_bedrock_adapter: document
+                    .topology
+                    .default_bedrock_adapter
+                    .unwrap_or_else(|| BEDROCK_BASELINE_ADAPTER_ID.to_string()),
+                enabled_bedrock_adapters: normalize_optional_vec(
+                    document.topology.enabled_bedrock_adapters,
+                ),
+                reload_watch: document.topology.reload_watch.unwrap_or(false),
+                drain_grace_secs: document
+                    .topology
+                    .drain_grace_secs
+                    .unwrap_or(DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS),
+            },
+            plugins: PluginsConfig {
+                allowlist: normalize_optional_vec(document.plugins.allowlist),
+                reload_watch: document.plugins.reload_watch.unwrap_or(false),
+                failure_policy: PluginFailureMatrix {
+                    protocol: parse_failure_policy(
+                        document.plugins.failure_policy.protocol.as_deref(),
+                        PluginFailureMatrix::parse_protocol,
+                        PluginFailureMatrix::default().protocol,
+                    )?,
+                    gameplay: parse_failure_policy(
+                        document.plugins.failure_policy.gameplay.as_deref(),
+                        PluginFailureMatrix::parse_gameplay,
+                        PluginFailureMatrix::default().gameplay,
+                    )?,
+                    storage: parse_failure_policy(
+                        document.plugins.failure_policy.storage.as_deref(),
+                        PluginFailureMatrix::parse_storage,
+                        PluginFailureMatrix::default().storage,
+                    )?,
+                    auth: parse_failure_policy(
+                        document.plugins.failure_policy.auth.as_deref(),
+                        PluginFailureMatrix::parse_auth,
+                        PluginFailureMatrix::default().auth,
+                    )?,
+                },
+            },
+            profiles: ProfilesConfig {
+                auth: document
+                    .profiles
+                    .auth
+                    .unwrap_or_else(|| "offline-v1".to_string()),
+                bedrock_auth: document
+                    .profiles
+                    .bedrock_auth
+                    .unwrap_or_else(|| BEDROCK_OFFLINE_AUTH_PROFILE_ID.to_string()),
+                default_gameplay: document
+                    .profiles
+                    .default_gameplay
+                    .unwrap_or_else(|| "canonical".to_string()),
+                gameplay_map: document.profiles.gameplay_map,
+            },
+        })
     }
 
     #[must_use]
     pub fn bind_addr(&self) -> SocketAddr {
         SocketAddr::new(
-            self.server_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
-            self.server_port,
+            self.network
+                .server_ip
+                .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            self.network.server_port,
         )
     }
 
     pub(crate) fn effective_enabled_adapters(&self) -> Vec<String> {
-        self.enabled_adapters
+        self.topology
+            .enabled_adapters
             .as_ref()
-            .map_or_else(|| vec![self.default_adapter.clone()], Clone::clone)
+            .map_or_else(|| vec![self.topology.default_adapter.clone()], Clone::clone)
     }
 
     pub(crate) fn effective_enabled_bedrock_adapters(&self) -> Vec<String> {
-        self.enabled_bedrock_adapters
-            .as_ref()
-            .map_or_else(|| vec![self.default_bedrock_adapter.clone()], Clone::clone)
+        self.topology.enabled_bedrock_adapters.as_ref().map_or_else(
+            || vec![self.topology.default_bedrock_adapter.clone()],
+            Clone::clone,
+        )
     }
 
-    pub(crate) fn apply_topology_from(&mut self, other: &Self) -> bool {
-        let previous = self.clone();
-        self.server_ip = other.server_ip;
-        self.server_port = other.server_port;
-        self.be_enabled = other.be_enabled;
-        self.motd.clone_from(&other.motd);
-        self.max_players = other.max_players;
-        self.default_adapter.clone_from(&other.default_adapter);
-        self.enabled_adapters.clone_from(&other.enabled_adapters);
-        self.default_bedrock_adapter
-            .clone_from(&other.default_bedrock_adapter);
-        self.enabled_bedrock_adapters
-            .clone_from(&other.enabled_bedrock_adapters);
-        self.topology_reload_watch = other.topology_reload_watch;
-        self.topology_drain_grace_secs = other.topology_drain_grace_secs;
-        previous != *self
+    #[must_use]
+    pub fn live_config(&self) -> LiveConfig {
+        LiveConfig {
+            network: self.network.clone(),
+            topology: self.topology.clone(),
+            plugins: self.plugins.clone(),
+            profiles: self.profiles.clone(),
+        }
+    }
+
+    #[must_use]
+    pub fn plugin_host_bootstrap_config(&self) -> PluginHostBootstrapConfig {
+        PluginHostBootstrapConfig {
+            storage_profile: self.bootstrap.storage_profile.clone(),
+            plugins_dir: self.bootstrap.plugins_dir.clone(),
+            plugin_abi_min: self.bootstrap.plugin_abi_min,
+            plugin_abi_max: self.bootstrap.plugin_abi_max,
+        }
+    }
+
+    #[must_use]
+    pub fn plugin_host_runtime_selection_config(&self) -> PluginHostRuntimeSelectionConfig {
+        PluginHostRuntimeSelectionConfig {
+            be_enabled: self.topology.be_enabled,
+            auth_profile: self.profiles.auth.clone(),
+            bedrock_auth_profile: self.profiles.bedrock_auth.clone(),
+            default_gameplay_profile: self.profiles.default_gameplay.clone(),
+            gameplay_profile_map: self.profiles.gameplay_map.clone(),
+            plugin_allowlist: self.plugins.allowlist.clone(),
+            plugin_failure_policy_protocol: self.plugins.failure_policy.protocol,
+            plugin_failure_policy_gameplay: self.plugins.failure_policy.gameplay,
+            plugin_failure_policy_storage: self.plugins.failure_policy.storage,
+            plugin_failure_policy_auth: self.plugins.failure_policy.auth,
+        }
     }
 
     #[must_use]
     pub fn plugin_host_config(&self) -> mc_plugin_host::config::ServerConfig {
         mc_plugin_host::config::ServerConfig {
-            be_enabled: self.be_enabled,
-            storage_profile: self.storage_profile.clone(),
-            auth_profile: self.auth_profile.clone(),
-            bedrock_auth_profile: self.bedrock_auth_profile.clone(),
-            default_gameplay_profile: self.default_gameplay_profile.clone(),
-            gameplay_profile_map: self.gameplay_profile_map.clone(),
-            plugins_dir: self.plugins_dir.clone(),
-            plugin_allowlist: self.plugin_allowlist.clone(),
-            plugin_failure_policy_protocol: self.plugin_failure_policy_protocol,
-            plugin_failure_policy_gameplay: self.plugin_failure_policy_gameplay,
-            plugin_failure_policy_storage: self.plugin_failure_policy_storage,
-            plugin_failure_policy_auth: self.plugin_failure_policy_auth,
-            plugin_abi_min: self.plugin_abi_min,
-            plugin_abi_max: self.plugin_abi_max,
+            be_enabled: self.topology.be_enabled,
+            storage_profile: self.bootstrap.storage_profile.clone(),
+            auth_profile: self.profiles.auth.clone(),
+            bedrock_auth_profile: self.profiles.bedrock_auth.clone(),
+            default_gameplay_profile: self.profiles.default_gameplay.clone(),
+            gameplay_profile_map: self.profiles.gameplay_map.clone(),
+            plugins_dir: self.bootstrap.plugins_dir.clone(),
+            plugin_allowlist: self.plugins.allowlist.clone(),
+            plugin_failure_policy_protocol: self.plugins.failure_policy.protocol,
+            plugin_failure_policy_gameplay: self.plugins.failure_policy.gameplay,
+            plugin_failure_policy_storage: self.plugins.failure_policy.storage,
+            plugin_failure_policy_auth: self.plugins.failure_policy.auth,
+            plugin_abi_min: self.bootstrap.plugin_abi_min,
+            plugin_abi_max: self.bootstrap.plugin_abi_max,
         }
     }
 }
 
-fn apply_property_line(config: &mut ServerConfig, raw_line: &str) -> Result<(), RuntimeError> {
-    let line = raw_line.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return Ok(());
-    }
-    let Some((key, value)) = line.split_once('=') else {
-        return Ok(());
-    };
-    apply_property(config, key.trim(), value.trim())
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ServerConfigDocument {
+    bootstrap: BootstrapDocument,
+    network: NetworkDocument,
+    topology: TopologyDocument,
+    plugins: PluginsDocument,
+    profiles: ProfilesDocument,
 }
 
-fn apply_property(config: &mut ServerConfig, key: &str, value: &str) -> Result<(), RuntimeError> {
-    match key {
-        "server-ip" => {
-            config.server_ip = parse_server_ip(value)?;
-        }
-        "server-port" => config.server_port = parse_u16(value, "server-port")?,
-        "be-enabled" => config.be_enabled = parse_bool_flag(value),
-        "motd" => config.motd = value.to_string(),
-        "max-players" => config.max_players = parse_u8(value, "max-players")?,
-        "online-mode" => config.online_mode = parse_bool_flag(value),
-        "level-name" => config.level_name = value.to_string(),
-        "level-type" => config.level_type = LevelType::parse(value)?,
-        "gamemode" => config.game_mode = parse_u8(value, "gamemode")?,
-        "difficulty" => config.difficulty = parse_u8(value, "difficulty")?,
-        "view-distance" => config.view_distance = parse_u8(value, "view-distance")?,
-        "default-adapter" => config.default_adapter = value.to_string(),
-        "enabled-adapters" => config.enabled_adapters = parse_enabled_adapters(value),
-        "default-bedrock-adapter" => config.default_bedrock_adapter = value.to_string(),
-        "enabled-bedrock-adapters" => {
-            config.enabled_bedrock_adapters = parse_enabled_adapters(value);
-        }
-        "storage-profile" => config.storage_profile = value.to_string(),
-        "auth-profile" => config.auth_profile = value.to_string(),
-        "bedrock-auth-profile" => config.bedrock_auth_profile = value.to_string(),
-        "default-gameplay-profile" => config.default_gameplay_profile = value.to_string(),
-        "gameplay-profile-map" => {
-            config.gameplay_profile_map = parse_gameplay_profile_map(value)?;
-        }
-        "plugins-dir" => config.plugins_dir = PathBuf::from(value),
-        "plugin-allowlist" => config.plugin_allowlist = parse_enabled_adapters(value),
-        "plugin-failure-policy" => {
-            return Err(RuntimeError::Config(
-                "plugin-failure-policy is no longer supported; use kind-specific plugin-failure-policy-* keys".to_string(),
-            ));
-        }
-        "plugin-failure-policy-protocol" => {
-            config.plugin_failure_policy_protocol = PluginFailureMatrix::parse_protocol(value)?;
-        }
-        "plugin-failure-policy-gameplay" => {
-            config.plugin_failure_policy_gameplay = PluginFailureMatrix::parse_gameplay(value)?;
-        }
-        "plugin-failure-policy-storage" => {
-            config.plugin_failure_policy_storage = PluginFailureMatrix::parse_storage(value)?;
-        }
-        "plugin-failure-policy-auth" => {
-            config.plugin_failure_policy_auth = PluginFailureMatrix::parse_auth(value)?;
-        }
-        "plugin-reload-watch" => config.plugin_reload_watch = parse_bool_flag(value),
-        "topology-reload-watch" => config.topology_reload_watch = parse_bool_flag(value),
-        "topology-drain-grace-secs" => {
-            config.topology_drain_grace_secs = parse_u64(value, "topology-drain-grace-secs")?;
-        }
-        "plugin-abi-min" => config.plugin_abi_min = PluginAbiRange::parse_version(value)?,
-        "plugin-abi-max" => config.plugin_abi_max = PluginAbiRange::parse_version(value)?,
-        unknown => eprintln!("warning: ignoring unknown server.properties key `{unknown}`"),
-    }
-    Ok(())
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct BootstrapDocument {
+    online_mode: Option<bool>,
+    level_name: Option<String>,
+    level_type: Option<String>,
+    game_mode: Option<u8>,
+    difficulty: Option<u8>,
+    view_distance: Option<u8>,
+    world_dir: Option<PathBuf>,
+    storage_profile: Option<String>,
+    plugins_dir: Option<PathBuf>,
+    plugin_abi_min: Option<String>,
+    plugin_abi_max: Option<String>,
 }
 
-fn parse_server_ip(value: &str) -> Result<Option<IpAddr>, RuntimeError> {
-    if value.is_empty() {
-        Ok(None)
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct NetworkDocument {
+    server_ip: Option<String>,
+    server_port: Option<u16>,
+    motd: Option<String>,
+    max_players: Option<u8>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TopologyDocument {
+    be_enabled: Option<bool>,
+    default_adapter: Option<String>,
+    enabled_adapters: Option<Vec<String>>,
+    default_bedrock_adapter: Option<String>,
+    enabled_bedrock_adapters: Option<Vec<String>>,
+    reload_watch: Option<bool>,
+    drain_grace_secs: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct PluginsDocument {
+    allowlist: Option<Vec<String>>,
+    reload_watch: Option<bool>,
+    failure_policy: FailurePolicyDocument,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct FailurePolicyDocument {
+    protocol: Option<String>,
+    gameplay: Option<String>,
+    storage: Option<String>,
+    auth: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ProfilesDocument {
+    auth: Option<String>,
+    bedrock_auth: Option<String>,
+    default_gameplay: Option<String>,
+    gameplay_map: HashMap<String, String>,
+}
+
+fn normalize_optional_vec(values: Option<Vec<String>>) -> Option<Vec<String>> {
+    match values {
+        Some(values) if values.is_empty() => None,
+        other => other,
+    }
+}
+
+fn resolve_world_dir(parent: &Path, explicit: Option<&Path>, level_name: Option<&str>) -> PathBuf {
+    let world_dir = explicit
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(level_name.unwrap_or("world")));
+    if world_dir.is_relative() {
+        parent.join(world_dir)
     } else {
-        value
+        world_dir
+    }
+}
+
+fn resolve_config_path(parent: &Path, explicit: Option<&Path>, default_relative: &Path) -> PathBuf {
+    let path = explicit
+        .map(PathBuf::from)
+        .unwrap_or_else(|| default_relative.to_path_buf());
+    if path.is_relative() {
+        parent.join(path)
+    } else {
+        path
+    }
+}
+
+fn parse_server_ip(value: Option<&str>) -> Result<Option<IpAddr>, RuntimeError> {
+    match value {
+        None | Some("") => Ok(None),
+        Some(value) => value
             .parse()
             .map(Some)
-            .map_err(|_| RuntimeError::Config("invalid server-ip".to_string()))
+            .map_err(|_| RuntimeError::Config("invalid network.server_ip".to_string())),
     }
 }
 
-const fn parse_bool_flag(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 4
-        && matches!(bytes[0], b't' | b'T')
-        && matches!(bytes[1], b'r' | b'R')
-        && matches!(bytes[2], b'u' | b'U')
-        && matches!(bytes[3], b'e' | b'E')
+fn parse_failure_policy<F, E>(
+    value: Option<&str>,
+    parser: F,
+    default: mc_plugin_host::host::PluginFailureAction,
+) -> Result<mc_plugin_host::host::PluginFailureAction, RuntimeError>
+where
+    F: Fn(&str) -> Result<mc_plugin_host::host::PluginFailureAction, E>,
+    E: Into<RuntimeError>,
+{
+    match value {
+        Some(value) => parser(value).map_err(Into::into),
+        None => Ok(default),
+    }
 }
 
-fn parse_u8(value: &str, key: &str) -> Result<u8, RuntimeError> {
+fn parse_plugin_abi(
+    value: Option<&str>,
+    key: &str,
+) -> Result<Option<PluginAbiVersion>, RuntimeError> {
     value
-        .parse()
-        .map_err(|_| RuntimeError::Config(format!("invalid {key}")))
-}
-
-fn parse_u16(value: &str, key: &str) -> Result<u16, RuntimeError> {
-    value
-        .parse()
-        .map_err(|_| RuntimeError::Config(format!("invalid {key}")))
-}
-
-fn parse_u64(value: &str, key: &str) -> Result<u64, RuntimeError> {
-    value
-        .parse()
-        .map_err(|_| RuntimeError::Config(format!("invalid {key}")))
-}
-
-fn finalize_relative_paths(config: &mut ServerConfig, parent: &Path) {
-    config.world_dir = parent.join(&config.level_name);
-    if config.plugins_dir.is_relative() {
-        config.plugins_dir = parent.join(&config.plugins_dir);
-    }
-}
-
-fn parse_enabled_adapters(value: &str) -> Option<Vec<String>> {
-    let adapters = value
-        .split(',')
-        .map(str::trim)
-        .filter(|adapter_id| !adapter_id.is_empty())
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    if adapters.is_empty() {
-        return None;
-    }
-    Some(adapters)
-}
-
-fn parse_gameplay_profile_map(value: &str) -> Result<HashMap<String, String>, RuntimeError> {
-    let mut map = HashMap::new();
-    for entry in value
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-    {
-        let Some((adapter_id, profile_id)) = entry.split_once(':') else {
-            return Err(RuntimeError::Config(format!(
-                "invalid gameplay-profile-map entry `{entry}`"
-            )));
-        };
-        let adapter_id = adapter_id.trim();
-        let profile_id = profile_id.trim();
-        if adapter_id.is_empty() || profile_id.is_empty() {
-            return Err(RuntimeError::Config(format!(
-                "invalid gameplay-profile-map entry `{entry}`"
-            )));
-        }
-        if map
-            .insert(adapter_id.to_string(), profile_id.to_string())
-            .is_some()
-        {
-            return Err(RuntimeError::Config(format!(
-                "duplicate gameplay profile mapping for adapter `{adapter_id}`"
-            )));
-        }
-    }
-    Ok(map)
+        .map(|value| {
+            PluginAbiRange::parse_version(value)
+                .map_err(|_| RuntimeError::Config(format!("invalid {key} `{value}`")))
+        })
+        .transpose()
 }

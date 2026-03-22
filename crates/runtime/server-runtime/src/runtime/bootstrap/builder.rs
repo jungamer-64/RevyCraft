@@ -5,7 +5,7 @@ use super::protocols::{ActiveProtocols, activate_protocols};
 use crate::RuntimeError;
 use crate::config::ServerConfigSource;
 use crate::runtime::{
-    RuntimeServer, RuntimeState, RuntimeTopologyGeneration, RuntimeTopologyState,
+    LiveRuntimeState, RuntimeServer, RuntimeState, RuntimeTopologyGeneration, RuntimeTopologyState,
     TopologyGenerationId,
 };
 use mc_plugin_host::registry::LoadedPluginSet;
@@ -88,14 +88,14 @@ async fn build_server(
 ) -> Result<crate::runtime::RunningServer, RuntimeError> {
     let config = config_source.load()?;
     if reload_host.is_none() {
-        if config.plugin_reload_watch {
+        if config.plugins.reload_watch {
             return Err(RuntimeError::Config(
-                "plugin-reload-watch requires ServerBuilder::with_reload_host(...)".to_string(),
+                "plugins.reload_watch requires ServerBuilder::with_reload_host(...)".to_string(),
             ));
         }
-        if config.topology_reload_watch {
+        if config.topology.reload_watch {
             return Err(RuntimeError::Config(
-                "topology-reload-watch requires ServerBuilder::with_reload_host(...)".to_string(),
+                "topology.reload_watch requires ServerBuilder::with_reload_host(...)".to_string(),
             ));
         }
     }
@@ -132,7 +132,12 @@ async fn build_server(
     let server = Arc::new(RuntimeServer {
         config,
         config_source,
-        loaded_plugins,
+        live_state: tokio::sync::RwLock::new(LiveRuntimeState {
+            config: topology_generation.config.clone(),
+            loaded_plugins,
+            auth_profile,
+            bedrock_auth_profile,
+        }),
         reload_host,
         consistency_gate: tokio::sync::RwLock::new(()),
         topology: std::sync::RwLock::new(RuntimeTopologyState {
@@ -141,8 +146,6 @@ async fn build_server(
             listener_workers,
             next_generation_id: 2,
         }),
-        auth_profile,
-        bedrock_auth_profile,
         online_auth_keys,
         storage_profile,
         state: Mutex::new(RuntimeState { core, dirty: false }),

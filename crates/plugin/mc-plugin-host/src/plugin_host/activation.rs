@@ -1,13 +1,13 @@
 use super::{
     Arc, HashMap, HashSet, HotSwappableAuthProfile, HotSwappableGameplayProfile,
     HotSwappableStorageProfile, ManagedAuthPlugin, ManagedGameplayPlugin, ManagedStoragePlugin,
-    PluginFailureStage, PluginHost, PluginKind, PluginPackage, RuntimeError, ServerConfig,
-    ensure_known_profiles, ensure_profile_known,
+    PluginFailureStage, PluginHost, PluginKind, PluginPackage, RuntimeError,
+    RuntimeSelectionConfig, ensure_known_profiles, ensure_profile_known,
 };
 use crate::registry::LoadedPluginSet;
 
 impl PluginHost {
-    fn loaded_plugin_set(&self, protocols: super::ProtocolRegistry) -> LoadedPluginSet {
+    pub(crate) fn loaded_plugin_set(&self, protocols: super::ProtocolRegistry) -> LoadedPluginSet {
         let mut loaded = LoadedPluginSet::new();
         loaded.replace_protocols(protocols);
 
@@ -53,14 +53,14 @@ impl PluginHost {
         loaded
     }
 
-    fn required_gameplay_profiles(config: &ServerConfig) -> HashSet<String> {
+    fn required_gameplay_profiles(config: &RuntimeSelectionConfig) -> HashSet<String> {
         let mut required_profiles = HashSet::new();
         required_profiles.insert(config.default_gameplay_profile.clone());
         required_profiles.extend(config.gameplay_profile_map.values().cloned());
         required_profiles
     }
 
-    fn runtime_auth_profiles(config: &ServerConfig) -> Vec<String> {
+    pub(crate) fn runtime_auth_profiles(config: &RuntimeSelectionConfig) -> Vec<String> {
         let mut auth_profiles = vec![config.auth_profile.clone()];
         if config.be_enabled && !auth_profiles.contains(&config.bedrock_auth_profile) {
             auth_profiles.push(config.bedrock_auth_profile.clone());
@@ -281,9 +281,14 @@ impl PluginHost {
     /// Panics if the gameplay plugin registry mutex is poisoned.
     pub(crate) fn activate_gameplay_profiles(
         &self,
-        config: &ServerConfig,
+        config: &RuntimeSelectionConfig,
     ) -> Result<(), RuntimeError> {
         let required_profiles = Self::required_gameplay_profiles(config);
+        let allowlist = config
+            .plugin_allowlist
+            .as_ref()
+            .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
+        let catalog = self.protocol_catalog()?;
 
         let mut gameplay = self
             .gameplay
@@ -291,8 +296,13 @@ impl PluginHost {
             .expect("plugin host mutex should not be poisoned");
         gameplay.clear();
 
-        for package in self.catalog.packages() {
+        for package in catalog.packages() {
             if package.plugin_kind != PluginKind::Gameplay {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
                 continue;
             }
             self.load_requested_gameplay_plugin(&mut gameplay, package, &required_profiles)?;
@@ -317,14 +327,24 @@ impl PluginHost {
         &self,
         storage_profile: &str,
     ) -> Result<(), RuntimeError> {
+        let allowlist = self
+            .current_runtime_selection()
+            .plugin_allowlist
+            .map(|entries| entries.into_iter().collect::<HashSet<_>>());
+        let catalog = self.protocol_catalog()?;
         let mut storage = self
             .storage
             .lock()
             .expect("plugin host mutex should not be poisoned");
         storage.clear();
 
-        for package in self.catalog.packages() {
+        for package in catalog.packages() {
             if package.plugin_kind != PluginKind::Storage {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
                 continue;
             }
             self.load_requested_storage_plugin(&mut storage, package, storage_profile)?;
@@ -350,14 +370,24 @@ impl PluginHost {
         auth_profiles: &[String],
     ) -> Result<(), RuntimeError> {
         let requested = Self::requested_auth_profiles(auth_profiles)?;
+        let allowlist = self
+            .current_runtime_selection()
+            .plugin_allowlist
+            .map(|entries| entries.into_iter().collect::<HashSet<_>>());
+        let catalog = self.protocol_catalog()?;
         let mut auth = self
             .auth
             .lock()
             .expect("plugin host mutex should not be poisoned");
         auth.clear();
 
-        for package in self.catalog.packages() {
+        for package in catalog.packages() {
             if package.plugin_kind != PluginKind::Auth {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
                 continue;
             }
             self.load_requested_auth_plugin(&mut auth, package, &requested)?;
@@ -385,10 +415,10 @@ impl PluginHost {
     /// Returns an error when any configured runtime profile cannot be activated.
     pub(crate) fn activate_runtime_profiles(
         &self,
-        config: &ServerConfig,
+        config: &RuntimeSelectionConfig,
     ) -> Result<(), RuntimeError> {
         self.activate_gameplay_profiles(config)?;
-        self.activate_storage_profile(&config.storage_profile)?;
+        self.activate_storage_profile(&self.bootstrap_config.storage_profile)?;
         self.activate_auth_profiles(&Self::runtime_auth_profiles(config))
     }
 
@@ -400,9 +430,17 @@ impl PluginHost {
     /// Returns an error when protocol topology or required runtime profiles cannot be loaded.
     pub fn load_plugin_set(
         self: &Arc<Self>,
-        config: &ServerConfig,
+        config: &RuntimeSelectionConfig,
     ) -> Result<LoadedPluginSet, RuntimeError> {
-        let protocols = self.load_protocol_registry()?;
+        self.failures.update_matrix(config.failure_matrix());
+        {
+            let mut runtime_selection = self
+                .runtime_selection
+                .lock()
+                .expect("plugin host mutex should not be poisoned");
+            *runtime_selection = config.clone();
+        }
+        let protocols = self.load_protocol_registry(config)?;
         self.activate_runtime_profiles(config)?;
         Ok(self.loaded_plugin_set(protocols))
     }
@@ -414,8 +452,9 @@ impl PluginHost {
     /// Returns an error when the protocol topology cannot be prepared.
     pub(crate) fn load_protocol_registry(
         self: &Arc<Self>,
+        config: &RuntimeSelectionConfig,
     ) -> Result<super::ProtocolRegistry, RuntimeError> {
-        let prepared = self.prepare_protocol_topology_for_boot()?;
+        let prepared = self.prepare_protocol_topology_for_boot(config)?;
         let registry = prepared.registry.clone();
         self.activate_protocol_topology(prepared);
         Ok(registry)

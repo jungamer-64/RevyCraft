@@ -268,8 +268,8 @@ fn topology_status_snapshot(
         enabled_bedrock_adapter_ids: generation
             .protocol_registry
             .adapter_ids_for_transport(TransportKind::Udp),
-        motd: generation.config.motd.clone(),
-        max_players: generation.config.max_players,
+        motd: generation.config.network.motd.clone(),
+        max_players: generation.config.network.max_players,
     }
 }
 

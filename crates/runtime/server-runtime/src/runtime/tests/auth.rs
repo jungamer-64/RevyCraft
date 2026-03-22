@@ -1,20 +1,16 @@
 use super::*;
 
 fn online_auth_server_config(world_dir: PathBuf, enabled_adapters: &[&str]) -> ServerConfig {
-    ServerConfig {
-        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-        server_port: 0,
-        online_mode: true,
-        auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
-        enabled_adapters: Some(
-            enabled_adapters
-                .iter()
-                .map(|id| (*id).to_string())
-                .collect(),
-        ),
-        world_dir,
-        ..ServerConfig::default()
-    }
+    let mut config = loopback_server_config(world_dir);
+    config.bootstrap.online_mode = true;
+    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+    config.topology.enabled_adapters = Some(
+        enabled_adapters
+            .iter()
+            .map(|id| (*id).to_string())
+            .collect(),
+    );
+    config
 }
 
 async fn assert_spawn_fails_with_message(
@@ -36,12 +32,11 @@ async fn assert_spawn_fails_with_message(
 #[tokio::test]
 async fn online_mode_requires_online_auth_profile() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
+    let mut config = ServerConfig::default();
+    config.bootstrap.online_mode = true;
+    config.bootstrap.world_dir = temp_dir.path().join("world");
     assert_spawn_fails_with_message(
-        ServerConfig {
-            online_mode: true,
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        config,
         plugin_test_registries_tcp_only()?,
         "requires an online auth profile",
     )
@@ -51,12 +46,11 @@ async fn online_mode_requires_online_auth_profile() -> Result<(), RuntimeError> 
 #[tokio::test]
 async fn offline_mode_rejects_online_auth_profile() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
+    let mut config = ServerConfig::default();
+    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+    config.bootstrap.world_dir = temp_dir.path().join("world");
     assert_spawn_fails_with_message(
-        ServerConfig {
-            auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        config,
         in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
         "requires an offline auth profile",
     )

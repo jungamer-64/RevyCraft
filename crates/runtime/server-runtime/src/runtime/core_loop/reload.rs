@@ -1,11 +1,112 @@
 use crate::RuntimeError;
-use crate::runtime::{RuntimeReloadContext, RuntimeServer};
+use crate::runtime::{ConfigReloadResult, LiveRuntimeState, RuntimeReloadContext, RuntimeServer};
+use mc_plugin_api::codec::auth::AuthMode;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_host::runtime::{ProtocolReloadSession, RuntimePluginHost};
+use std::collections::HashSet;
 use tokio::sync::RwLockWriteGuard;
 
 impl RuntimeServer {
+    fn validate_static_reload_candidate(
+        &self,
+        candidate: &crate::config::ServerConfig,
+    ) -> Result<(), RuntimeError> {
+        if candidate.bootstrap != self.config.bootstrap {
+            return Err(RuntimeError::Config(
+                "bootstrap config changes require a restart".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_candidate_gameplay_profiles_active(
+        &self,
+        candidate: &crate::config::ServerConfig,
+        context: &RuntimeReloadContext,
+    ) -> Result<(), RuntimeError> {
+        let mut active_profiles = HashSet::new();
+        let _ = active_profiles.insert(candidate.profiles.default_gameplay.clone());
+        active_profiles.extend(candidate.profiles.gameplay_map.values().cloned());
+        for session in &context.gameplay_sessions {
+            if !active_profiles.contains(session.gameplay_profile.as_str()) {
+                return Err(RuntimeError::Config(format!(
+                    "cannot remove gameplay profile `{}` while sessions are still using it",
+                    session.gameplay_profile.as_str()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_live_state(
+        &self,
+        config: crate::config::ServerConfig,
+        loaded_plugins: mc_plugin_host::registry::LoadedPluginSet,
+    ) -> Result<LiveRuntimeState, RuntimeError> {
+        let auth_profile = loaded_plugins
+            .resolve_auth_profile(&config.profiles.auth)
+            .ok_or_else(|| {
+                RuntimeError::Config(format!("unknown auth-profile `{}`", config.profiles.auth))
+            })?;
+        match (self.config.bootstrap.online_mode, auth_profile.mode()?) {
+            (true, AuthMode::Online) | (false, AuthMode::Offline) => {}
+            (true, mode) => {
+                return Err(RuntimeError::Config(format!(
+                    "online-mode=true requires an online auth profile, got {mode:?}"
+                )));
+            }
+            (false, mode) => {
+                return Err(RuntimeError::Config(format!(
+                    "online-mode=false requires an offline auth profile, got {mode:?}"
+                )));
+            }
+        }
+
+        let bedrock_auth_profile = if config.topology.be_enabled {
+            let profile = loaded_plugins
+                .resolve_auth_profile(&config.profiles.bedrock_auth)
+                .ok_or_else(|| {
+                    RuntimeError::Config(format!(
+                        "unknown bedrock-auth-profile `{}`",
+                        config.profiles.bedrock_auth
+                    ))
+                })?;
+            match profile.mode()? {
+                AuthMode::BedrockOffline | AuthMode::BedrockXbl => {}
+                mode => {
+                    return Err(RuntimeError::Config(format!(
+                        "bedrock-auth-profile requires a bedrock auth mode, got {mode:?}"
+                    )));
+                }
+            }
+            Some(profile)
+        } else {
+            None
+        };
+
+        Ok(LiveRuntimeState {
+            config,
+            loaded_plugins,
+            auth_profile,
+            bedrock_auth_profile,
+        })
+    }
+
+    async fn restore_runtime_selection(
+        &self,
+        reload_host: &dyn RuntimePluginHost,
+        previous_live: &LiveRuntimeState,
+        context: &RuntimeReloadContext,
+    ) {
+        if let Err(error) = reload_host.reconcile_runtime_selection(
+            &previous_live.config.plugin_host_runtime_selection_config(),
+            context,
+        ) {
+            eprintln!("failed to restore previous runtime selection after reload failure: {error}");
+        }
+    }
+
     pub(in crate::runtime) fn take_pending_plugin_fatal_error(&self) -> Option<RuntimeError> {
         self.reload_host.as_ref().and_then(|reload_host| {
             reload_host
@@ -73,7 +174,7 @@ impl RuntimeServer {
             protocol_sessions,
             gameplay_sessions,
             snapshot,
-            world_dir: self.config.world_dir.clone(),
+            world_dir: self.config.bootstrap.world_dir.clone(),
         }
     }
 
@@ -81,8 +182,104 @@ impl RuntimeServer {
         &self,
         reload_host: &dyn RuntimePluginHost,
     ) -> Result<Vec<String>, RuntimeError> {
+        let loaded_config = self.config_source.load()?;
+        self.reload_plugins_with_loaded_config(reload_host, loaded_config)
+            .await
+    }
+
+    async fn reload_plugins_with_loaded_config(
+        &self,
+        reload_host: &dyn RuntimePluginHost,
+        loaded_config: crate::config::ServerConfig,
+    ) -> Result<Vec<String>, RuntimeError> {
+        self.validate_static_reload_candidate(&loaded_config)?;
         let consistency_guard = self.consistency_gate.write().await;
         let context = self.reload_context(&consistency_guard).await;
-        Ok(reload_host.reload_modified_with_context(&context)?)
+        self.ensure_candidate_gameplay_profiles_active(&loaded_config, &context)?;
+        let previous_live = self.live_state.read().await.clone();
+        let result = reload_host.reconcile_runtime_selection(
+            &loaded_config.plugin_host_runtime_selection_config(),
+            &context,
+        )?;
+        let candidate_live =
+            match self.resolve_live_state(loaded_config.clone(), result.loaded_plugins) {
+                Ok(candidate_live) => candidate_live,
+                Err(error) => {
+                    self.restore_runtime_selection(reload_host, &previous_live, &context)
+                        .await;
+                    return Err(error);
+                }
+            };
+        *self.live_state.write().await = candidate_live;
+        Ok(result.reloaded)
+    }
+
+    pub(in crate::runtime) async fn reload_config(
+        &self,
+        reload_host: &dyn RuntimePluginHost,
+    ) -> Result<ConfigReloadResult, RuntimeError> {
+        let loaded_config = self.config_source.load()?;
+        self.reload_config_with_loaded(reload_host, loaded_config)
+            .await
+    }
+
+    async fn reload_config_with_loaded(
+        &self,
+        reload_host: &dyn RuntimePluginHost,
+        loaded_config: crate::config::ServerConfig,
+    ) -> Result<ConfigReloadResult, RuntimeError> {
+        self.validate_static_reload_candidate(&loaded_config)?;
+        let consistency_guard = self.consistency_gate.write().await;
+        let context = self.reload_context(&consistency_guard).await;
+        self.ensure_candidate_gameplay_profiles_active(&loaded_config, &context)?;
+
+        let previous_live = self.live_state.read().await.clone();
+        let selection_result = reload_host.reconcile_runtime_selection(
+            &loaded_config.plugin_host_runtime_selection_config(),
+            &context,
+        )?;
+        let candidate_live =
+            match self.resolve_live_state(loaded_config.clone(), selection_result.loaded_plugins) {
+                Ok(candidate_live) => candidate_live,
+                Err(error) => {
+                    self.restore_runtime_selection(reload_host, &previous_live, &context)
+                        .await;
+                    return Err(error);
+                }
+            };
+        let topology_result = match self
+            .reload_topology_with_config(reload_host, loaded_config.clone())
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                self.restore_runtime_selection(reload_host, &previous_live, &context)
+                    .await;
+                return Err(error);
+            }
+        };
+        *self.live_state.write().await = candidate_live;
+        Ok(ConfigReloadResult {
+            reloaded_plugins: selection_result.reloaded,
+            topology: topology_result,
+        })
+    }
+
+    pub(in crate::runtime) async fn maybe_reload_config_watch(
+        &self,
+        reload_host: &dyn RuntimePluginHost,
+    ) -> Result<Option<ConfigReloadResult>, RuntimeError> {
+        let loaded_config = self.config_source.load()?;
+        let active_config = self.live_state.read().await.config.clone();
+        if !loaded_config.topology.reload_watch
+            && !loaded_config.plugins.reload_watch
+            && !active_config.topology.reload_watch
+            && !active_config.plugins.reload_watch
+        {
+            return Ok(None);
+        }
+        self.reload_config_with_loaded(reload_host, loaded_config)
+            .await
+            .map(Some)
     }
 }

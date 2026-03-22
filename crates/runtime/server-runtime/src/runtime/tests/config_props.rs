@@ -1,14 +1,5 @@
 use super::*;
 
-fn loopback_server_config(world_dir: PathBuf) -> ServerConfig {
-    ServerConfig {
-        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-        server_port: 0,
-        world_dir,
-        ..ServerConfig::default()
-    }
-}
-
 async fn assert_spawn_fails_with_message(
     config: ServerConfig,
     expected_fragment: &str,
@@ -25,106 +16,141 @@ async fn assert_spawn_fails_with_message(
 }
 
 #[test]
-fn server_properties_accept_flat_level_type() -> Result<(), RuntimeError> {
+fn server_toml_accepts_grouped_schema_and_resolves_relative_paths() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
+    let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
-        "level-name=flatland\nlevel-type=FLAT\nbe-enabled=true\nonline-mode=false\ndefault-adapter=je-1_7_10\nstorage-profile=je-anvil-1_7_10\nauth-profile=offline-v1\n",
+        r#"
+[bootstrap]
+online_mode = false
+level_name = "flatland"
+level_type = "FLAT"
+
+[network]
+server_ip = "127.0.0.1"
+server_port = 0
+
+[topology]
+be_enabled = true
+default_adapter = "je-1_7_10"
+
+[plugins]
+
+[plugins.failure_policy]
+
+[profiles]
+auth = "offline-v1"
+"#,
     )?;
 
-    let config = ServerConfig::from_properties(&path)?;
+    let config = ServerConfig::from_toml(&path)?;
 
-    assert_eq!(config.level_name, "flatland");
-    assert_eq!(config.level_type, LevelType::Flat);
-    assert!(config.be_enabled);
-    assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
-    assert_eq!(config.default_bedrock_adapter, BE_26_3_ADAPTER_ID);
-    assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
-    assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
-    assert_eq!(config.bedrock_auth_profile, BEDROCK_OFFLINE_AUTH_PROFILE_ID);
-    assert_eq!(config.world_dir, temp_dir.path().join("flatland"));
-    Ok(())
-}
-
-#[test]
-fn server_properties_use_default_adapter_and_storage_profile() -> Result<(), RuntimeError> {
-    let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(&path, "level-name=flatland\nlevel-type=FLAT\n")?;
-
-    let config = ServerConfig::from_properties(&path)?;
-
-    assert!(!config.be_enabled);
-    assert_eq!(config.default_adapter, JE_1_7_10_ADAPTER_ID);
-    assert_eq!(config.default_bedrock_adapter, BE_26_3_ADAPTER_ID);
-    assert_eq!(config.storage_profile, JE_1_7_10_STORAGE_PROFILE_ID);
-    assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
-    assert_eq!(config.bedrock_auth_profile, BEDROCK_OFFLINE_AUTH_PROFILE_ID);
+    assert_eq!(config.bootstrap.level_name, "flatland");
+    assert_eq!(config.bootstrap.level_type, LevelType::Flat);
+    assert!(config.topology.be_enabled);
+    assert_eq!(config.topology.default_adapter, JE_1_7_10_ADAPTER_ID);
+    assert_eq!(
+        config.topology.default_bedrock_adapter,
+        BE_26_3_ADAPTER_ID.to_string()
+    );
+    assert_eq!(
+        config.bootstrap.storage_profile,
+        JE_1_7_10_STORAGE_PROFILE_ID.to_string()
+    );
+    assert_eq!(config.profiles.auth, OFFLINE_AUTH_PROFILE_ID);
+    assert_eq!(
+        config.profiles.bedrock_auth,
+        BEDROCK_OFFLINE_AUTH_PROFILE_ID
+    );
+    assert_eq!(config.bootstrap.world_dir, temp_dir.path().join("flatland"));
+    assert_eq!(
+        config.bootstrap.plugins_dir,
+        temp_dir.path().join("plugins")
+    );
     Ok(())
 }
 
 #[test]
 fn default_config_uses_relative_runtime_paths() {
     let config = ServerConfig::default();
-    assert_eq!(config.plugins_dir, PathBuf::from("runtime").join("plugins"));
-    assert_eq!(config.world_dir, PathBuf::from("runtime").join("world"));
+    assert_eq!(
+        config.bootstrap.plugins_dir,
+        PathBuf::from("runtime").join("plugins")
+    );
+    assert_eq!(
+        config.bootstrap.world_dir,
+        PathBuf::from("runtime").join("world")
+    );
 }
 
 #[test]
-fn server_properties_parse_enabled_adapters() -> Result<(), RuntimeError> {
+fn server_toml_parse_enabled_adapters() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(&path, "enabled-adapters=je-1_7_10, je-1_8_x,je-1_12_2\n")?;
+    let mut config = ServerConfig::default();
+    config.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_1_12_2_ADAPTER_ID.to_string(),
+    ]);
+    let path = temp_dir.path().join("server.toml");
+    write_server_toml(&path, &config)?;
 
-    let config = ServerConfig::from_properties(&path)?;
+    let parsed = ServerConfig::from_toml(&path)?;
     assert_eq!(
-        config.enabled_adapters,
-        Some(vec![
-            JE_1_7_10_ADAPTER_ID.to_string(),
-            JE_1_8_X_ADAPTER_ID.to_string(),
-            JE_1_12_2_ADAPTER_ID.to_string(),
-        ])
+        parsed.topology.enabled_adapters,
+        config.topology.enabled_adapters
     );
     Ok(())
 }
 
 #[test]
-fn server_properties_parse_bedrock_adapter_and_auth_profile() -> Result<(), RuntimeError> {
+fn server_toml_parse_bedrock_adapter_and_auth_profile() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(
-        &path,
-        "be-enabled=true\ndefault-bedrock-adapter=be-26_3\nenabled-bedrock-adapters=be-26_3,be-placeholder\nbedrock-auth-profile=bedrock-xbl-v1\n",
-    )?;
+    let mut config = ServerConfig::default();
+    config.topology.be_enabled = true;
+    config.topology.default_bedrock_adapter = BE_26_3_ADAPTER_ID.to_string();
+    config.topology.enabled_bedrock_adapters = Some(vec![
+        BE_26_3_ADAPTER_ID.to_string(),
+        BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+    ]);
+    config.profiles.bedrock_auth = "bedrock-xbl-v1".to_string();
+    let path = temp_dir.path().join("server.toml");
+    write_server_toml(&path, &config)?;
 
-    let config = ServerConfig::from_properties(&path)?;
-    assert!(config.be_enabled);
-    assert_eq!(config.default_bedrock_adapter, BE_26_3_ADAPTER_ID);
+    let parsed = ServerConfig::from_toml(&path)?;
+    assert!(parsed.topology.be_enabled);
     assert_eq!(
-        config.enabled_bedrock_adapters,
+        parsed.topology.default_bedrock_adapter,
+        BE_26_3_ADAPTER_ID.to_string()
+    );
+    assert_eq!(
+        parsed.topology.enabled_bedrock_adapters,
         Some(vec![
             BE_26_3_ADAPTER_ID.to_string(),
             BE_PLACEHOLDER_ADAPTER_ID.to_string(),
         ])
     );
-    assert_eq!(config.bedrock_auth_profile, "bedrock-xbl-v1");
+    assert_eq!(parsed.profiles.bedrock_auth, "bedrock-xbl-v1");
     Ok(())
 }
 
 #[test]
-fn server_properties_parse_gameplay_profile_configuration() -> Result<(), RuntimeError> {
+fn server_toml_parse_gameplay_profile_configuration() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(
-        &path,
-        "default-gameplay-profile=canonical\ngameplay-profile-map=je-1_7_10:readonly,je-1_12_2:canonical\n",
-    )?;
+    let mut config = ServerConfig::default();
+    config.profiles.default_gameplay = "canonical".to_string();
+    config.profiles.gameplay_map = gameplay_profile_map(&[
+        (JE_1_7_10_ADAPTER_ID, "readonly"),
+        (JE_1_12_2_ADAPTER_ID, "canonical"),
+    ]);
+    let path = temp_dir.path().join("server.toml");
+    write_server_toml(&path, &config)?;
 
-    let config = ServerConfig::from_properties(&path)?;
-    assert_eq!(config.default_gameplay_profile, "canonical");
+    let parsed = ServerConfig::from_toml(&path)?;
+    assert_eq!(parsed.profiles.default_gameplay, "canonical");
     assert_eq!(
-        config.gameplay_profile_map,
+        parsed.profiles.gameplay_map,
         gameplay_profile_map(&[
             (JE_1_7_10_ADAPTER_ID, "readonly"),
             (JE_1_12_2_ADAPTER_ID, "canonical"),
@@ -134,202 +160,235 @@ fn server_properties_parse_gameplay_profile_configuration() -> Result<(), Runtim
 }
 
 #[test]
-fn server_properties_parse_auth_profile() -> Result<(), RuntimeError> {
+fn server_toml_parse_auth_profile() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(&path, "auth-profile=offline-v1\n")?;
+    let mut config = ServerConfig::default();
+    config.profiles.auth = OFFLINE_AUTH_PROFILE_ID.to_string();
+    let path = temp_dir.path().join("server.toml");
+    write_server_toml(&path, &config)?;
 
-    let config = ServerConfig::from_properties(&path)?;
-    assert_eq!(config.auth_profile, OFFLINE_AUTH_PROFILE_ID);
+    let parsed = ServerConfig::from_toml(&path)?;
+    assert_eq!(parsed.profiles.auth, OFFLINE_AUTH_PROFILE_ID);
     Ok(())
 }
 
 #[test]
 fn plugin_host_config_copies_all_plugin_host_fields() {
-    let config = ServerConfig {
-        be_enabled: true,
-        storage_profile: "custom-storage".to_string(),
-        auth_profile: "custom-auth".to_string(),
-        bedrock_auth_profile: "custom-bedrock-auth".to_string(),
-        default_gameplay_profile: "readonly".to_string(),
-        gameplay_profile_map: gameplay_profile_map(&[
-            (JE_1_7_10_ADAPTER_ID, "readonly"),
-            (BE_26_3_ADAPTER_ID, "canonical"),
-        ]),
-        plugins_dir: PathBuf::from("custom").join("plugins"),
-        plugin_allowlist: Some(vec![
-            "je-1_7_10".to_string(),
-            "auth-mojang-online".to_string(),
-            "auth-bedrock-xbl".to_string(),
-        ]),
-        plugin_failure_policy_protocol: PluginFailureAction::Skip,
-        plugin_failure_policy_gameplay: PluginFailureAction::FailFast,
-        plugin_failure_policy_storage: PluginFailureAction::Skip,
-        plugin_failure_policy_auth: PluginFailureAction::FailFast,
-        plugin_abi_min: mc_plugin_api::abi::PluginAbiVersion { major: 1, minor: 9 },
-        plugin_abi_max: mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 1 },
-        ..ServerConfig::default()
-    };
+    let mut config = ServerConfig::default();
+    config.topology.be_enabled = true;
+    config.bootstrap.storage_profile = "custom-storage".to_string();
+    config.profiles.auth = "custom-auth".to_string();
+    config.profiles.bedrock_auth = "custom-bedrock-auth".to_string();
+    config.profiles.default_gameplay = "readonly".to_string();
+    config.profiles.gameplay_map = gameplay_profile_map(&[
+        (JE_1_7_10_ADAPTER_ID, "readonly"),
+        (BE_26_3_ADAPTER_ID, "canonical"),
+    ]);
+    config.bootstrap.plugins_dir = PathBuf::from("custom").join("plugins");
+    config.plugins.allowlist = Some(vec![
+        "je-1_7_10".to_string(),
+        "auth-mojang-online".to_string(),
+        "auth-bedrock-xbl".to_string(),
+    ]);
+    config.plugins.failure_policy.protocol = PluginFailureAction::Skip;
+    config.plugins.failure_policy.gameplay = PluginFailureAction::FailFast;
+    config.plugins.failure_policy.storage = PluginFailureAction::Skip;
+    config.plugins.failure_policy.auth = PluginFailureAction::FailFast;
+    config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 0 };
+    config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 1 };
 
     let plugin_host_config = config.plugin_host_config();
 
-    assert_eq!(plugin_host_config.be_enabled, config.be_enabled);
-    assert_eq!(plugin_host_config.storage_profile, config.storage_profile);
-    assert_eq!(plugin_host_config.auth_profile, config.auth_profile);
+    assert_eq!(plugin_host_config.be_enabled, config.topology.be_enabled);
+    assert_eq!(
+        plugin_host_config.storage_profile,
+        config.bootstrap.storage_profile
+    );
+    assert_eq!(plugin_host_config.auth_profile, config.profiles.auth);
     assert_eq!(
         plugin_host_config.bedrock_auth_profile,
-        config.bedrock_auth_profile
+        config.profiles.bedrock_auth
     );
     assert_eq!(
         plugin_host_config.default_gameplay_profile,
-        config.default_gameplay_profile
+        config.profiles.default_gameplay
     );
     assert_eq!(
         plugin_host_config.gameplay_profile_map,
-        config.gameplay_profile_map
+        config.profiles.gameplay_map
     );
-    assert_eq!(plugin_host_config.plugins_dir, config.plugins_dir);
-    assert_eq!(plugin_host_config.plugin_allowlist, config.plugin_allowlist);
+    assert_eq!(plugin_host_config.plugins_dir, config.bootstrap.plugins_dir);
+    assert_eq!(
+        plugin_host_config.plugin_allowlist,
+        config.plugins.allowlist
+    );
     assert_eq!(
         plugin_host_config.plugin_failure_policy_protocol,
-        config.plugin_failure_policy_protocol
+        config.plugins.failure_policy.protocol
     );
     assert_eq!(
         plugin_host_config.plugin_failure_policy_gameplay,
-        config.plugin_failure_policy_gameplay
+        config.plugins.failure_policy.gameplay
     );
     assert_eq!(
         plugin_host_config.plugin_failure_policy_storage,
-        config.plugin_failure_policy_storage
+        config.plugins.failure_policy.storage
     );
     assert_eq!(
         plugin_host_config.plugin_failure_policy_auth,
-        config.plugin_failure_policy_auth
+        config.plugins.failure_policy.auth
     );
-    assert_eq!(plugin_host_config.plugin_abi_min, config.plugin_abi_min);
-    assert_eq!(plugin_host_config.plugin_abi_max, config.plugin_abi_max);
+    assert_eq!(
+        plugin_host_config.plugin_abi_min,
+        config.bootstrap.plugin_abi_min
+    );
+    assert_eq!(
+        plugin_host_config.plugin_abi_max,
+        config.bootstrap.plugin_abi_max
+    );
 }
 
 #[test]
-fn server_properties_parse_topology_reload_settings() -> Result<(), RuntimeError> {
+fn server_toml_parse_topology_reload_settings() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(
-        &path,
-        "topology-reload-watch=true\ntopology-drain-grace-secs=45\n",
-    )?;
+    let mut config = ServerConfig::default();
+    config.topology.reload_watch = true;
+    config.topology.drain_grace_secs = 45;
+    let path = temp_dir.path().join("server.toml");
+    write_server_toml(&path, &config)?;
 
-    let config = ServerConfig::from_properties(&path)?;
-    assert!(config.topology_reload_watch);
-    assert_eq!(config.topology_drain_grace_secs, 45);
+    let parsed = ServerConfig::from_toml(&path)?;
+    assert!(parsed.topology.reload_watch);
+    assert_eq!(parsed.topology.drain_grace_secs, 45);
     Ok(())
 }
 
 #[test]
-fn server_properties_parse_per_kind_failure_policies() -> Result<(), RuntimeError> {
+fn server_toml_parse_per_kind_failure_policies() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(
-        &path,
-        "plugin-failure-policy-protocol=skip\nplugin-failure-policy-gameplay=fail-fast\nplugin-failure-policy-storage=skip\nplugin-failure-policy-auth=fail-fast\n",
-    )?;
+    let mut config = ServerConfig::default();
+    config.plugins.failure_policy.protocol = PluginFailureAction::Skip;
+    config.plugins.failure_policy.gameplay = PluginFailureAction::FailFast;
+    config.plugins.failure_policy.storage = PluginFailureAction::Skip;
+    config.plugins.failure_policy.auth = PluginFailureAction::FailFast;
+    let path = temp_dir.path().join("server.toml");
+    write_server_toml(&path, &config)?;
 
-    let config = ServerConfig::from_properties(&path)?;
+    let parsed = ServerConfig::from_toml(&path)?;
     assert_eq!(
-        config.plugin_failure_policy_protocol,
+        parsed.plugins.failure_policy.protocol,
         PluginFailureAction::Skip
     );
     assert_eq!(
-        config.plugin_failure_policy_gameplay,
+        parsed.plugins.failure_policy.gameplay,
         PluginFailureAction::FailFast
     );
     assert_eq!(
-        config.plugin_failure_policy_storage,
+        parsed.plugins.failure_policy.storage,
         PluginFailureAction::Skip
     );
     assert_eq!(
-        config.plugin_failure_policy_auth,
+        parsed.plugins.failure_policy.auth,
         PluginFailureAction::FailFast
     );
     Ok(())
 }
 
 #[test]
-fn server_properties_use_balanced_failure_policy_defaults() -> Result<(), RuntimeError> {
+fn server_toml_use_balanced_failure_policy_defaults() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(&path, "level-name=flatland\n")?;
+    let path = temp_dir.path().join("server.toml");
+    write_server_toml(&path, &ServerConfig::default())?;
 
-    let config = ServerConfig::from_properties(&path)?;
+    let config = ServerConfig::from_toml(&path)?;
     assert_eq!(
-        config.plugin_failure_policy_protocol,
+        config.plugins.failure_policy.protocol,
         PluginFailureAction::Quarantine
     );
     assert_eq!(
-        config.plugin_failure_policy_gameplay,
+        config.plugins.failure_policy.gameplay,
         PluginFailureAction::Quarantine
     );
     assert_eq!(
-        config.plugin_failure_policy_storage,
+        config.plugins.failure_policy.storage,
         PluginFailureAction::FailFast
     );
-    assert_eq!(config.plugin_failure_policy_auth, PluginFailureAction::Skip);
+    assert_eq!(
+        config.plugins.failure_policy.auth,
+        PluginFailureAction::Skip
+    );
     Ok(())
 }
 
 #[test]
-fn server_properties_reject_legacy_failure_policy_key() -> Result<(), RuntimeError> {
-    let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(&path, "plugin-failure-policy=quarantine\n")?;
+fn server_toml_reject_invalid_failure_policy_for_kind() {
+    let temp_dir = tempdir().expect("tempdir should be available");
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[bootstrap]
 
-    let error =
-        ServerConfig::from_properties(&path).expect_err("legacy failure policy key should fail");
-    assert!(matches!(
-        error,
-        RuntimeError::Config(message) if message.contains("plugin-failure-policy is no longer supported")
-    ));
-    Ok(())
-}
+[network]
 
-#[test]
-fn server_properties_reject_invalid_failure_policy_for_kind() -> Result<(), RuntimeError> {
-    let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(&path, "plugin-failure-policy-storage=quarantine\n")?;
+[topology]
 
-    let error = ServerConfig::from_properties(&path)
+[plugins]
+
+[plugins.failure_policy]
+storage = "quarantine"
+
+[profiles]
+"#,
+    )
+    .expect("server.toml should write");
+
+    let error = ServerConfig::from_toml(&path)
         .expect_err("storage failure policy should reject quarantine");
     assert!(matches!(
         error,
         RuntimeError::Config(message) if message.contains("plugin-failure-policy-storage")
     ));
-    Ok(())
 }
 
 #[test]
-fn server_properties_reject_non_flat_level_type() -> Result<(), RuntimeError> {
-    let temp_dir = tempdir()?;
-    let path = temp_dir.path().join("server.properties");
-    fs::write(&path, "level-type=DEFAULT\n")?;
+fn server_toml_reject_non_flat_level_type() {
+    let temp_dir = tempdir().expect("tempdir should be available");
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[bootstrap]
+level_type = "DEFAULT"
 
-    let error = ServerConfig::from_properties(&path).expect_err("DEFAULT should be rejected");
-    assert!(matches!(error, RuntimeError::Unsupported(message) if message.contains("only FLAT")));
-    Ok(())
+[network]
+
+[topology]
+
+[plugins]
+
+[plugins.failure_policy]
+
+[profiles]
+"#,
+    )
+    .expect("server.toml should write");
+
+    let error = ServerConfig::from_toml(&path).expect_err("DEFAULT should be rejected");
+    assert!(matches!(
+        error,
+        RuntimeError::Unsupported(message) if message.contains("only `flat`")
+    ));
 }
 
 #[test]
 fn be_enabled_requires_udp_adapter() {
     let registry =
         plugin_test_registries_tcp_only().expect("tcp-only plugin registry should be available");
-    let error = build_listener_plans(
-        &ServerConfig {
-            be_enabled: true,
-            ..ServerConfig::default()
-        },
-        registry.protocols(),
-    )
-    .expect_err("be-enabled should require udp adapter");
+    let mut config = ServerConfig::default();
+    config.topology.be_enabled = true;
+    let error = build_listener_plans(&config, registry.protocols())
+        .expect_err("be-enabled should require udp adapter");
     assert!(matches!(
         error,
         RuntimeError::Config(message) if message.contains("be-enabled=true")
@@ -339,30 +398,20 @@ fn be_enabled_requires_udp_adapter() {
 #[tokio::test]
 async fn enabled_adapters_must_include_default_adapter() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    assert_spawn_fails_with_message(
-        ServerConfig {
-            enabled_adapters: Some(vec![JE_1_8_X_ADAPTER_ID.to_string()]),
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        "default-adapter",
-    )
-    .await
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.topology.enabled_adapters = Some(vec![JE_1_8_X_ADAPTER_ID.to_string()]);
+    assert_spawn_fails_with_message(config, "default-adapter").await
 }
 
 #[tokio::test]
 async fn duplicate_enabled_adapters_fail_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    assert_spawn_fails_with_message(
-        ServerConfig {
-            enabled_adapters: Some(vec![
-                JE_1_7_10_ADAPTER_ID.to_string(),
-                JE_1_7_10_ADAPTER_ID.to_string(),
-            ]),
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        "duplicate adapter",
-    )
-    .await
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_7_10_ADAPTER_ID.to_string(),
+    ]);
+    assert_spawn_fails_with_message(config, "duplicate adapter").await
 }
 
 #[test]
@@ -374,16 +423,14 @@ fn plugin_abi_range_must_include_current_host_abi() -> Result<(), RuntimeError> 
         TCP_ONLY_PROTOCOL_PLUGIN_IDS,
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    let config = ServerConfig {
-        plugins_dir: dist_dir,
-        plugin_allowlist: Some(plugin_allowlist_with_supporting_plugins(
-            TCP_ONLY_PROTOCOL_PLUGIN_IDS,
-            STORAGE_AND_AUTH_PLUGIN_IDS,
-        )),
-        plugin_abi_min: mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 },
-        plugin_abi_max: mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 9 },
-        ..ServerConfig::default()
-    };
+    let mut config = ServerConfig::default();
+    config.bootstrap.plugins_dir = dist_dir;
+    config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
+        TCP_ONLY_PROTOCOL_PLUGIN_IDS,
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+    ));
+    config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
+    config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 9 };
     let error = match plugin_test_registries_from_config(&config) {
         Ok(_) => panic!("plugin ABI range should reject configs that exclude the current host ABI"),
         Err(error) => error,

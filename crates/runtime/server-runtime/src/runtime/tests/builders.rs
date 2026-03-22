@@ -3,15 +3,11 @@ use super::*;
 #[tokio::test]
 async fn storage_skip_keeps_dirty_state_after_runtime_save_failure() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     let server = build_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
-            plugin_failure_policy_storage: PluginFailureAction::Skip,
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        config,
         in_process_failing_storage_registries(PluginFailureAction::Skip)?,
     )
     .await?;
@@ -30,13 +26,9 @@ async fn storage_skip_keeps_dirty_state_after_runtime_save_failure() -> Result<(
 async fn plain_server_builder_rejects_reload_watch_without_reload_host() -> Result<(), RuntimeError>
 {
     let temp_dir = tempdir()?;
-    let config = ServerConfig {
-        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-        server_port: 0,
-        plugin_reload_watch: true,
-        world_dir: temp_dir.path().join("world"),
-        ..ServerConfig::default()
-    };
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.plugins.reload_watch = true;
     let LoadedPluginTestEnvironment { loaded_plugins, .. } =
         in_process_failing_storage_registries(PluginFailureAction::Skip)?;
     let error = match ServerBuilder::new(ServerConfigSource::Inline(config), loaded_plugins)
@@ -49,7 +41,7 @@ async fn plain_server_builder_rejects_reload_watch_without_reload_host() -> Resu
     assert!(matches!(
         error,
         RuntimeError::Config(message)
-            if message.contains("plugin-reload-watch requires ServerBuilder::with_reload_host")
+            if message.contains("plugins.reload_watch requires ServerBuilder::with_reload_host")
     ));
     Ok(())
 }
@@ -58,14 +50,9 @@ async fn plain_server_builder_rejects_reload_watch_without_reload_host() -> Resu
 async fn reloadable_server_builder_applies_reload_host_failure_policy() -> Result<(), RuntimeError>
 {
     let temp_dir = tempdir()?;
-    let config = ServerConfig {
-        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-        server_port: 0,
-        storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
-        plugin_failure_policy_storage: PluginFailureAction::Skip,
-        world_dir: temp_dir.path().join("world"),
-        ..ServerConfig::default()
-    };
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     let LoadedPluginTestEnvironment { loaded_plugins, .. } =
         in_process_failing_storage_registries(PluginFailureAction::Skip)?;
     let LoadedPluginTestEnvironment {
@@ -107,15 +94,11 @@ async fn reloadable_server_builder_applies_reload_host_failure_policy() -> Resul
 async fn storage_fail_fast_returns_plugin_fatal_on_runtime_save_failure() -> Result<(), RuntimeError>
 {
     let temp_dir = tempdir()?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.plugins.failure_policy.storage = PluginFailureAction::FailFast;
     let server = build_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
-            plugin_failure_policy_storage: PluginFailureAction::FailFast,
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        config,
         in_process_failing_storage_registries(PluginFailureAction::FailFast)?,
     )
     .await?;

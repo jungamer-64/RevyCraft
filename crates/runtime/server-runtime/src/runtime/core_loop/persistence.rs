@@ -14,7 +14,7 @@ impl RuntimeServer {
         };
         match self
             .storage_profile
-            .save_snapshot(&self.config.world_dir, &snapshot)
+            .save_snapshot(&self.config.bootstrap.world_dir, &snapshot)
         {
             Ok(()) => {
                 let mut state = self.state.lock().await;

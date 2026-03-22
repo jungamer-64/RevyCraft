@@ -130,6 +130,7 @@ pub struct TestPluginHostBuilder {
     gameplay_plugins: Vec<InProcessGameplayPlugin>,
     storage_plugins: Vec<InProcessStoragePlugin>,
     auth_plugins: Vec<InProcessAuthPlugin>,
+    bootstrap_config: crate::config::BootstrapConfig,
     abi_range: PluginAbiRange,
     failure_matrix: PluginFailureMatrix,
 }
@@ -164,6 +165,13 @@ impl TestPluginHostBuilder {
         self
     }
 
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn bootstrap_config(mut self, bootstrap_config: crate::config::BootstrapConfig) -> Self {
+        self.bootstrap_config = bootstrap_config;
+        self
+    }
+
     #[must_use]
     pub const fn abi_range(mut self, abi_range: PluginAbiRange) -> Self {
         self.abi_range = abi_range;
@@ -184,6 +192,7 @@ impl TestPluginHostBuilder {
                 gameplay_plugins: self.gameplay_plugins,
                 storage_plugins: self.storage_plugins,
                 auth_plugins: self.auth_plugins,
+                bootstrap_config: self.bootstrap_config,
                 abi_range: self.abi_range,
                 failure_matrix: self.failure_matrix,
             }),

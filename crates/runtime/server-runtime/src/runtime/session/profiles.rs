@@ -24,20 +24,27 @@ impl RuntimeServer {
         });
     }
 
-    fn gameplay_profile_for_adapter(&self, adapter_id: &str) -> &str {
-        self.config
-            .gameplay_profile_map
+    async fn gameplay_profile_for_adapter(&self, adapter_id: &str) -> String {
+        let live_state = self.live_state.read().await;
+        live_state
+            .config
+            .profiles
+            .gameplay_map
             .get(adapter_id)
-            .map_or(&self.config.default_gameplay_profile, String::as_str)
+            .cloned()
+            .unwrap_or_else(|| live_state.config.profiles.default_gameplay.clone())
     }
 
-    pub(in crate::runtime::session) fn resolve_gameplay_for_adapter(
+    pub(in crate::runtime::session) async fn resolve_gameplay_for_adapter(
         &self,
         adapter_id: &str,
     ) -> Result<Arc<dyn GameplayProfileHandle>, RuntimeError> {
-        let profile_id = self.gameplay_profile_for_adapter(adapter_id);
-        self.loaded_plugins
-            .resolve_gameplay_profile(profile_id)
+        let profile_id = self.gameplay_profile_for_adapter(adapter_id).await;
+        self.live_state
+            .read()
+            .await
+            .loaded_plugins
+            .resolve_gameplay_profile(profile_id.as_str())
             .ok_or_else(|| {
                 RuntimeError::Config(format!(
                     "gameplay profile `{profile_id}` for adapter `{adapter_id}` is not active"
@@ -45,10 +52,13 @@ impl RuntimeServer {
             })
     }
 
-    pub(in crate::runtime::session) fn resolve_bedrock_auth_profile(
+    pub(in crate::runtime::session) async fn resolve_bedrock_auth_profile(
         &self,
     ) -> Result<Arc<dyn AuthProfileHandle>, RuntimeError> {
-        self.bedrock_auth_profile
+        self.live_state
+            .read()
+            .await
+            .bedrock_auth_profile
             .clone()
             .ok_or_else(|| RuntimeError::Config("bedrock auth profile is not active".to_string()))
     }

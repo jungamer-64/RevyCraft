@@ -1,7 +1,8 @@
 use crate::PluginHostError;
+use crate::config::RuntimeSelectionConfig;
 use crate::host::{PluginFailureAction, PluginHostStatusSnapshot};
 use crate::plugin_host::PreparedProtocolTopology;
-use crate::registry::ProtocolRegistry;
+use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_core::{
     CapabilitySet, GameplayPolicyResolver, GameplayProfileId, PlayerId, PluginGenerationId,
     WorldSnapshot,
@@ -153,7 +154,22 @@ impl RuntimeProtocolTopologyCandidate {
     }
 }
 
+pub struct RuntimeSelectionResult {
+    pub loaded_plugins: LoadedPluginSet,
+    pub reloaded: Vec<String>,
+}
+
 pub trait RuntimePluginHost: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns [`PluginHostError`] when the host cannot reconcile its
+    /// runtime-selected gameplay/auth/plugin state with the provided config.
+    fn reconcile_runtime_selection(
+        &self,
+        config: &RuntimeSelectionConfig,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<RuntimeSelectionResult, PluginHostError>;
+
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when a modified plugin cannot be reloaded.

@@ -1,5 +1,28 @@
 use super::*;
 
+fn gameplay_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerConfig {
+    let mut config = loopback_server_config(world_dir);
+    config.bootstrap.game_mode = 1;
+    config.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_12_2_ADAPTER_ID.to_string(),
+    ]);
+    config.profiles.default_gameplay = "canonical".to_string();
+    config.profiles.gameplay_map = gameplay_profile_map(&[
+        (JE_1_7_10_ADAPTER_ID, "readonly"),
+        (JE_1_12_2_ADAPTER_ID, "canonical"),
+    ]);
+    config.bootstrap.plugins_dir = dist_dir;
+    config
+}
+
+fn packaged_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerConfig {
+    let mut config = loopback_server_config(world_dir);
+    config.bootstrap.game_mode = 1;
+    config.bootstrap.plugins_dir = dist_dir;
+    config
+}
+
 #[tokio::test]
 async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
@@ -17,34 +40,16 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
     )?;
     let server = build_reloadable_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            game_mode: 1,
-            enabled_adapters: Some(vec![
-                JE_1_7_10_ADAPTER_ID.to_string(),
-                JE_1_12_2_ADAPTER_ID.to_string(),
-            ]),
-            default_gameplay_profile: "canonical".to_string(),
-            gameplay_profile_map: gameplay_profile_map(&[
-                (JE_1_7_10_ADAPTER_ID, "readonly"),
-                (JE_1_12_2_ADAPTER_ID, "canonical"),
-            ]),
-            plugins_dir: dist_dir.clone(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        gameplay_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
         registries,
     )
     .await?;
-    let canonical_before = server
-        .runtime
-        .loaded_plugins
+    let canonical_before = loaded_plugins_snapshot(&server)
+        .await
         .resolve_gameplay_profile("canonical")
         .expect("canonical gameplay profile should resolve");
-    let readonly_before = server
-        .runtime
-        .loaded_plugins
+    let readonly_before = loaded_plugins_snapshot(&server)
+        .await
         .resolve_gameplay_profile("readonly")
         .expect("readonly gameplay profile should resolve");
     let canonical_generation = canonical_before
@@ -87,14 +92,12 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         "gameplay reload should report canonical plugin reload"
     );
 
-    let canonical_after = server
-        .runtime
-        .loaded_plugins
+    let canonical_after = loaded_plugins_snapshot(&server)
+        .await
         .resolve_gameplay_profile("canonical")
         .expect("canonical gameplay profile should still resolve");
-    let readonly_after = server
-        .runtime
-        .loaded_plugins
+    let readonly_after = loaded_plugins_snapshot(&server)
+        .await
         .resolve_gameplay_profile("readonly")
         .expect("readonly gameplay profile should still resolve");
     assert_ne!(
@@ -141,29 +144,12 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
     )?;
     let server = build_reloadable_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            game_mode: 1,
-            enabled_adapters: Some(vec![
-                JE_1_7_10_ADAPTER_ID.to_string(),
-                JE_1_12_2_ADAPTER_ID.to_string(),
-            ]),
-            default_gameplay_profile: "canonical".to_string(),
-            gameplay_profile_map: gameplay_profile_map(&[
-                (JE_1_7_10_ADAPTER_ID, "readonly"),
-                (JE_1_12_2_ADAPTER_ID, "canonical"),
-            ]),
-            plugins_dir: dist_dir.clone(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        gameplay_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
         registries,
     )
     .await?;
-    let canonical_before = server
-        .runtime
-        .loaded_plugins
+    let canonical_before = loaded_plugins_snapshot(&server)
+        .await
         .resolve_gameplay_profile("canonical")
         .expect("canonical gameplay profile should resolve");
     let before_generation = canonical_before
@@ -203,9 +189,8 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         "failed gameplay migration should not swap the canonical generation"
     );
 
-    let canonical_after = server
-        .runtime
-        .loaded_plugins
+    let canonical_after = loaded_plugins_snapshot(&server)
+        .await
         .resolve_gameplay_profile("canonical")
         .expect("canonical gameplay profile should still resolve");
     assert_eq!(
@@ -246,20 +231,12 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     )?;
     let registries = plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?;
     let server = build_reloadable_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            game_mode: 1,
-            plugins_dir: dist_dir.clone(),
-            world_dir: world_dir.clone(),
-            ..ServerConfig::default()
-        },
+        packaged_reload_server_config(world_dir.clone(), dist_dir.clone()),
         registries,
     )
     .await?;
-    let storage_before = server
-        .runtime
-        .loaded_plugins
+    let storage_before = loaded_plugins_snapshot(&server)
+        .await
         .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
         .expect("storage profile should resolve");
     let before_generation = storage_before
@@ -302,9 +279,8 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
         "storage reload should report generation swap"
     );
 
-    let storage_after = server
-        .runtime
-        .loaded_plugins
+    let storage_after = loaded_plugins_snapshot(&server)
+        .await
         .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
         .expect("storage profile should still resolve");
     assert_ne!(
@@ -320,14 +296,7 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     server.shutdown().await?;
 
     let restarted = build_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            game_mode: 1,
-            plugins_dir: dist_dir.clone(),
-            world_dir: world_dir.clone(),
-            ..ServerConfig::default()
-        },
+        packaged_reload_server_config(world_dir.clone(), dist_dir.clone()),
         plugin_test_registries_from_dist(dist_dir, &[JE_1_7_10_ADAPTER_ID])?,
     )
     .await?;
@@ -354,24 +323,18 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
         &[JE_1_7_10_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    let config = ServerConfig {
-        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-        server_port: 0,
-        plugins_dir: dist_dir.clone(),
-        plugin_allowlist: Some(plugin_allowlist_with_supporting_plugins(
-            &[JE_1_7_10_ADAPTER_ID],
-            STORAGE_AND_AUTH_PLUGIN_IDS,
-        )),
-        plugin_failure_policy_storage: PluginFailureAction::Skip,
-        world_dir: temp_dir.path().join("world"),
-        ..ServerConfig::default()
-    };
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.plugins_dir = dist_dir.clone();
+    config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
+        &[JE_1_7_10_ADAPTER_ID],
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+    ));
+    config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     let server =
         build_reloadable_test_server(config.clone(), plugin_test_registries_from_config(&config)?)
             .await?;
-    let storage_before = server
-        .runtime
-        .loaded_plugins
+    let storage_before = loaded_plugins_snapshot(&server)
+        .await
         .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
         .expect("storage profile should resolve");
     let before_generation = storage_before
@@ -397,9 +360,8 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
         "failed storage migration should not swap the storage generation"
     );
 
-    let storage_after = server
-        .runtime
-        .loaded_plugins
+    let storage_after = loaded_plugins_snapshot(&server)
+        .await
         .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
         .expect("storage profile should still resolve");
     assert_eq!(
@@ -428,20 +390,12 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let server = build_reloadable_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            game_mode: 1,
-            plugins_dir: dist_dir.clone(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        packaged_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
     )
     .await?;
-    let auth_before = server
-        .runtime
-        .loaded_plugins
+    let auth_before = loaded_plugins_snapshot(&server)
+        .await
         .resolve_auth_profile(OFFLINE_AUTH_PROFILE_ID)
         .expect("auth profile should resolve");
     let before_generation = auth_before
@@ -476,9 +430,8 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
         "auth reload should report generation swap"
     );
 
-    let auth_after = server
-        .runtime
-        .loaded_plugins
+    let auth_after = loaded_plugins_snapshot(&server)
+        .await
         .resolve_auth_profile(OFFLINE_AUTH_PROFILE_ID)
         .expect("auth profile should still resolve");
     assert_ne!(auth_after.plugin_generation_id(), Some(before_generation));

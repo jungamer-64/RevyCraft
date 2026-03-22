@@ -1,15 +1,6 @@
 use super::*;
 use mc_proto_common::ConnectionPhase;
 
-fn loopback_server_config(world_dir: PathBuf) -> ServerConfig {
-    ServerConfig {
-        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-        server_port: 0,
-        world_dir,
-        ..ServerConfig::default()
-    }
-}
-
 async fn assert_spawn_fails_with_message(
     config: ServerConfig,
     expected_fragment: &str,
@@ -74,11 +65,16 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
         .plugin_host
         .as_ref()
         .expect("runtime status should expose the plugin host snapshot");
-    assert_eq!(plugin_host.protocols.len(), 1);
+    assert_eq!(plugin_host.protocols.len(), 5);
     assert_eq!(plugin_host.gameplay.len(), 1);
     assert_eq!(plugin_host.storage.len(), 1);
     assert_eq!(plugin_host.auth.len(), 1);
-    assert_eq!(plugin_host.protocols[0].adapter_id, JE_1_7_10_ADAPTER_ID);
+    assert!(
+        plugin_host
+            .protocols
+            .iter()
+            .any(|plugin| plugin.adapter_id == JE_1_7_10_ADAPTER_ID)
+    );
     assert_eq!(
         plugin_host.failure_matrix.protocol,
         PluginFailureMatrix::default().protocol
@@ -91,7 +87,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
             "runtime active-topology=1 draining-topologies=0 listeners=1 sessions=0 dirty=false\n",
             "topology tcp-default=je-1_7_10 tcp-enabled=je-1_7_10 udp-default=- udp-enabled=- max-players=20 motd=\"Multi-version Rust server\"\n",
             "session-summary transport=tcp:0,udp:0 phase=handshaking:0,status:0,login:0,play:0\n",
-            "plugins protocol=1 gameplay=1 storage=1 auth=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
+            "plugins protocol=5 gameplay=1 storage=1 auth=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
         )
     );
     let serialized = toml::to_string(&status).expect("runtime status snapshot should serialize");
@@ -104,14 +100,9 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
 #[tokio::test]
 async fn running_server_exposes_udp_listener_binding_when_enabled() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = build_test_server(
-        ServerConfig {
-            be_enabled: true,
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        plugin_test_registries_all()?,
-    )
-    .await?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.topology.be_enabled = true;
+    let server = build_test_server(config, plugin_test_registries_all()?).await?;
 
     assert_eq!(server.listener_bindings().len(), 2);
     let bindings = server.listener_bindings();
@@ -196,35 +187,25 @@ async fn running_server_session_status_reports_live_sessions() -> Result<(), Run
 #[tokio::test]
 async fn default_bedrock_adapter_requires_listener_metadata() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    assert_spawn_fails_with_message(
-        ServerConfig {
-            be_enabled: true,
-            default_bedrock_adapter: BE_PLACEHOLDER_ADAPTER_ID.to_string(),
-            enabled_bedrock_adapters: Some(vec![BE_PLACEHOLDER_ADAPTER_ID.to_string()]),
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        "must provide bedrock listener metadata",
-    )
-    .await
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.topology.be_enabled = true;
+    config.topology.default_bedrock_adapter = BE_PLACEHOLDER_ADAPTER_ID.to_string();
+    config.topology.enabled_bedrock_adapters = Some(vec![BE_PLACEHOLDER_ADAPTER_ID.to_string()]);
+    assert_spawn_fails_with_message(config, "must provide bedrock listener metadata").await
 }
 
 #[tokio::test]
 async fn placeholder_bedrock_adapter_can_remain_enabled_when_not_default()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = build_test_server(
-        ServerConfig {
-            be_enabled: true,
-            default_bedrock_adapter: BE_26_3_ADAPTER_ID.to_string(),
-            enabled_bedrock_adapters: Some(vec![
-                BE_26_3_ADAPTER_ID.to_string(),
-                BE_PLACEHOLDER_ADAPTER_ID.to_string(),
-            ]),
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        plugin_test_registries_all()?,
-    )
-    .await?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.topology.be_enabled = true;
+    config.topology.default_bedrock_adapter = BE_26_3_ADAPTER_ID.to_string();
+    config.topology.enabled_bedrock_adapters = Some(vec![
+        BE_26_3_ADAPTER_ID.to_string(),
+        BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+    ]);
+    let server = build_test_server(config, plugin_test_registries_all()?).await?;
 
     let bindings = server.listener_bindings();
     let binding = bindings
@@ -244,18 +225,13 @@ async fn placeholder_bedrock_adapter_can_remain_enabled_when_not_default()
 #[tokio::test]
 async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = build_test_server(
-        ServerConfig {
-            enabled_adapters: Some(vec![
-                JE_1_7_10_ADAPTER_ID.to_string(),
-                JE_1_8_X_ADAPTER_ID.to_string(),
-                JE_1_12_2_ADAPTER_ID.to_string(),
-            ]),
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        plugin_test_registries_all()?,
-    )
-    .await?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_1_12_2_ADAPTER_ID.to_string(),
+    ]);
+    let server = build_test_server(config, plugin_test_registries_all()?).await?;
 
     let bindings = server.listener_bindings();
     let binding = bindings
@@ -372,14 +348,9 @@ fn udp_unknown_datagram_is_ignored() -> Result<(), RuntimeError> {
 #[tokio::test]
 async fn udp_bedrock_probe_does_not_block_je_status() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = build_test_server(
-        ServerConfig {
-            be_enabled: true,
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        plugin_test_registries_all()?,
-    )
-    .await?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.topology.be_enabled = true;
+    let server = build_test_server(config, plugin_test_registries_all()?).await?;
 
     let udp_addr = udp_listener_addr(&server);
     let udp_client = UdpSocket::bind("127.0.0.1:0").await?;

@@ -1,22 +1,5 @@
 use super::*;
 
-pub(crate) fn write_topology_properties(
-    path: &Path,
-    plugins_dir: &Path,
-    lines: &[&str],
-) -> Result<(), RuntimeError> {
-    let mut contents = format!(
-        "server-ip=127.0.0.1\nserver-port=0\nlevel-name=world\nplugins-dir={}\n",
-        plugins_dir.display()
-    );
-    for line in lines {
-        contents.push_str(line);
-        contents.push('\n');
-    }
-    fs::write(path, contents)?;
-    Ok(())
-}
-
 pub(crate) async fn spawn_protocol_reload_server(
     temp_dir: &tempfile::TempDir,
     scenario: &str,
@@ -48,15 +31,11 @@ pub(crate) async fn spawn_protocol_reload_server(
             "protocol-reload-v1",
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.game_mode = 1;
+    config.bootstrap.plugins_dir = dist_dir.clone();
     let server = build_reloadable_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            game_mode: 1,
-            plugins_dir: dist_dir.clone(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        config,
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
     )
     .await?;
@@ -104,16 +83,12 @@ pub(crate) async fn spawn_online_auth_reload_server(
             "online-auth-v1",
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.online_mode = true;
+    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+    config.bootstrap.plugins_dir = dist_dir.clone();
     let server = build_reloadable_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            online_mode: true,
-            auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
-            plugins_dir: dist_dir.clone(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        config,
         plugin_test_registries_from_dist_with_supporting_plugins(
             dist_dir.clone(),
             &[JE_1_7_10_ADAPTER_ID],
@@ -121,9 +96,8 @@ pub(crate) async fn spawn_online_auth_reload_server(
         )?,
     )
     .await?;
-    let auth_before = server
-        .runtime
-        .loaded_plugins
+    let auth_before = loaded_plugins_snapshot(&server)
+        .await
         .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
         .expect("online auth profile should resolve");
     let before_generation = auth_before

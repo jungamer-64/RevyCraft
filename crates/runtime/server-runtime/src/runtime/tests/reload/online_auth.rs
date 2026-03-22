@@ -28,9 +28,8 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
             .any(|plugin_id| plugin_id == ONLINE_STUB_AUTH_PLUGIN_ID)
     );
 
-    let auth_after = server
-        .runtime
-        .loaded_plugins
+    let auth_after = loaded_plugins_snapshot(&server)
+        .await
         .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
         .expect("online auth profile should still resolve");
     assert_ne!(auth_after.plugin_generation_id(), Some(before_generation));

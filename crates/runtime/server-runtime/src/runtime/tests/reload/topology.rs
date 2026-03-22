@@ -1,5 +1,11 @@
 use super::*;
 
+fn topology_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerConfig {
+    let mut config = loopback_server_config(world_dir);
+    config.bootstrap.plugins_dir = dist_dir;
+    config
+}
+
 #[tokio::test]
 async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
@@ -22,13 +28,7 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let server = build_reloadable_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            plugins_dir: dist_dir.clone(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
     )
     .await?;
@@ -73,11 +73,10 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
 }
 
 #[tokio::test]
-async fn topology_reload_properties_source_reads_updated_server_properties()
--> Result<(), RuntimeError> {
+async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let properties_path = temp_dir.path().join("server.properties");
+    let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
         &[
@@ -87,19 +86,16 @@ async fn topology_reload_properties_source_reads_updated_server_properties()
         ],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    write_topology_properties(
-        &properties_path,
-        &dist_dir,
-        &[
-            "default-adapter=je-1_7_10",
-            "enabled-adapters=je-1_7_10,je-1_8_x",
-            "be-enabled=false",
-            "topology-reload-watch=false",
-            "topology-drain-grace-secs=30",
-        ],
-    )?;
+    let mut initial =
+        topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
+    initial.topology.default_adapter = JE_1_7_10_ADAPTER_ID.to_string();
+    initial.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_8_X_ADAPTER_ID.to_string(),
+    ]);
+    write_server_toml(&config_path, &initial)?;
     let server = build_reloadable_test_server_from_source(
-        ServerConfigSource::Properties(properties_path.clone()),
+        ServerConfigSource::Toml(config_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),
             &[
@@ -114,19 +110,12 @@ async fn topology_reload_properties_source_reads_updated_server_properties()
     assert_eq!(server.listener_bindings().len(), 1);
 
     std::thread::sleep(Duration::from_secs(1));
-    write_topology_properties(
-        &properties_path,
-        &dist_dir,
-        &[
-            "default-adapter=je-1_8_x",
-            "enabled-adapters=je-1_7_10,je-1_8_x",
-            "be-enabled=true",
-            "default-bedrock-adapter=be-26_3",
-            "enabled-bedrock-adapters=be-26_3",
-            "topology-reload-watch=false",
-            "topology-drain-grace-secs=30",
-        ],
-    )?;
+    let mut updated = initial.clone();
+    updated.topology.default_adapter = JE_1_8_X_ADAPTER_ID.to_string();
+    updated.topology.be_enabled = true;
+    updated.topology.default_bedrock_adapter = BE_26_3_ADAPTER_ID.to_string();
+    updated.topology.enabled_bedrock_adapters = Some(vec![BE_26_3_ADAPTER_ID.to_string()]);
+    write_server_toml(&config_path, &updated)?;
 
     let result = server.reload_topology().await?;
     assert_ne!(result.activated_generation_id, before_generation);
@@ -155,40 +144,29 @@ async fn topology_reload_properties_source_reads_updated_server_properties()
 async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let properties_path = temp_dir.path().join("server.properties");
+    let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
         &[JE_1_7_10_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    write_topology_properties(
-        &properties_path,
-        &dist_dir,
-        &[
-            "default-adapter=je-1_7_10",
-            "enabled-adapters=je-1_7_10",
-            "topology-reload-watch=false",
-            "topology-drain-grace-secs=30",
-        ],
-    )?;
+    let mut initial =
+        topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
+    initial.topology.default_adapter = JE_1_7_10_ADAPTER_ID.to_string();
+    initial.topology.enabled_adapters = Some(vec![JE_1_7_10_ADAPTER_ID.to_string()]);
+    write_server_toml(&config_path, &initial)?;
     let server = build_reloadable_test_server_from_source(
-        ServerConfigSource::Properties(properties_path.clone()),
+        ServerConfigSource::Toml(config_path.clone()),
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
     )
     .await?;
     let before_generation = server.runtime.active_topology().generation_id;
 
     std::thread::sleep(Duration::from_secs(1));
-    write_topology_properties(
-        &properties_path,
-        &dist_dir,
-        &[
-            "default-adapter=missing-adapter",
-            "enabled-adapters=missing-adapter",
-            "topology-reload-watch=false",
-            "topology-drain-grace-secs=30",
-        ],
-    )?;
+    let mut invalid = initial.clone();
+    invalid.topology.default_adapter = "missing-adapter".to_string();
+    invalid.topology.enabled_adapters = Some(vec!["missing-adapter".to_string()]);
+    write_server_toml(&config_path, &invalid)?;
 
     let error = server
         .reload_topology()
@@ -210,24 +188,22 @@ async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result
 async fn topology_reload_status_reports_draining_generation() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let properties_path = temp_dir.path().join("server.properties");
+    let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
         &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    write_topology_properties(
-        &properties_path,
-        &dist_dir,
-        &[
-            "default-adapter=je-1_7_10",
-            "enabled-adapters=je-1_7_10,je-1_8_x",
-            "topology-reload-watch=false",
-            "topology-drain-grace-secs=30",
-        ],
-    )?;
+    let mut initial =
+        topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
+    initial.topology.default_adapter = JE_1_7_10_ADAPTER_ID.to_string();
+    initial.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_8_X_ADAPTER_ID.to_string(),
+    ]);
+    write_server_toml(&config_path, &initial)?;
     let server = build_reloadable_test_server_from_source(
-        ServerConfigSource::Properties(properties_path.clone()),
+        ServerConfigSource::Toml(config_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),
             &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
@@ -241,16 +217,9 @@ async fn topology_reload_status_reports_draining_generation() -> Result<(), Runt
     let before_generation = server.runtime.active_topology().generation_id;
 
     std::thread::sleep(Duration::from_secs(1));
-    write_topology_properties(
-        &properties_path,
-        &dist_dir,
-        &[
-            "default-adapter=je-1_8_x",
-            "enabled-adapters=je-1_7_10,je-1_8_x",
-            "topology-reload-watch=false",
-            "topology-drain-grace-secs=30",
-        ],
-    )?;
+    let mut updated = initial.clone();
+    updated.topology.default_adapter = JE_1_8_X_ADAPTER_ID.to_string();
+    write_server_toml(&config_path, &updated)?;
     let result = server.reload_topology().await?;
     assert_ne!(result.activated_generation_id, before_generation);
 
@@ -289,24 +258,23 @@ async fn topology_reload_status_reports_draining_generation() -> Result<(), Runt
 async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let properties_path = temp_dir.path().join("server.properties");
+    let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
         &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    write_topology_properties(
-        &properties_path,
-        &dist_dir,
-        &[
-            "default-adapter=je-1_7_10",
-            "enabled-adapters=je-1_7_10,je-1_8_x",
-            "topology-reload-watch=false",
-            "topology-drain-grace-secs=0",
-        ],
-    )?;
+    let mut initial =
+        topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
+    initial.topology.default_adapter = JE_1_7_10_ADAPTER_ID.to_string();
+    initial.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_8_X_ADAPTER_ID.to_string(),
+    ]);
+    initial.topology.drain_grace_secs = 0;
+    write_server_toml(&config_path, &initial)?;
     let server = build_reloadable_test_server_from_source(
-        ServerConfigSource::Properties(properties_path.clone()),
+        ServerConfigSource::Toml(config_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),
             &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
@@ -320,16 +288,9 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
     assert_eq!(server.runtime.sessions.lock().await.len(), 1);
 
     std::thread::sleep(Duration::from_secs(1));
-    write_topology_properties(
-        &properties_path,
-        &dist_dir,
-        &[
-            "default-adapter=je-1_8_x",
-            "enabled-adapters=je-1_7_10,je-1_8_x",
-            "topology-reload-watch=false",
-            "topology-drain-grace-secs=0",
-        ],
-    )?;
+    let mut updated = initial.clone();
+    updated.topology.default_adapter = JE_1_8_X_ADAPTER_ID.to_string();
+    write_server_toml(&config_path, &updated)?;
     let _ = server.reload_topology().await?;
 
     tokio::time::timeout(Duration::from_secs(2), async {

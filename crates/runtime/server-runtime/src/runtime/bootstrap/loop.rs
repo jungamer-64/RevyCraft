@@ -14,9 +14,7 @@ pub(super) fn spawn_runtime_loop(
     tokio::spawn(async move {
         let mut tick_interval = tokio::time::interval(Duration::from_millis(50));
         let mut save_interval = tokio::time::interval(Duration::from_secs(2));
-        let mut plugin_reload_interval =
-            tokio::time::interval(Duration::from_millis(plugin_reload_poll_interval_ms()));
-        let mut topology_reload_interval =
+        let mut config_reload_interval =
             tokio::time::interval(Duration::from_millis(plugin_reload_poll_interval_ms()));
         loop {
             tokio::select! {
@@ -41,52 +39,36 @@ pub(super) fn spawn_runtime_loop(
                         return run_server.finish_with_runtime_error(error).await;
                     }
                 }
-                _ = topology_reload_interval.tick(), if run_server.reload_host.is_some() => {
+                _ = config_reload_interval.tick(), if run_server.reload_host.is_some() => {
                     if let Some(reload_host) = run_server.reload_host.as_ref() {
                         let previous_generation = run_server.active_topology_generation_id();
-                        match run_server.maybe_reload_topology_watch(reload_host.as_ref()).await {
-                            Ok(result) => {
-                                if result.changed(previous_generation) {
+                        match run_server.maybe_reload_config_watch(reload_host.as_ref()).await {
+                            Ok(Some(result)) => {
+                                if !result.reloaded_plugins.is_empty() || result.topology.changed(previous_generation) {
                                     run_server
                                         .log_status_summary(&format!(
-                                            "topology reload applied: activated_generation={} reconfigured={}",
-                                            result.activated_generation_id.0,
-                                            if result.reconfigured_adapter_ids.is_empty() {
+                                            "config reload applied: plugins={} activated_generation={} reconfigured={}",
+                                            if result.reloaded_plugins.is_empty() {
                                                 "-".to_string()
                                             } else {
-                                                result.reconfigured_adapter_ids.join(",")
-                                            }
+                                                result.reloaded_plugins.join(",")
+                                            },
+                                            result.topology.activated_generation_id.0,
+                                            if result.topology.reconfigured_adapter_ids.is_empty() {
+                                                "-".to_string()
+                                            } else {
+                                                result.topology.reconfigured_adapter_ids.join(",")
+                                            },
                                         ))
                                         .await;
                                 }
                             }
+                            Ok(None) => {}
                             Err(error) => {
                                 if matches!(error, RuntimeError::PluginFatal(_)) {
                                     return run_server.finish_with_runtime_error(error).await;
                                 }
-                                eprintln!("topology reload failed: {error}");
-                            }
-                        }
-                    }
-                }
-                _ = plugin_reload_interval.tick(), if run_server.config.plugin_reload_watch && run_server.reload_host.is_some() => {
-                    if let Some(reload_host) = run_server.reload_host.as_ref() {
-                        match run_server.reload_plugins(reload_host.as_ref()).await {
-                            Ok(reloaded) => {
-                                if !reloaded.is_empty() {
-                                    run_server
-                                        .log_status_summary(&format!(
-                                            "plugin reload applied: {}",
-                                            reloaded.join(",")
-                                        ))
-                                        .await;
-                                }
-                            }
-                            Err(error) => {
-                                if matches!(error, RuntimeError::PluginFatal(_)) {
-                                    return run_server.finish_with_runtime_error(error).await;
-                                }
-                                eprintln!("plugin reload failed: {error}");
+                                eprintln!("config reload failed: {error}");
                             }
                         }
                     }

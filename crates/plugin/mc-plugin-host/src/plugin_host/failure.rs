@@ -223,7 +223,7 @@ impl PluginFailureStage {
 }
 
 pub(crate) struct PluginFailureDispatch {
-    matrix: PluginFailureMatrix,
+    matrix: Mutex<PluginFailureMatrix>,
     active_quarantine: ActiveQuarantineManager,
     artifact_quarantine: ArtifactQuarantineManager,
     pending_fatal: Mutex<Option<String>>,
@@ -232,7 +232,7 @@ pub(crate) struct PluginFailureDispatch {
 impl PluginFailureDispatch {
     pub(crate) fn new(matrix: PluginFailureMatrix) -> Self {
         Self {
-            matrix,
+            matrix: Mutex::new(matrix),
             active_quarantine: ActiveQuarantineManager {
                 reasons: Mutex::new(HashMap::new()),
             },
@@ -243,12 +243,25 @@ impl PluginFailureDispatch {
         }
     }
 
-    pub(crate) const fn action_for_kind(&self, kind: PluginKind) -> PluginFailureAction {
-        self.matrix.action_for_kind(kind)
+    pub(crate) fn update_matrix(&self, matrix: PluginFailureMatrix) {
+        *self
+            .matrix
+            .lock()
+            .expect("failure matrix mutex should not be poisoned") = matrix;
     }
 
-    pub(crate) const fn matrix(&self) -> PluginFailureMatrix {
+    pub(crate) fn action_for_kind(&self, kind: PluginKind) -> PluginFailureAction {
         self.matrix
+            .lock()
+            .expect("failure matrix mutex should not be poisoned")
+            .action_for_kind(kind)
+    }
+
+    pub(crate) fn matrix(&self) -> PluginFailureMatrix {
+        *self
+            .matrix
+            .lock()
+            .expect("failure matrix mutex should not be poisoned")
     }
 
     pub(crate) fn active_reason(&self, plugin_id: &str) -> Option<String> {

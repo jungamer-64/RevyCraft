@@ -114,16 +114,14 @@ pub(crate) fn plugin_test_registries_from_dist_with_supporting_plugins(
     allowlist: &[&str],
     supporting_plugin_ids: &[&str],
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
-    let mut config = ServerConfig {
-        plugins_dir: dist_dir,
-        plugin_allowlist: Some(plugin_allowlist_with_supporting_plugins(
-            allowlist,
-            supporting_plugin_ids,
-        )),
-        ..ServerConfig::default()
-    };
+    let mut config = ServerConfig::default();
+    config.bootstrap.plugins_dir = dist_dir;
+    config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
+        allowlist,
+        supporting_plugin_ids,
+    ));
     if supporting_plugin_ids.contains(&ONLINE_STUB_AUTH_PLUGIN_ID) {
-        config.auth_profile = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+        config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
     }
     let plugin_host = TestPluginHost::discover(&config.plugin_host_config())?.ok_or_else(|| {
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
@@ -246,10 +244,8 @@ pub(crate) fn in_process_online_auth_registries(
         .abi_range(PluginAbiRange::default())
         .failure_matrix(PluginFailureMatrix::default())
         .build();
-    let config = ServerConfig {
-        auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
-        ..ServerConfig::default()
-    };
+    let mut config = ServerConfig::default();
+    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
     Ok(LoadedPluginTestEnvironment {
         loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
         plugin_host: Some(plugin_host),
@@ -282,16 +278,18 @@ pub(crate) fn in_process_failing_storage_registries(
             manifest: offline_auth_entrypoints().manifest,
             api: offline_auth_entrypoints().api,
         })
+        .bootstrap_config(mc_plugin_host::config::BootstrapConfig {
+            storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
+            ..mc_plugin_host::config::BootstrapConfig::default()
+        })
         .abi_range(PluginAbiRange::default())
         .failure_matrix(PluginFailureMatrix {
             storage: failure_action,
             ..PluginFailureMatrix::default()
         })
         .build();
-    let config = ServerConfig {
-        storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
-        ..ServerConfig::default()
-    };
+    let mut config = ServerConfig::default();
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
     Ok(LoadedPluginTestEnvironment {
         loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
         plugin_host: Some(plugin_host),

@@ -90,7 +90,7 @@ fn can_reuse_listener(
     desired_addr: SocketAddr,
     current_binding: &ListenerBinding,
 ) -> bool {
-    config.server_port != 0 && current_binding.local_addr == desired_addr
+    config.network.server_port != 0 && current_binding.local_addr == desired_addr
 }
 
 impl RuntimeServer {
@@ -186,18 +186,6 @@ impl RuntimeServer {
         }
     }
 
-    pub(in crate::runtime) async fn maybe_reload_topology_watch(
-        &self,
-        reload_host: &dyn RuntimePluginHost,
-    ) -> Result<TopologyReloadResult, RuntimeError> {
-        let loaded = self.config_source.load()?;
-        let active = self.active_topology();
-        if !loaded.topology_reload_watch && !active.config.topology_reload_watch {
-            return Ok(self.noop_topology_reload_result());
-        }
-        self.reload_topology_with_config(reload_host, loaded).await
-    }
-
     pub(in crate::runtime) async fn reload_topology(
         &self,
         reload_host: &dyn RuntimePluginHost,
@@ -206,14 +194,17 @@ impl RuntimeServer {
         self.reload_topology_with_config(reload_host, loaded).await
     }
 
-    async fn reload_topology_with_config(
+    pub(in crate::runtime) async fn reload_topology_with_config(
         &self,
         reload_host: &dyn RuntimePluginHost,
         loaded_config: crate::config::ServerConfig,
     ) -> Result<TopologyReloadResult, RuntimeError> {
         let active = self.active_topology();
         let mut candidate_config = active.config.clone();
-        let applied_config_change = candidate_config.apply_topology_from(&loaded_config);
+        let previous_config = candidate_config.clone();
+        candidate_config.network = loaded_config.network.clone();
+        candidate_config.topology = loaded_config.topology.clone();
+        let applied_config_change = previous_config != candidate_config;
 
         let prepared = reload_host.prepare_protocol_topology_for_reload()?;
         let current_signature = protocol_topology_signature(&active.protocol_registry);
@@ -329,7 +320,8 @@ impl RuntimeServer {
                     generation: previous_active,
                     drain_deadline_ms: now_ms().saturating_add(
                         candidate_config
-                            .topology_drain_grace_secs
+                            .topology
+                            .drain_grace_secs
                             .saturating_mul(1_000),
                     ),
                 });
@@ -356,7 +348,9 @@ impl RuntimeServer {
         reload_host.activate_protocol_topology(prepared);
         {
             let mut state = self.state.lock().await;
-            state.core.set_max_players(candidate_config.max_players);
+            state
+                .core
+                .set_max_players(candidate_config.network.max_players);
         }
         for mut worker in workers_to_shutdown {
             if let Some(shutdown_tx) = worker.shutdown_tx.take() {

@@ -42,7 +42,9 @@ impl RuntimeServer {
             )
             .await;
         };
-        let gameplay = self.resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)?;
+        let gameplay = self
+            .resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)
+            .await?;
         session.adapter = Some(next_adapter.clone());
         session.gameplay = Some(gameplay);
         Self::refresh_session_capabilities(session);
@@ -87,13 +89,15 @@ impl RuntimeServer {
                     ))
                 })?
         };
-        let gameplay = self.resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)?;
+        let gameplay = self
+            .resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)
+            .await?;
         session.adapter = Some(next_adapter);
         session.gameplay = Some(gameplay);
         Self::refresh_session_capabilities(session);
         self.sync_session_handle(connection_id, session).await;
 
-        let auth_profile = self.resolve_bedrock_auth_profile()?;
+        let auth_profile = self.resolve_bedrock_auth_profile().await?;
         let authenticated = match auth_profile.mode()? {
             AuthMode::BedrockOffline => auth_profile.authenticate_bedrock_offline(&display_name)?,
             AuthMode::BedrockXbl => {
@@ -118,7 +122,7 @@ impl RuntimeServer {
         current: &Arc<dyn mc_proto_common::ProtocolAdapter>,
         username: String,
     ) -> Result<bool, RuntimeError> {
-        if self.config.online_mode {
+        if self.config.bootstrap.online_mode {
             if session.login_challenge.is_some() {
                 return Self::disconnect_login(
                     transport_io,
@@ -133,7 +137,8 @@ impl RuntimeServer {
                 ));
             };
             let verify_token = random_verify_token();
-            let auth_generation = self.auth_profile.capture_generation()?;
+            let auth_profile = self.live_state.read().await.auth_profile.clone();
+            let auth_generation = auth_profile.capture_generation()?;
             let encryption_request = current.encode_encryption_request(
                 LOGIN_SERVER_ID,
                 &online_auth_keys.public_key_der,
@@ -148,7 +153,8 @@ impl RuntimeServer {
             return Ok(false);
         }
 
-        let authenticated = self.auth_profile.authenticate_offline(&username)?;
+        let auth_profile = self.live_state.read().await.auth_profile.clone();
+        let authenticated = auth_profile.authenticate_offline(&username)?;
         self.apply_command(
             CoreCommand::LoginStart {
                 connection_id,
@@ -170,7 +176,7 @@ impl RuntimeServer {
         shared_secret_encrypted: Vec<u8>,
         verify_token_encrypted: Vec<u8>,
     ) -> Result<bool, RuntimeError> {
-        if !self.config.online_mode {
+        if !self.config.bootstrap.online_mode {
             return Self::disconnect_login(
                 transport_io,
                 current,
@@ -218,7 +224,7 @@ impl RuntimeServer {
         let login_username = challenge.username;
         let auth_generation = Arc::clone(&challenge.auth_generation);
         let captured_generation_id = auth_generation.generation_id();
-        let auth_profile = Arc::clone(&self.auth_profile);
+        let auth_profile = self.live_state.read().await.auth_profile.clone();
         let authenticated = match tokio::task::spawn_blocking(move || {
             let current_generation_id = auth_profile
                 .plugin_generation_id()

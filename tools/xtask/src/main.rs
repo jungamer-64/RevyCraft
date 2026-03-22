@@ -35,7 +35,19 @@ struct CargoTarget {
 struct PackageArgs {
     dist_dir: PathBuf,
     release: bool,
-    properties_path: Option<PathBuf>,
+    config_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ServerConfigDocument {
+    plugins: PluginConfigDocument,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct PluginConfigDocument {
+    allowlist: Option<Vec<String>>,
 }
 
 fn main() -> Result<(), String> {
@@ -54,7 +66,7 @@ fn main() -> Result<(), String> {
 fn help() -> String {
     [
         "usage:",
-        "  cargo run -p xtask -- package-plugins [--release] [--dist-dir <path>] [--properties <path>]",
+        "  cargo run -p xtask -- package-plugins [--release] [--dist-dir <path>] [--config <path>]",
         "  cargo run -p xtask -- package-all-plugins [--release] [--dist-dir <path>]",
     ]
     .join("\n")
@@ -64,12 +76,12 @@ fn package_plugins(args: &[String]) -> Result<(), String> {
     let package_args = parse_package_args(args)?;
     let workspace_root = workspace_root()?;
     let discovered_plugins = discover_plugins(&workspace_root)?;
-    let properties_path =
-        resolve_package_properties_path(&workspace_root, package_args.properties_path.as_deref())?;
-    let plugin_allowlist = plugin_allowlist_from_properties(&properties_path)?;
+    let config_path =
+        resolve_package_config_path(&workspace_root, package_args.config_path.as_deref())?;
+    let plugin_allowlist = plugin_allowlist_from_toml(&config_path)?;
     println!(
         "using plugin allowlist from {}: {}",
-        properties_path.display(),
+        config_path.display(),
         plugin_allowlist.join(", ")
     );
     let plugins = filter_plugins_by_ids(discovered_plugins.clone(), &plugin_allowlist)?;
@@ -96,7 +108,7 @@ fn package_all_plugins(args: &[String]) -> Result<(), String> {
 fn parse_package_args(args: &[String]) -> Result<PackageArgs, String> {
     let mut release = false;
     let mut dist_dir = PathBuf::from("runtime/plugins");
-    let mut properties_path = None;
+    let mut config_path = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -111,11 +123,11 @@ fn parse_package_args(args: &[String]) -> Result<PackageArgs, String> {
                 dist_dir = PathBuf::from(value);
                 index += 2;
             }
-            "--properties" => {
+            "--config" => {
                 let Some(value) = args.get(index + 1) else {
-                    return Err("--properties requires a value".to_string());
+                    return Err("--config requires a value".to_string());
                 };
-                properties_path = Some(PathBuf::from(value));
+                config_path = Some(PathBuf::from(value));
                 index += 2;
             }
             unknown => {
@@ -126,7 +138,7 @@ fn parse_package_args(args: &[String]) -> Result<PackageArgs, String> {
     Ok(PackageArgs {
         dist_dir,
         release,
-        properties_path,
+        config_path,
     })
 }
 
@@ -201,7 +213,7 @@ fn workspace_root() -> Result<PathBuf, String> {
     ))
 }
 
-fn resolve_package_properties_path(
+fn resolve_package_config_path(
     workspace_root: &Path,
     explicit_path: Option<&Path>,
 ) -> Result<PathBuf, String> {
@@ -217,26 +229,21 @@ fn resolve_package_properties_path(
         if resolved.is_file() {
             return Ok(resolved);
         }
-        return Err(format!(
-            "properties file {} does not exist",
-            resolved.display()
-        ));
+        return Err(format!("config file {} does not exist", resolved.display()));
     }
 
-    let active_properties = workspace_root.join("runtime").join("server.properties");
-    if active_properties.is_file() {
-        return Ok(active_properties);
+    let active_config = workspace_root.join("runtime").join("server.toml");
+    if active_config.is_file() {
+        return Ok(active_config);
     }
 
-    let example_properties = workspace_root
-        .join("runtime")
-        .join("server.properties.example");
-    if example_properties.is_file() {
-        return Ok(example_properties);
+    let example_config = workspace_root.join("runtime").join("server.toml.example");
+    if example_config.is_file() {
+        return Ok(example_config);
     }
 
     Err(format!(
-        "no default properties file found under {}",
+        "no default config file found under {}",
         workspace_root.join("runtime").display()
     ))
 }
@@ -269,36 +276,26 @@ fn discover_plugins(workspace_root: &Path) -> Result<Vec<PluginSpec>, String> {
     Ok(plugins)
 }
 
-fn plugin_allowlist_from_properties(properties_path: &Path) -> Result<Vec<String>, String> {
-    let contents = fs::read_to_string(&properties_path).map_err(|error| {
+fn plugin_allowlist_from_toml(config_path: &Path) -> Result<Vec<String>, String> {
+    let contents = fs::read_to_string(config_path)
+        .map_err(|error| format!("failed to read config {}: {error}", config_path.display()))?;
+    let document: ServerConfigDocument = toml::from_str(&contents)
+        .map_err(|error| format!("failed to parse config {}: {error}", config_path.display()))?;
+    let raw_ids = document.plugins.allowlist.ok_or_else(|| {
         format!(
-            "failed to read server properties {}: {error}",
-            properties_path.display()
+            "config {} did not define plugins.allowlist",
+            config_path.display()
         )
     })?;
-    let allowlist_line = contents
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.starts_with('#') && line.starts_with("plugin-allowlist="))
-        .ok_or_else(|| {
-            format!(
-                "server properties {} did not define plugin-allowlist",
-                properties_path.display()
-            )
-        })?;
-    let (_, raw_ids) = allowlist_line
-        .split_once('=')
-        .ok_or_else(|| "plugin-allowlist line was malformed".to_string())?;
     let mut seen = BTreeSet::new();
     let plugin_ids = raw_ids
-        .split(',')
-        .map(str::trim)
+        .into_iter()
+        .map(|plugin_id| plugin_id.trim().to_string())
         .filter(|plugin_id| !plugin_id.is_empty())
-        .filter(|plugin_id| seen.insert((*plugin_id).to_string()))
-        .map(ToString::to_string)
+        .filter(|plugin_id| seen.insert(plugin_id.clone()))
         .collect::<Vec<_>>();
     if plugin_ids.is_empty() {
-        return Err("plugin-allowlist was empty".to_string());
+        return Err("plugins.allowlist was empty".to_string());
     }
     Ok(plugin_ids)
 }
@@ -551,8 +548,8 @@ fn packaged_artifact_name_with_tag(base_name: &str, build_tag: Option<String>) -
 mod tests {
     use super::{
         PackageArgs, PluginSpec, filter_plugins_by_ids, packaged_artifact_name_with_tag,
-        parse_package_args, plugin_allowlist_from_properties, plugin_spec_from_package_name,
-        reconcile_packaged_plugins, resolve_package_properties_path,
+        parse_package_args, plugin_allowlist_from_toml, plugin_spec_from_package_name,
+        reconcile_packaged_plugins, resolve_package_config_path,
     };
     use std::collections::BTreeSet;
     use std::fs;
@@ -597,20 +594,20 @@ mod tests {
     }
 
     #[test]
-    fn parse_package_args_reads_release_dist_dir_and_properties() {
+    fn parse_package_args_reads_release_dist_dir_and_config() {
         assert_eq!(
             parse_package_args(&[
                 "--release".to_string(),
                 "--dist-dir".to_string(),
                 "target/plugins".to_string(),
-                "--properties".to_string(),
-                "runtime/custom.properties".to_string(),
+                "--config".to_string(),
+                "runtime/server.toml".to_string(),
             ])
             .expect("xtask args should parse"),
             PackageArgs {
                 dist_dir: PathBuf::from("target/plugins"),
                 release: true,
-                properties_path: Some(PathBuf::from("runtime/custom.properties")),
+                config_path: Some(PathBuf::from("runtime/server.toml")),
             }
         );
     }
@@ -630,53 +627,52 @@ mod tests {
     }
 
     #[test]
-    fn resolve_package_properties_path_prefers_active_runtime_properties() {
+    fn resolve_package_config_path_prefers_active_runtime_toml() {
         let temp_dir = tempdir().expect("temp dir should be created");
         let runtime_dir = temp_dir.path().join("runtime");
         fs::create_dir_all(&runtime_dir).expect("runtime dir should be created");
-        let active = runtime_dir.join("server.properties");
-        let example = runtime_dir.join("server.properties.example");
-        fs::write(&active, "plugin-allowlist=je-1_7_10\n")
-            .expect("active properties should be written");
-        fs::write(&example, "plugin-allowlist=je-1_8_x\n")
-            .expect("example properties should be written");
+        let active = runtime_dir.join("server.toml");
+        let example = runtime_dir.join("server.toml.example");
+        fs::write(&active, "[plugins]\nallowlist = [\"je-1_7_10\"]\n")
+            .expect("active config should be written");
+        fs::write(&example, "[plugins]\nallowlist = [\"je-1_8_x\"]\n")
+            .expect("example config should be written");
 
         assert_eq!(
-            resolve_package_properties_path(temp_dir.path(), None)
-                .expect("active properties should be preferred"),
+            resolve_package_config_path(temp_dir.path(), None)
+                .expect("active config should be preferred"),
             active
         );
     }
 
     #[test]
-    fn resolve_package_properties_path_falls_back_to_example() {
+    fn resolve_package_config_path_falls_back_to_example() {
         let temp_dir = tempdir().expect("temp dir should be created");
         let runtime_dir = temp_dir.path().join("runtime");
         fs::create_dir_all(&runtime_dir).expect("runtime dir should be created");
-        let example = runtime_dir.join("server.properties.example");
-        fs::write(&example, "plugin-allowlist=je-1_8_x\n")
-            .expect("example properties should be written");
+        let example = runtime_dir.join("server.toml.example");
+        fs::write(&example, "[plugins]\nallowlist = [\"je-1_8_x\"]\n")
+            .expect("example config should be written");
 
         assert_eq!(
-            resolve_package_properties_path(temp_dir.path(), None)
-                .expect("example properties should be used as fallback"),
+            resolve_package_config_path(temp_dir.path(), None)
+                .expect("example config should be used as fallback"),
             example
         );
     }
 
     #[test]
-    fn plugin_allowlist_from_properties_reads_deduplicated_ids() {
+    fn plugin_allowlist_from_toml_reads_deduplicated_ids() {
         let temp_dir = tempdir().expect("temp dir should be created");
-        let properties = temp_dir.path().join("server.properties");
+        let config = temp_dir.path().join("server.toml");
         fs::write(
-            &properties,
-            "# ignored\nplugin-allowlist=je-1_7_10,je-1_7_10,auth-offline\n",
+            &config,
+            "[plugins]\nallowlist = [\"je-1_7_10\", \"je-1_7_10\", \"auth-offline\"]\n",
         )
-        .expect("properties should be written");
+        .expect("config should be written");
 
         assert_eq!(
-            plugin_allowlist_from_properties(&properties)
-                .expect("allowlist should be parsed successfully"),
+            plugin_allowlist_from_toml(&config).expect("allowlist should be parsed successfully"),
             vec!["je-1_7_10".to_string(), "auth-offline".to_string()]
         );
     }

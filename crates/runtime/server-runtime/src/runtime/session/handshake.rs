@@ -56,8 +56,9 @@ impl RuntimeServer {
             intent.edition,
             intent.protocol_number,
         ) {
-            let gameplay =
-                self.resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)?;
+            let gameplay = self
+                .resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)
+                .await?;
             session.adapter = Some(next_adapter);
             session.gameplay = Some(gameplay);
             session.phase = next_phase;
@@ -70,8 +71,9 @@ impl RuntimeServer {
         let descriptor = fallback.descriptor();
         match next_phase {
             ConnectionPhase::Status => {
-                let gameplay =
-                    self.resolve_gameplay_for_adapter(&fallback.descriptor().adapter_id)?;
+                let gameplay = self
+                    .resolve_gameplay_for_adapter(&fallback.descriptor().adapter_id)
+                    .await?;
                 session.adapter = Some(fallback);
                 session.gameplay = Some(gameplay);
                 session.phase = ConnectionPhase::Status;
@@ -113,8 +115,8 @@ impl RuntimeServer {
                 let response = current.encode_status_response(&ServerListStatus {
                     version: current.descriptor(),
                     players_online: summary.online_players,
-                    max_players: usize::from(topology.config.max_players),
-                    description: topology.config.motd.clone(),
+                    max_players: usize::from(topology.config.network.max_players),
+                    description: topology.config.network.motd.clone(),
                 })?;
                 write_payload(transport_io, current.wire_codec(), &response).await?;
                 Ok(false)

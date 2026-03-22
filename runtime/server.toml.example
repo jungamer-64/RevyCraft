@@ -1,0 +1,70 @@
+# Minecraft-like runtime config for the Rust server
+
+[bootstrap]
+online_mode = false
+level_name = "world"
+level_type = "flat"
+game_mode = 0
+difficulty = 1
+view_distance = 2
+world_dir = "world"
+storage_profile = "je-anvil-1_7_10"
+plugins_dir = "plugins"
+plugin_abi_min = "3.0"
+plugin_abi_max = "3.0"
+
+[network]
+server_ip = ""
+server_port = 25565
+motd = "Multi-version Rust server"
+max_players = 20
+
+[topology]
+be_enabled = true
+default_adapter = "je-1_7_10"
+enabled_adapters = ["je-1_7_10", "je-1_8_x", "je-1_12_2"]
+default_bedrock_adapter = "be-26_3"
+enabled_bedrock_adapters = ["be-26_3"]
+reload_watch = false
+drain_grace_secs = 30
+
+[plugins]
+allowlist = [
+  "je-1_7_10",
+  "je-1_8_x",
+  "je-1_12_2",
+  "be-26_3",
+  "gameplay-canonical",
+  "gameplay-readonly",
+  "storage-je-anvil-1_7_10",
+  "auth-offline",
+  "auth-bedrock-offline",
+]
+reload_watch = false
+
+[plugins.failure_policy]
+protocol = "quarantine"
+gameplay = "quarantine"
+storage = "fail-fast"
+auth = "skip"
+
+[profiles]
+auth = "offline-v1"
+bedrock_auth = "bedrock-offline-v1"
+default_gameplay = "canonical"
+
+# For JE online mode, set:
+# [bootstrap]
+# online_mode = true
+# [profiles]
+# auth = "mojang-online-v1"
+#
+# This sample allowlist is a minimal baseline.
+# Add `auth-mojang-online` before enabling JE online mode.
+# Add `auth-bedrock-xbl` before using `bedrock_auth = "bedrock-xbl-v1"`.
+
+[profiles.gameplay_map]
+"je-1_7_10" = "readonly"
+"je-1_8_x" = "canonical"
+"je-1_12_2" = "canonical"
+"be-26_3" = "canonical"

@@ -20,26 +20,26 @@ pub(super) fn resolve_runtime_profiles(
     loaded_plugins: &LoadedPluginSet,
 ) -> Result<RuntimeProfiles, RuntimeError> {
     let storage_profile = loaded_plugins
-        .resolve_storage_profile(&config.storage_profile)
+        .resolve_storage_profile(&config.bootstrap.storage_profile)
         .ok_or_else(|| {
             RuntimeError::Config(format!(
                 "unknown storage-profile `{}`",
-                config.storage_profile
+                config.bootstrap.storage_profile
             ))
         })?;
     let auth_profile = loaded_plugins
-        .resolve_auth_profile(&config.auth_profile)
+        .resolve_auth_profile(&config.profiles.auth)
         .ok_or_else(|| {
-            RuntimeError::Config(format!("unknown auth-profile `{}`", config.auth_profile))
+            RuntimeError::Config(format!("unknown auth-profile `{}`", config.profiles.auth))
         })?;
-    let bedrock_auth_profile = if config.be_enabled {
+    let bedrock_auth_profile = if config.topology.be_enabled {
         Some(
             loaded_plugins
-                .resolve_auth_profile(&config.bedrock_auth_profile)
+                .resolve_auth_profile(&config.profiles.bedrock_auth)
                 .ok_or_else(|| {
                     RuntimeError::Config(format!(
                         "unknown bedrock-auth-profile `{}`",
-                        config.bedrock_auth_profile
+                        config.profiles.bedrock_auth
                     ))
                 })?,
         )
@@ -47,7 +47,7 @@ pub(super) fn resolve_runtime_profiles(
         None
     };
 
-    match (config.online_mode, auth_profile.mode()?) {
+    match (config.bootstrap.online_mode, auth_profile.mode()?) {
         (true, AuthMode::Online) | (false, AuthMode::Offline) => {}
         (true, mode) => {
             return Err(RuntimeError::Config(format!(
@@ -71,19 +71,19 @@ pub(super) fn resolve_runtime_profiles(
         }
     }
 
-    let online_auth_keys = if config.online_mode {
+    let online_auth_keys = if config.bootstrap.online_mode {
         Some(Arc::new(OnlineAuthKeys::generate()?))
     } else {
         None
     };
-    let snapshot = storage_profile.load_snapshot(&config.world_dir)?;
+    let snapshot = storage_profile.load_snapshot(&config.bootstrap.world_dir)?;
     let core_config = CoreConfig {
-        level_name: config.level_name.clone(),
+        level_name: config.bootstrap.level_name.clone(),
         seed: 0,
-        max_players: config.max_players,
-        view_distance: config.view_distance,
-        game_mode: config.game_mode,
-        difficulty: config.difficulty,
+        max_players: config.network.max_players,
+        view_distance: config.bootstrap.view_distance,
+        game_mode: config.bootstrap.game_mode,
+        difficulty: config.bootstrap.difficulty,
         ..CoreConfig::default()
     };
     let core = match snapshot {

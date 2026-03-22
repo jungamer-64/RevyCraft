@@ -1,9 +1,10 @@
 use crate::PluginHostError as RuntimeError;
-use crate::config::ServerConfig;
+use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
 use crate::registry::ProtocolRegistry;
 use crate::runtime::{
     AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
-    RuntimeProtocolTopologyCandidate, RuntimeReloadContext, StorageProfileHandle,
+    RuntimeProtocolTopologyCandidate, RuntimeReloadContext, RuntimeSelectionResult,
+    StorageProfileHandle,
 };
 use bytes::BytesMut;
 use libloading::Library;
@@ -162,8 +163,10 @@ impl PluginAbiRange {
 }
 
 pub struct PluginHost {
+    bootstrap_config: BootstrapConfig,
     catalog: PluginCatalog,
     dynamic_catalog_source: Option<DynamicCatalogSource>,
+    runtime_selection: Mutex<RuntimeSelectionConfig>,
     loader: PluginLoader,
     generations: Arc<GenerationManager>,
     failures: Arc<PluginFailureDispatch>,
@@ -174,27 +177,44 @@ pub struct PluginHost {
 }
 
 impl PluginHost {
+    fn current_runtime_selection(&self) -> RuntimeSelectionConfig {
+        self.runtime_selection
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .clone()
+    }
+
     #[must_use]
     #[cfg(any(test, feature = "in-process-testing"))]
     pub(crate) fn new(
         catalog: PluginCatalog,
+        bootstrap_config: BootstrapConfig,
         abi_range: PluginAbiRange,
         failure_matrix: PluginFailureMatrix,
     ) -> Self {
-        Self::new_with_dynamic_catalog_source(catalog, abi_range, failure_matrix, None)
+        Self::new_with_dynamic_catalog_source(
+            catalog,
+            bootstrap_config,
+            abi_range,
+            failure_matrix,
+            None,
+        )
     }
 
     #[must_use]
     pub(crate) fn new_with_dynamic_catalog_source(
         catalog: PluginCatalog,
+        bootstrap_config: BootstrapConfig,
         abi_range: PluginAbiRange,
         failure_matrix: PluginFailureMatrix,
-        dynamic_catalog_source: Option<(PathBuf, Option<HashSet<String>>)>,
+        dynamic_catalog_source: Option<PathBuf>,
     ) -> Self {
         Self {
+            bootstrap_config,
             catalog,
             dynamic_catalog_source: dynamic_catalog_source
-                .map(|(root, allowlist)| DynamicCatalogSource { root, allowlist }),
+                .map(|root| DynamicCatalogSource { root }),
+            runtime_selection: Mutex::new(RuntimeSelectionConfig::default()),
             loader: PluginLoader::new(abi_range),
             generations: Arc::new(GenerationManager::default()),
             failures: Arc::new(PluginFailureDispatch::new(failure_matrix)),
@@ -207,7 +227,7 @@ impl PluginHost {
 
     fn protocol_catalog(&self) -> Result<PluginCatalog, RuntimeError> {
         match &self.dynamic_catalog_source {
-            Some(source) => PluginCatalog::discover(&source.root, source.allowlist.as_ref()),
+            Some(source) => PluginCatalog::discover(&source.root, None),
             None => Ok(self.catalog.clone()),
         }
     }
@@ -331,6 +351,14 @@ impl PluginHost {
 }
 
 impl RuntimePluginHost for PluginHost {
+    fn reconcile_runtime_selection(
+        &self,
+        config: &RuntimeSelectionConfig,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<RuntimeSelectionResult, RuntimeError> {
+        Self::reconcile_runtime_selection(self, config, runtime)
+    }
+
     fn reload_modified_with_context(
         &self,
         runtime: &RuntimeReloadContext,
@@ -341,7 +369,7 @@ impl RuntimePluginHost for PluginHost {
     fn prepare_protocol_topology_for_reload(
         &self,
     ) -> Result<RuntimeProtocolTopologyCandidate, RuntimeError> {
-        self.prepare_protocol_topology_for_reload()
+        self.prepare_protocol_topology_for_reload(&self.current_runtime_selection())
             .map(RuntimeProtocolTopologyCandidate::new)
     }
 
@@ -377,7 +405,7 @@ impl RuntimePluginHost for PluginHost {
 ///
 /// Returns an error when plugin discovery fails or a configured plugin manifest is invalid.
 pub fn plugin_host_from_config(
-    config: &ServerConfig,
+    config: &BootstrapConfig,
 ) -> Result<Option<Arc<PluginHost>>, RuntimeError> {
     let abi_range = PluginAbiRange {
         min: config.plugin_abi_min,
@@ -389,24 +417,16 @@ pub fn plugin_host_from_config(
             abi_range.min, abi_range.max, CURRENT_PLUGIN_ABI
         )));
     }
-    let allowlist = config
-        .plugin_allowlist
-        .as_ref()
-        .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
-    let catalog = PluginCatalog::discover(&config.plugins_dir, allowlist.as_ref())?;
+    let catalog = PluginCatalog::discover(&config.plugins_dir, None)?;
     if catalog.is_empty() {
         return Ok(None);
     }
     Ok(Some(Arc::new(PluginHost::new_with_dynamic_catalog_source(
         catalog,
+        config.clone(),
         abi_range,
-        PluginFailureMatrix {
-            protocol: config.plugin_failure_policy_protocol,
-            gameplay: config.plugin_failure_policy_gameplay,
-            storage: config.plugin_failure_policy_storage,
-            auth: config.plugin_failure_policy_auth,
-        },
-        Some((config.plugins_dir.clone(), allowlist)),
+        PluginFailureMatrix::default(),
+        Some(config.plugins_dir.clone()),
     ))))
 }
 

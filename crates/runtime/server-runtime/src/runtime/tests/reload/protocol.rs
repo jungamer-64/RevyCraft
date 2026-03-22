@@ -190,17 +190,12 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
             "protocol-reload-v1",
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
-
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.game_mode = 1;
+    config.plugins.reload_watch = true;
+    config.bootstrap.plugins_dir = dist_dir.clone();
     let server = build_reloadable_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            game_mode: 1,
-            plugin_reload_watch: true,
-            plugins_dir: dist_dir.clone(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        config,
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
     )
     .await?;
@@ -285,21 +280,17 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
             "online-stub-v1",
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.online_mode = true;
+    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+    config.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_1_12_2_ADAPTER_ID.to_string(),
+    ]);
+    config.bootstrap.plugins_dir = dist_dir.clone();
     let server = build_reloadable_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            online_mode: true,
-            auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
-            enabled_adapters: Some(vec![
-                JE_1_7_10_ADAPTER_ID.to_string(),
-                JE_1_8_X_ADAPTER_ID.to_string(),
-                JE_1_12_2_ADAPTER_ID.to_string(),
-            ]),
-            plugins_dir: dist_dir.clone(),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
+        config,
         plugin_test_registries_from_dist_with_supporting_plugins(
             dist_dir,
             &[

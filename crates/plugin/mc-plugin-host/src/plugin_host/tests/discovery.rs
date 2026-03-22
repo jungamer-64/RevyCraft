@@ -58,10 +58,13 @@ fn discover_rejects_duplicate_plugin_ids() -> Result<(), RuntimeError> {
         )?;
     }
 
-    let error = match plugin_host_from_config(&ServerConfig {
-        plugins_dir: temp_dir.path().to_path_buf(),
-        ..ServerConfig::default()
-    }) {
+    let error = match plugin_host_from_config(
+        &ServerConfig {
+            plugins_dir: temp_dir.path().to_path_buf(),
+            ..ServerConfig::default()
+        }
+        .bootstrap_config(),
+    ) {
         Ok(_) => panic!("duplicate plugin ids should fail discovery"),
         Err(error) => error,
     };

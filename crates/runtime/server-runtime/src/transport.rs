@@ -232,7 +232,7 @@ pub fn build_listener_plans(
         adapter_ids: tcp_adapter_ids,
         bedrock_bind_metadata: None,
     }];
-    if config.be_enabled {
+    if config.topology.be_enabled {
         let udp_adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Udp);
         if udp_adapter_ids.is_empty() {
             return Err(RuntimeError::Config(
@@ -240,11 +240,11 @@ pub fn build_listener_plans(
             ));
         }
         let default_bedrock_adapter = protocols
-            .resolve_adapter(&config.default_bedrock_adapter)
+            .resolve_adapter(&config.topology.default_bedrock_adapter)
             .ok_or_else(|| {
                 RuntimeError::Config(format!(
                     "default-bedrock-adapter `{}` is not registered",
-                    config.default_bedrock_adapter
+                    config.topology.default_bedrock_adapter
                 ))
             })?;
         let descriptor = default_bedrock_adapter.descriptor();
@@ -253,7 +253,7 @@ pub fn build_listener_plans(
             .ok_or_else(|| {
                 RuntimeError::Config(format!(
                     "default-bedrock-adapter `{}` must provide bedrock listener metadata",
-                    config.default_bedrock_adapter
+                    config.topology.default_bedrock_adapter
                 ))
             })?;
         plans.push(ListenerPlan {
@@ -287,7 +287,7 @@ pub async fn bind_transport_listener(
             })?;
             let mut listener = BedrockListener::new_raknet(
                 plan.bind_addr,
-                config.motd.clone(),
+                config.network.motd.clone(),
                 "RevyCraft".to_string(),
                 metadata.game_version,
                 u32::try_from(metadata.protocol_number).map_err(|_| {
@@ -297,7 +297,7 @@ pub async fn bind_transport_listener(
                     ))
                 })?,
                 metadata.raknet_version,
-                u32::from(config.max_players),
+                u32::from(config.network.max_players),
                 0,
                 false,
             )

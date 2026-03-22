@@ -27,6 +27,7 @@ pub struct InProcessHostBuildInput {
     pub gameplay_plugins: Vec<InProcessGameplayPlugin>,
     pub storage_plugins: Vec<InProcessStoragePlugin>,
     pub auth_plugins: Vec<InProcessAuthPlugin>,
+    pub bootstrap_config: crate::config::BootstrapConfig,
     pub abi_range: PluginAbiRange,
     pub failure_matrix: PluginFailureMatrix,
 }
@@ -35,7 +36,8 @@ pub struct InProcessHostBuildInput {
 ///
 /// Returns [`PluginHostError`] when packaged plugin discovery fails.
 pub fn discover(config: &ServerConfig) -> Result<Option<BuiltTestHost>, PluginHostError> {
-    plugin_host_from_config(config).map(|host| host.map(|inner| BuiltTestHost { inner }))
+    plugin_host_from_config(&config.bootstrap_config())
+        .map(|host| host.map(|inner| BuiltTestHost { inner }))
 }
 
 #[must_use]
@@ -56,6 +58,7 @@ pub fn build_in_process_host(input: InProcessHostBuildInput) -> BuiltTestHost {
     BuiltTestHost {
         inner: Arc::new(PluginHost::new(
             catalog,
+            input.bootstrap_config,
             input.abi_range,
             input.failure_matrix,
         )),
@@ -79,21 +82,25 @@ pub fn load_plugin_set(
     host: &BuiltTestHost,
     config: &ServerConfig,
 ) -> Result<LoadedPluginSet, PluginHostError> {
-    host.inner.load_plugin_set(config)
+    host.inner
+        .load_plugin_set(&config.runtime_selection_config())
 }
 
 /// # Errors
 ///
 /// Returns [`PluginHostError`] when the host cannot materialize the protocol snapshot.
 pub fn load_protocol_registry(host: &BuiltTestHost) -> Result<ProtocolRegistry, PluginHostError> {
-    host.inner.load_protocol_registry()
+    host.inner
+        .load_protocol_registry(&crate::config::RuntimeSelectionConfig::default())
 }
 
 /// # Errors
 ///
 /// Returns [`PluginHostError`] when the host cannot materialize the protocol-only plugin set.
 pub fn load_protocol_plugin_set(host: &BuiltTestHost) -> Result<LoadedPluginSet, PluginHostError> {
-    let protocols = host.inner.load_protocol_registry()?;
+    let protocols = host
+        .inner
+        .load_protocol_registry(&crate::config::RuntimeSelectionConfig::default())?;
     let mut loaded_plugins = LoadedPluginSet::new();
     loaded_plugins.replace_protocols(protocols);
     Ok(loaded_plugins)
@@ -106,7 +113,8 @@ pub fn activate_gameplay_profiles(
     host: &BuiltTestHost,
     config: &ServerConfig,
 ) -> Result<(), PluginHostError> {
-    host.inner.activate_gameplay_profiles(config)
+    host.inner
+        .activate_gameplay_profiles(&config.runtime_selection_config())
 }
 
 /// # Errors

@@ -76,7 +76,6 @@ pub(crate) struct PluginPackage {
 #[derive(Clone, Debug)]
 pub(crate) struct DynamicCatalogSource {
     pub(crate) root: PathBuf,
-    pub(crate) allowlist: Option<HashSet<String>>,
 }
 
 impl PluginPackage {

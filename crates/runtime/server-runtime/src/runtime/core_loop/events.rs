@@ -71,6 +71,7 @@ impl RuntimeServer {
     }
 
     async fn tick_guarded(&self) -> Result<(), RuntimeError> {
+        let loaded_plugins = self.live_state.read().await.loaded_plugins.clone();
         let gameplay_sessions = {
             self.sessions
                 .lock()
@@ -89,9 +90,8 @@ impl RuntimeServer {
             let now = now_ms();
             let mut events = state.core.tick(now);
             for (player_id, session_capabilities, gameplay_profile) in &gameplay_sessions {
-                let Some(gameplay) = self
-                    .loaded_plugins
-                    .resolve_gameplay_profile(gameplay_profile.as_str())
+                let Some(gameplay) =
+                    loaded_plugins.resolve_gameplay_profile(gameplay_profile.as_str())
                 else {
                     continue;
                 };

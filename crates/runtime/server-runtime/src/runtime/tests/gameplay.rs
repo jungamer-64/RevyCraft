@@ -1,30 +1,19 @@
 use super::*;
 
-fn loopback_server_config(world_dir: PathBuf) -> ServerConfig {
-    ServerConfig {
-        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-        server_port: 0,
-        world_dir,
-        ..ServerConfig::default()
-    }
-}
-
 fn creative_server_config(world_dir: PathBuf) -> ServerConfig {
-    ServerConfig {
-        game_mode: 1,
-        ..loopback_server_config(world_dir)
-    }
+    let mut config = loopback_server_config(world_dir);
+    config.bootstrap.game_mode = 1;
+    config
 }
 
 fn multi_version_creative_server_config(world_dir: PathBuf) -> ServerConfig {
-    ServerConfig {
-        enabled_adapters: Some(vec![
-            JE_1_7_10_ADAPTER_ID.to_string(),
-            JE_1_8_X_ADAPTER_ID.to_string(),
-            JE_1_12_2_ADAPTER_ID.to_string(),
-        ]),
-        ..creative_server_config(world_dir)
-    }
+    let mut config = creative_server_config(world_dir);
+    config.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_1_12_2_ADAPTER_ID.to_string(),
+    ]);
+    config
 }
 
 async fn login_legacy(
@@ -265,16 +254,11 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
 async fn plugin_backed_storage_and_auth_profiles_boot_and_persist() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let world_dir = temp_dir.path().join("world");
+    let mut config = loopback_server_config(world_dir.clone());
+    config.bootstrap.storage_profile = JE_1_7_10_STORAGE_PROFILE_ID.to_string();
+    config.profiles.auth = OFFLINE_AUTH_PROFILE_ID.to_string();
 
-    let server = build_test_server(
-        ServerConfig {
-            storage_profile: JE_1_7_10_STORAGE_PROFILE_ID.to_string(),
-            auth_profile: OFFLINE_AUTH_PROFILE_ID.to_string(),
-            ..loopback_server_config(world_dir.clone())
-        },
-        plugin_test_registries_tcp_only()?,
-    )
-    .await?;
+    let server = build_test_server(config, plugin_test_registries_tcp_only()?).await?;
 
     let addr = listener_addr(&server);
     let _ = login_java_client_with_packet(addr, 5, "alpha", 0x02, 8).await?;

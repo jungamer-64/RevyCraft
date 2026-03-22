@@ -15,65 +15,36 @@ async fn assert_spawn_fails_with_message(
     Ok(())
 }
 
-fn loopback_server_config(world_dir: PathBuf) -> ServerConfig {
-    ServerConfig {
-        server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-        server_port: 0,
-        world_dir,
-        ..ServerConfig::default()
-    }
-}
-
 #[tokio::test]
 async fn unknown_default_adapter_fails_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    assert_spawn_fails_with_message(
-        ServerConfig {
-            default_adapter: "missing".to_string(),
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        "unknown default-adapter",
-    )
-    .await
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.topology.default_adapter = "missing".to_string();
+    assert_spawn_fails_with_message(config, "unknown default-adapter").await
 }
 
 #[tokio::test]
 async fn unknown_gameplay_profile_fails_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    assert_spawn_fails_with_message(
-        ServerConfig {
-            default_gameplay_profile: "missing".to_string(),
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        "unknown gameplay profile",
-    )
-    .await
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.profiles.default_gameplay = "missing".to_string();
+    assert_spawn_fails_with_message(config, "unknown gameplay profile").await
 }
 
 #[tokio::test]
 async fn unknown_storage_profile_fails_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    assert_spawn_fails_with_message(
-        ServerConfig {
-            storage_profile: "missing".to_string(),
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        "unknown storage profile",
-    )
-    .await
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.storage_profile = "missing".to_string();
+    assert_spawn_fails_with_message(config, "unknown storage-profile").await
 }
 
 #[tokio::test]
 async fn unknown_auth_profile_fails_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    assert_spawn_fails_with_message(
-        ServerConfig {
-            auth_profile: "missing".to_string(),
-            ..loopback_server_config(temp_dir.path().join("world"))
-        },
-        "unknown auth profile",
-    )
-    .await
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.profiles.auth = "missing".to_string();
+    assert_spawn_fails_with_message(config, "unknown auth profile").await
 }
 
 #[tokio::test]

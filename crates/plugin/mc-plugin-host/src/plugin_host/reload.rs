@@ -1,9 +1,9 @@
 use super::{
     Arc, AuthGeneration, GameplayGeneration, ManagedAuthPlugin, ManagedGameplayPlugin,
     ManagedProtocolPlugin, ManagedStoragePlugin, PluginFailureAction, PluginFailureStage,
-    PluginHost, PluginKind, RuntimeError, RuntimeReloadContext, StorageGeneration, SystemTime,
-    import_storage_runtime_state, migrate_gameplay_sessions, migrate_protocol_sessions,
-    protocol_reload_compatible,
+    PluginHost, PluginKind, RuntimeError, RuntimeReloadContext, RuntimeSelectionConfig,
+    RuntimeSelectionResult, StorageGeneration, SystemTime, import_storage_runtime_state,
+    migrate_gameplay_sessions, migrate_protocol_sessions, protocol_reload_compatible,
 };
 use crate::runtime::ProtocolReloadSession;
 
@@ -518,11 +518,43 @@ impl PluginHost {
         &self,
         runtime: &RuntimeReloadContext,
     ) -> Result<Vec<String>, RuntimeError> {
+        self.failures
+            .update_matrix(self.current_runtime_selection().failure_matrix());
         let mut reloaded = Vec::new();
         self.reload_protocol_plugins_with_sessions(&runtime.protocol_sessions, &mut reloaded)?;
         self.reload_gameplay_plugins_with_context(runtime, &mut reloaded)?;
         self.reload_storage_plugins_with_context(runtime, &mut reloaded)?;
         self.reload_auth_plugins(&mut reloaded)?;
         Ok(reloaded)
+    }
+
+    pub(crate) fn reconcile_runtime_selection(
+        &self,
+        config: &RuntimeSelectionConfig,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<RuntimeSelectionResult, RuntimeError> {
+        let previous = self.current_runtime_selection();
+        self.failures.update_matrix(config.failure_matrix());
+
+        let reloaded = if previous == *config {
+            self.reload_modified_with_context(runtime)?
+        } else {
+            {
+                let mut runtime_selection = self
+                    .runtime_selection
+                    .lock()
+                    .expect("plugin host mutex should not be poisoned");
+                *runtime_selection = config.clone();
+            }
+            self.activate_gameplay_profiles(config)?;
+            self.activate_auth_profiles(&Self::runtime_auth_profiles(config))?;
+            Vec::new()
+        };
+
+        let prepared = self.prepare_protocol_topology_for_reload(config)?;
+        Ok(RuntimeSelectionResult {
+            loaded_plugins: self.loaded_plugin_set(prepared.registry.clone()),
+            reloaded,
+        })
     }
 }

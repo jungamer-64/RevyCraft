@@ -82,6 +82,17 @@ impl ReloadableRunningServer {
 
     /// # Errors
     ///
+    /// Returns [`RuntimeError`] when the runtime cannot reconcile live config
+    /// state or apply a candidate topology.
+    pub async fn reload_config(&self) -> Result<ConfigReloadResult, RuntimeError> {
+        self.running
+            .runtime
+            .reload_config(self.reload_host.as_ref())
+            .await
+    }
+
+    /// # Errors
+    ///
     /// Returns [`RuntimeError`] when the runtime cannot materialize a candidate
     /// topology or bind the required listeners.
     pub async fn reload_topology(&self) -> Result<TopologyReloadResult, RuntimeError> {
@@ -169,6 +180,12 @@ impl TopologyReloadResult {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfigReloadResult {
+    pub reloaded_plugins: Vec<String>,
+    pub topology: TopologyReloadResult,
+}
+
 pub(crate) struct RuntimeTopologyGeneration {
     pub(crate) generation_id: TopologyGenerationId,
     pub(crate) config: ServerConfig,
@@ -197,15 +214,21 @@ pub(crate) struct RuntimeTopologyState {
     pub(crate) next_generation_id: u64,
 }
 
+#[derive(Clone)]
+pub(crate) struct LiveRuntimeState {
+    pub(crate) config: ServerConfig,
+    pub(crate) loaded_plugins: LoadedPluginSet,
+    pub(crate) auth_profile: Arc<dyn AuthProfileHandle>,
+    pub(crate) bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,
+}
+
 pub(crate) struct RuntimeServer {
     pub(crate) config: ServerConfig,
     pub(crate) config_source: ServerConfigSource,
-    pub(crate) loaded_plugins: LoadedPluginSet,
+    pub(crate) live_state: AsyncRwLock<LiveRuntimeState>,
     pub(crate) reload_host: Option<Arc<dyn RuntimePluginHost>>,
     pub(crate) consistency_gate: AsyncRwLock<()>,
     pub(crate) topology: RwLock<RuntimeTopologyState>,
-    pub(crate) auth_profile: Arc<dyn AuthProfileHandle>,
-    pub(crate) bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,
     pub(crate) online_auth_keys: Option<Arc<OnlineAuthKeys>>,
     pub(crate) storage_profile: Arc<dyn StorageProfileHandle>,
     pub(crate) state: Mutex<RuntimeState>,

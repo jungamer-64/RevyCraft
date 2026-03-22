@@ -1,7 +1,8 @@
 use super::{
     Arc, HashMap, HotSwappableProtocolAdapter, ManagedProtocolPlugin, PluginFailureStage,
-    PluginHost, PluginKind, ProtocolRegistry, RuntimeError,
+    PluginHost, PluginKind, ProtocolRegistry, RuntimeError, RuntimeSelectionConfig,
 };
+use std::collections::HashSet;
 
 pub(crate) struct PreparedProtocolTopology {
     pub(crate) registry: ProtocolRegistry,
@@ -12,14 +13,24 @@ pub(crate) struct PreparedProtocolTopology {
 impl PluginHost {
     fn prepare_protocol_topology_with_stage(
         &self,
+        config: &RuntimeSelectionConfig,
         stage: PluginFailureStage,
     ) -> Result<PreparedProtocolTopology, RuntimeError> {
         let catalog = self.protocol_catalog()?;
+        let allowlist = config
+            .plugin_allowlist
+            .as_ref()
+            .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
         let mut registry = ProtocolRegistry::new();
         let mut managed = HashMap::new();
         let mut adapter_ids = Vec::new();
         for package in catalog.packages() {
             if package.plugin_kind != PluginKind::Protocol {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
                 continue;
             }
             let modified_at = package.modified_at()?;
@@ -87,14 +98,16 @@ impl PluginHost {
 
     pub(crate) fn prepare_protocol_topology_for_boot(
         &self,
+        config: &RuntimeSelectionConfig,
     ) -> Result<PreparedProtocolTopology, RuntimeError> {
-        self.prepare_protocol_topology_with_stage(PluginFailureStage::Boot)
+        self.prepare_protocol_topology_with_stage(config, PluginFailureStage::Boot)
     }
 
     pub(crate) fn prepare_protocol_topology_for_reload(
         &self,
+        config: &RuntimeSelectionConfig,
     ) -> Result<PreparedProtocolTopology, RuntimeError> {
-        self.prepare_protocol_topology_with_stage(PluginFailureStage::Reload)
+        self.prepare_protocol_topology_with_stage(config, PluginFailureStage::Reload)
     }
 
     pub(crate) fn activate_protocol_topology(&self, candidate: PreparedProtocolTopology) {

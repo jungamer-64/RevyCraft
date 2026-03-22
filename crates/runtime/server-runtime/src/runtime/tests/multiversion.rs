@@ -3,22 +3,14 @@ use super::*;
 #[tokio::test]
 async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = build_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            game_mode: 1,
-            enabled_adapters: Some(vec![
-                JE_1_7_10_ADAPTER_ID.to_string(),
-                JE_1_8_X_ADAPTER_ID.to_string(),
-                JE_1_12_2_ADAPTER_ID.to_string(),
-            ]),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
-        plugin_test_registries_all()?,
-    )
-    .await?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.game_mode = 1;
+    config.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_1_12_2_ADAPTER_ID.to_string(),
+    ]);
+    let server = build_test_server(config, plugin_test_registries_all()?).await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
 
@@ -71,26 +63,18 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
 #[tokio::test]
 async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = build_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            game_mode: 1,
-            enabled_adapters: Some(vec![
-                JE_1_7_10_ADAPTER_ID.to_string(),
-                JE_1_12_2_ADAPTER_ID.to_string(),
-            ]),
-            default_gameplay_profile: "canonical".to_string(),
-            gameplay_profile_map: gameplay_profile_map(&[
-                (JE_1_7_10_ADAPTER_ID, "readonly"),
-                (JE_1_12_2_ADAPTER_ID, "canonical"),
-            ]),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
-        plugin_test_registries_all()?,
-    )
-    .await?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.game_mode = 1;
+    config.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_12_2_ADAPTER_ID.to_string(),
+    ]);
+    config.profiles.default_gameplay = "canonical".to_string();
+    config.profiles.gameplay_map = gameplay_profile_map(&[
+        (JE_1_7_10_ADAPTER_ID, "readonly"),
+        (JE_1_12_2_ADAPTER_ID, "canonical"),
+    ]);
+    let server = build_test_server(config, plugin_test_registries_all()?).await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
 
@@ -140,24 +124,16 @@ async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), R
 async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let registries = plugin_test_registries_all()?;
-    let server = build_test_server(
-        ServerConfig {
-            server_ip: Some("127.0.0.1".parse().expect("loopback should parse")),
-            server_port: 0,
-            be_enabled: true,
-            game_mode: 1,
-            enabled_adapters: Some(vec![
-                JE_1_7_10_ADAPTER_ID.to_string(),
-                JE_1_8_X_ADAPTER_ID.to_string(),
-                JE_1_12_2_ADAPTER_ID.to_string(),
-                BE_PLACEHOLDER_ADAPTER_ID.to_string(),
-            ]),
-            world_dir: temp_dir.path().join("world"),
-            ..ServerConfig::default()
-        },
-        registries,
-    )
-    .await?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.topology.be_enabled = true;
+    config.bootstrap.game_mode = 1;
+    config.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_1_12_2_ADAPTER_ID.to_string(),
+        BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+    ]);
+    let server = build_test_server(config, registries).await?;
 
     let udp_addr = udp_listener_addr(&server);
     let udp_client = UdpSocket::bind("127.0.0.1:0").await?;
