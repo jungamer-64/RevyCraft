@@ -542,7 +542,8 @@ mod tests {
             .expect("describe request should encode");
 
         let mut wrong_version = request.clone();
-        wrong_version[0] = 9;
+        wrong_version[0..2].copy_from_slice(&2_u16.to_le_bytes());
+        wrong_version[2..4].copy_from_slice(&0_u16.to_le_bytes());
         let error = decode_protocol_request(&wrong_version).expect_err("wrong version should fail");
         assert!(matches!(
             error,

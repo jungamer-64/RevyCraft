@@ -364,3 +364,33 @@ async fn duplicate_enabled_adapters_fail_fast() -> Result<(), RuntimeError> {
     )
     .await
 }
+
+#[test]
+fn plugin_abi_range_must_include_current_host_abi() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    seed_runtime_plugins(
+        &dist_dir,
+        TCP_ONLY_PROTOCOL_PLUGIN_IDS,
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+    )?;
+    let config = ServerConfig {
+        plugins_dir: dist_dir,
+        plugin_allowlist: Some(plugin_allowlist_with_supporting_plugins(
+            TCP_ONLY_PROTOCOL_PLUGIN_IDS,
+            STORAGE_AND_AUTH_PLUGIN_IDS,
+        )),
+        plugin_abi_min: mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 },
+        plugin_abi_max: mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 9 },
+        ..ServerConfig::default()
+    };
+    let error = match plugin_test_registries_from_config(&config) {
+        Ok(_) => panic!("plugin ABI range should reject configs that exclude the current host ABI"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        RuntimeError::Config(message) if message.contains("does not include current host ABI")
+    ));
+    Ok(())
+}

@@ -1,21 +1,21 @@
 use super::{
     Arc, AuthGeneration, AuthPluginApiV1, AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest,
-    GameplayGeneration, GameplayPluginApiV1, GameplayRequest, Library, Mutex,
-    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1, PLUGIN_MANIFEST_SYMBOL_V1,
-    PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginErrorCode,
-    PluginGenerationId, PluginManifestV1, PluginPackage, PluginSource, ProtocolGeneration,
-    ProtocolPluginApiV1, ProtocolRequest, RuntimeError, StorageGeneration, StoragePluginApiV1,
-    StorageRequest, decode_manifest, expect_auth_capabilities, expect_auth_descriptor,
+    GameplayGeneration, GameplayPluginApiV2, GameplayRequest, Library, Mutex,
+    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V2, PLUGIN_MANIFEST_SYMBOL_V1,
+    PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginGenerationId,
+    PluginManifestV1, PluginPackage, PluginSource, ProtocolGeneration, ProtocolPluginApiV1,
+    ProtocolRequest, RuntimeError, StorageGeneration, StoragePluginApiV1, StorageRequest,
+    decode_manifest, expect_auth_capabilities, expect_auth_descriptor,
     expect_gameplay_capabilities, expect_gameplay_descriptor,
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
-    gameplay_host_api, gameplay_profile_id_from_manifest, invoke_auth, invoke_gameplay,
-    invoke_protocol, invoke_storage, manifest_profile_id, require_manifest_capability,
+    gameplay_profile_id_from_manifest, invoke_auth, invoke_gameplay, invoke_protocol,
+    invoke_storage, manifest_profile_id, require_manifest_capability,
 };
 
 type LibraryGuard = Option<Arc<Mutex<Library>>>;
 type LoadedProtocolApi = (LibraryGuard, DecodedManifest, ProtocolPluginApiV1);
-type LoadedGameplayApi = (LibraryGuard, DecodedManifest, GameplayPluginApiV1);
+type LoadedGameplayApi = (LibraryGuard, DecodedManifest, GameplayPluginApiV2);
 type LoadedStorageApi = (LibraryGuard, DecodedManifest, StoragePluginApiV1);
 type LoadedAuthApi = (LibraryGuard, DecodedManifest, AuthPluginApiV1);
 
@@ -57,13 +57,6 @@ impl PluginLoader {
             },
             #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessGameplay(plugin) => {
-                let status = unsafe { (plugin.api.set_host_api)(&gameplay_host_api()) };
-                if status != PluginErrorCode::Ok {
-                    return Err(RuntimeError::Config(format!(
-                        "failed to configure gameplay host api for plugin `{}`: {status:?}",
-                        package.plugin_id
-                    )));
-                }
                 Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
             }
             #[cfg(any(test, feature = "in-process-testing"))]
@@ -328,8 +321,8 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const GameplayPluginApiV1> =
-                unsafe { library.get(PLUGIN_GAMEPLAY_API_SYMBOL_V1) }.map_err(|error| {
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const GameplayPluginApiV2> =
+                unsafe { library.get(PLUGIN_GAMEPLAY_API_SYMBOL_V2) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve gameplay api symbol in {}: {error}",
                         library_path.display()
@@ -337,13 +330,6 @@ impl PluginLoader {
                 })?;
             unsafe { *api_fn() }
         };
-        let status = unsafe { (api.set_host_api)(&gameplay_host_api()) };
-        if status != PluginErrorCode::Ok {
-            return Err(RuntimeError::Config(format!(
-                "failed to configure gameplay host api in {}: {status:?}",
-                library_path.display()
-            )));
-        }
         Ok((Some(library), decode_manifest(manifest_ptr)?, api))
     }
 
@@ -424,6 +410,12 @@ impl PluginLoader {
             return Err(RuntimeError::Config(format!(
                 "plugin `{}` manifest kind mismatch",
                 package.plugin_id
+            )));
+        }
+        if manifest.plugin_abi != CURRENT_PLUGIN_ABI {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` ABI {} did not match current host ABI {}",
+                package.plugin_id, manifest.plugin_abi, CURRENT_PLUGIN_ABI
             )));
         }
         if !self.abi_range.contains(manifest.plugin_abi) {

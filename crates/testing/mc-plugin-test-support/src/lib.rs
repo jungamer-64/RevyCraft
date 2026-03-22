@@ -282,8 +282,11 @@ impl PackagedPluginHarness {
             .lock()
             .expect("packaged plugin build lock should not be poisoned");
         let artifact_name = dynamic_library_filename(cargo_package);
+        let cache_stamp =
+            packaged_plugin_test_harness_stamp().map_err(PackagedPluginTestError::Message)?;
         let cached_artifact = self
             .artifact_cache_dir
+            .join(cache_stamp)
             .join(cargo_package)
             .join(build_tag)
             .join(&artifact_name);
@@ -559,8 +562,11 @@ mod tests {
             .lock()
             .expect("packaged plugin test lock should not be poisoned");
         let harness = PackagedPluginHarness::shared().expect("harness should load");
+        let cache_stamp =
+            super::packaged_plugin_test_harness_stamp().expect("cache stamp should be available");
         let cache_dir = harness
             .artifact_cache_dir()
+            .join(cache_stamp)
             .join("mc-plugin-proto-je-1_7_10")
             .join("cache-hit-v1");
         if cache_dir.exists() {

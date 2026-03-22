@@ -37,7 +37,12 @@ unsafe impl Sync for HostApiTableV1 {}
 pub type PluginInvokeFn =
     unsafe extern "C" fn(ByteSlice, *mut OwnedBuffer, *mut OwnedBuffer) -> PluginErrorCode;
 pub type PluginFreeBufferFn = unsafe extern "C" fn(OwnedBuffer);
-pub type GameplaySetHostApiFn = unsafe extern "C" fn(*const HostApiTableV1) -> PluginErrorCode;
+pub type GameplayPluginInvokeV2Fn = unsafe extern "C" fn(
+    ByteSlice,
+    *const HostApiTableV1,
+    *mut OwnedBuffer,
+    *mut OwnedBuffer,
+) -> PluginErrorCode;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -62,8 +67,7 @@ pub struct AuthPluginApiV1 {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct GameplayPluginApiV1 {
-    pub set_host_api: GameplaySetHostApiFn,
-    pub invoke: PluginInvokeFn,
+pub struct GameplayPluginApiV2 {
+    pub invoke: GameplayPluginInvokeV2Fn,
     pub free_buffer: PluginFreeBufferFn,
 }

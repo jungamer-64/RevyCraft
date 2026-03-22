@@ -31,11 +31,11 @@ use mc_plugin_api::codec::storage::{
     StorageRequest, StorageResponse, decode_storage_response, encode_storage_request,
 };
 use mc_plugin_api::host_api::{
-    AuthPluginApiV1, GameplayPluginApiV1, PluginFreeBufferFn, PluginInvokeFn, ProtocolPluginApiV1,
-    StoragePluginApiV1,
+    AuthPluginApiV1, GameplayPluginApiV2, GameplayPluginInvokeV2Fn, PluginFreeBufferFn,
+    PluginInvokeFn, ProtocolPluginApiV1, StoragePluginApiV1,
 };
 use mc_plugin_api::manifest::{
-    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V1, PLUGIN_MANIFEST_SYMBOL_V1,
+    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V2, PLUGIN_MANIFEST_SYMBOL_V1,
     PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1, PluginManifestV1,
 };
 use mc_proto_common::{
@@ -379,6 +379,16 @@ impl RuntimePluginHost for PluginHost {
 pub fn plugin_host_from_config(
     config: &ServerConfig,
 ) -> Result<Option<Arc<PluginHost>>, RuntimeError> {
+    let abi_range = PluginAbiRange {
+        min: config.plugin_abi_min,
+        max: config.plugin_abi_max,
+    };
+    if !abi_range.contains(CURRENT_PLUGIN_ABI) {
+        return Err(RuntimeError::Config(format!(
+            "plugin ABI range {}..={} does not include current host ABI {}",
+            abi_range.min, abi_range.max, CURRENT_PLUGIN_ABI
+        )));
+    }
     let allowlist = config
         .plugin_allowlist
         .as_ref()
@@ -389,10 +399,7 @@ pub fn plugin_host_from_config(
     }
     Ok(Some(Arc::new(PluginHost::new_with_dynamic_catalog_source(
         catalog,
-        PluginAbiRange {
-            min: config.plugin_abi_min,
-            max: config.plugin_abi_max,
-        },
+        abi_range,
         PluginFailureMatrix {
             protocol: config.plugin_failure_policy_protocol,
             gameplay: config.plugin_failure_policy_gameplay,

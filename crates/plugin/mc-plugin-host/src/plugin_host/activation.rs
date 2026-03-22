@@ -1,8 +1,8 @@
 use super::{
     Arc, HashMap, HashSet, HotSwappableAuthProfile, HotSwappableGameplayProfile,
     HotSwappableStorageProfile, ManagedAuthPlugin, ManagedGameplayPlugin, ManagedStoragePlugin,
-    PluginHost, PluginKind, PluginPackage, RuntimeError, ServerConfig, ensure_known_profiles,
-    ensure_profile_known,
+    PluginFailureStage, PluginHost, PluginKind, PluginPackage, RuntimeError, ServerConfig,
+    ensure_known_profiles, ensure_profile_known,
 };
 use crate::registry::LoadedPluginSet;
 
@@ -88,10 +88,35 @@ impl PluginHost {
         package: &PluginPackage,
         required_profiles: &HashSet<String>,
     ) -> Result<(), RuntimeError> {
-        let generation = Arc::new(
-            self.loader
-                .load_gameplay_generation(package, self.generations.next_generation_id())?,
-        );
+        let modified_at = package.modified_at()?;
+        let identity = package.artifact_identity(modified_at);
+        if self
+            .failures
+            .is_artifact_quarantined(&package.plugin_id, &identity)
+        {
+            return Ok(());
+        }
+        let generation = match self
+            .loader
+            .load_gameplay_generation(package, self.generations.next_generation_id())
+        {
+            Ok(generation) => Arc::new(generation),
+            Err(error) => {
+                let reason = error.to_string();
+                eprintln!(
+                    "gameplay boot load failed for `{}`: {reason}",
+                    package.plugin_id
+                );
+                self.failures.handle_candidate_failure(
+                    PluginKind::Gameplay,
+                    PluginFailureStage::Boot,
+                    &package.plugin_id,
+                    identity,
+                    &reason,
+                )?;
+                return Ok(());
+            }
+        };
         if !required_profiles.contains(generation.profile_id.as_str()) {
             return Ok(());
         }
@@ -114,8 +139,8 @@ impl PluginHost {
                     generation,
                     Arc::clone(&self.failures),
                 )),
-                loaded_at: package.modified_at()?,
-                active_loaded_at: package.modified_at()?,
+                loaded_at: modified_at,
+                active_loaded_at: modified_at,
             },
         );
         self.failures.clear_plugin_state(&package.plugin_id);
@@ -128,10 +153,35 @@ impl PluginHost {
         package: &PluginPackage,
         storage_profile: &str,
     ) -> Result<(), RuntimeError> {
-        let generation = Arc::new(
-            self.loader
-                .load_storage_generation(package, self.generations.next_generation_id())?,
-        );
+        let modified_at = package.modified_at()?;
+        let identity = package.artifact_identity(modified_at);
+        if self
+            .failures
+            .is_artifact_quarantined(&package.plugin_id, &identity)
+        {
+            return Ok(());
+        }
+        let generation = match self
+            .loader
+            .load_storage_generation(package, self.generations.next_generation_id())
+        {
+            Ok(generation) => Arc::new(generation),
+            Err(error) => {
+                let reason = error.to_string();
+                eprintln!(
+                    "storage boot load failed for `{}`: {reason}",
+                    package.plugin_id
+                );
+                self.failures.handle_candidate_failure(
+                    PluginKind::Storage,
+                    PluginFailureStage::Boot,
+                    &package.plugin_id,
+                    identity,
+                    &reason,
+                )?;
+                return Ok(());
+            }
+        };
         if generation.profile_id != storage_profile {
             return Ok(());
         }
@@ -149,8 +199,8 @@ impl PluginHost {
                     package.plugin_id.clone(),
                     generation,
                 )),
-                loaded_at: package.modified_at()?,
-                active_loaded_at: package.modified_at()?,
+                loaded_at: modified_at,
+                active_loaded_at: modified_at,
             },
         );
         self.failures.clear_plugin_state(&package.plugin_id);
@@ -163,10 +213,35 @@ impl PluginHost {
         package: &PluginPackage,
         requested_profiles: &HashSet<String>,
     ) -> Result<(), RuntimeError> {
-        let generation = Arc::new(
-            self.loader
-                .load_auth_generation(package, self.generations.next_generation_id())?,
-        );
+        let modified_at = package.modified_at()?;
+        let identity = package.artifact_identity(modified_at);
+        if self
+            .failures
+            .is_artifact_quarantined(&package.plugin_id, &identity)
+        {
+            return Ok(());
+        }
+        let generation = match self
+            .loader
+            .load_auth_generation(package, self.generations.next_generation_id())
+        {
+            Ok(generation) => Arc::new(generation),
+            Err(error) => {
+                let reason = error.to_string();
+                eprintln!(
+                    "auth boot load failed for `{}`: {reason}",
+                    package.plugin_id
+                );
+                self.failures.handle_candidate_failure(
+                    PluginKind::Auth,
+                    PluginFailureStage::Boot,
+                    &package.plugin_id,
+                    identity,
+                    &reason,
+                )?;
+                return Ok(());
+            }
+        };
         if !requested_profiles.contains(&generation.profile_id) {
             return Ok(());
         }
@@ -187,8 +262,8 @@ impl PluginHost {
                     generation,
                     Arc::clone(&self.failures),
                 )),
-                loaded_at: package.modified_at()?,
-                active_loaded_at: package.modified_at()?,
+                loaded_at: modified_at,
+                active_loaded_at: modified_at,
             },
         );
         self.failures.clear_plugin_state(&package.plugin_id);

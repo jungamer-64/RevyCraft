@@ -126,36 +126,16 @@ macro_rules! __export_plugin_gameplay {
             std::sync::OnceLock::new();
         static MC_GAMEPLAY_PLUGIN_MANIFEST: std::sync::OnceLock<mc_plugin_api::manifest::PluginManifestV1> =
             std::sync::OnceLock::new();
-        static MC_GAMEPLAY_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::host_api::GameplayPluginApiV1> =
+        static MC_GAMEPLAY_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::host_api::GameplayPluginApiV2> =
             std::sync::OnceLock::new();
-        static MC_GAMEPLAY_HOST_API_SLOT: std::sync::OnceLock<
-            std::sync::Mutex<Option<mc_plugin_api::host_api::HostApiTableV1>>,
-        > = std::sync::OnceLock::new();
 
         fn mc_gameplay_plugin_instance() -> &'static $plugin_ty {
             MC_GAMEPLAY_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
         }
 
-        fn mc_gameplay_host_api_slot()
-        -> &'static std::sync::Mutex<Option<mc_plugin_api::host_api::HostApiTableV1>> {
-            MC_GAMEPLAY_HOST_API_SLOT.get_or_init(|| std::sync::Mutex::new(None))
-        }
-
-        unsafe extern "C" fn mc_gameplay_plugin_set_host_api(
-            host_api: *const mc_plugin_api::host_api::HostApiTableV1,
-        ) -> mc_plugin_api::abi::PluginErrorCode {
-            let Some(host_api) = (unsafe { host_api.as_ref() }) else {
-                return mc_plugin_api::abi::PluginErrorCode::InvalidInput;
-            };
-            let mut guard = mc_gameplay_host_api_slot()
-                .lock()
-                .expect("gameplay host api mutex should not be poisoned");
-            *guard = Some(*host_api);
-            mc_plugin_api::abi::PluginErrorCode::Ok
-        }
-
-        unsafe extern "C" fn mc_gameplay_plugin_invoke(
+        unsafe extern "C" fn mc_gameplay_plugin_invoke_v2(
             request: mc_plugin_api::abi::ByteSlice,
+            host_api: *const mc_plugin_api::host_api::HostApiTableV1,
             output: *mut mc_plugin_api::abi::OwnedBuffer,
             error_out: *mut mc_plugin_api::abi::OwnedBuffer,
         ) -> mc_plugin_api::abi::PluginErrorCode {
@@ -181,17 +161,30 @@ macro_rules! __export_plugin_gameplay {
                 }
             };
 
+            let Some(host_api) = (unsafe { host_api.as_ref() }) else {
+                $crate::__macro_support::buffers::write_error_buffer(
+                    error_out,
+                    "gameplay host api was null".to_string(),
+                );
+                return mc_plugin_api::abi::PluginErrorCode::InvalidInput;
+            };
+            if host_api.abi != mc_plugin_api::abi::CURRENT_PLUGIN_ABI {
+                $crate::__macro_support::buffers::write_error_buffer(
+                    error_out,
+                    format!(
+                        "gameplay host api ABI {} did not match plugin ABI {}",
+                        host_api.abi,
+                        mc_plugin_api::abi::CURRENT_PLUGIN_ABI
+                    ),
+                );
+                return mc_plugin_api::abi::PluginErrorCode::AbiMismatch;
+            }
+
             let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let host_api = {
-                    let guard = mc_gameplay_host_api_slot()
-                        .lock()
-                        .expect("gameplay host api mutex should not be poisoned");
-                    *guard
-                };
                 $crate::__macro_support::handle_gameplay_request_with_host_api(
                     mc_gameplay_plugin_instance(),
                     request.clone(),
-                    host_api,
+                    Some(*host_api),
                 )
             })) {
                 Ok(Ok(response)) => response,
@@ -246,11 +239,10 @@ macro_rules! __export_plugin_gameplay {
             all(not(test), not(feature = "disable-exported-symbols")),
             unsafe(no_mangle)
         )]
-        pub extern "C" fn mc_plugin_gameplay_api_v1() -> *const mc_plugin_api::host_api::GameplayPluginApiV1 {
+        pub extern "C" fn mc_plugin_gameplay_api_v2() -> *const mc_plugin_api::host_api::GameplayPluginApiV2 {
             std::ptr::from_ref(MC_GAMEPLAY_PLUGIN_API.get_or_init(|| {
-                mc_plugin_api::host_api::GameplayPluginApiV1 {
-                    set_host_api: mc_gameplay_plugin_set_host_api,
-                    invoke: mc_gameplay_plugin_invoke,
+                mc_plugin_api::host_api::GameplayPluginApiV2 {
+                    invoke: mc_gameplay_plugin_invoke_v2,
                     free_buffer: mc_gameplay_plugin_free_buffer,
                 }
             }))
@@ -259,11 +251,11 @@ macro_rules! __export_plugin_gameplay {
         #[cfg(any(test, feature = "in-process-testing"))]
         #[must_use]
         pub fn in_process_plugin_entrypoints()
-        -> $crate::test_support::InProcessPluginEntrypoints<mc_plugin_api::host_api::GameplayPluginApiV1>
+        -> $crate::test_support::InProcessPluginEntrypoints<mc_plugin_api::host_api::GameplayPluginApiV2>
         {
             $crate::test_support::InProcessPluginEntrypoints::new(
                 unsafe { &*mc_plugin_manifest_v1() },
-                unsafe { &*mc_plugin_gameplay_api_v1() },
+                unsafe { &*mc_plugin_gameplay_api_v2() },
             )
         }
     };

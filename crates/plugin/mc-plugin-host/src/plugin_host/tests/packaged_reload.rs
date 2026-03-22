@@ -1,5 +1,33 @@
 use super::*;
 
+fn seed_legacy_gameplay_artifact_without_v2_symbol(dist_dir: &Path) -> Result<(), RuntimeError> {
+    let protocol_dir = dist_dir.join("je-1_7_10");
+    let artifact_name = fs::read_dir(&protocol_dir)?
+        .filter_map(Result::ok)
+        .find_map(|entry| {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            (file_name != "plugin.toml").then(|| file_name.into_owned())
+        })
+        .ok_or_else(|| {
+            RuntimeError::Config(format!(
+                "packaged protocol artifact missing from {}",
+                protocol_dir.display()
+            ))
+        })?;
+    let legacy_dir = dist_dir.join("gameplay-legacy");
+    fs::create_dir_all(&legacy_dir)?;
+    fs::write(
+        legacy_dir.join("plugin.toml"),
+        format!(
+            "[plugin]\nid = \"gameplay-legacy\"\nkind = \"gameplay\"\n\n[artifacts]\n\"{}\" = \"../je-1_7_10/{}\"\n",
+            current_artifact_key(),
+            artifact_name,
+        ),
+    )?;
+    Ok(())
+}
+
 #[test]
 fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
@@ -27,6 +55,86 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
                 .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG)),
             "adapter `{adapter_id}` should expose build tag capability"
         );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
+-> Result<(), RuntimeError> {
+    use mc_core::{
+        CapabilitySet, CoreCommand, EntityId, GameplayProfileId, PlayerId, SessionCapabilitySet,
+    };
+    use uuid::Uuid;
+
+    for action in [
+        PluginFailureAction::Skip,
+        PluginFailureAction::Quarantine,
+        PluginFailureAction::FailFast,
+    ] {
+        let temp_dir = tempdir()?;
+        let dist_dir = temp_dir.path().join("runtime").join("plugins");
+        seed_packaged_plugins(
+            &dist_dir,
+            &[
+                "je-1_7_10",
+                "gameplay-canonical",
+                "storage-je-anvil-1_7_10",
+                "auth-offline",
+            ],
+        )?;
+        seed_legacy_gameplay_artifact_without_v2_symbol(&dist_dir)?;
+
+        let config = ServerConfig {
+            plugins_dir: dist_dir,
+            plugin_failure_policy_gameplay: action,
+            ..ServerConfig::default()
+        };
+        let host =
+            TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+
+        match action {
+            PluginFailureAction::FailFast => {
+                let error = match host.load_plugin_set(&config) {
+                    Ok(_) => panic!("fail-fast should reject the incompatible gameplay artifact"),
+                    Err(error) => error,
+                };
+                assert!(matches!(
+                    error,
+                    RuntimeError::PluginFatal(message)
+                        if message.contains("gameplay-legacy")
+                            && message.contains("failed to resolve gameplay api symbol")
+                ));
+            }
+            PluginFailureAction::Skip | PluginFailureAction::Quarantine => {
+                let loaded = host.load_plugin_set(&config)?;
+                let profile = loaded
+                    .resolve_gameplay_profile("canonical")
+                    .expect("canonical gameplay profile should resolve");
+                let result = profile.handle_command(
+                    &StubGameplayQuery {
+                        level_name: "world",
+                    },
+                    &SessionCapabilitySet {
+                        protocol: CapabilitySet::new(),
+                        gameplay: CapabilitySet::new(),
+                        gameplay_profile: GameplayProfileId::new("canonical"),
+                        entity_id: Some(EntityId(3)),
+                        protocol_generation: None,
+                        gameplay_generation: None,
+                    },
+                    &CoreCommand::SetHeldSlot {
+                        player_id: PlayerId(Uuid::from_u128(44)),
+                        slot: 1,
+                    },
+                );
+                assert!(
+                    result.is_ok(),
+                    "compatible packaged gameplay plugin should still invoke"
+                );
+            }
+        }
     }
 
     Ok(())

@@ -621,7 +621,8 @@ mod declared_protocol_plugin {
 }
 
 unsafe fn invoke_gameplay(
-    api: &mc_plugin_api::host_api::GameplayPluginApiV1,
+    api: &mc_plugin_api::host_api::GameplayPluginApiV2,
+    host_api: Option<&HostApiTableV1>,
     request: &GameplayRequest,
 ) -> GameplayResponse {
     let payload = encode_gameplay_request(request).expect("gameplay request should encode");
@@ -633,6 +634,7 @@ unsafe fn invoke_gameplay(
                 ptr: payload.as_ptr(),
                 len: payload.len(),
             },
+            host_api.map_or(std::ptr::null(), std::ptr::from_ref),
             &raw mut output,
             &raw mut error,
         )
@@ -670,15 +672,6 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
     let entrypoints_a = plugin_a::in_process_plugin_entrypoints();
     let entrypoints_b = plugin_b::in_process_plugin_entrypoints();
 
-    assert_eq!(
-        unsafe { (entrypoints_a.api.set_host_api)(&raw const host_api_a) },
-        PluginErrorCode::Ok
-    );
-    assert_eq!(
-        unsafe { (entrypoints_b.api.set_host_api)(&raw const host_api_b) },
-        PluginErrorCode::Ok
-    );
-
     let request_a = GameplayRequest::HandleTick {
         session: GameplaySessionSnapshot {
             phase: ConnectionPhase::Play,
@@ -699,11 +692,11 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
     };
 
     assert_eq!(
-        unsafe { invoke_gameplay(entrypoints_a.api, &request_a) },
+        unsafe { invoke_gameplay(entrypoints_a.api, Some(&host_api_a), &request_a) },
         GameplayResponse::Effect(GameplayEffect::default())
     );
     assert_eq!(
-        unsafe { invoke_gameplay(entrypoints_b.api, &request_b) },
+        unsafe { invoke_gameplay(entrypoints_b.api, Some(&host_api_b), &request_b) },
         GameplayResponse::Effect(GameplayEffect::default())
     );
     assert_eq!(
@@ -713,6 +706,85 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
     assert_eq!(
         plugin_b::take_recorded_level_name().as_deref(),
         Some("host-b")
+    );
+}
+
+#[test]
+fn exported_gameplay_plugins_reject_null_host_api() {
+    let entrypoints = plugin_a::in_process_plugin_entrypoints();
+    let request = GameplayRequest::HandleTick {
+        session: GameplaySessionSnapshot {
+            phase: ConnectionPhase::Play,
+            player_id: Some(test_player_id()),
+            entity_id: None,
+            gameplay_profile: GameplayProfileId::new("plugin-a"),
+        },
+        now_ms: 3,
+    };
+    let payload = encode_gameplay_request(&request).expect("gameplay request should encode");
+    let mut output = OwnedBuffer::empty();
+    let mut error = OwnedBuffer::empty();
+    let status = unsafe {
+        (entrypoints.api.invoke)(
+            ByteSlice {
+                ptr: payload.as_ptr(),
+                len: payload.len(),
+            },
+            std::ptr::null(),
+            &raw mut output,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, PluginErrorCode::InvalidInput);
+    let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
+    unsafe {
+        (entrypoints.api.free_buffer)(error);
+    }
+    assert_eq!(
+        String::from_utf8(bytes).expect("plugin error should be utf-8"),
+        "gameplay host api was null"
+    );
+}
+
+#[test]
+fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
+    let context = TestHostContext {
+        level_name: "host-a",
+    };
+    let mut host_api = host_api_for(&context);
+    host_api.abi = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
+    let entrypoints = plugin_a::in_process_plugin_entrypoints();
+    let request = GameplayRequest::HandleTick {
+        session: GameplaySessionSnapshot {
+            phase: ConnectionPhase::Play,
+            player_id: Some(test_player_id()),
+            entity_id: None,
+            gameplay_profile: GameplayProfileId::new("plugin-a"),
+        },
+        now_ms: 4,
+    };
+    let payload = encode_gameplay_request(&request).expect("gameplay request should encode");
+    let mut output = OwnedBuffer::empty();
+    let mut error = OwnedBuffer::empty();
+    let status = unsafe {
+        (entrypoints.api.invoke)(
+            ByteSlice {
+                ptr: payload.as_ptr(),
+                len: payload.len(),
+            },
+            &raw const host_api,
+            &raw mut output,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, PluginErrorCode::AbiMismatch);
+    let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
+    unsafe {
+        (entrypoints.api.free_buffer)(error);
+    }
+    assert_eq!(
+        String::from_utf8(bytes).expect("plugin error should be utf-8"),
+        "gameplay host api ABI 2.0 did not match plugin ABI 3.0"
     );
 }
 

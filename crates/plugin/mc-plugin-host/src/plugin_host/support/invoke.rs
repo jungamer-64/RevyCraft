@@ -1,10 +1,10 @@
 use super::{
-    AuthPluginApiV1, AuthRequest, AuthResponse, ByteSlice, GameplayPluginApiV1, GameplayRequest,
+    AuthPluginApiV1, AuthRequest, AuthResponse, ByteSlice, GameplayPluginApiV2, GameplayRequest,
     GameplayResponse, OwnedBuffer, PluginErrorCode, ProtocolPluginApiV1, ProtocolRequest,
     ProtocolResponse, RuntimeError, StoragePluginApiV1, StorageRequest, StorageResponse,
     decode_auth_response, decode_gameplay_response, decode_plugin_error, decode_protocol_response,
     decode_storage_response, encode_auth_request, encode_gameplay_request, encode_protocol_request,
-    encode_storage_request,
+    encode_storage_request, gameplay_host_api,
 };
 
 pub(crate) fn invoke_protocol(
@@ -48,19 +48,21 @@ pub(crate) fn invoke_protocol(
 
 pub(crate) fn invoke_gameplay(
     plugin_id: &str,
-    api: &GameplayPluginApiV1,
+    api: &GameplayPluginApiV2,
     request: &GameplayRequest,
 ) -> Result<GameplayResponse, RuntimeError> {
     let request_bytes = encode_gameplay_request(request)
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
+    let host_api = gameplay_host_api();
     let status = unsafe {
         (api.invoke)(
             ByteSlice {
                 ptr: request_bytes.as_ptr(),
                 len: request_bytes.len(),
             },
+            &raw const host_api,
             &raw mut output,
             &raw mut error,
         )

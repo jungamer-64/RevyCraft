@@ -6,14 +6,14 @@ mod reload;
 
 use super::{
     Arc, AuthPluginApiV1, AuthRequest, AuthResponse, BedrockListenerDescriptor, CapabilitySet,
-    GameplayGeneration, GameplayPluginApiV1, GameplayProfileId, GameplayRequest, GameplayResponse,
+    GameplayGeneration, GameplayPluginApiV2, GameplayProfileId, GameplayRequest, GameplayResponse,
     GameplaySessionSnapshot, HashMap, HashSet, ManagedGameplayPlugin, ManagedProtocolPlugin,
     OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1,
     ProtocolDescriptor, ProtocolGeneration, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
     RuntimeError, RuntimeReloadContext, StorageGeneration, StoragePluginApiV1, StorageRequest,
     StorageResponse, decode_auth_response, decode_gameplay_response, decode_plugin_error,
     decode_protocol_response, decode_storage_response, encode_auth_request,
-    encode_gameplay_request, encode_protocol_request, encode_storage_request,
+    encode_gameplay_request, encode_protocol_request, encode_storage_request, gameplay_host_api,
 };
 use crate::runtime::ProtocolReloadSession;
 use mc_plugin_api::abi::{ByteSlice, Utf8Slice};

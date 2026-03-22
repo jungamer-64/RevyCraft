@@ -1,10 +1,10 @@
 use super::{
     Arc, AuthGenerationHandle, AuthMode, AuthRequest, AuthResponse, BedrockAuthResult,
-    BedrockListenerDescriptor, ByteSlice, CapabilitySet, GameplayProfileId, GameplayRequest,
-    GameplayResponse, Library, Mutex, OwnedBuffer, PlayerId, PluginErrorCode, PluginFreeBufferFn,
-    PluginGenerationId, PluginInvokeFn, ProtocolDescriptor, ProtocolError, ProtocolRequest,
-    ProtocolResponse, RuntimeError, StorageError, StorageRequest, StorageResponse,
-    decode_auth_response, decode_gameplay_response, decode_protocol_response,
+    BedrockListenerDescriptor, ByteSlice, CapabilitySet, GameplayPluginInvokeV2Fn,
+    GameplayProfileId, GameplayRequest, GameplayResponse, Library, Mutex, OwnedBuffer, PlayerId,
+    PluginErrorCode, PluginFreeBufferFn, PluginGenerationId, PluginInvokeFn, ProtocolDescriptor,
+    ProtocolError, ProtocolRequest, ProtocolResponse, RuntimeError, StorageError, StorageRequest,
+    StorageResponse, decode_auth_response, decode_gameplay_response, decode_protocol_response,
     decode_storage_response, encode_auth_request, encode_gameplay_request, encode_protocol_request,
     encode_storage_request,
 };
@@ -113,7 +113,7 @@ pub(crate) struct GameplayGeneration {
     pub(crate) plugin_id: String,
     pub(crate) profile_id: GameplayProfileId,
     pub(crate) capabilities: CapabilitySet,
-    pub(crate) invoke: PluginInvokeFn,
+    pub(crate) invoke: GameplayPluginInvokeV2Fn,
     pub(crate) free_buffer: PluginFreeBufferFn,
     pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
 }
@@ -123,12 +123,14 @@ impl GameplayGeneration {
         let request_bytes = encode_gameplay_request(request).map_err(|error| error.to_string())?;
         let mut output = OwnedBuffer::empty();
         let mut error = OwnedBuffer::empty();
+        let host_api = super::gameplay_host_api();
         let status = unsafe {
             (self.invoke)(
                 ByteSlice {
                     ptr: request_bytes.as_ptr(),
                     len: request_bytes.len(),
                 },
+                &raw const host_api,
                 &raw mut output,
                 &raw mut error,
             )

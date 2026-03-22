@@ -34,5 +34,5 @@ plugin-failure-policy-auth=skip
 plugin-reload-watch=false
 topology-reload-watch=false
 topology-drain-grace-secs=30
-plugin-abi-min=2.0
-plugin-abi-max=2.0
+plugin-abi-min=3.0
+plugin-abi-max=3.0
