@@ -66,6 +66,18 @@ pub struct AuthPluginStatusSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminUiPluginStatusSnapshot {
+    pub plugin_id: String,
+    pub profile_id: String,
+    pub generation_id: PluginGenerationId,
+    pub loaded_at_ms: u64,
+    pub failure_action: PluginFailureAction,
+    pub current_artifact: PluginArtifactStatusSnapshot,
+    pub active_quarantine_reason: Option<String>,
+    pub artifact_quarantine: Option<PluginArtifactStatusSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginHostStatusSnapshot {
     pub failure_matrix: PluginFailureMatrix,
     pub pending_fatal_error: Option<String>,
@@ -73,6 +85,7 @@ pub struct PluginHostStatusSnapshot {
     pub gameplay: Vec<GameplayPluginStatusSnapshot>,
     pub storage: Vec<StoragePluginStatusSnapshot>,
     pub auth: Vec<AuthPluginStatusSnapshot>,
+    pub admin_ui: Vec<AdminUiPluginStatusSnapshot>,
 }
 
 impl PluginHostStatusSnapshot {
@@ -97,6 +110,11 @@ impl PluginHostStatusSnapshot {
                 .iter()
                 .filter(|plugin| plugin.active_quarantine_reason.is_some())
                 .count()
+            + self
+                .admin_ui
+                .iter()
+                .filter(|plugin| plugin.active_quarantine_reason.is_some())
+                .count()
     }
 
     #[must_use]
@@ -117,6 +135,11 @@ impl PluginHostStatusSnapshot {
                 .count()
             + self
                 .auth
+                .iter()
+                .filter(|plugin| plugin.artifact_quarantine.is_some())
+                .count()
+            + self
+                .admin_ui
                 .iter()
                 .filter(|plugin| plugin.artifact_quarantine.is_some())
                 .count()
@@ -272,6 +295,35 @@ impl PluginHost {
             .collect::<Vec<_>>();
         auth.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
 
+        let mut admin_ui = self
+            .admin_ui
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .values()
+            .map(|managed| {
+                let generation = managed.profile.current_generation();
+                AdminUiPluginStatusSnapshot {
+                    plugin_id: managed.package.plugin_id.clone(),
+                    profile_id: managed.profile_id.clone(),
+                    generation_id: generation.generation_id,
+                    loaded_at_ms: system_time_ms(managed.active_loaded_at),
+                    failure_action: self.failures.action_for_kind(PluginKind::AdminUi),
+                    current_artifact: artifact_status_snapshot(
+                        managed.package.artifact_identity(managed.active_loaded_at),
+                        None,
+                    ),
+                    active_quarantine_reason: self
+                        .failures
+                        .active_reason(&managed.package.plugin_id),
+                    artifact_quarantine: self
+                        .failures
+                        .artifact_record(&managed.package.plugin_id)
+                        .map(artifact_quarantine_status_snapshot),
+                }
+            })
+            .collect::<Vec<_>>();
+        admin_ui.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+
         PluginHostStatusSnapshot {
             failure_matrix: self.failures.matrix(),
             pending_fatal_error: self.failures.pending_fatal_message(),
@@ -279,6 +331,7 @@ impl PluginHost {
             gameplay,
             storage,
             auth,
+            admin_ui,
         }
     }
 }

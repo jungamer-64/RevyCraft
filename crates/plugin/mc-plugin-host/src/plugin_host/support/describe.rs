@@ -1,7 +1,7 @@
 use super::{
-    AuthDescriptor, AuthResponse, BedrockListenerDescriptor, CapabilitySet, GameplayDescriptor,
-    GameplayResponse, ProtocolDescriptor, ProtocolResponse, RuntimeError, StorageDescriptor,
-    StorageResponse,
+    AdminUiDescriptor, AdminUiOutput, AuthDescriptor, AuthResponse, BedrockListenerDescriptor,
+    CapabilitySet, GameplayDescriptor, GameplayResponse, ProtocolDescriptor, ProtocolResponse,
+    RuntimeError, StorageDescriptor, StorageResponse,
 };
 
 pub(crate) fn expect_protocol_descriptor(
@@ -108,6 +108,30 @@ pub(crate) fn expect_auth_capabilities(
         AuthResponse::CapabilitySet(capabilities) => Ok(capabilities),
         other => Err(RuntimeError::Config(format!(
             "plugin `{plugin_id}` returned unexpected auth capability payload: {other:?}"
+        ))),
+    }
+}
+
+pub(crate) fn expect_admin_ui_descriptor(
+    plugin_id: &str,
+    response: AdminUiOutput,
+) -> Result<AdminUiDescriptor, RuntimeError> {
+    match response {
+        AdminUiOutput::Descriptor(descriptor) => Ok(descriptor),
+        other => Err(RuntimeError::Config(format!(
+            "plugin `{plugin_id}` returned unexpected admin-ui describe payload: {other:?}"
+        ))),
+    }
+}
+
+pub(crate) fn expect_admin_ui_capabilities(
+    plugin_id: &str,
+    response: AdminUiOutput,
+) -> Result<CapabilitySet, RuntimeError> {
+    match response {
+        AdminUiOutput::CapabilitySet(capabilities) => Ok(capabilities),
+        other => Err(RuntimeError::Config(format!(
+            "plugin `{plugin_id}` returned unexpected admin-ui capability payload: {other:?}"
         ))),
     }
 }

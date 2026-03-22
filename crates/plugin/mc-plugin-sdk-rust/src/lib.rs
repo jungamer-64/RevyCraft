@@ -8,6 +8,7 @@ use mc_plugin_api::abi::{
     CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginAbiVersion, PluginKind,
     Utf8Slice,
 };
+use mc_plugin_api::codec::admin_ui::{AdminRequest, AdminResponse, AdminUiDescriptor};
 use mc_plugin_api::codec::auth::{AuthDescriptor, BedrockAuthResult};
 use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
@@ -18,6 +19,7 @@ use std::path::Path;
 
 #[doc(hidden)]
 pub mod __macro_support;
+pub mod admin_ui;
 pub mod auth;
 pub mod buffers;
 pub mod capabilities;

@@ -1,5 +1,6 @@
 use crate::RuntimeError;
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use mc_plugin_api::codec::admin_ui::AdminPermission;
 use mc_plugin_host::config::{
     BootstrapConfig as PluginHostBootstrapConfig,
     RuntimeSelectionConfig as PluginHostRuntimeSelectionConfig,
@@ -165,11 +166,27 @@ impl Default for ProfilesConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdminConfig {
+    pub ui_profile: String,
+    pub local_console_permissions: Vec<AdminPermission>,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            ui_profile: "console-v1".to_string(),
+            local_console_permissions: all_admin_permissions().to_vec(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveConfig {
     pub network: NetworkConfig,
     pub topology: TopologyConfig,
     pub plugins: PluginsConfig,
     pub profiles: ProfilesConfig,
+    pub admin: AdminConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +196,7 @@ pub struct ServerConfig {
     pub topology: TopologyConfig,
     pub plugins: PluginsConfig,
     pub profiles: ProfilesConfig,
+    pub admin: AdminConfig,
 }
 
 impl Default for ServerConfig {
@@ -189,6 +207,7 @@ impl Default for ServerConfig {
             topology: TopologyConfig::default(),
             plugins: PluginsConfig::default(),
             profiles: ProfilesConfig::default(),
+            admin: AdminConfig::default(),
         }
     }
 }
@@ -303,6 +322,11 @@ impl ServerConfig {
                         PluginFailureMatrix::parse_auth,
                         PluginFailureMatrix::default().auth,
                     )?,
+                    admin_ui: parse_failure_policy(
+                        document.plugins.failure_policy.admin_ui.as_deref(),
+                        PluginFailureMatrix::parse_admin_ui,
+                        PluginFailureMatrix::default().admin_ui,
+                    )?,
                 },
             },
             profiles: ProfilesConfig {
@@ -319,6 +343,15 @@ impl ServerConfig {
                     .default_gameplay
                     .unwrap_or_else(|| "canonical".to_string()),
                 gameplay_map: document.profiles.gameplay_map,
+            },
+            admin: AdminConfig {
+                ui_profile: document
+                    .admin
+                    .ui_profile
+                    .unwrap_or_else(|| "console-v1".to_string()),
+                local_console_permissions: parse_admin_permissions(
+                    document.admin.local_console_permissions,
+                )?,
             },
         })
     }
@@ -354,6 +387,7 @@ impl ServerConfig {
             topology: self.topology.clone(),
             plugins: self.plugins.clone(),
             profiles: self.profiles.clone(),
+            admin: self.admin.clone(),
         }
     }
 
@@ -375,11 +409,13 @@ impl ServerConfig {
             bedrock_auth_profile: self.profiles.bedrock_auth.clone(),
             default_gameplay_profile: self.profiles.default_gameplay.clone(),
             gameplay_profile_map: self.profiles.gameplay_map.clone(),
+            admin_ui_profile: self.admin.ui_profile.clone(),
             plugin_allowlist: self.plugins.allowlist.clone(),
             plugin_failure_policy_protocol: self.plugins.failure_policy.protocol,
             plugin_failure_policy_gameplay: self.plugins.failure_policy.gameplay,
             plugin_failure_policy_storage: self.plugins.failure_policy.storage,
             plugin_failure_policy_auth: self.plugins.failure_policy.auth,
+            plugin_failure_policy_admin_ui: self.plugins.failure_policy.admin_ui,
         }
     }
 
@@ -392,12 +428,14 @@ impl ServerConfig {
             bedrock_auth_profile: self.profiles.bedrock_auth.clone(),
             default_gameplay_profile: self.profiles.default_gameplay.clone(),
             gameplay_profile_map: self.profiles.gameplay_map.clone(),
+            admin_ui_profile: self.admin.ui_profile.clone(),
             plugins_dir: self.bootstrap.plugins_dir.clone(),
             plugin_allowlist: self.plugins.allowlist.clone(),
             plugin_failure_policy_protocol: self.plugins.failure_policy.protocol,
             plugin_failure_policy_gameplay: self.plugins.failure_policy.gameplay,
             plugin_failure_policy_storage: self.plugins.failure_policy.storage,
             plugin_failure_policy_auth: self.plugins.failure_policy.auth,
+            plugin_failure_policy_admin_ui: self.plugins.failure_policy.admin_ui,
             plugin_abi_min: self.bootstrap.plugin_abi_min,
             plugin_abi_max: self.bootstrap.plugin_abi_max,
         }
@@ -412,6 +450,7 @@ struct ServerConfigDocument {
     topology: TopologyDocument,
     plugins: PluginsDocument,
     profiles: ProfilesDocument,
+    admin: AdminDocument,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -466,6 +505,7 @@ struct FailurePolicyDocument {
     gameplay: Option<String>,
     storage: Option<String>,
     auth: Option<String>,
+    admin_ui: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -475,6 +515,13 @@ struct ProfilesDocument {
     bedrock_auth: Option<String>,
     default_gameplay: Option<String>,
     gameplay_map: HashMap<String, String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AdminDocument {
+    ui_profile: Option<String>,
+    local_console_permissions: Option<Vec<String>>,
 }
 
 fn normalize_optional_vec(values: Option<Vec<String>>) -> Option<Vec<String>> {
@@ -529,6 +576,45 @@ where
         Some(value) => parser(value).map_err(Into::into),
         None => Ok(default),
     }
+}
+
+const fn all_admin_permissions() -> [AdminPermission; 6] {
+    [
+        AdminPermission::Status,
+        AdminPermission::Sessions,
+        AdminPermission::ReloadConfig,
+        AdminPermission::ReloadPlugins,
+        AdminPermission::ReloadTopology,
+        AdminPermission::Shutdown,
+    ]
+}
+
+fn parse_admin_permissions(
+    values: Option<Vec<String>>,
+) -> Result<Vec<AdminPermission>, RuntimeError> {
+    let Some(values) = values else {
+        return Ok(all_admin_permissions().to_vec());
+    };
+    let mut permissions = Vec::new();
+    for value in values {
+        let permission = match value.as_str() {
+            "status" => AdminPermission::Status,
+            "sessions" => AdminPermission::Sessions,
+            "reload-config" | "reload_config" => AdminPermission::ReloadConfig,
+            "reload-plugins" | "reload_plugins" => AdminPermission::ReloadPlugins,
+            "reload-topology" | "reload_topology" => AdminPermission::ReloadTopology,
+            "shutdown" => AdminPermission::Shutdown,
+            _ => {
+                return Err(RuntimeError::Config(format!(
+                    "unsupported admin.local_console_permissions entry `{value}`"
+                )));
+            }
+        };
+        if !permissions.contains(&permission) {
+            permissions.push(permission);
+        }
+    }
+    Ok(permissions)
 }
 
 fn parse_plugin_abi(

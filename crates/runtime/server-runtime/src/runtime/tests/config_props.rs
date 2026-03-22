@@ -1,9 +1,18 @@
 use super::*;
 
 async fn assert_spawn_fails_with_message(
-    config: ServerConfig,
+    mut config: ServerConfig,
     expected_fragment: &str,
 ) -> Result<(), RuntimeError> {
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    config.bootstrap.plugins_dir = harness.dist_dir().to_path_buf();
+    if config.plugins.allowlist.is_none() {
+        config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
+            ALL_PROTOCOL_PLUGIN_IDS,
+            STORAGE_AND_AUTH_PLUGIN_IDS,
+        ));
+    }
     let result = build_test_server(config, plugin_test_registries_all()?).await;
     let Err(error) = result else {
         panic!("build_test_server should have failed");
@@ -173,6 +182,39 @@ fn server_toml_parse_auth_profile() -> Result<(), RuntimeError> {
 }
 
 #[test]
+fn server_toml_parse_admin_section_and_failure_policy() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[plugins.failure_policy]
+admin_ui = "quarantine"
+
+[admin]
+ui_profile = "console-v2"
+local_console_permissions = ["status", "reload_config", "status"]
+"#,
+    )?;
+
+    let parsed = ServerConfig::from_toml(&path)?;
+
+    assert_eq!(
+        parsed.plugins.failure_policy.admin_ui,
+        PluginFailureAction::Quarantine
+    );
+    assert_eq!(parsed.admin.ui_profile, "console-v2");
+    assert_eq!(
+        parsed.admin.local_console_permissions,
+        vec![
+            crate::runtime::AdminPermission::Status,
+            crate::runtime::AdminPermission::ReloadConfig,
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn plugin_host_config_copies_all_plugin_host_fields() {
     let mut config = ServerConfig::default();
     config.topology.be_enabled = true;
@@ -194,6 +236,12 @@ fn plugin_host_config_copies_all_plugin_host_fields() {
     config.plugins.failure_policy.gameplay = PluginFailureAction::FailFast;
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     config.plugins.failure_policy.auth = PluginFailureAction::FailFast;
+    config.plugins.failure_policy.admin_ui = PluginFailureAction::Quarantine;
+    config.admin.ui_profile = "console-v2".to_string();
+    config.admin.local_console_permissions = vec![
+        crate::runtime::AdminPermission::Status,
+        crate::runtime::AdminPermission::ReloadPlugins,
+    ];
     config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 0 };
     config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 1 };
 
@@ -238,6 +286,11 @@ fn plugin_host_config_copies_all_plugin_host_fields() {
         plugin_host_config.plugin_failure_policy_auth,
         config.plugins.failure_policy.auth
     );
+    assert_eq!(
+        plugin_host_config.plugin_failure_policy_admin_ui,
+        config.plugins.failure_policy.admin_ui
+    );
+    assert_eq!(plugin_host_config.admin_ui_profile, config.admin.ui_profile);
     assert_eq!(
         plugin_host_config.plugin_abi_min,
         config.bootstrap.plugin_abi_min

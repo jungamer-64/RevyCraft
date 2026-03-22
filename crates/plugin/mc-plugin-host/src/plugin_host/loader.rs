@@ -1,16 +1,18 @@
 use super::{
-    Arc, AuthGeneration, AuthPluginApiV1, AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest,
-    GameplayGeneration, GameplayPluginApiV2, GameplayRequest, Library, Mutex,
-    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V2, PLUGIN_MANIFEST_SYMBOL_V1,
-    PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginGenerationId,
-    PluginManifestV1, PluginPackage, PluginSource, ProtocolGeneration, ProtocolPluginApiV1,
-    ProtocolRequest, RuntimeError, StorageGeneration, StoragePluginApiV1, StorageRequest,
-    decode_manifest, expect_auth_capabilities, expect_auth_descriptor,
-    expect_gameplay_capabilities, expect_gameplay_descriptor,
-    expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
-    expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
-    gameplay_profile_id_from_manifest, invoke_auth, invoke_gameplay, invoke_protocol,
-    invoke_storage, manifest_profile_id, require_manifest_capability,
+    AdminUiGeneration, AdminUiInput, AdminUiPluginApiV1, Arc, AuthGeneration, AuthPluginApiV1,
+    AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest, GameplayGeneration, GameplayPluginApiV2,
+    GameplayRequest, Library, Mutex, PLUGIN_ADMIN_UI_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1,
+    PLUGIN_GAMEPLAY_API_SYMBOL_V2, PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1,
+    PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginGenerationId, PluginManifestV1, PluginPackage,
+    PluginSource, ProtocolGeneration, ProtocolPluginApiV1, ProtocolRequest, RuntimeError,
+    StorageGeneration, StoragePluginApiV1, StorageRequest, admin_ui_profile_id_from_manifest,
+    decode_manifest, expect_admin_ui_capabilities, expect_admin_ui_descriptor,
+    expect_auth_capabilities, expect_auth_descriptor, expect_gameplay_capabilities,
+    expect_gameplay_descriptor, expect_protocol_bedrock_listener_descriptor,
+    expect_protocol_capabilities, expect_protocol_descriptor, expect_storage_capabilities,
+    expect_storage_descriptor, gameplay_profile_id_from_manifest, invoke_admin_ui, invoke_auth,
+    invoke_gameplay, invoke_protocol, invoke_storage, manifest_profile_id,
+    require_manifest_capability,
 };
 
 type LibraryGuard = Option<Arc<Mutex<Library>>>;
@@ -18,6 +20,7 @@ type LoadedProtocolApi = (LibraryGuard, DecodedManifest, ProtocolPluginApiV1);
 type LoadedGameplayApi = (LibraryGuard, DecodedManifest, GameplayPluginApiV2);
 type LoadedStorageApi = (LibraryGuard, DecodedManifest, StoragePluginApiV1);
 type LoadedAuthApi = (LibraryGuard, DecodedManifest, AuthPluginApiV1);
+type LoadedAdminUiApi = (LibraryGuard, DecodedManifest, AdminUiPluginApiV1);
 
 pub(crate) struct PluginLoader {
     abi_range: super::PluginAbiRange,
@@ -43,7 +46,8 @@ impl PluginLoader {
             #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
+            | PluginSource::InProcessAuth(_)
+            | PluginSource::InProcessAdminUi(_) => Err(RuntimeError::Config(format!(
                 "plugin `{}` is not a protocol plugin",
                 package.plugin_id
             ))),
@@ -62,7 +66,8 @@ impl PluginLoader {
             #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
+            | PluginSource::InProcessAuth(_)
+            | PluginSource::InProcessAdminUi(_) => Err(RuntimeError::Config(format!(
                 "plugin `{}` is not a gameplay plugin",
                 package.plugin_id
             ))),
@@ -81,7 +86,8 @@ impl PluginLoader {
             #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
+            | PluginSource::InProcessAuth(_)
+            | PluginSource::InProcessAdminUi(_) => Err(RuntimeError::Config(format!(
                 "plugin `{}` is not a storage plugin",
                 package.plugin_id
             ))),
@@ -100,8 +106,29 @@ impl PluginLoader {
             #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessStorage(_) => Err(RuntimeError::Config(format!(
+            | PluginSource::InProcessStorage(_)
+            | PluginSource::InProcessAdminUi(_) => Err(RuntimeError::Config(format!(
                 "plugin `{}` is not an auth plugin",
+                package.plugin_id
+            ))),
+        }
+    }
+
+    fn load_admin_ui_api(package: &PluginPackage) -> Result<LoadedAdminUiApi, RuntimeError> {
+        match &package.source {
+            PluginSource::DynamicLibrary { library_path, .. } => unsafe {
+                Self::load_dynamic_admin_ui(library_path)
+            },
+            #[cfg(any(test, feature = "in-process-testing"))]
+            PluginSource::InProcessAdminUi(plugin) => {
+                Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
+            }
+            #[cfg(any(test, feature = "in-process-testing"))]
+            PluginSource::InProcessProtocol(_)
+            | PluginSource::InProcessGameplay(_)
+            | PluginSource::InProcessStorage(_)
+            | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
+                "plugin `{}` is not an admin-ui plugin",
                 package.plugin_id
             ))),
         }
@@ -267,6 +294,45 @@ impl PluginLoader {
         })
     }
 
+    pub(super) fn load_admin_ui_generation(
+        &self,
+        package: &PluginPackage,
+        generation_id: PluginGenerationId,
+    ) -> Result<AdminUiGeneration, RuntimeError> {
+        let (guard, manifest, api) = Self::load_admin_ui_api(package)?;
+        self.validate_manifest(package, &manifest)?;
+        let profile_id = admin_ui_profile_id_from_manifest(&manifest, &package.plugin_id)?;
+        require_manifest_capability(
+            &manifest,
+            "runtime.reload.admin-ui",
+            &package.plugin_id,
+            "admin-ui",
+        )?;
+        let descriptor = expect_admin_ui_descriptor(
+            &package.plugin_id,
+            invoke_admin_ui(&package.plugin_id, &api, &AdminUiInput::Describe)?,
+        )?;
+        if descriptor.ui_profile != profile_id {
+            return Err(RuntimeError::Config(format!(
+                "admin-ui plugin `{}` describe profile `{}` did not match manifest profile `{}`",
+                package.plugin_id, descriptor.ui_profile, profile_id
+            )));
+        }
+        let capabilities = expect_admin_ui_capabilities(
+            &package.plugin_id,
+            invoke_admin_ui(&package.plugin_id, &api, &AdminUiInput::CapabilitySet)?,
+        )?;
+        Ok(AdminUiGeneration {
+            generation_id,
+            plugin_id: package.plugin_id.clone(),
+            profile_id,
+            capabilities,
+            invoke: api.invoke,
+            free_buffer: api.free_buffer,
+            _library_guard: guard,
+        })
+    }
+
     unsafe fn load_dynamic_protocol(
         library_path: &Path,
     ) -> Result<LoadedProtocolApi, RuntimeError> {
@@ -387,6 +453,37 @@ impl PluginLoader {
                 unsafe { library.get(PLUGIN_AUTH_API_SYMBOL_V1) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve auth api symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { *api_fn() }
+        };
+        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+    }
+
+    unsafe fn load_dynamic_admin_ui(library_path: &Path) -> Result<LoadedAdminUiApi, RuntimeError> {
+        let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
+        let manifest_ptr = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve plugin manifest symbol in {}: {error}",
+                        library_path.display()
+                    ))
+                })?;
+            unsafe { manifest_fn() }
+        };
+        let api = {
+            let library = library
+                .lock()
+                .expect("dynamic library mutex should not be poisoned");
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const AdminUiPluginApiV1> =
+                unsafe { library.get(PLUGIN_ADMIN_UI_API_SYMBOL_V1) }.map_err(|error| {
+                    RuntimeError::Config(format!(
+                        "failed to resolve admin-ui api symbol in {}: {error}",
                         library_path.display()
                     ))
                 })?;

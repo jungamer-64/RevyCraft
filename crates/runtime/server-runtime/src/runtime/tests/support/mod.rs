@@ -129,11 +129,12 @@ pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<()
     }
     contents.push_str("\n[plugins.failure_policy]\n");
     contents.push_str(&format!(
-        "protocol = {}\ngameplay = {}\nstorage = {}\nauth = {}\n\n",
+        "protocol = {}\ngameplay = {}\nstorage = {}\nauth = {}\nadmin_ui = {}\n\n",
         toml_string(failure_policy_name(config.plugins.failure_policy.protocol)),
         toml_string(failure_policy_name(config.plugins.failure_policy.gameplay)),
         toml_string(failure_policy_name(config.plugins.failure_policy.storage)),
         toml_string(failure_policy_name(config.plugins.failure_policy.auth)),
+        toml_string(failure_policy_name(config.plugins.failure_policy.admin_ui)),
     ));
     contents.push_str("[profiles]\n");
     contents.push_str(&format!(
@@ -152,6 +153,19 @@ pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<()
             toml_string(profile_id)
         ));
     }
+    contents.push_str("\n[admin]\n");
+    contents.push_str(&format!(
+        "ui_profile = {}\nlocal_console_permissions = {}\n",
+        toml_string(&config.admin.ui_profile),
+        toml::Value::Array(
+            config
+                .admin
+                .local_console_permissions
+                .iter()
+                .map(|permission| toml::Value::String(permission.as_str().to_string()))
+                .collect::<Vec<_>>(),
+        ),
+    ));
     fs::write(path, contents)?;
     Ok(())
 }

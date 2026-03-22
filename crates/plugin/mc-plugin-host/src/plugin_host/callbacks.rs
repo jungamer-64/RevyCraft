@@ -166,6 +166,18 @@ pub(crate) fn gameplay_host_api() -> HostApiTableV1 {
     }
 }
 
+pub(crate) fn admin_ui_host_api() -> HostApiTableV1 {
+    HostApiTableV1 {
+        abi: CURRENT_PLUGIN_ABI,
+        context: std::ptr::null_mut(),
+        log: None,
+        read_player_snapshot: None,
+        read_world_meta: None,
+        read_block_state: None,
+        can_edit_block: None,
+    }
+}
+
 pub(crate) fn write_error_buffer(error_out: *mut OwnedBuffer, message: String) {
     write_owned_buffer(error_out, message.into_bytes());
 }

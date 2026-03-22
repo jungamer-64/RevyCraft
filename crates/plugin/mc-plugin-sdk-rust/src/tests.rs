@@ -1,4 +1,4 @@
-use super::{__macro_support, capabilities, gameplay, manifest, protocol};
+use super::{__macro_support, admin_ui, capabilities, gameplay, manifest, protocol};
 use bytes::BytesMut;
 use mc_core::{
     BlockPos, CoreCommand, CoreEvent, DimensionId, GameplayEffect, GameplayJoinEffect,
@@ -6,6 +6,10 @@ use mc_core::{
     SessionCapabilitySet, WorldMeta,
 };
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
+use mc_plugin_api::codec::admin_ui::{
+    AdminPermission, AdminPrincipal, AdminRequest, AdminResponse, AdminUiDescriptor, AdminUiInput,
+    AdminUiOutput, decode_admin_ui_output, encode_admin_ui_input,
+};
 use mc_plugin_api::codec::gameplay::{
     GameplayDescriptor, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
     decode_gameplay_response, encode_gameplay_request, host_blob::encode_world_meta,
@@ -484,6 +488,55 @@ mod plugin_b {
 }
 
 #[allow(unexpected_cfgs)]
+mod console_admin_ui_plugin {
+    use super::*;
+    use crate::export_plugin;
+
+    #[derive(Default)]
+    pub struct ConsoleAdminUiPlugin;
+
+    impl admin_ui::RustAdminUiPlugin for ConsoleAdminUiPlugin {
+        fn descriptor(&self) -> AdminUiDescriptor {
+            AdminUiDescriptor {
+                ui_profile: "console-v1".to_string(),
+            }
+        }
+
+        fn parse_line(&self, line: &str) -> Result<AdminRequest, String> {
+            match line.trim() {
+                "status" => Ok(AdminRequest::Status),
+                "help" => Ok(AdminRequest::Help),
+                other => Err(format!("unknown command `{other}`")),
+            }
+        }
+
+        fn render_response(&self, response: &AdminResponse) -> Result<String, String> {
+            Ok(match response {
+                AdminResponse::Status(_) => "status".to_string(),
+                AdminResponse::Help => "help".to_string(),
+                AdminResponse::PermissionDenied {
+                    principal,
+                    permission,
+                } => format!(
+                    "permission denied: principal={} permission={}",
+                    principal.as_str(),
+                    permission.as_str()
+                ),
+                other => format!("{other:?}"),
+            })
+        }
+    }
+
+    const MANIFEST: manifest::StaticPluginManifest = manifest::StaticPluginManifest::admin_ui(
+        "admin-ui-test",
+        "Admin UI Test Plugin",
+        &["admin-ui.profile:console-v1", "runtime.reload.admin-ui"],
+    );
+
+    export_plugin!(admin_ui, ConsoleAdminUiPlugin, MANIFEST);
+}
+
+#[allow(unexpected_cfgs)]
 mod declared_protocol_plugin {
     use super::*;
     use crate::protocol::declare_protocol_plugin;
@@ -658,6 +711,44 @@ unsafe fn invoke_gameplay(
     decode_gameplay_response(request, &bytes).expect("gameplay response should decode")
 }
 
+unsafe fn invoke_admin_ui(
+    api: &mc_plugin_api::host_api::AdminUiPluginApiV1,
+    host_api: Option<&HostApiTableV1>,
+    request: &AdminUiInput,
+) -> AdminUiOutput {
+    let payload = encode_admin_ui_input(request).expect("admin-ui request should encode");
+    let mut output = OwnedBuffer::empty();
+    let mut error = OwnedBuffer::empty();
+    let status = unsafe {
+        (api.invoke)(
+            ByteSlice {
+                ptr: payload.as_ptr(),
+                len: payload.len(),
+            },
+            host_api.map_or(std::ptr::null(), std::ptr::from_ref),
+            &raw mut output,
+            &raw mut error,
+        )
+    };
+    if status != PluginErrorCode::Ok {
+        let message = if error.ptr.is_null() {
+            format!("invoke failed with status {status:?}")
+        } else {
+            let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
+            unsafe {
+                (api.free_buffer)(error);
+            }
+            String::from_utf8(bytes).expect("plugin error should be utf-8")
+        };
+        panic!("{message}");
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
+    unsafe {
+        (api.free_buffer)(output);
+    }
+    decode_admin_ui_output(request, &bytes).expect("admin-ui response should decode")
+}
+
 #[test]
 fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
     let context_a = TestHostContext {
@@ -785,6 +876,116 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
         "gameplay host api ABI 2.0 did not match plugin ABI 3.0"
+    );
+}
+
+#[test]
+fn exported_admin_ui_plugins_parse_and_render_round_trip() {
+    let context_a = TestHostContext {
+        level_name: "host-a",
+    };
+    let context_b = TestHostContext {
+        level_name: "host-b",
+    };
+    let host_api_a = host_api_for(&context_a);
+    let host_api_b = host_api_for(&context_b);
+    let entrypoints = console_admin_ui_plugin::in_process_plugin_entrypoints();
+
+    assert_eq!(
+        unsafe {
+            invoke_admin_ui(
+                entrypoints.api,
+                Some(&host_api_a),
+                &AdminUiInput::ParseLine {
+                    line: "status".to_string(),
+                },
+            )
+        },
+        AdminUiOutput::ParsedRequest(AdminRequest::Status)
+    );
+    assert_eq!(
+        unsafe {
+            invoke_admin_ui(
+                entrypoints.api,
+                Some(&host_api_b),
+                &AdminUiInput::RenderResponse {
+                    response: AdminResponse::PermissionDenied {
+                        principal: AdminPrincipal::LocalConsole,
+                        permission: AdminPermission::ReloadPlugins,
+                    },
+                },
+            )
+        },
+        AdminUiOutput::RenderedText(
+            "permission denied: principal=local-console permission=reload-plugins".to_string()
+        )
+    );
+}
+
+#[test]
+fn exported_admin_ui_plugins_reject_null_host_api() {
+    let entrypoints = console_admin_ui_plugin::in_process_plugin_entrypoints();
+    let request = AdminUiInput::ParseLine {
+        line: "status".to_string(),
+    };
+    let payload = encode_admin_ui_input(&request).expect("admin-ui request should encode");
+    let mut output = OwnedBuffer::empty();
+    let mut error = OwnedBuffer::empty();
+    let status = unsafe {
+        (entrypoints.api.invoke)(
+            ByteSlice {
+                ptr: payload.as_ptr(),
+                len: payload.len(),
+            },
+            std::ptr::null(),
+            &raw mut output,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, PluginErrorCode::InvalidInput);
+    let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
+    unsafe {
+        (entrypoints.api.free_buffer)(error);
+    }
+    assert_eq!(
+        String::from_utf8(bytes).expect("plugin error should be utf-8"),
+        "admin-ui host api was null"
+    );
+}
+
+#[test]
+fn exported_admin_ui_plugins_reject_mismatched_host_api_abi() {
+    let context = TestHostContext {
+        level_name: "host-a",
+    };
+    let mut host_api = host_api_for(&context);
+    host_api.abi = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
+    let entrypoints = console_admin_ui_plugin::in_process_plugin_entrypoints();
+    let request = AdminUiInput::ParseLine {
+        line: "status".to_string(),
+    };
+    let payload = encode_admin_ui_input(&request).expect("admin-ui request should encode");
+    let mut output = OwnedBuffer::empty();
+    let mut error = OwnedBuffer::empty();
+    let status = unsafe {
+        (entrypoints.api.invoke)(
+            ByteSlice {
+                ptr: payload.as_ptr(),
+                len: payload.len(),
+            },
+            &raw const host_api,
+            &raw mut output,
+            &raw mut error,
+        )
+    };
+    assert_eq!(status, PluginErrorCode::AbiMismatch);
+    let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
+    unsafe {
+        (entrypoints.api.free_buffer)(error);
+    }
+    assert_eq!(
+        String::from_utf8(bytes).expect("plugin error should be utf-8"),
+        "admin-ui host api ABI 2.0 did not match plugin ABI 3.0"
     );
 }
 

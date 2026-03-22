@@ -35,6 +35,7 @@ pub struct PluginFailureMatrix {
     pub gameplay: PluginFailureAction,
     pub storage: PluginFailureAction,
     pub auth: PluginFailureAction,
+    pub admin_ui: PluginFailureAction,
 }
 
 impl Default for PluginFailureMatrix {
@@ -44,6 +45,7 @@ impl Default for PluginFailureMatrix {
             gameplay: PluginFailureAction::Quarantine,
             storage: PluginFailureAction::FailFast,
             auth: PluginFailureAction::Skip,
+            admin_ui: PluginFailureAction::Skip,
         }
     }
 }
@@ -89,12 +91,25 @@ impl PluginFailureMatrix {
         )
     }
 
+    pub fn parse_admin_ui(value: &str) -> Result<PluginFailureAction, RuntimeError> {
+        PluginFailureAction::parse_with_allowed(
+            value,
+            "plugin-failure-policy-admin-ui",
+            &[
+                PluginFailureAction::Quarantine,
+                PluginFailureAction::Skip,
+                PluginFailureAction::FailFast,
+            ],
+        )
+    }
+
     pub(crate) const fn action_for_kind(self, kind: PluginKind) -> PluginFailureAction {
         match kind {
             PluginKind::Protocol => self.protocol,
             PluginKind::Gameplay => self.gameplay,
             PluginKind::Storage => self.storage,
             PluginKind::Auth => self.auth,
+            PluginKind::AdminUi => self.admin_ui,
         }
     }
 }
@@ -321,6 +336,7 @@ impl PluginFailureDispatch {
             PluginKind::Gameplay => "gameplay",
             PluginKind::Storage => "storage",
             PluginKind::Auth => "auth",
+            PluginKind::AdminUi => "admin-ui",
         }
     }
 
@@ -345,6 +361,7 @@ impl PluginFailureDispatch {
                 PluginKind::Gameplay => "gameplay",
                 PluginKind::Storage => "storage",
                 PluginKind::Auth => "auth",
+                PluginKind::AdminUi => "admin-ui",
             },
             stage.as_str(),
         )

@@ -1,13 +1,16 @@
+use crate::admin_ui::RustAdminUiPlugin;
 use crate::auth::RustAuthPlugin;
 use crate::gameplay::RustGameplayPlugin;
 use crate::protocol::RustProtocolPlugin;
 use crate::storage::RustStoragePlugin;
+use mc_plugin_api::codec::admin_ui::{AdminUiInput, AdminUiOutput};
 use mc_plugin_api::codec::auth::{AuthRequest, AuthResponse};
 use mc_plugin_api::codec::gameplay::{GameplayRequest, GameplayResponse};
 use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse};
 use mc_plugin_api::codec::storage::{StorageRequest, StorageResponse};
 use mc_plugin_api::host_api::HostApiTableV1;
 
+pub mod admin_ui;
 #[doc(hidden)]
 pub mod auth;
 #[doc(hidden)]
@@ -18,6 +21,23 @@ pub mod gameplay;
 pub mod protocol;
 #[doc(hidden)]
 pub mod storage;
+
+#[doc(hidden)]
+pub fn handle_admin_ui_request<P: RustAdminUiPlugin>(
+    plugin: &P,
+    request: AdminUiInput,
+) -> Result<AdminUiOutput, String> {
+    admin_ui::handle_admin_ui_request(plugin, request)
+}
+
+#[doc(hidden)]
+pub fn handle_admin_ui_request_with_host_api<P: RustAdminUiPlugin>(
+    plugin: &P,
+    request: AdminUiInput,
+    host_api: Option<HostApiTableV1>,
+) -> Result<AdminUiOutput, String> {
+    admin_ui::handle_admin_ui_request_with_host_api(plugin, request, host_api)
+}
 
 #[doc(hidden)]
 pub fn handle_protocol_request<P: RustProtocolPlugin>(

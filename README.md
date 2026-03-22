@@ -1,6 +1,6 @@
 # RevyCraft
 
-Minecraft JE `1.7.10` / `1.8.x` / `1.12.2` と Bedrock `be-26_3` を同一プロセス・同一ポート番号で扱う Rust 製 server-only workspace です。runtime は protocol / gameplay / storage / auth plugin を packaged artifact から読み込み、`mc-plugin-host` がそれを `LoadedPluginSet` にまとめ、`ServerBuilder` が listener / topology / session supervision を起動します。
+Minecraft JE `1.7.10` / `1.8.x` / `1.12.2` と Bedrock `be-26_3` を同一プロセス・同一ポート番号で扱う Rust 製 server-only workspace です。runtime は protocol / gameplay / storage / auth / admin-ui plugin を packaged artifact から読み込み、`mc-plugin-host` がそれを `LoadedPluginSet` にまとめ、`ServerBuilder` が listener / topology / session supervision を起動します。
 
 `LoadedPluginSet` は pure snapshot で、reload capability は別です。reload を使うときだけ `ServerBuilder::with_reload_host(...)` から `ReloadableRunningServer` を作ります。
 
@@ -12,6 +12,7 @@ Minecraft JE `1.7.10` / `1.8.x` / `1.12.2` と Bedrock `be-26_3` を同一プロ
 - `crates/protocol`: `mc-proto-*`
 - `crates/runtime`: `server-runtime`
 - `plugins/auth`: `mc-plugin-auth-*`
+- `plugins/admin-ui`: `mc-plugin-admin-ui-*`
 - `plugins/gameplay`: `mc-plugin-gameplay-*`
 - `plugins/protocol`: `mc-plugin-proto-*`
 - `plugins/storage`: `mc-plugin-storage-*`
@@ -38,6 +39,7 @@ sample に含まれる plugin:
 - `storage-je-anvil-1_7_10`
 - `auth-offline`
 - `auth-bedrock-offline`
+- `admin-ui-console`
 
 optional plugin も含めて全量 package したいときだけ、明示的に次を使います。
 
@@ -51,7 +53,7 @@ config を明示したいときは次を使います。
 cargo run -p xtask -- package-plugins --config runtime/server.toml.example
 ```
 
-`server-bootstrap` は `runtime/server.toml` を読みます。設定ファイルが無い場合は default config で起動し、plugin は `runtime/plugins/<plugin-id>/plugin.toml` から解決します。runtime は `target/` の build artifact を直接読みません。
+`server-bootstrap` は `runtime/server.toml` を読みます。設定ファイルが無い場合は default config で起動し、plugin は `runtime/plugins/<plugin-id>/plugin.toml` から解決します。runtime は `target/` の build artifact を直接読みません。`[admin].ui_profile` で有効な admin-ui profile が解決できた場合は、stdio 上に line-oriented operator loop を起動し、parse/render は plugin に委譲されます。
 
 起動フローは固定です。
 
@@ -68,8 +70,10 @@ cargo run -p xtask -- package-plugins --config runtime/server.toml.example
 - `[topology].enabled_adapters = ["je-1_7_10", "je-1_8_x", "je-1_12_2"]` で JE multi-version routing を有効化できます。
 - `[topology].enabled_bedrock_adapters = ["be-26_3"]` で Bedrock baseline listener を有効化できます。
 - `[profiles].default_gameplay` と `[profiles.gameplay_map]` で adapter ごとの gameplay profile を固定できます。
+- `[admin].ui_profile` で active admin UI profile、`[admin].local_console_permissions` で stdio operator の権限を指定できます。
 - `[plugins].reload_watch = true` と `[topology].reload_watch = true` は reload host を渡した `ReloadableRunningServer` でだけ使えます。
 - 手動 reload は `ReloadableRunningServer::reload_plugins().await` / `ReloadableRunningServer::reload_topology().await` / `ReloadableRunningServer::reload_config().await` が使えます。
+- operator command は `RunningServer::admin_control_plane()` が実行し、`status` / `sessions` / `reload config` / `reload plugins` / `reload topology` / `shutdown` を request 単位で permission check します。
 - `RunningServer::status().await` は active/draining topology、listener、session summary、plugin health を返します。
 
 sample config は offline-first です。JE online auth や Bedrock XBL を使うときは `package-all-plugins` 実行後に allowlist と profile を明示してください。

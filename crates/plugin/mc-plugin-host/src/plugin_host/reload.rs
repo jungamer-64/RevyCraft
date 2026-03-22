@@ -1,9 +1,10 @@
 use super::{
-    Arc, AuthGeneration, GameplayGeneration, ManagedAuthPlugin, ManagedGameplayPlugin,
-    ManagedProtocolPlugin, ManagedStoragePlugin, PluginFailureAction, PluginFailureStage,
-    PluginHost, PluginKind, RuntimeError, RuntimeReloadContext, RuntimeSelectionConfig,
-    RuntimeSelectionResult, StorageGeneration, SystemTime, import_storage_runtime_state,
-    migrate_gameplay_sessions, migrate_protocol_sessions, protocol_reload_compatible,
+    AdminUiGeneration, Arc, AuthGeneration, GameplayGeneration, ManagedAdminUiPlugin,
+    ManagedAuthPlugin, ManagedGameplayPlugin, ManagedProtocolPlugin, ManagedStoragePlugin,
+    PluginFailureAction, PluginFailureStage, PluginHost, PluginKind, RuntimeError,
+    RuntimeReloadContext, RuntimeSelectionConfig, RuntimeSelectionResult, StorageGeneration,
+    SystemTime, import_storage_runtime_state, migrate_gameplay_sessions, migrate_protocol_sessions,
+    protocol_reload_compatible,
 };
 use crate::runtime::ProtocolReloadSession;
 
@@ -498,6 +499,110 @@ impl PluginHost {
         Ok(())
     }
 
+    fn load_admin_ui_reload_candidate(
+        &self,
+        managed: &mut ManagedAdminUiPlugin,
+    ) -> Result<Option<(SystemTime, super::ArtifactIdentity, Arc<AdminUiGeneration>)>, RuntimeError>
+    {
+        managed.package.refresh_dynamic_manifest()?;
+        let modified_at = managed.package.modified_at()?;
+        if modified_at <= managed.loaded_at {
+            return Ok(None);
+        }
+        let identity = managed.package.artifact_identity(modified_at);
+        if self
+            .failures
+            .is_artifact_quarantined(&managed.package.plugin_id, &identity)
+        {
+            if let Some(reason) = self
+                .failures
+                .artifact_reason(&managed.package.plugin_id, &identity)
+            {
+                eprintln!(
+                    "skipping quarantined admin-ui reload candidate `{}`: {reason}",
+                    managed.package.plugin_id
+                );
+            }
+            return Ok(None);
+        }
+
+        let generation = match self
+            .loader
+            .load_admin_ui_generation(&managed.package, self.generations.next_generation_id())
+        {
+            Ok(generation) => Arc::new(generation),
+            Err(error) => {
+                let reason = error.to_string();
+                eprintln!(
+                    "admin-ui reload load failed for `{}`: {reason}",
+                    managed.package.plugin_id
+                );
+                let action = self.failures.action_for_kind(PluginKind::AdminUi);
+                self.failures.handle_candidate_failure(
+                    PluginKind::AdminUi,
+                    PluginFailureStage::Reload,
+                    &managed.package.plugin_id,
+                    identity,
+                    &reason,
+                )?;
+                if action == PluginFailureAction::Skip {
+                    managed.loaded_at = modified_at;
+                }
+                return Ok(None);
+            }
+        };
+        if generation.profile_id != managed.profile_id {
+            let reason = format!(
+                "admin-ui plugin `{}` changed profile from `{}` to `{}` during reload",
+                managed.package.plugin_id, managed.profile_id, generation.profile_id
+            );
+            let action = self.failures.action_for_kind(PluginKind::AdminUi);
+            self.failures.handle_candidate_failure(
+                PluginKind::AdminUi,
+                PluginFailureStage::Reload,
+                &managed.package.plugin_id,
+                identity,
+                &reason,
+            )?;
+            if action == PluginFailureAction::Skip {
+                managed.loaded_at = modified_at;
+            }
+            return Ok(None);
+        }
+        Ok(Some((modified_at, identity, generation)))
+    }
+
+    fn reload_admin_ui_plugin(
+        &self,
+        managed: &mut ManagedAdminUiPlugin,
+        reloaded: &mut Vec<String>,
+    ) -> Result<(), RuntimeError> {
+        let Some((modified_at, _identity, generation)) =
+            self.load_admin_ui_reload_candidate(managed)?
+        else {
+            return Ok(());
+        };
+        managed.profile.swap_generation(generation);
+        self.failures.clear_plugin_state(&managed.package.plugin_id);
+        managed.loaded_at = modified_at;
+        managed.active_loaded_at = modified_at;
+        reloaded.push(managed.package.plugin_id.clone());
+        Ok(())
+    }
+
+    fn reload_admin_ui_plugins(&self, reloaded: &mut Vec<String>) -> Result<(), RuntimeError> {
+        {
+            let mut admin_ui = self
+                .admin_ui
+                .lock()
+                .expect("plugin host mutex should not be poisoned");
+            for managed in admin_ui.values_mut() {
+                self.reload_admin_ui_plugin(managed, reloaded)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Reloads modified protocol plugins in place.
     ///
     /// # Errors
@@ -525,6 +630,7 @@ impl PluginHost {
         self.reload_gameplay_plugins_with_context(runtime, &mut reloaded)?;
         self.reload_storage_plugins_with_context(runtime, &mut reloaded)?;
         self.reload_auth_plugins(&mut reloaded)?;
+        self.reload_admin_ui_plugins(&mut reloaded)?;
         Ok(reloaded)
     }
 
@@ -548,6 +654,7 @@ impl PluginHost {
             }
             self.activate_gameplay_profiles(config)?;
             self.activate_auth_profiles(&Self::runtime_auth_profiles(config))?;
+            self.activate_admin_ui_profile(config)?;
             Vec::new()
         };
 

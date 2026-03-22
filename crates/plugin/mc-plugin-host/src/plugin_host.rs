@@ -16,6 +16,10 @@ use mc_core::{
 use mc_plugin_api::abi::{
     ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind,
 };
+use mc_plugin_api::codec::admin_ui::{
+    AdminRequest, AdminResponse, AdminUiDescriptor, AdminUiInput, AdminUiOutput,
+    decode_admin_ui_output, encode_admin_ui_input,
+};
 use mc_plugin_api::codec::auth::{
     AuthMode, AuthRequest, AuthResponse, BedrockAuthResult, decode_auth_response,
     encode_auth_request,
@@ -32,12 +36,14 @@ use mc_plugin_api::codec::storage::{
     StorageRequest, StorageResponse, decode_storage_response, encode_storage_request,
 };
 use mc_plugin_api::host_api::{
-    AuthPluginApiV1, GameplayPluginApiV2, GameplayPluginInvokeV2Fn, PluginFreeBufferFn,
-    PluginInvokeFn, ProtocolPluginApiV1, StoragePluginApiV1,
+    AdminUiPluginApiV1, AdminUiPluginInvokeV1Fn, AuthPluginApiV1, GameplayPluginApiV2,
+    GameplayPluginInvokeV2Fn, PluginFreeBufferFn, PluginInvokeFn, ProtocolPluginApiV1,
+    StoragePluginApiV1,
 };
 use mc_plugin_api::manifest::{
-    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V2, PLUGIN_MANIFEST_SYMBOL_V1,
-    PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1, PluginManifestV1,
+    PLUGIN_ADMIN_UI_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V2,
+    PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1, PLUGIN_STORAGE_API_SYMBOL_V1,
+    PluginManifestV1,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
@@ -74,10 +80,10 @@ mod support;
 #[path = "plugin_host/topology.rs"]
 mod topology;
 
-use self::callbacks::gameplay_host_api;
 #[cfg(test)]
 pub(crate) use self::callbacks::with_current_gameplay_query;
 pub(crate) use self::callbacks::with_gameplay_query;
+use self::callbacks::{admin_ui_host_api, gameplay_host_api};
 pub(crate) use self::catalog::PluginCatalog;
 #[cfg(test)]
 pub(crate) use self::catalog::current_artifact_key;
@@ -86,35 +92,39 @@ use self::catalog::{
 };
 #[cfg(any(test, feature = "in-process-testing"))]
 pub use self::catalog::{
-    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    InProcessAdminUiPlugin, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
+    InProcessStoragePlugin,
 };
 pub(crate) use self::failure::{
     ArtifactQuarantineRecord, PluginFailureDispatch, PluginFailureStage,
 };
 pub use self::failure::{PluginFailureAction, PluginFailureMatrix};
 pub(crate) use self::generation::{
-    AuthGeneration, GameplayGeneration, GenerationManager, ProtocolGeneration, StorageGeneration,
-    decode_plugin_error, write_owned_buffer,
+    AdminUiGeneration, AuthGeneration, GameplayGeneration, GenerationManager, ProtocolGeneration,
+    StorageGeneration, decode_plugin_error, write_owned_buffer,
 };
 pub(crate) use self::loader::PluginLoader;
 pub(crate) use self::profiles::{
-    HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableProtocolAdapter,
-    HotSwappableStorageProfile, ManagedAuthPlugin, ManagedGameplayPlugin, ManagedProtocolPlugin,
-    ManagedStoragePlugin,
+    HotSwappableAdminUiProfile, HotSwappableAuthProfile, HotSwappableGameplayProfile,
+    HotSwappableProtocolAdapter, HotSwappableStorageProfile, ManagedAdminUiPlugin,
+    ManagedAuthPlugin, ManagedGameplayPlugin, ManagedProtocolPlugin, ManagedStoragePlugin,
 };
 pub use self::status::{
-    AuthPluginStatusSnapshot, GameplayPluginStatusSnapshot, PluginArtifactStatusSnapshot,
-    PluginHostStatusSnapshot, ProtocolPluginStatusSnapshot, StoragePluginStatusSnapshot,
+    AdminUiPluginStatusSnapshot, AuthPluginStatusSnapshot, GameplayPluginStatusSnapshot,
+    PluginArtifactStatusSnapshot, PluginHostStatusSnapshot, ProtocolPluginStatusSnapshot,
+    StoragePluginStatusSnapshot,
 };
 use self::support::{
-    DecodedManifest, decode_manifest, decode_utf8_slice, ensure_known_profiles,
-    ensure_profile_known, expect_auth_capabilities, expect_auth_descriptor,
+    DecodedManifest, admin_ui_profile_id_from_manifest, decode_manifest, decode_utf8_slice,
+    ensure_known_profiles, ensure_profile_known, expect_admin_ui_capabilities,
+    expect_admin_ui_descriptor, expect_auth_capabilities, expect_auth_descriptor,
     expect_gameplay_capabilities, expect_gameplay_descriptor,
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
-    gameplay_profile_id_from_manifest, import_storage_runtime_state, invoke_auth, invoke_gameplay,
-    invoke_protocol, invoke_storage, manifest_profile_id, migrate_gameplay_sessions,
-    migrate_protocol_sessions, protocol_reload_compatible, require_manifest_capability,
+    gameplay_profile_id_from_manifest, import_storage_runtime_state, invoke_admin_ui, invoke_auth,
+    invoke_gameplay, invoke_protocol, invoke_storage, manifest_profile_id,
+    migrate_gameplay_sessions, migrate_protocol_sessions, protocol_reload_compatible,
+    require_manifest_capability,
 };
 pub(crate) use self::topology::PreparedProtocolTopology;
 
@@ -174,6 +184,7 @@ pub struct PluginHost {
     gameplay: Mutex<HashMap<String, ManagedGameplayPlugin>>,
     storage: Mutex<HashMap<String, ManagedStoragePlugin>>,
     auth: Mutex<HashMap<String, ManagedAuthPlugin>>,
+    admin_ui: Mutex<HashMap<String, ManagedAdminUiPlugin>>,
 }
 
 impl PluginHost {
@@ -222,6 +233,7 @@ impl PluginHost {
             gameplay: Mutex::new(HashMap::new()),
             storage: Mutex::new(HashMap::new()),
             auth: Mutex::new(HashMap::new()),
+            admin_ui: Mutex::new(HashMap::new()),
         }
     }
 
@@ -277,6 +289,23 @@ impl PluginHost {
         profile_id: &str,
     ) -> Option<Arc<HotSwappableAuthProfile>> {
         self.auth
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .get(profile_id)
+            .map(|managed| Arc::clone(&managed.profile))
+    }
+
+    /// Resolves an active admin UI profile by id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the admin-ui plugin registry mutex is poisoned.
+    #[cfg(any(test, feature = "in-process-testing"))]
+    pub(crate) fn resolve_admin_ui_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<HotSwappableAdminUiProfile>> {
+        self.admin_ui
             .lock()
             .expect("plugin host mutex should not be poisoned")
             .get(profile_id)

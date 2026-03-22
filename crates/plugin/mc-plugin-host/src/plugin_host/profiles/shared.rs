@@ -1,6 +1,6 @@
 use super::{
-    Arc, AuthGeneration, CapabilitySet, GameplayGeneration, PluginGenerationId, RwLock,
-    StorageGeneration,
+    AdminUiGeneration, Arc, AuthGeneration, CapabilitySet, GameplayGeneration, PluginGenerationId,
+    RwLock, StorageGeneration,
 };
 
 pub(crate) trait ProfileGenerationMetadata {
@@ -130,6 +130,16 @@ impl ProfileGenerationMetadata for GameplayGeneration {
 }
 
 impl ProfileGenerationMetadata for StorageGeneration {
+    fn capabilities(&self) -> &CapabilitySet {
+        &self.capabilities
+    }
+
+    fn generation_id(&self) -> PluginGenerationId {
+        self.generation_id
+    }
+}
+
+impl ProfileGenerationMetadata for AdminUiGeneration {
     fn capabilities(&self) -> &CapabilitySet {
         &self.capabilities
     }

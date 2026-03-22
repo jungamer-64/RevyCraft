@@ -4,14 +4,16 @@ use crate::config::ServerConfig;
 use crate::host::PluginHostStatusSnapshot;
 use crate::registry::LoadedPluginSet;
 use crate::runtime::{
-    AuthProfileHandle, GameplayProfileHandle, RuntimeReloadContext, StorageProfileHandle,
+    AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimeReloadContext,
+    StorageProfileHandle,
 };
 use mc_core::PluginGenerationId;
 use std::sync::Arc;
 
 pub use crate::host::{PluginAbiRange, PluginFailureMatrix};
 pub use crate::plugin_host::{
-    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    InProcessAdminUiPlugin, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
+    InProcessStoragePlugin,
 };
 
 #[derive(Clone)]
@@ -91,6 +93,14 @@ impl TestPluginHost {
         hooks::resolve_auth_profile(&self.inner, profile_id)
     }
 
+    #[must_use]
+    pub fn resolve_admin_ui_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<dyn AdminUiProfileHandle>> {
+        hooks::resolve_admin_ui_profile(&self.inner, profile_id)
+    }
+
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the replacement generation cannot be loaded.
@@ -130,6 +140,7 @@ pub struct TestPluginHostBuilder {
     gameplay_plugins: Vec<InProcessGameplayPlugin>,
     storage_plugins: Vec<InProcessStoragePlugin>,
     auth_plugins: Vec<InProcessAuthPlugin>,
+    admin_ui_plugins: Vec<InProcessAdminUiPlugin>,
     bootstrap_config: crate::config::BootstrapConfig,
     abi_range: PluginAbiRange,
     failure_matrix: PluginFailureMatrix,
@@ -165,6 +176,12 @@ impl TestPluginHostBuilder {
         self
     }
 
+    #[must_use]
+    pub fn admin_ui_raw(mut self, plugin: InProcessAdminUiPlugin) -> Self {
+        self.admin_ui_plugins.push(plugin);
+        self
+    }
+
     #[allow(dead_code)]
     #[must_use]
     pub fn bootstrap_config(mut self, bootstrap_config: crate::config::BootstrapConfig) -> Self {
@@ -192,6 +209,7 @@ impl TestPluginHostBuilder {
                 gameplay_plugins: self.gameplay_plugins,
                 storage_plugins: self.storage_plugins,
                 auth_plugins: self.auth_plugins,
+                admin_ui_plugins: self.admin_ui_plugins,
                 bootstrap_config: self.bootstrap_config,
                 abi_range: self.abi_range,
                 failure_matrix: self.failure_matrix,

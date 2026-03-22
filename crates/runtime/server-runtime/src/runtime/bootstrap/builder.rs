@@ -128,12 +128,14 @@ async fn build_server(
     let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
     let listener_workers =
         spawn_listener_workers(bound_listeners, initial_generation_id, accepted_tx.clone())?;
+    let admin_ui = loaded_plugins.resolve_admin_ui_profile(&config.admin.ui_profile);
 
     let server = Arc::new(RuntimeServer {
         config,
         config_source,
         live_state: tokio::sync::RwLock::new(LiveRuntimeState {
             config: topology_generation.config.clone(),
+            admin_ui,
             loaded_plugins,
             auth_profile,
             bedrock_auth_profile,
@@ -152,15 +154,19 @@ async fn build_server(
         sessions: Mutex::new(HashMap::new()),
         next_connection_id: Mutex::new(1),
         accepted_tx,
+        shutdown_tx: std::sync::Mutex::new(None),
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    *server
+        .shutdown_tx
+        .lock()
+        .expect("shutdown mutex should not be poisoned") = Some(shutdown_tx);
     let run_server = Arc::clone(&server);
     let join_handle = spawn_runtime_loop(run_server, shutdown_rx, accepted_rx);
 
     Ok(crate::runtime::RunningServer {
         runtime: server,
-        shutdown_tx: Some(shutdown_tx),
         join_handle,
     })
 }

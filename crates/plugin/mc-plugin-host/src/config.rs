@@ -29,11 +29,13 @@ pub struct RuntimeSelectionConfig {
     pub bedrock_auth_profile: String,
     pub default_gameplay_profile: String,
     pub gameplay_profile_map: HashMap<String, String>,
+    pub admin_ui_profile: String,
     pub plugin_allowlist: Option<Vec<String>>,
     pub plugin_failure_policy_protocol: PluginFailureAction,
     pub plugin_failure_policy_gameplay: PluginFailureAction,
     pub plugin_failure_policy_storage: PluginFailureAction,
     pub plugin_failure_policy_auth: PluginFailureAction,
+    pub plugin_failure_policy_admin_ui: PluginFailureAction,
 }
 
 impl Default for RuntimeSelectionConfig {
@@ -45,11 +47,13 @@ impl Default for RuntimeSelectionConfig {
             bedrock_auth_profile: "bedrock-offline-v1".to_string(),
             default_gameplay_profile: "canonical".to_string(),
             gameplay_profile_map: HashMap::new(),
+            admin_ui_profile: "console-v1".to_string(),
             plugin_allowlist: None,
             plugin_failure_policy_protocol: failure_matrix.protocol,
             plugin_failure_policy_gameplay: failure_matrix.gameplay,
             plugin_failure_policy_storage: failure_matrix.storage,
             plugin_failure_policy_auth: failure_matrix.auth,
+            plugin_failure_policy_admin_ui: failure_matrix.admin_ui,
         }
     }
 }
@@ -62,6 +66,7 @@ impl RuntimeSelectionConfig {
             gameplay: self.plugin_failure_policy_gameplay,
             storage: self.plugin_failure_policy_storage,
             auth: self.plugin_failure_policy_auth,
+            admin_ui: self.plugin_failure_policy_admin_ui,
         }
     }
 }
@@ -74,12 +79,14 @@ pub struct ServerConfig {
     pub bedrock_auth_profile: String,
     pub default_gameplay_profile: String,
     pub gameplay_profile_map: HashMap<String, String>,
+    pub admin_ui_profile: String,
     pub plugins_dir: PathBuf,
     pub plugin_allowlist: Option<Vec<String>>,
     pub plugin_failure_policy_protocol: PluginFailureAction,
     pub plugin_failure_policy_gameplay: PluginFailureAction,
     pub plugin_failure_policy_storage: PluginFailureAction,
     pub plugin_failure_policy_auth: PluginFailureAction,
+    pub plugin_failure_policy_admin_ui: PluginFailureAction,
     pub plugin_abi_min: PluginAbiVersion,
     pub plugin_abi_max: PluginAbiVersion,
 }
@@ -95,12 +102,14 @@ impl Default for ServerConfig {
             bedrock_auth_profile: runtime.bedrock_auth_profile,
             default_gameplay_profile: runtime.default_gameplay_profile,
             gameplay_profile_map: runtime.gameplay_profile_map,
+            admin_ui_profile: runtime.admin_ui_profile,
             plugins_dir: bootstrap.plugins_dir,
             plugin_allowlist: runtime.plugin_allowlist,
             plugin_failure_policy_protocol: runtime.plugin_failure_policy_protocol,
             plugin_failure_policy_gameplay: runtime.plugin_failure_policy_gameplay,
             plugin_failure_policy_storage: runtime.plugin_failure_policy_storage,
             plugin_failure_policy_auth: runtime.plugin_failure_policy_auth,
+            plugin_failure_policy_admin_ui: runtime.plugin_failure_policy_admin_ui,
             plugin_abi_min: bootstrap.plugin_abi_min,
             plugin_abi_max: bootstrap.plugin_abi_max,
         }
@@ -126,11 +135,13 @@ impl ServerConfig {
             bedrock_auth_profile: self.bedrock_auth_profile.clone(),
             default_gameplay_profile: self.default_gameplay_profile.clone(),
             gameplay_profile_map: self.gameplay_profile_map.clone(),
+            admin_ui_profile: self.admin_ui_profile.clone(),
             plugin_allowlist: self.plugin_allowlist.clone(),
             plugin_failure_policy_protocol: self.plugin_failure_policy_protocol,
             plugin_failure_policy_gameplay: self.plugin_failure_policy_gameplay,
             plugin_failure_policy_storage: self.plugin_failure_policy_storage,
             plugin_failure_policy_auth: self.plugin_failure_policy_auth,
+            plugin_failure_policy_admin_ui: self.plugin_failure_policy_admin_ui,
         }
     }
 }

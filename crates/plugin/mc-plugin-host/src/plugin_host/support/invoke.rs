@@ -1,10 +1,11 @@
 use super::{
-    AuthPluginApiV1, AuthRequest, AuthResponse, ByteSlice, GameplayPluginApiV2, GameplayRequest,
-    GameplayResponse, OwnedBuffer, PluginErrorCode, ProtocolPluginApiV1, ProtocolRequest,
-    ProtocolResponse, RuntimeError, StoragePluginApiV1, StorageRequest, StorageResponse,
+    AdminUiInput, AdminUiOutput, AdminUiPluginApiV1, AuthPluginApiV1, AuthRequest, AuthResponse,
+    ByteSlice, GameplayPluginApiV2, GameplayRequest, GameplayResponse, OwnedBuffer,
+    PluginErrorCode, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse, RuntimeError,
+    StoragePluginApiV1, StorageRequest, StorageResponse, admin_ui_host_api, decode_admin_ui_output,
     decode_auth_response, decode_gameplay_response, decode_plugin_error, decode_protocol_response,
-    decode_storage_response, encode_auth_request, encode_gameplay_request, encode_protocol_request,
-    encode_storage_request, gameplay_host_api,
+    decode_storage_response, encode_admin_ui_input, encode_auth_request, encode_gameplay_request,
+    encode_protocol_request, encode_storage_request, gameplay_host_api,
 };
 
 pub(crate) fn invoke_protocol(
@@ -152,5 +153,43 @@ pub(crate) fn invoke_auth(
         (api.free_buffer)(output);
     }
     decode_auth_response(request, &response_bytes)
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+pub(crate) fn invoke_admin_ui(
+    plugin_id: &str,
+    api: &AdminUiPluginApiV1,
+    request: &AdminUiInput,
+) -> Result<AdminUiOutput, RuntimeError> {
+    let request_bytes =
+        encode_admin_ui_input(request).map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let mut output = OwnedBuffer::empty();
+    let mut error = OwnedBuffer::empty();
+    let host_api = admin_ui_host_api();
+    let status = unsafe {
+        (api.invoke)(
+            ByteSlice {
+                ptr: request_bytes.as_ptr(),
+                len: request_bytes.len(),
+            },
+            &raw const host_api,
+            &raw mut output,
+            &raw mut error,
+        )
+    };
+    if status != PluginErrorCode::Ok {
+        return Err(RuntimeError::Config(decode_plugin_error(
+            plugin_id,
+            status,
+            api.free_buffer,
+            error,
+        )));
+    }
+
+    let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
+    unsafe {
+        (api.free_buffer)(output);
+    }
+    decode_admin_ui_output(request, &response_bytes)
         .map_err(|error| RuntimeError::Config(error.to_string()))
 }

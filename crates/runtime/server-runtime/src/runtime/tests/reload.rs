@@ -5,6 +5,7 @@ use mc_plugin_test_support::PackagedPluginHarness;
 
 type EncryptedLoginChallenge = ([u8; 16], Vec<u8>, Vec<u8>);
 
+mod admin;
 mod online_auth;
 mod profiles;
 mod protocol;

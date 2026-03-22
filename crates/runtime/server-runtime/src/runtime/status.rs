@@ -233,11 +233,12 @@ pub fn format_runtime_status_summary(snapshot: &RuntimeStatusSnapshot) -> String
 
     if let Some(plugin_host) = &snapshot.plugin_host {
         lines.push(format!(
-            "plugins protocol={} gameplay={} storage={} auth={} active-quarantines={} artifact-quarantines={} pending-fatal={}",
+            "plugins protocol={} gameplay={} storage={} auth={} admin-ui={} active-quarantines={} artifact-quarantines={} pending-fatal={}",
             plugin_host.protocols.len(),
             plugin_host.gameplay.len(),
             plugin_host.storage.len(),
             plugin_host.auth.len(),
+            plugin_host.admin_ui.len(),
             plugin_host.active_quarantine_count(),
             plugin_host.artifact_quarantine_count(),
             plugin_host.pending_fatal_error.as_deref().unwrap_or("none"),
@@ -273,7 +274,7 @@ fn topology_status_snapshot(
     }
 }
 
-fn summarize_sessions(sessions: &[SessionStatusSnapshot]) -> SessionSummarySnapshot {
+pub(crate) fn summarize_sessions(sessions: &[SessionStatusSnapshot]) -> SessionSummarySnapshot {
     let mut transport_counts = HashMap::new();
     let mut phase_counts = [0_usize; 4];
     let mut topology_counts = HashMap::new();

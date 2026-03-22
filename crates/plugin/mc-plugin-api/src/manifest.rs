@@ -5,6 +5,7 @@ pub const PLUGIN_PROTOCOL_API_SYMBOL_V1: &[u8] = b"mc_plugin_protocol_api_v1\0";
 pub const PLUGIN_STORAGE_API_SYMBOL_V1: &[u8] = b"mc_plugin_storage_api_v1\0";
 pub const PLUGIN_AUTH_API_SYMBOL_V1: &[u8] = b"mc_plugin_auth_api_v1\0";
 pub const PLUGIN_GAMEPLAY_API_SYMBOL_V2: &[u8] = b"mc_plugin_gameplay_api_v2\0";
+pub const PLUGIN_ADMIN_UI_API_SYMBOL_V1: &[u8] = b"mc_plugin_admin_ui_api_v1\0";
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]

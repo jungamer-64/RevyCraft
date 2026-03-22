@@ -1,5 +1,7 @@
 use crate::PluginHostError as RuntimeError;
-use crate::runtime::{AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle};
+use crate::runtime::{
+    AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
+};
 use mc_proto_common::{
     Edition, HandshakeIntent, HandshakeProbe, ProtocolAdapter, ProtocolError, TransportKind,
 };
@@ -132,6 +134,7 @@ pub struct LoadedPluginSet {
     gameplay_profiles: HashMap<String, Arc<dyn GameplayProfileHandle>>,
     storage_profiles: HashMap<String, Arc<dyn StorageProfileHandle>>,
     auth_profiles: HashMap<String, Arc<dyn AuthProfileHandle>>,
+    admin_ui_profiles: HashMap<String, Arc<dyn AdminUiProfileHandle>>,
 }
 
 impl LoadedPluginSet {
@@ -142,6 +145,7 @@ impl LoadedPluginSet {
             gameplay_profiles: HashMap::new(),
             storage_profiles: HashMap::new(),
             auth_profiles: HashMap::new(),
+            admin_ui_profiles: HashMap::new(),
         }
     }
 
@@ -169,6 +173,15 @@ impl LoadedPluginSet {
         profile: Arc<dyn AuthProfileHandle>,
     ) -> &mut Self {
         self.auth_profiles.insert(profile_id.into(), profile);
+        self
+    }
+
+    pub(crate) fn register_admin_ui_profile(
+        &mut self,
+        profile_id: impl Into<String>,
+        profile: Arc<dyn AdminUiProfileHandle>,
+    ) -> &mut Self {
+        self.admin_ui_profiles.insert(profile_id.into(), profile);
         self
     }
 
@@ -201,5 +214,13 @@ impl LoadedPluginSet {
     #[must_use]
     pub fn resolve_auth_profile(&self, profile_id: &str) -> Option<Arc<dyn AuthProfileHandle>> {
         self.auth_profiles.get(profile_id).cloned()
+    }
+
+    #[must_use]
+    pub fn resolve_admin_ui_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<dyn AdminUiProfileHandle>> {
+        self.admin_ui_profiles.get(profile_id).cloned()
     }
 }

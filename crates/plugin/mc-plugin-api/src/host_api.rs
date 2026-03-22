@@ -43,6 +43,12 @@ pub type GameplayPluginInvokeV2Fn = unsafe extern "C" fn(
     *mut OwnedBuffer,
     *mut OwnedBuffer,
 ) -> PluginErrorCode;
+pub type AdminUiPluginInvokeV1Fn = unsafe extern "C" fn(
+    ByteSlice,
+    *const HostApiTableV1,
+    *mut OwnedBuffer,
+    *mut OwnedBuffer,
+) -> PluginErrorCode;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -69,5 +75,12 @@ pub struct AuthPluginApiV1 {
 #[derive(Clone, Copy, Debug)]
 pub struct GameplayPluginApiV2 {
     pub invoke: GameplayPluginInvokeV2Fn,
+    pub free_buffer: PluginFreeBufferFn,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AdminUiPluginApiV1 {
+    pub invoke: AdminUiPluginInvokeV1Fn,
     pub free_buffer: PluginFreeBufferFn,
 }

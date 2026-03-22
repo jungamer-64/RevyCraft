@@ -85,6 +85,13 @@ pub(crate) fn gameplay_profile_id_from_manifest(
         })
 }
 
+pub(crate) fn admin_ui_profile_id_from_manifest(
+    manifest: &DecodedManifest,
+    plugin_id: &str,
+) -> Result<String, RuntimeError> {
+    manifest_profile_id(manifest, "admin-ui.profile:", plugin_id, "admin-ui")
+}
+
 pub(crate) fn require_manifest_capability(
     manifest: &DecodedManifest,
     capability: &str,

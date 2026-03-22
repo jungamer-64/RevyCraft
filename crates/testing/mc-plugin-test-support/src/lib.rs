@@ -8,6 +8,7 @@ enum PackagedPluginKind {
     Gameplay,
     Storage,
     Auth,
+    AdminUi,
 }
 
 impl PackagedPluginKind {
@@ -17,6 +18,7 @@ impl PackagedPluginKind {
             Self::Gameplay => "gameplay",
             Self::Storage => "storage",
             Self::Auth => "auth",
+            Self::AdminUi => "admin-ui",
         }
     }
 }
@@ -241,6 +243,29 @@ impl PackagedPluginHarness {
         )
     }
 
+    /// # Errors
+    ///
+    /// Returns an error when the packaged plugin cannot be built, cached, or installed.
+    pub fn install_admin_ui_plugin(
+        &self,
+        cargo_package: &str,
+        plugin_id: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), PackagedPluginTestError> {
+        self.install_cached_plugin(
+            PackagedPluginSpec {
+                cargo_package,
+                plugin_id,
+                kind: PackagedPluginKind::AdminUi,
+                build_tag,
+            },
+            dist_dir,
+            target_dir,
+        )
+    }
+
     fn install_cached_plugin(
         &self,
         spec: PackagedPluginSpec<'_>,
@@ -284,6 +309,10 @@ impl PackagedPluginHarness {
         let artifact_name = dynamic_library_filename(cargo_package);
         let cache_stamp =
             packaged_plugin_test_harness_stamp().map_err(PackagedPluginTestError::Message)?;
+        let package_cache_dir = self
+            .artifact_cache_dir
+            .join(&cache_stamp)
+            .join(cargo_package);
         let cached_artifact = self
             .artifact_cache_dir
             .join(cache_stamp)
@@ -293,9 +322,26 @@ impl PackagedPluginHarness {
         if cached_artifact.is_file() {
             return Ok(cached_artifact);
         }
+        if package_cache_dir.is_dir() {
+            fs::remove_dir_all(&package_cache_dir)?;
+        }
 
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo"));
-        let status = std::process::Command::new(cargo)
+        let clean_status = std::process::Command::new(&cargo)
+            .current_dir(packaged_plugin_test_workspace_root())
+            .env("CARGO_TARGET_DIR", target_dir)
+            .arg("clean")
+            .arg("-p")
+            .arg(cargo_package)
+            .status()
+            .map_err(|error| PackagedPluginTestError::Message(error.to_string()))?;
+        if !clean_status.success() {
+            return Err(PackagedPluginTestError::Message(format!(
+                "cargo clean failed for `{cargo_package}`"
+            )));
+        }
+
+        let status = std::process::Command::new(&cargo)
             .current_dir(packaged_plugin_test_workspace_root())
             .env("CARGO_TARGET_DIR", target_dir)
             .env("REVY_PLUGIN_BUILD_TAG", build_tag)
@@ -360,7 +406,16 @@ fn packaged_plugin_test_run_xtask_package_all_plugins(
         .lock()
         .expect("packaged plugin build lock should not be poisoned");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo"));
-    let status = std::process::Command::new(cargo)
+    let clean_status = std::process::Command::new(&cargo)
+        .current_dir(packaged_plugin_test_workspace_root())
+        .env("CARGO_TARGET_DIR", target_dir)
+        .arg("clean")
+        .status()
+        .map_err(|error| error.to_string())?;
+    if !clean_status.success() {
+        return Err("cargo clean before xtask package-all-plugins failed".to_string());
+    }
+    let status = std::process::Command::new(&cargo)
         .current_dir(packaged_plugin_test_workspace_root())
         .env("CARGO_TARGET_DIR", target_dir)
         .env("REVY_PLUGIN_BUILD_TAG", build_tag)

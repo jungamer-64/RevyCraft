@@ -6,12 +6,13 @@ use crate::host::{
 };
 use crate::plugin_host::PluginCatalog;
 pub use crate::plugin_host::{
-    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    InProcessAdminUiPlugin, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
+    InProcessStoragePlugin,
 };
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use crate::runtime::{
-    AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost, RuntimeReloadContext,
-    StorageProfileHandle,
+    AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
+    RuntimeReloadContext, StorageProfileHandle,
 };
 use mc_core::PluginGenerationId;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ pub struct InProcessHostBuildInput {
     pub gameplay_plugins: Vec<InProcessGameplayPlugin>,
     pub storage_plugins: Vec<InProcessStoragePlugin>,
     pub auth_plugins: Vec<InProcessAuthPlugin>,
+    pub admin_ui_plugins: Vec<InProcessAdminUiPlugin>,
     pub bootstrap_config: crate::config::BootstrapConfig,
     pub abi_range: PluginAbiRange,
     pub failure_matrix: PluginFailureMatrix,
@@ -54,6 +56,9 @@ pub fn build_in_process_host(input: InProcessHostBuildInput) -> BuiltTestHost {
     }
     for plugin in input.auth_plugins {
         catalog.register_in_process_auth_plugin(plugin);
+    }
+    for plugin in input.admin_ui_plugins {
+        catalog.register_in_process_admin_ui_plugin(plugin);
     }
     BuiltTestHost {
         inner: Arc::new(PluginHost::new(
@@ -165,6 +170,16 @@ pub fn resolve_auth_profile(
     host.inner
         .resolve_auth_profile(profile_id)
         .map(|profile| profile as Arc<dyn AuthProfileHandle>)
+}
+
+#[must_use]
+pub fn resolve_admin_ui_profile(
+    host: &BuiltTestHost,
+    profile_id: &str,
+) -> Option<Arc<dyn AdminUiProfileHandle>> {
+    host.inner
+        .resolve_admin_ui_profile(profile_id)
+        .map(|profile| profile as Arc<dyn AdminUiProfileHandle>)
 }
 
 /// # Errors

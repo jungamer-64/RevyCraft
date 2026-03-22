@@ -1,8 +1,9 @@
 use super::{
-    Arc, HashMap, HashSet, HotSwappableAuthProfile, HotSwappableGameplayProfile,
-    HotSwappableStorageProfile, ManagedAuthPlugin, ManagedGameplayPlugin, ManagedStoragePlugin,
-    PluginFailureStage, PluginHost, PluginKind, PluginPackage, RuntimeError,
-    RuntimeSelectionConfig, ensure_known_profiles, ensure_profile_known,
+    Arc, HashMap, HashSet, HotSwappableAdminUiProfile, HotSwappableAuthProfile,
+    HotSwappableGameplayProfile, HotSwappableStorageProfile, ManagedAdminUiPlugin,
+    ManagedAuthPlugin, ManagedGameplayPlugin, ManagedStoragePlugin, PluginFailureStage, PluginHost,
+    PluginKind, PluginPackage, RuntimeError, RuntimeSelectionConfig, ensure_known_profiles,
+    ensure_profile_known,
 };
 use crate::registry::LoadedPluginSet;
 
@@ -50,6 +51,19 @@ impl PluginHost {
             }
         }
 
+        {
+            let admin_ui = self
+                .admin_ui
+                .lock()
+                .expect("plugin host mutex should not be poisoned");
+            for (profile_id, managed) in admin_ui.iter() {
+                loaded.register_admin_ui_profile(
+                    profile_id.clone(),
+                    Arc::clone(&managed.profile) as Arc<dyn crate::runtime::AdminUiProfileHandle>,
+                );
+            }
+        }
+
         loaded
     }
 
@@ -80,6 +94,10 @@ impl PluginHost {
             ));
         }
         Ok(requested)
+    }
+
+    fn requested_admin_ui_profile(config: &RuntimeSelectionConfig) -> Option<&str> {
+        (!config.admin_ui_profile.is_empty()).then_some(config.admin_ui_profile.as_str())
     }
 
     fn load_requested_gameplay_plugin(
@@ -270,6 +288,72 @@ impl PluginHost {
         Ok(())
     }
 
+    fn load_requested_admin_ui_plugin(
+        &self,
+        admin_ui: &mut HashMap<String, ManagedAdminUiPlugin>,
+        package: &PluginPackage,
+        requested_profile: Option<&str>,
+    ) -> Result<(), RuntimeError> {
+        let Some(requested_profile) = requested_profile else {
+            return Ok(());
+        };
+        let modified_at = package.modified_at()?;
+        let identity = package.artifact_identity(modified_at);
+        if self
+            .failures
+            .is_artifact_quarantined(&package.plugin_id, &identity)
+        {
+            return Ok(());
+        }
+        let generation = match self
+            .loader
+            .load_admin_ui_generation(package, self.generations.next_generation_id())
+        {
+            Ok(generation) => Arc::new(generation),
+            Err(error) => {
+                let reason = error.to_string();
+                eprintln!(
+                    "admin-ui boot load failed for `{}`: {reason}",
+                    package.plugin_id
+                );
+                self.failures.handle_candidate_failure(
+                    PluginKind::AdminUi,
+                    PluginFailureStage::Boot,
+                    &package.plugin_id,
+                    identity,
+                    &reason,
+                )?;
+                return Ok(());
+            }
+        };
+        if generation.profile_id != requested_profile {
+            return Ok(());
+        }
+
+        if admin_ui.contains_key(requested_profile) {
+            return Err(RuntimeError::Config(format!(
+                "duplicate admin-ui profile `{requested_profile}` discovered"
+            )));
+        }
+        admin_ui.insert(
+            requested_profile.to_string(),
+            ManagedAdminUiPlugin {
+                package: package.clone(),
+                profile_id: requested_profile.to_string(),
+                profile: Arc::new(HotSwappableAdminUiProfile::new(
+                    package.plugin_id.clone(),
+                    requested_profile.to_string(),
+                    generation,
+                    Arc::clone(&self.failures),
+                )),
+                loaded_at: modified_at,
+                active_loaded_at: modified_at,
+            },
+        );
+        self.failures.clear_plugin_state(&package.plugin_id);
+        Ok(())
+    }
+
     /// Activates every gameplay profile required by the current server configuration.
     ///
     /// # Errors
@@ -398,6 +482,42 @@ impl PluginHost {
         result
     }
 
+    /// Activates the requested admin UI profile when available.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when duplicate matching admin UI profiles are discovered.
+    pub(crate) fn activate_admin_ui_profile(
+        &self,
+        config: &RuntimeSelectionConfig,
+    ) -> Result<(), RuntimeError> {
+        let requested_profile = Self::requested_admin_ui_profile(config);
+        let allowlist = self
+            .current_runtime_selection()
+            .plugin_allowlist
+            .map(|entries| entries.into_iter().collect::<HashSet<_>>());
+        let catalog = self.protocol_catalog()?;
+        let mut admin_ui = self
+            .admin_ui
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        admin_ui.clear();
+
+        for package in catalog.packages() {
+            if package.plugin_kind != PluginKind::AdminUi {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
+                continue;
+            }
+            self.load_requested_admin_ui_plugin(&mut admin_ui, package, requested_profile)?;
+        }
+
+        Ok(())
+    }
+
     /// Activates a single auth profile.
     ///
     /// # Errors
@@ -419,7 +539,8 @@ impl PluginHost {
     ) -> Result<(), RuntimeError> {
         self.activate_gameplay_profiles(config)?;
         self.activate_storage_profile(&self.bootstrap_config.storage_profile)?;
-        self.activate_auth_profiles(&Self::runtime_auth_profiles(config))
+        self.activate_auth_profiles(&Self::runtime_auth_profiles(config))?;
+        self.activate_admin_ui_profile(config)
     }
 
     /// Loads protocol adapters and activates runtime-selected profiles, then snapshots the active

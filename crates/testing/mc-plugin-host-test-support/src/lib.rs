@@ -9,20 +9,21 @@ use mc_plugin_host::__test_hooks::{
     BuiltTestHost, InProcessHostBuildInput, activate_auth_profile, activate_gameplay_profiles,
     activate_storage_profile, build_in_process_host, discover, load_plugin_set,
     load_protocol_plugin_set, load_protocol_registry, reload_modified,
-    reload_modified_with_context, replace_in_process_protocol_plugin, resolve_auth_profile,
-    resolve_gameplay_profile, resolve_storage_profile, runtime_host, status,
+    reload_modified_with_context, replace_in_process_protocol_plugin, resolve_admin_ui_profile,
+    resolve_auth_profile, resolve_gameplay_profile, resolve_storage_profile, runtime_host, status,
     take_pending_fatal_error,
 };
 use mc_plugin_host::__test_hooks::{
-    InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    InProcessAdminUiPlugin, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
+    InProcessStoragePlugin,
 };
 use mc_plugin_host::PluginHostError;
 use mc_plugin_host::config::ServerConfig;
 pub use mc_plugin_host::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
 use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_host::runtime::{
-    AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost, RuntimeReloadContext,
-    StorageProfileHandle,
+    AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
+    RuntimeReloadContext, StorageProfileHandle,
 };
 use std::sync::Arc;
 
@@ -115,6 +116,14 @@ impl TestPluginHost {
         resolve_auth_profile(&self.inner, profile_id)
     }
 
+    #[must_use]
+    pub fn resolve_admin_ui_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<dyn AdminUiProfileHandle>> {
+        resolve_admin_ui_profile(&self.inner, profile_id)
+    }
+
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the replacement generation cannot be loaded.
@@ -154,6 +163,7 @@ pub struct TestPluginHostBuilder {
     gameplay_plugins: Vec<InProcessGameplayPlugin>,
     storage_plugins: Vec<InProcessStoragePlugin>,
     auth_plugins: Vec<InProcessAuthPlugin>,
+    admin_ui_plugins: Vec<InProcessAdminUiPlugin>,
     bootstrap_config: mc_plugin_host::config::BootstrapConfig,
     abi_range: PluginAbiRange,
     failure_matrix: PluginFailureMatrix,
@@ -190,6 +200,12 @@ impl TestPluginHostBuilder {
     }
 
     #[must_use]
+    pub fn admin_ui_raw(mut self, plugin: InProcessAdminUiPlugin) -> Self {
+        self.admin_ui_plugins.push(plugin);
+        self
+    }
+
+    #[must_use]
     pub fn bootstrap_config(
         mut self,
         bootstrap_config: mc_plugin_host::config::BootstrapConfig,
@@ -218,6 +234,7 @@ impl TestPluginHostBuilder {
                 gameplay_plugins: self.gameplay_plugins,
                 storage_plugins: self.storage_plugins,
                 auth_plugins: self.auth_plugins,
+                admin_ui_plugins: self.admin_ui_plugins,
                 bootstrap_config: self.bootstrap_config,
                 abi_range: self.abi_range,
                 failure_matrix: self.failure_matrix,
@@ -228,8 +245,8 @@ impl TestPluginHostBuilder {
 
 pub mod raw {
     pub use mc_plugin_host::__test_hooks::{
-        InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
-        InProcessStoragePlugin,
+        InProcessAdminUiPlugin, InProcessAuthPlugin, InProcessGameplayPlugin,
+        InProcessProtocolPlugin, InProcessStoragePlugin,
     };
 }
 

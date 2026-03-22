@@ -84,12 +84,14 @@ impl RuntimeServer {
         } else {
             None
         };
+        let admin_ui = loaded_plugins.resolve_admin_ui_profile(&config.admin.ui_profile);
 
         Ok(LiveRuntimeState {
             config,
             loaded_plugins,
             auth_profile,
             bedrock_auth_profile,
+            admin_ui,
         })
     }
 

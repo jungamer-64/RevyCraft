@@ -1,0 +1,25 @@
+[package]
+name = "mc-plugin-admin-ui-console"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Console admin UI plugin for the RevyCraft runtime host."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+disable-exported-symbols = []
+in-process-testing = ["mc-plugin-sdk-rust/in-process-testing"]
+
+[dependencies]
+mc-core = { path = "../../../crates/core/mc-core" }
+mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
+mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
+
+[lints]
+workspace = true

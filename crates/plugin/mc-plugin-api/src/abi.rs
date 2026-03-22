@@ -23,6 +23,7 @@ pub enum PluginKind {
     Storage = 2,
     Auth = 3,
     Gameplay = 4,
+    AdminUi = 5,
 }
 
 impl TryFrom<u8> for PluginKind {
@@ -34,6 +35,7 @@ impl TryFrom<u8> for PluginKind {
             2 => Ok(Self::Storage),
             3 => Ok(Self::Auth),
             4 => Ok(Self::Gameplay),
+            5 => Ok(Self::AdminUi),
             _ => Err(ProtocolCodecError::InvalidPluginKind(value)),
         }
     }

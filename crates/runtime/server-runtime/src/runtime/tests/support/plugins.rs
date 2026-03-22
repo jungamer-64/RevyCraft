@@ -59,6 +59,7 @@ pub(crate) const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
 ];
 pub(crate) const TCP_ONLY_PROTOCOL_PLUGIN_IDS: &[&str] = &[JE_1_7_10_ADAPTER_ID];
 pub(crate) const GAMEPLAY_PLUGIN_IDS: &[&str] = &["gameplay-canonical", "gameplay-readonly"];
+pub(crate) const ADMIN_UI_PLUGIN_IDS: &[&str] = &["admin-ui-console"];
 pub(crate) const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &[
     "storage-je-anvil-1_7_10",
     "auth-offline",
@@ -95,6 +96,11 @@ pub(crate) fn plugin_allowlist_with_supporting_plugins(
             .iter()
             .map(|plugin_id| (*plugin_id).to_string()),
     );
+    plugin_allowlist.extend(
+        ADMIN_UI_PLUGIN_IDS
+            .iter()
+            .map(|plugin_id| (*plugin_id).to_string()),
+    );
     plugin_allowlist
 }
 
@@ -115,7 +121,7 @@ pub(crate) fn plugin_test_registries_from_dist_with_supporting_plugins(
     supporting_plugin_ids: &[&str],
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
     let mut config = ServerConfig::default();
-    config.bootstrap.plugins_dir = dist_dir;
+    config.bootstrap.plugins_dir = dist_dir.clone();
     config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
         allowlist,
         supporting_plugin_ids,
@@ -153,6 +159,7 @@ pub(crate) fn seed_runtime_plugins(
     plugin_ids.extend_from_slice(allowlist);
     plugin_ids.extend_from_slice(GAMEPLAY_PLUGIN_IDS);
     plugin_ids.extend_from_slice(supporting_plugin_ids);
+    plugin_ids.extend_from_slice(ADMIN_UI_PLUGIN_IDS);
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
         .seed_subset(dist_dir, &plugin_ids)

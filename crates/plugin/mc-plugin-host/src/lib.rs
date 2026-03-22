@@ -5,10 +5,10 @@ mod error;
 pub mod config;
 pub mod host {
     pub use crate::plugin_host::{
-        AuthPluginStatusSnapshot, GameplayPluginStatusSnapshot, PluginAbiRange,
-        PluginArtifactStatusSnapshot, PluginFailureAction, PluginFailureMatrix, PluginHost,
-        PluginHostStatusSnapshot, ProtocolPluginStatusSnapshot, StoragePluginStatusSnapshot,
-        plugin_host_from_config, plugin_reload_poll_interval_ms,
+        AdminUiPluginStatusSnapshot, AuthPluginStatusSnapshot, GameplayPluginStatusSnapshot,
+        PluginAbiRange, PluginArtifactStatusSnapshot, PluginFailureAction, PluginFailureMatrix,
+        PluginHost, PluginHostStatusSnapshot, ProtocolPluginStatusSnapshot,
+        StoragePluginStatusSnapshot, plugin_host_from_config, plugin_reload_poll_interval_ms,
     };
 }
 pub mod registry;

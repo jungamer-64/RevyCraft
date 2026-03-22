@@ -1,11 +1,13 @@
 use super::{
-    Arc, AuthGenerationHandle, AuthMode, AuthRequest, AuthResponse, BedrockAuthResult,
+    AdminRequest, AdminResponse, AdminUiInput, AdminUiOutput, AdminUiPluginInvokeV1Fn, Arc,
+    AuthGenerationHandle, AuthMode, AuthRequest, AuthResponse, BedrockAuthResult,
     BedrockListenerDescriptor, ByteSlice, CapabilitySet, GameplayPluginInvokeV2Fn,
     GameplayProfileId, GameplayRequest, GameplayResponse, Library, Mutex, OwnedBuffer, PlayerId,
     PluginErrorCode, PluginFreeBufferFn, PluginGenerationId, PluginInvokeFn, ProtocolDescriptor,
     ProtocolError, ProtocolRequest, ProtocolResponse, RuntimeError, StorageError, StorageRequest,
-    StorageResponse, decode_auth_response, decode_gameplay_response, decode_protocol_response,
-    decode_storage_response, encode_auth_request, encode_gameplay_request, encode_protocol_request,
+    StorageResponse, admin_ui_host_api, decode_admin_ui_output, decode_auth_response,
+    decode_gameplay_response, decode_protocol_response, decode_storage_response,
+    encode_admin_ui_input, encode_auth_request, encode_gameplay_request, encode_protocol_request,
     encode_storage_request,
 };
 
@@ -207,6 +209,17 @@ pub(crate) struct AuthGeneration {
     pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct AdminUiGeneration {
+    pub(crate) generation_id: PluginGenerationId,
+    pub(crate) plugin_id: String,
+    pub(crate) profile_id: String,
+    pub(crate) capabilities: CapabilitySet,
+    pub(crate) invoke: AdminUiPluginInvokeV1Fn,
+    pub(crate) free_buffer: PluginFreeBufferFn,
+    pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
+}
+
 impl AuthGeneration {
     fn invoke(&self, request: &AuthRequest) -> Result<AuthResponse, String> {
         let request_bytes = encode_auth_request(request).map_err(|error| error.to_string())?;
@@ -307,6 +320,58 @@ impl AuthGeneration {
             other => Err(RuntimeError::Config(format!(
                 "unexpected auth authenticate_bedrock_xbl payload: {other:?}"
             ))),
+        }
+    }
+}
+
+impl AdminUiGeneration {
+    fn invoke(&self, request: &AdminUiInput) -> Result<AdminUiOutput, String> {
+        let request_bytes = encode_admin_ui_input(request).map_err(|error| error.to_string())?;
+        let mut output = OwnedBuffer::empty();
+        let mut error = OwnedBuffer::empty();
+        let host_api = admin_ui_host_api();
+        let status = unsafe {
+            (self.invoke)(
+                ByteSlice {
+                    ptr: request_bytes.as_ptr(),
+                    len: request_bytes.len(),
+                },
+                &raw const host_api,
+                &raw mut output,
+                &raw mut error,
+            )
+        };
+        if status != PluginErrorCode::Ok {
+            return Err(decode_plugin_error(
+                &self.plugin_id,
+                status,
+                self.free_buffer,
+                error,
+            ));
+        }
+
+        let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
+        unsafe {
+            (self.free_buffer)(output);
+        }
+        decode_admin_ui_output(request, &response_bytes).map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn parse_line(&self, line: &str) -> Result<AdminRequest, String> {
+        match self.invoke(&AdminUiInput::ParseLine {
+            line: line.to_string(),
+        })? {
+            AdminUiOutput::ParsedRequest(request) => Ok(request),
+            other => Err(format!("unexpected admin-ui parse payload: {other:?}")),
+        }
+    }
+
+    pub(crate) fn render_response(&self, response: &AdminResponse) -> Result<String, String> {
+        match self.invoke(&AdminUiInput::RenderResponse {
+            response: response.clone(),
+        })? {
+            AdminUiOutput::RenderedText(text) => Ok(text),
+            other => Err(format!("unexpected admin-ui render payload: {other:?}")),
         }
     }
 }

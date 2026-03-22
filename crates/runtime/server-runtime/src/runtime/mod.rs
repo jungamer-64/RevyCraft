@@ -1,3 +1,4 @@
+mod admin;
 mod bootstrap;
 mod core_loop;
 mod session;
@@ -12,10 +13,16 @@ use mc_core::{
     ConnectionId, CoreEvent, EntityId, GameplayProfileId, PlayerId, ServerCore,
     SessionCapabilitySet,
 };
+pub use mc_plugin_api::codec::admin_ui::{
+    AdminConfigReloadView, AdminListenerBindingView, AdminNamedCountView, AdminPermission,
+    AdminPhaseCountView, AdminPluginHostView, AdminPluginsReloadView, AdminPrincipal, AdminRequest,
+    AdminResponse, AdminSessionSummaryView, AdminSessionView, AdminSessionsView, AdminStatusView,
+    AdminTopologyGenerationCountView, AdminTopologyReloadView, AdminTransportCountView,
+};
 use mc_plugin_host::registry::{ListenerBinding, LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_host::runtime::{
-    AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
-    RuntimeReloadContext, StorageProfileHandle,
+    AdminUiProfileHandle, AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle,
+    RuntimePluginHost, RuntimeReloadContext, StorageProfileHandle,
 };
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use serde::{Deserialize, Serialize};
@@ -25,6 +32,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock as AsyncRwLock, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
+pub use self::admin::AdminControlPlaneHandle;
 pub use self::bootstrap::{ReloadableServerBuilder, ServerBuilder};
 pub use self::status::{
     OptionalNamedCountSnapshot, PhaseCountSnapshot, RuntimeStatusSnapshot, SessionStatusSnapshot,
@@ -37,7 +45,6 @@ pub(crate) const LOGIN_VERIFY_TOKEN_LEN: usize = 4;
 
 pub struct RunningServer {
     runtime: Arc<RuntimeServer>,
-    shutdown_tx: Option<oneshot::Sender<()>>,
     join_handle: JoinHandle<Result<(), RuntimeError>>,
 }
 
@@ -47,13 +54,20 @@ impl RunningServer {
         self.runtime.listener_bindings()
     }
 
+    #[must_use]
+    pub fn admin_control_plane(&self) -> AdminControlPlaneHandle {
+        AdminControlPlaneHandle::new(Arc::clone(&self.runtime))
+    }
+
+    pub async fn admin_ui(&self) -> Option<Arc<dyn AdminUiProfileHandle>> {
+        self.runtime.current_admin_ui().await
+    }
+
     /// # Errors
     ///
     /// Returns [`RuntimeError`] when the server task fails while shutting down.
-    pub async fn shutdown(mut self) -> Result<(), RuntimeError> {
-        if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            let _ = shutdown_tx.send(());
-        }
+    pub async fn shutdown(self) -> Result<(), RuntimeError> {
+        let _ = self.runtime.request_shutdown();
         self.join_handle.await?
     }
 }
@@ -220,6 +234,7 @@ pub(crate) struct LiveRuntimeState {
     pub(crate) loaded_plugins: LoadedPluginSet,
     pub(crate) auth_profile: Arc<dyn AuthProfileHandle>,
     pub(crate) bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,
+    pub(crate) admin_ui: Option<Arc<dyn AdminUiProfileHandle>>,
 }
 
 pub(crate) struct RuntimeServer {
@@ -235,6 +250,7 @@ pub(crate) struct RuntimeServer {
     pub(crate) sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
     pub(crate) next_connection_id: Mutex<u64>,
     pub(crate) accepted_tx: mpsc::UnboundedSender<AcceptedTopologySession>,
+    pub(crate) shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
 }
 
 pub(crate) struct OnlineAuthKeys {

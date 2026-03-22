@@ -39,6 +39,7 @@ allowlist = [
   "storage-je-anvil-1_7_10",
   "auth-offline",
   "auth-bedrock-offline",
+  "admin-ui-console",
 ]
 reload_watch = false
 
@@ -47,11 +48,23 @@ protocol = "quarantine"
 gameplay = "quarantine"
 storage = "fail-fast"
 auth = "skip"
+admin_ui = "skip"
 
 [profiles]
 auth = "offline-v1"
 bedrock_auth = "bedrock-offline-v1"
 default_gameplay = "canonical"
+
+[admin]
+ui_profile = "console-v1"
+local_console_permissions = [
+  "status",
+  "sessions",
+  "reload-config",
+  "reload-plugins",
+  "reload-topology",
+  "shutdown",
+]
 
 # For JE online mode, set:
 # [bootstrap]

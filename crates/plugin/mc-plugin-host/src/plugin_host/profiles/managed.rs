@@ -1,6 +1,7 @@
 use super::{
-    Arc, GameplayProfileId, HotSwappableAuthProfile, HotSwappableGameplayProfile,
-    HotSwappableProtocolAdapter, HotSwappableStorageProfile, PluginPackage, SystemTime,
+    Arc, GameplayProfileId, HotSwappableAdminUiProfile, HotSwappableAuthProfile,
+    HotSwappableGameplayProfile, HotSwappableProtocolAdapter, HotSwappableStorageProfile,
+    PluginPackage, SystemTime,
 };
 
 pub(crate) struct ManagedProtocolPlugin {
@@ -30,6 +31,14 @@ pub(crate) struct ManagedAuthPlugin {
     pub(crate) package: PluginPackage,
     pub(crate) profile_id: String,
     pub(crate) profile: Arc<HotSwappableAuthProfile>,
+    pub(crate) loaded_at: SystemTime,
+    pub(crate) active_loaded_at: SystemTime,
+}
+
+pub(crate) struct ManagedAdminUiPlugin {
+    pub(crate) package: PluginPackage,
+    pub(crate) profile_id: String,
+    pub(crate) profile: Arc<HotSwappableAdminUiProfile>,
     pub(crate) loaded_at: SystemTime,
     pub(crate) active_loaded_at: SystemTime,
 }

@@ -1426,12 +1426,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-admin-ui-console"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+]
+
+[[package]]
 name = "mc-plugin-api"
 version = "0.1.0"
 dependencies = [
  "mc-core",
  "mc-proto-common",
  "serde",
+ "serde_json",
  "thiserror",
  "uuid",
 ]
@@ -1522,6 +1532,7 @@ dependencies = [
  "bytes",
  "libloading",
  "mc-core",
+ "mc-plugin-admin-ui-console",
  "mc-plugin-api",
  "mc-plugin-auth-offline",
  "mc-plugin-gameplay-canonical",

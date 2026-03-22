@@ -8,6 +8,7 @@ use mc_core::{
     WorldSnapshot,
 };
 use mc_plugin_api::abi::PluginKind;
+use mc_plugin_api::codec::admin_ui::{AdminRequest, AdminResponse};
 use mc_plugin_api::codec::auth::{AuthMode, BedrockAuthResult};
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
@@ -126,6 +127,24 @@ pub trait AuthProfileHandle: Send + Sync {
         chain_jwts: &[String],
         client_data_jwt: &str,
     ) -> Result<BedrockAuthResult, PluginHostError>;
+}
+
+pub trait AdminUiProfileHandle: Send + Sync {
+    fn profile_id(&self) -> &str;
+
+    fn capability_set(&self) -> CapabilitySet;
+
+    fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
+
+    /// # Errors
+    ///
+    /// Returns [`PluginHostError`] when the UI cannot parse the provided line.
+    fn parse_line(&self, line: &str) -> Result<AdminRequest, PluginHostError>;
+
+    /// # Errors
+    ///
+    /// Returns [`PluginHostError`] when the UI cannot render the provided response.
+    fn render_response(&self, response: &AdminResponse) -> Result<String, PluginHostError>;
 }
 
 pub struct RuntimeProtocolTopologyCandidate {
