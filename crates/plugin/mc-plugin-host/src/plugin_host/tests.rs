@@ -32,7 +32,6 @@ use mc_proto_common::{ConnectionPhase, Edition, PacketWriter, TransportKind, Wir
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tempfile::tempdir;
 use uuid::Uuid;
 
 #[path = "tests/admin_ui.rs"]
@@ -55,3 +54,31 @@ mod test_plugins;
 
 use self::support::*;
 use self::test_plugins::*;
+
+fn tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base_dir = workspace_test_temp_root().join("mc-plugin-host");
+    fs::create_dir_all(&base_dir)?;
+    tempfile::Builder::new()
+        .prefix("mc-plugin-host-")
+        .tempdir_in(base_dir)
+}
+
+fn workspace_test_temp_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for ancestor in manifest_dir.ancestors() {
+        let manifest = ancestor.join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&manifest) else {
+            continue;
+        };
+        if contents.contains("[workspace]") {
+            return ancestor.join("target").join("test-tmp");
+        }
+    }
+    panic!(
+        "mc-plugin-host tests should run under the workspace root: {}",
+        manifest_dir.display()
+    );
+}

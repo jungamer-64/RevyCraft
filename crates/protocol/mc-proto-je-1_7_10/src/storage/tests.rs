@@ -1,7 +1,8 @@
 use super::Je1710StorageAdapter;
 use mc_core::{ChunkColumn, ChunkPos, CoreConfig, InventorySlot, ItemStack, PlayerId, ServerCore};
 use mc_proto_common::StorageAdapter;
-use tempfile::tempdir;
+use std::fs;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 #[test]
@@ -62,5 +63,33 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
             .key
             .as_str(),
         "minecraft:bedrock"
+    );
+}
+
+fn tempdir() -> std::io::Result<tempfile::TempDir> {
+    let base_dir = workspace_test_temp_root().join("mc-proto-je-1_7_10");
+    fs::create_dir_all(&base_dir)?;
+    tempfile::Builder::new()
+        .prefix("mc-proto-je-1_7_10-")
+        .tempdir_in(base_dir)
+}
+
+fn workspace_test_temp_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for ancestor in manifest_dir.ancestors() {
+        let manifest = ancestor.join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&manifest) else {
+            continue;
+        };
+        if contents.contains("[workspace]") {
+            return ancestor.join("target").join("test-tmp");
+        }
+    }
+    panic!(
+        "mc-proto-je-1_7_10 tests should run under the workspace root: {}",
+        manifest_dir.display()
     );
 }

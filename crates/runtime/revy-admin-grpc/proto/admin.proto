@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package revy.admin.v1;
+
+service AdminControlPlane {
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc ReloadConfig(ReloadConfigRequest) returns (ReloadConfigResponse);
+  rpc ReloadPlugins(ReloadPluginsRequest) returns (ReloadPluginsResponse);
+  rpc ReloadTopology(ReloadTopologyRequest) returns (ReloadTopologyResponse);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+enum TransportKind {
+  TRANSPORT_KIND_UNSPECIFIED = 0;
+  TRANSPORT_KIND_TCP = 1;
+  TRANSPORT_KIND_UDP = 2;
+}
+
+enum ConnectionPhase {
+  CONNECTION_PHASE_UNSPECIFIED = 0;
+  CONNECTION_PHASE_HANDSHAKING = 1;
+  CONNECTION_PHASE_STATUS = 2;
+  CONNECTION_PHASE_LOGIN = 3;
+  CONNECTION_PHASE_PLAY = 4;
+}
+
+message AdminListenerBindingView {
+  TransportKind transport = 1;
+  string local_addr = 2;
+  repeated string adapter_ids = 3;
+}
+
+message AdminTransportCountView {
+  TransportKind transport = 1;
+  uint64 count = 2;
+}
+
+message AdminPhaseCountView {
+  ConnectionPhase phase = 1;
+  uint64 count = 2;
+}
+
+message AdminTopologyGenerationCountView {
+  uint64 generation_id = 1;
+  uint64 count = 2;
+}
+
+message AdminNamedCountView {
+  optional string value = 1;
+  uint64 count = 2;
+}
+
+message AdminSessionSummaryView {
+  uint64 total = 1;
+  repeated AdminTransportCountView by_transport = 2;
+  repeated AdminPhaseCountView by_phase = 3;
+  repeated AdminTopologyGenerationCountView by_topology_generation = 4;
+  repeated AdminNamedCountView by_adapter_id = 5;
+  repeated AdminNamedCountView by_gameplay_profile = 6;
+}
+
+message AdminPluginHostView {
+  uint64 protocol_count = 1;
+  uint64 gameplay_count = 2;
+  uint64 storage_count = 3;
+  uint64 auth_count = 4;
+  uint64 admin_ui_count = 5;
+  uint64 active_quarantine_count = 6;
+  uint64 artifact_quarantine_count = 7;
+  optional string pending_fatal_error = 8;
+}
+
+message AdminStatusView {
+  uint64 active_topology_generation_id = 1;
+  repeated uint64 draining_topology_generation_ids = 2;
+  repeated AdminListenerBindingView listener_bindings = 3;
+  string default_adapter_id = 4;
+  optional string default_bedrock_adapter_id = 5;
+  repeated string enabled_adapter_ids = 6;
+  repeated string enabled_bedrock_adapter_ids = 7;
+  string motd = 8;
+  uint32 max_players = 9;
+  AdminSessionSummaryView session_summary = 10;
+  bool dirty = 11;
+  optional AdminPluginHostView plugin_host = 12;
+}
+
+message AdminSessionView {
+  uint64 connection_id = 1;
+  uint64 topology_generation_id = 2;
+  TransportKind transport = 3;
+  ConnectionPhase phase = 4;
+  optional string adapter_id = 5;
+  optional string gameplay_profile = 6;
+  optional string player_id = 7;
+  optional int32 entity_id = 8;
+  optional uint64 protocol_generation = 9;
+  optional uint64 gameplay_generation = 10;
+}
+
+message AdminSessionsView {
+  AdminSessionSummaryView summary = 1;
+  repeated AdminSessionView sessions = 2;
+}
+
+message AdminPluginsReloadView {
+  repeated string reloaded_plugin_ids = 1;
+}
+
+message AdminTopologyReloadView {
+  uint64 activated_generation_id = 1;
+  repeated uint64 retired_generation_ids = 2;
+  bool applied_config_change = 3;
+  repeated string reconfigured_adapter_ids = 4;
+}
+
+message AdminConfigReloadView {
+  repeated string reloaded_plugin_ids = 1;
+  AdminTopologyReloadView topology = 2;
+}
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  AdminStatusView status = 1;
+}
+
+message ListSessionsRequest {}
+
+message ListSessionsResponse {
+  AdminSessionsView sessions = 1;
+}
+
+message ReloadConfigRequest {}
+
+message ReloadConfigResponse {
+  AdminConfigReloadView result = 1;
+}
+
+message ReloadPluginsRequest {}
+
+message ReloadPluginsResponse {
+  AdminPluginsReloadView result = 1;
+}
+
+message ReloadTopologyRequest {}
+
+message ReloadTopologyResponse {
+  AdminTopologyReloadView result = 1;
+}
+
+message ShutdownRequest {}
+
+message ShutdownResponse {}

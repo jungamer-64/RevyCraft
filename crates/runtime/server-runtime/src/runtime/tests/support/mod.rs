@@ -68,6 +68,16 @@ fn failure_policy_name(action: PluginFailureAction) -> &'static str {
     }
 }
 
+fn admin_permissions_toml(permissions: &[crate::runtime::AdminPermission]) -> String {
+    toml::Value::Array(
+        permissions
+            .iter()
+            .map(|permission| toml::Value::String(permission.as_str().to_string()))
+            .collect::<Vec<_>>(),
+    )
+    .to_string()
+}
+
 pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<(), RuntimeError> {
     let mut contents = String::new();
     contents.push_str("[bootstrap]\n");
@@ -157,15 +167,28 @@ pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<()
     contents.push_str(&format!(
         "ui_profile = {}\nlocal_console_permissions = {}\n",
         toml_string(&config.admin.ui_profile),
-        toml::Value::Array(
-            config
-                .admin
-                .local_console_permissions
-                .iter()
-                .map(|permission| toml::Value::String(permission.as_str().to_string()))
-                .collect::<Vec<_>>(),
-        ),
+        admin_permissions_toml(&config.admin.local_console_permissions),
     ));
+    contents.push_str("\n[admin.grpc]\n");
+    contents.push_str(&format!(
+        "enabled = {}\nbind_addr = {}\nallow_non_loopback = {}\n",
+        config.admin.grpc.enabled,
+        toml_string(&config.admin.grpc.bind_addr.to_string()),
+        config.admin.grpc.allow_non_loopback,
+    ));
+    let mut principals = config.admin.grpc.principals.iter().collect::<Vec<_>>();
+    principals.sort_by(|left, right| left.0.cmp(right.0));
+    for (principal_id, principal) in principals {
+        contents.push_str(&format!(
+            "\n[admin.grpc.principals.{}]\n",
+            toml_string(principal_id)
+        ));
+        contents.push_str(&format!(
+            "token_file = {}\npermissions = {}\n",
+            toml_string(&principal.token_file.display().to_string()),
+            admin_permissions_toml(&principal.permissions),
+        ));
+    }
     fs::write(path, contents)?;
     Ok(())
 }

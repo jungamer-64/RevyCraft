@@ -66,6 +66,29 @@ local_console_permissions = [
   "shutdown",
 ]
 
+[admin.grpc]
+enabled = false
+bind_addr = "127.0.0.1:50051"
+allow_non_loopback = false
+
+# To enable remote unary gRPC admin control:
+# 1. create a token file outside version control, for example `runtime/admin/ops.token`
+# 2. put a bearer token on its first line
+# 3. enable the transport and define at least one principal:
+#
+# [admin.grpc]
+# enabled = true
+# bind_addr = "0.0.0.0:50051"
+# allow_non_loopback = true
+#
+# [admin.grpc.principals.ops]
+# token_file = "admin/ops.token"
+# permissions = ["status", "sessions", "reload-config", "reload-plugins", "reload-topology", "shutdown"]
+#
+# The built-in gRPC server is plaintext h2 only. Non-loopback exposure is rejected
+# unless `allow_non_loopback = true` is set explicitly. Put TLS and public exposure
+# policy in a reverse proxy or ingress in front of this process.
+
 # For JE online mode, set:
 # [bootstrap]
 # online_mode = true

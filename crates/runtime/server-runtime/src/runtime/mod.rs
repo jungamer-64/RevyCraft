@@ -6,6 +6,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 
+use self::admin::RemoteAdminPrincipal;
 use crate::RuntimeError;
 use crate::config::{ServerConfig, ServerConfigSource};
 use crate::transport::AcceptedTransportSession;
@@ -32,7 +33,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock as AsyncRwLock, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-pub use self::admin::AdminControlPlaneHandle;
+pub use self::admin::{AdminAuthError, AdminCommandError, AdminControlPlaneHandle, AdminSubject};
 pub use self::bootstrap::{ReloadableServerBuilder, ServerBuilder};
 pub use self::status::{
     OptionalNamedCountSnapshot, PhaseCountSnapshot, RuntimeStatusSnapshot, SessionStatusSnapshot,
@@ -235,6 +236,7 @@ pub(crate) struct LiveRuntimeState {
     pub(crate) auth_profile: Arc<dyn AuthProfileHandle>,
     pub(crate) bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,
     pub(crate) admin_ui: Option<Arc<dyn AdminUiProfileHandle>>,
+    pub(crate) remote_admin_subjects: HashMap<String, RemoteAdminPrincipal>,
 }
 
 pub(crate) struct RuntimeServer {

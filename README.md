@@ -53,7 +53,7 @@ config を明示したいときは次を使います。
 cargo run -p xtask -- package-plugins --config runtime/server.toml.example
 ```
 
-`server-bootstrap` は `runtime/server.toml` を読みます。設定ファイルが無い場合は default config で起動し、plugin は `runtime/plugins/<plugin-id>/plugin.toml` から解決します。runtime は `target/` の build artifact を直接読みません。`[admin].ui_profile` で有効な admin-ui profile が解決できた場合は、stdio 上に line-oriented operator loop を起動し、parse/render は plugin に委譲されます。
+`server-bootstrap` は `runtime/server.toml` を読みます。設定ファイルが無い場合は default config で起動し、plugin は `runtime/plugins/<plugin-id>/plugin.toml` から解決します。runtime は `target/` の build artifact を直接読みません。`[admin].ui_profile` で有効な admin-ui profile が解決できた場合は、stdio 上に line-oriented operator loop を起動し、parse/render は plugin に委譲されます。`[admin.grpc].enabled = true` のときは同じ process に unary gRPC control plane も起動します。
 
 起動フローは固定です。
 
@@ -71,9 +71,11 @@ cargo run -p xtask -- package-plugins --config runtime/server.toml.example
 - `[topology].enabled_bedrock_adapters = ["be-26_3"]` で Bedrock baseline listener を有効化できます。
 - `[profiles].default_gameplay` と `[profiles.gameplay_map]` で adapter ごとの gameplay profile を固定できます。
 - `[admin].ui_profile` で active admin UI profile、`[admin].local_console_permissions` で stdio operator の権限を指定できます。
+- `[admin.grpc]` で unary gRPC control plane を opt-in できます。既定では loopback bind のみ許可され、non-loopback bind には `allow_non_loopback = true` が必要です。`enabled` / `bind_addr` / `allow_non_loopback` は restart-required で、`principals.<id>.token_file` と `permissions` は `reload_config()` で live 更新されます。
 - `[plugins].reload_watch = true` と `[topology].reload_watch = true` は reload host を渡した `ReloadableRunningServer` でだけ使えます。
 - 手動 reload は `ReloadableRunningServer::reload_plugins().await` / `ReloadableRunningServer::reload_topology().await` / `ReloadableRunningServer::reload_config().await` が使えます。
-- operator command は `RunningServer::admin_control_plane()` が実行し、`status` / `sessions` / `reload config` / `reload plugins` / `reload topology` / `shutdown` を request 単位で permission check します。
+- operator command は `RunningServer::admin_control_plane()` が実行し、stdio と gRPC の両方で `status` / `sessions` / `reload config` / `reload plugins` / `reload topology` / `shutdown` を request 単位で permission check します。
+- built-in gRPC transport は plaintext h2 のみです。public bind は `allow_non_loopback = true` で明示 opt-in が必要で、TLS と public edge policy は reverse proxy / ingress 側で終端してください。
 - `RunningServer::status().await` は active/draining topology、listener、session summary、plugin health を返します。
 
 sample config は offline-first です。JE online auth や Bedrock XBL を使うときは `package-all-plugins` 実行後に allowlist と profile を明示してください。

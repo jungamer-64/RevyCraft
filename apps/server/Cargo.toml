@@ -11,8 +11,16 @@ description = "Standalone server bootstrap that wires the plugin host for RevyCr
 
 [dependencies]
 mc-plugin-host = { path = "../../crates/plugin/mc-plugin-host" }
+mc-proto-common = { path = "../../crates/protocol/mc-proto-common" }
+revy-admin-grpc = { path = "../../crates/runtime/revy-admin-grpc" }
 server-runtime = { path = "../../crates/runtime/server-runtime" }
 tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+
+[dev-dependencies]
+mc-plugin-test-support = { path = "../../crates/testing/mc-plugin-test-support" }
+tempfile.workspace = true
 
 [lints]
 workspace = true

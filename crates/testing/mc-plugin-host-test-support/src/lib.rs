@@ -260,6 +260,7 @@ mod tests {
     use mc_plugin_proto_je_1_7_10::in_process_plugin_entrypoints as je_1_7_10_entrypoints;
     use mc_plugin_test_support::PackagedPluginHarness;
     use mc_proto_je_1_7_10::JE_1_7_10_ADAPTER_ID;
+    use std::fs;
     use std::path::PathBuf;
 
     fn je_1_7_10_protocol_plugin() -> InProcessProtocolPlugin {
@@ -296,8 +297,13 @@ mod tests {
     #[test]
     fn discover_and_reload_wrappers_work_for_packaged_plugins() {
         let harness = PackagedPluginHarness::shared().expect("packaged harness should exist");
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let dist_dir = temp_dir.path().join("runtime").join("plugins");
+        harness
+            .seed_subset(&dist_dir, &[JE_1_7_10_ADAPTER_ID])
+            .expect("packaged subset should be seeded");
         let config = ServerConfig {
-            plugins_dir: harness.dist_dir().to_path_buf(),
+            plugins_dir: dist_dir,
             plugin_allowlist: Some(vec![JE_1_7_10_ADAPTER_ID.to_string()]),
             ..ServerConfig::default()
         };
@@ -328,6 +334,34 @@ mod tests {
             host.reload_modified_with_context(&runtime)
                 .expect("context reload with no modified artifacts should succeed"),
             Vec::<String>::new()
+        );
+    }
+
+    fn tempdir() -> std::io::Result<tempfile::TempDir> {
+        let base_dir = workspace_test_temp_root().join("mc-plugin-host-test-support");
+        fs::create_dir_all(&base_dir)?;
+        tempfile::Builder::new()
+            .prefix("mc-plugin-host-test-support-")
+            .tempdir_in(base_dir)
+    }
+
+    fn workspace_test_temp_root() -> PathBuf {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        for ancestor in manifest_dir.ancestors() {
+            let manifest = ancestor.join("Cargo.toml");
+            if !manifest.is_file() {
+                continue;
+            }
+            let Ok(contents) = fs::read_to_string(&manifest) else {
+                continue;
+            };
+            if contents.contains("[workspace]") {
+                return ancestor.join("target").join("test-tmp");
+            }
+        }
+        panic!(
+            "mc-plugin-host-test-support tests should run under the workspace root: {}",
+            manifest_dir.display()
         );
     }
 }

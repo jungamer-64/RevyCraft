@@ -4,6 +4,7 @@ use super::profiles::{RuntimeProfiles, resolve_runtime_profiles};
 use super::protocols::{ActiveProtocols, activate_protocols};
 use crate::RuntimeError;
 use crate::config::ServerConfigSource;
+use crate::runtime::admin::remote_admin_subjects_from_config;
 use crate::runtime::{
     LiveRuntimeState, RuntimeServer, RuntimeState, RuntimeTopologyGeneration, RuntimeTopologyState,
     TopologyGenerationId,
@@ -87,6 +88,7 @@ async fn build_server(
     reload_host: Option<Arc<dyn RuntimePluginHost>>,
 ) -> Result<crate::runtime::RunningServer, RuntimeError> {
     let config = config_source.load()?;
+    config.validate()?;
     if reload_host.is_none() {
         if config.plugins.reload_watch {
             return Err(RuntimeError::Config(
@@ -139,6 +141,7 @@ async fn build_server(
             loaded_plugins,
             auth_profile,
             bedrock_auth_profile,
+            remote_admin_subjects: remote_admin_subjects_from_config(&topology_generation.config),
         }),
         reload_host,
         consistency_gate: tokio::sync::RwLock::new(()),

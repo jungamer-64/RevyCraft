@@ -184,6 +184,7 @@ fn server_toml_parse_auth_profile() -> Result<(), RuntimeError> {
 #[test]
 fn server_toml_parse_admin_section_and_failure_policy() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
+    fs::write(temp_dir.path().join("ops.token"), "token-ops\n")?;
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
@@ -194,6 +195,14 @@ admin_ui = "quarantine"
 [admin]
 ui_profile = "console-v2"
 local_console_permissions = ["status", "reload_config", "status"]
+
+[admin.grpc]
+enabled = true
+bind_addr = "127.0.0.1:50052"
+
+[admin.grpc.principals.ops]
+token_file = "ops.token"
+permissions = ["status", "reload_plugins", "status"]
 "#,
     )?;
 
@@ -211,7 +220,234 @@ local_console_permissions = ["status", "reload_config", "status"]
             crate::runtime::AdminPermission::ReloadConfig,
         ]
     );
+    assert!(parsed.admin.grpc.enabled);
+    assert_eq!(
+        parsed.admin.grpc.bind_addr,
+        "127.0.0.1:50052".parse().expect("socket addr should parse")
+    );
+    assert!(!parsed.admin.grpc.allow_non_loopback);
+    assert_eq!(
+        parsed
+            .admin
+            .grpc
+            .principals
+            .get("ops")
+            .expect("ops principal should exist")
+            .token,
+        "token-ops"
+    );
+    assert_eq!(
+        parsed
+            .admin
+            .grpc
+            .principals
+            .get("ops")
+            .expect("ops principal should exist")
+            .permissions,
+        vec![
+            crate::runtime::AdminPermission::Status,
+            crate::runtime::AdminPermission::ReloadPlugins,
+        ]
+    );
     Ok(())
+}
+
+#[test]
+fn server_toml_reject_duplicate_admin_grpc_tokens() {
+    let temp_dir = tempdir().expect("tempdir should be available");
+    fs::write(temp_dir.path().join("ops-a.token"), "shared-token\n")
+        .expect("ops-a token should write");
+    fs::write(temp_dir.path().join("ops-b.token"), "shared-token\n")
+        .expect("ops-b token should write");
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[admin.grpc]
+enabled = true
+
+[admin.grpc.principals.ops_a]
+token_file = "ops-a.token"
+permissions = ["status"]
+
+[admin.grpc.principals.ops_b]
+token_file = "ops-b.token"
+permissions = ["status"]
+"#,
+    )
+    .expect("server.toml should write");
+
+    let error = ServerConfig::from_toml(&path)
+        .expect_err("duplicate remote admin tokens should be rejected");
+    assert!(matches!(
+        error,
+        RuntimeError::Config(message) if message.contains("resolved to the same token")
+    ));
+}
+
+#[test]
+fn inline_server_config_source_rejects_duplicate_admin_grpc_tokens() {
+    let mut config = ServerConfig::default();
+    config.admin.grpc.enabled = true;
+    config.admin.grpc.principals.insert(
+        "ops_a".to_string(),
+        crate::config::AdminGrpcPrincipalConfig {
+            token_file: PathBuf::from("runtime/admin/ops-a.token"),
+            token: "shared-token".to_string(),
+            permissions: vec![crate::runtime::AdminPermission::Status],
+        },
+    );
+    config.admin.grpc.principals.insert(
+        "ops_b".to_string(),
+        crate::config::AdminGrpcPrincipalConfig {
+            token_file: PathBuf::from("runtime/admin/ops-b.token"),
+            token: "shared-token".to_string(),
+            permissions: vec![crate::runtime::AdminPermission::Sessions],
+        },
+    );
+
+    let error = ServerConfigSource::Inline(config)
+        .load()
+        .expect_err("duplicate remote admin tokens should be rejected for inline configs");
+    assert!(matches!(
+        error,
+        RuntimeError::Config(message) if message.contains("resolved to the same token")
+    ));
+}
+
+#[test]
+fn server_toml_reject_enabled_admin_grpc_without_principals() {
+    let temp_dir = tempdir().expect("tempdir should be available");
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[admin.grpc]
+enabled = true
+"#,
+    )
+    .expect("server.toml should write");
+
+    let error = ServerConfig::from_toml(&path)
+        .expect_err("enabled admin gRPC without principals should fail");
+    assert!(matches!(
+        error,
+        RuntimeError::Config(message) if message.contains("requires at least one admin.grpc.principals entry")
+    ));
+}
+
+#[test]
+fn server_toml_reject_empty_admin_grpc_permissions() {
+    let temp_dir = tempdir().expect("tempdir should be available");
+    fs::write(temp_dir.path().join("ops.token"), "ops-token\n").expect("ops token should write");
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[admin.grpc]
+
+[admin.grpc.principals.ops]
+token_file = "ops.token"
+permissions = []
+"#,
+    )
+    .expect("server.toml should write");
+
+    let error =
+        ServerConfig::from_toml(&path).expect_err("empty remote admin permissions should fail");
+    assert!(matches!(
+        error,
+        RuntimeError::Config(message) if message.contains("admin.grpc.principals.ops.permissions must not be empty")
+    ));
+}
+
+#[test]
+fn server_toml_reject_non_loopback_admin_grpc_bind_without_opt_in() {
+    let temp_dir = tempdir().expect("tempdir should be available");
+    fs::write(temp_dir.path().join("ops.token"), "ops-token\n").expect("ops token should write");
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[admin.grpc]
+enabled = true
+bind_addr = "0.0.0.0:50051"
+
+[admin.grpc.principals.ops]
+token_file = "ops.token"
+permissions = ["status"]
+"#,
+    )
+    .expect("server.toml should write");
+
+    let error = ServerConfig::from_toml(&path)
+        .expect_err("non-loopback admin gRPC bind should require explicit opt-in");
+    assert!(matches!(
+        error,
+        RuntimeError::Config(message)
+            if message.contains("admin.grpc.allow_non_loopback=true")
+    ));
+}
+
+#[test]
+fn server_toml_accepts_non_loopback_admin_grpc_bind_with_opt_in() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    fs::write(temp_dir.path().join("ops.token"), "ops-token\n")?;
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[admin.grpc]
+enabled = true
+bind_addr = "0.0.0.0:50051"
+allow_non_loopback = true
+
+[admin.grpc.principals.ops]
+token_file = "ops.token"
+permissions = ["status"]
+"#,
+    )?;
+
+    let parsed = ServerConfig::from_toml(&path)?;
+    assert_eq!(
+        parsed.admin.grpc.bind_addr,
+        "0.0.0.0:50051".parse().expect("socket addr should parse")
+    );
+    assert!(parsed.admin.grpc.allow_non_loopback);
+    Ok(())
+}
+
+#[test]
+fn admin_grpc_debug_redacts_tokens() {
+    let principal = crate::config::AdminGrpcPrincipalConfig {
+        token_file: PathBuf::from("runtime/admin/ops.token"),
+        token: "super-secret-token".to_string(),
+        permissions: vec![crate::runtime::AdminPermission::Status],
+    };
+
+    let principal_debug = format!("{principal:?}");
+    assert!(principal_debug.contains("***redacted***"));
+    assert!(!principal_debug.contains("super-secret-token"));
+
+    let mut config = ServerConfig::default();
+    config
+        .admin
+        .grpc
+        .principals
+        .insert("ops".to_string(), principal);
+    let config_debug = format!("{config:?}");
+    assert!(config_debug.contains("***redacted***"));
+    assert!(!config_debug.contains("super-secret-token"));
+}
+
+#[test]
+fn admin_subject_debug_redacts_remote_credentials() {
+    let subject = crate::runtime::AdminSubject::remote("super-secret-token", "ops");
+    let subject_debug = format!("{subject:?}");
+
+    assert!(subject_debug.contains("***redacted***"));
+    assert!(subject_debug.contains("ops"));
+    assert!(!subject_debug.contains("super-secret-token"));
 }
 
 #[test]

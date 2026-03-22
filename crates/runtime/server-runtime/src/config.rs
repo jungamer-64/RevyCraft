@@ -8,6 +8,7 @@ use mc_plugin_host::config::{
 use mc_plugin_host::host::{PluginAbiRange, PluginFailureMatrix};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,8 @@ use std::path::{Path, PathBuf};
 pub(crate) const BEDROCK_BASELINE_ADAPTER_ID: &str = "be-26_3";
 pub(crate) const BEDROCK_OFFLINE_AUTH_PROFILE_ID: &str = "bedrock-offline-v1";
 pub(crate) const DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS: u64 = 30;
+pub(crate) const DEFAULT_ADMIN_GRPC_BIND_ADDR: SocketAddr =
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 50_051);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerConfigSource {
@@ -29,7 +32,11 @@ impl ServerConfigSource {
     /// concrete [`ServerConfig`].
     pub fn load(&self) -> Result<ServerConfig, RuntimeError> {
         match self {
-            Self::Inline(config) => Ok(config.clone()),
+            Self::Inline(config) => {
+                let config = config.clone();
+                config.validate()?;
+                Ok(config)
+            }
             Self::Toml(path) => ServerConfig::from_toml(path),
         }
     }
@@ -169,6 +176,7 @@ impl Default for ProfilesConfig {
 pub struct AdminConfig {
     pub ui_profile: String,
     pub local_console_permissions: Vec<AdminPermission>,
+    pub grpc: AdminGrpcConfig,
 }
 
 impl Default for AdminConfig {
@@ -176,7 +184,44 @@ impl Default for AdminConfig {
         Self {
             ui_profile: "console-v1".to_string(),
             local_console_permissions: all_admin_permissions().to_vec(),
+            grpc: AdminGrpcConfig::default(),
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdminGrpcConfig {
+    pub enabled: bool,
+    pub bind_addr: SocketAddr,
+    pub allow_non_loopback: bool,
+    pub principals: HashMap<String, AdminGrpcPrincipalConfig>,
+}
+
+impl Default for AdminGrpcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind_addr: DEFAULT_ADMIN_GRPC_BIND_ADDR,
+            allow_non_loopback: false,
+            principals: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct AdminGrpcPrincipalConfig {
+    pub token_file: PathBuf,
+    pub token: String,
+    pub permissions: Vec<AdminPermission>,
+}
+
+impl Debug for AdminGrpcPrincipalConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdminGrpcPrincipalConfig")
+            .field("token_file", &self.token_file)
+            .field("token", &"***redacted***")
+            .field("permissions", &self.permissions)
+            .finish()
     }
 }
 
@@ -219,7 +264,9 @@ impl ServerConfig {
     /// when it contains unsupported configuration values.
     pub fn from_toml(path: &Path) -> Result<Self, RuntimeError> {
         if !path.exists() {
-            return Ok(Self::default());
+            let config = Self::default();
+            config.validate()?;
+            return Ok(config);
         }
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         let document: ServerConfigDocument =
@@ -234,7 +281,7 @@ impl ServerConfig {
             .level_name
             .clone()
             .unwrap_or_else(|| "world".to_string());
-        Ok(Self {
+        let config = Self {
             bootstrap: BootstrapConfig {
                 online_mode: document.bootstrap.online_mode.unwrap_or(false),
                 level_name: level_name.clone(),
@@ -351,9 +398,15 @@ impl ServerConfig {
                     .unwrap_or_else(|| "console-v1".to_string()),
                 local_console_permissions: parse_admin_permissions(
                     document.admin.local_console_permissions,
+                    "admin.local_console_permissions",
+                    Some(all_admin_permissions().to_vec()),
+                    false,
                 )?,
+                grpc: parse_admin_grpc_config(parent, document.admin.grpc)?,
             },
-        })
+        };
+        config.validate()?;
+        Ok(config)
     }
 
     #[must_use]
@@ -364,6 +417,16 @@ impl ServerConfig {
                 .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
             self.network.server_port,
         )
+    }
+
+    #[must_use]
+    pub fn admin_grpc_enabled(&self) -> bool {
+        self.admin.grpc.enabled
+    }
+
+    #[must_use]
+    pub fn admin_grpc_bind_addr(&self) -> SocketAddr {
+        self.admin.grpc.bind_addr
     }
 
     pub(crate) fn effective_enabled_adapters(&self) -> Vec<String> {
@@ -439,6 +502,10 @@ impl ServerConfig {
             plugin_abi_min: self.bootstrap.plugin_abi_min,
             plugin_abi_max: self.bootstrap.plugin_abi_max,
         }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), RuntimeError> {
+        validate_admin_grpc_config(&self.admin.grpc)
     }
 }
 
@@ -522,6 +589,84 @@ struct ProfilesDocument {
 struct AdminDocument {
     ui_profile: Option<String>,
     local_console_permissions: Option<Vec<String>>,
+    grpc: AdminGrpcDocument,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AdminGrpcDocument {
+    enabled: Option<bool>,
+    bind_addr: Option<String>,
+    allow_non_loopback: Option<bool>,
+    principals: HashMap<String, AdminGrpcPrincipalDocument>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AdminGrpcPrincipalDocument {
+    token_file: Option<PathBuf>,
+    permissions: Option<Vec<String>>,
+}
+
+fn parse_admin_grpc_config(
+    parent: &Path,
+    document: AdminGrpcDocument,
+) -> Result<AdminGrpcConfig, RuntimeError> {
+    let mut principals = HashMap::new();
+    let mut seen_tokens = HashMap::new();
+    let mut principal_entries = document.principals.into_iter().collect::<Vec<_>>();
+    principal_entries.sort_by(|left, right| left.0.cmp(&right.0));
+    for (principal_id, principal) in principal_entries {
+        let token_file = principal.token_file.ok_or_else(|| {
+            RuntimeError::Config(format!(
+                "admin.grpc.principals.{principal_id}.token_file is required"
+            ))
+        })?;
+        let token_file = resolve_config_path(parent, Some(token_file.as_path()), Path::new(""));
+        let token = fs::read_to_string(&token_file)?.trim().to_string();
+        if token.is_empty() {
+            return Err(RuntimeError::Config(format!(
+                "admin.grpc.principals.{principal_id}.token_file resolved to an empty token"
+            )));
+        }
+        if let Some(previous_principal) = seen_tokens.insert(token.clone(), principal_id.clone()) {
+            return Err(RuntimeError::Config(format!(
+                "admin.grpc principals `{previous_principal}` and `{principal_id}` resolved to the same token"
+            )));
+        }
+        let permissions = parse_admin_permissions(
+            principal.permissions,
+            &format!("admin.grpc.principals.{principal_id}.permissions"),
+            None,
+            true,
+        )?;
+        principals.insert(
+            principal_id,
+            AdminGrpcPrincipalConfig {
+                token_file,
+                token,
+                permissions,
+            },
+        );
+    }
+    let enabled = document.enabled.unwrap_or(false);
+    if enabled && principals.is_empty() {
+        return Err(RuntimeError::Config(
+            "admin.grpc.enabled=true requires at least one admin.grpc.principals entry".to_string(),
+        ));
+    }
+    let config = AdminGrpcConfig {
+        enabled,
+        bind_addr: parse_socket_addr(
+            document.bind_addr.as_deref(),
+            "admin.grpc.bind_addr",
+            DEFAULT_ADMIN_GRPC_BIND_ADDR,
+        )?,
+        allow_non_loopback: document.allow_non_loopback.unwrap_or(false),
+        principals,
+    };
+    validate_admin_grpc_config(&config)?;
+    Ok(config)
 }
 
 fn normalize_optional_vec(values: Option<Vec<String>>) -> Option<Vec<String>> {
@@ -546,6 +691,9 @@ fn resolve_config_path(parent: &Path, explicit: Option<&Path>, default_relative:
     let path = explicit
         .map(PathBuf::from)
         .unwrap_or_else(|| default_relative.to_path_buf());
+    if path.as_os_str().is_empty() {
+        return parent.to_path_buf();
+    }
     if path.is_relative() {
         parent.join(path)
     } else {
@@ -561,6 +709,60 @@ fn parse_server_ip(value: Option<&str>) -> Result<Option<IpAddr>, RuntimeError> 
             .map(Some)
             .map_err(|_| RuntimeError::Config("invalid network.server_ip".to_string())),
     }
+}
+
+fn parse_socket_addr(
+    value: Option<&str>,
+    key: &str,
+    default: SocketAddr,
+) -> Result<SocketAddr, RuntimeError> {
+    match value {
+        Some(value) => value
+            .parse()
+            .map_err(|_| RuntimeError::Config(format!("invalid {key} `{value}`"))),
+        None => Ok(default),
+    }
+}
+
+fn validate_admin_grpc_config(config: &AdminGrpcConfig) -> Result<(), RuntimeError> {
+    if config.enabled && config.principals.is_empty() {
+        return Err(RuntimeError::Config(
+            "admin.grpc.enabled=true requires at least one admin.grpc.principals entry".to_string(),
+        ));
+    }
+    let mut seen_tokens = HashMap::new();
+    let mut principal_entries = config.principals.iter().collect::<Vec<_>>();
+    principal_entries.sort_by(|left, right| left.0.cmp(right.0));
+    for (principal_id, principal) in principal_entries {
+        if principal.token.trim().is_empty() {
+            return Err(RuntimeError::Config(format!(
+                "admin.grpc.principals.{principal_id}.token_file resolved to an empty token"
+            )));
+        }
+        if principal.permissions.is_empty() {
+            return Err(RuntimeError::Config(format!(
+                "admin.grpc.principals.{principal_id}.permissions must not be empty"
+            )));
+        }
+        let normalized_token = principal.token.trim().to_string();
+        if let Some(previous_principal) = seen_tokens.insert(normalized_token, principal_id.clone())
+        {
+            return Err(RuntimeError::Config(format!(
+                "admin.grpc principals `{previous_principal}` and `{principal_id}` resolved to the same token"
+            )));
+        }
+    }
+    validate_admin_grpc_transport(config)
+}
+
+fn validate_admin_grpc_transport(config: &AdminGrpcConfig) -> Result<(), RuntimeError> {
+    if config.enabled && !config.allow_non_loopback && !config.bind_addr.ip().is_loopback() {
+        return Err(RuntimeError::Config(format!(
+            "admin.grpc.bind_addr `{}` is non-loopback; set admin.grpc.allow_non_loopback=true to expose the built-in plaintext gRPC server",
+            config.bind_addr
+        )));
+    }
+    Ok(())
 }
 
 fn parse_failure_policy<F, E>(
@@ -591,9 +793,19 @@ const fn all_admin_permissions() -> [AdminPermission; 6] {
 
 fn parse_admin_permissions(
     values: Option<Vec<String>>,
+    key: &str,
+    default: Option<Vec<AdminPermission>>,
+    require_nonempty: bool,
 ) -> Result<Vec<AdminPermission>, RuntimeError> {
-    let Some(values) = values else {
-        return Ok(all_admin_permissions().to_vec());
+    let values = match values {
+        Some(values) => values,
+        None => {
+            let permissions = default.unwrap_or_default();
+            if require_nonempty && permissions.is_empty() {
+                return Err(RuntimeError::Config(format!("{key} must not be empty")));
+            }
+            return Ok(permissions);
+        }
     };
     let mut permissions = Vec::new();
     for value in values {
@@ -606,13 +818,16 @@ fn parse_admin_permissions(
             "shutdown" => AdminPermission::Shutdown,
             _ => {
                 return Err(RuntimeError::Config(format!(
-                    "unsupported admin.local_console_permissions entry `{value}`"
+                    "unsupported {key} entry `{value}`"
                 )));
             }
         };
         if !permissions.contains(&permission) {
             permissions.push(permission);
         }
+    }
+    if require_nonempty && permissions.is_empty() {
+        return Err(RuntimeError::Config(format!("{key} must not be empty")));
     }
     Ok(permissions)
 }

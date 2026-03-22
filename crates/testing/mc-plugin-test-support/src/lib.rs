@@ -55,9 +55,8 @@ impl PackagedPluginHarness {
             .get_or_init(|| {
                 PACKAGED_PLUGIN_TEST_HARNESS_BUILDS
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let root_dir = packaged_plugin_test_workspace_root()
-                    .join("target")
-                    .join("server-runtime-plugin-test-harness");
+                let process_root = packaged_plugin_test_process_root();
+                let root_dir = process_root.join("server-runtime-plugin-test-harness");
                 let dist_dir = root_dir.join("runtime").join("plugins");
                 let stamp_path = root_dir.join("stamp.txt");
                 let stamp = packaged_plugin_test_harness_stamp()?;
@@ -66,14 +65,12 @@ impl PackagedPluginHarness {
                     && fs::read_to_string(&stamp_path)
                         .map(|current| current == stamp)
                         .unwrap_or(false)
+                    && packaged_plugin_harness_is_consistent(&dist_dir)?
                 {
                     return Ok(PackagedPluginHarness {
                         dist_dir,
-                        artifact_cache_dir: packaged_plugin_test_workspace_root()
-                            .join("target")
-                            .join("server-runtime-plugin-artifacts"),
-                        cargo_target_dir: packaged_plugin_test_workspace_root()
-                            .join("target")
+                        artifact_cache_dir: process_root.join("server-runtime-plugin-artifacts"),
+                        cargo_target_dir: process_root
                             .join("server-runtime-packaged-plugin-builds")
                             .join("cargo-target"),
                     });
@@ -83,11 +80,8 @@ impl PackagedPluginHarness {
                 }
                 let harness = PackagedPluginHarness {
                     dist_dir,
-                    artifact_cache_dir: packaged_plugin_test_workspace_root()
-                        .join("target")
-                        .join("server-runtime-plugin-artifacts"),
-                    cargo_target_dir: packaged_plugin_test_workspace_root()
-                        .join("target")
+                    artifact_cache_dir: process_root.join("server-runtime-plugin-artifacts"),
+                    cargo_target_dir: process_root
                         .join("server-runtime-packaged-plugin-builds")
                         .join("cargo-target"),
                 };
@@ -97,6 +91,10 @@ impl PackagedPluginHarness {
                     &harness.cargo_target_dir,
                     PACKAGED_PLUGIN_TEST_HARNESS_TAG,
                 )?;
+                if harness.cargo_target_dir.exists() {
+                    fs::remove_dir_all(&harness.cargo_target_dir)
+                        .map_err(|error| error.to_string())?;
+                }
                 fs::write(&stamp_path, stamp).map_err(|error| error.to_string())?;
                 Ok(harness)
             })
@@ -113,8 +111,9 @@ impl PackagedPluginHarness {
     }
 
     #[must_use]
-    pub fn scoped_target_dir(&self, _scope: &str) -> PathBuf {
-        self.cargo_target_dir.clone()
+    pub fn scoped_target_dir(&self, scope: &str) -> PathBuf {
+        self.cargo_target_dir
+            .join(sanitize_packaged_plugin_test_scope(scope))
     }
 
     #[cfg(test)]
@@ -358,6 +357,9 @@ impl PackagedPluginHarness {
 
         let source = target_dir.join("debug").join(&artifact_name);
         link_or_copy_file(&source, &cached_artifact)?;
+        if target_dir.exists() {
+            fs::remove_dir_all(target_dir)?;
+        }
         PACKAGED_PLUGIN_TEST_VARIANT_BUILDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(cached_artifact)
     }
@@ -395,6 +397,23 @@ fn packaged_plugin_test_workspace_root() -> PathBuf {
         "mc-plugin-test-support crate should live under the workspace root: {}",
         manifest_dir.display()
     );
+}
+
+fn packaged_plugin_test_process_root() -> PathBuf {
+    packaged_plugin_test_workspace_root()
+        .join("target")
+        .join("server-runtime-test-processes")
+        .join(format!("pid-{}", std::process::id()))
+}
+
+fn sanitize_packaged_plugin_test_scope(scope: &str) -> String {
+    scope
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => ch,
+            _ => '_',
+        })
+        .collect()
 }
 
 fn packaged_plugin_test_run_xtask_package_all_plugins(
@@ -515,6 +534,14 @@ fn copy_packaged_plugin_tree(source: &Path, destination: &Path) -> std::io::Resu
         if destination_path.exists() {
             fs::remove_file(&destination_path)?;
         }
+        if source_path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|name| name == "plugin.toml")
+        {
+            fs::copy(&source_path, &destination_path)?;
+            continue;
+        }
         if fs::hard_link(&source_path, &destination_path).is_err() {
             fs::copy(&source_path, &destination_path)?;
         }
@@ -552,6 +579,71 @@ fn packaged_artifact_name(base_name: &str, build_tag: &str) -> String {
     }
 }
 
+fn packaged_plugin_harness_is_consistent(dist_dir: &Path) -> Result<bool, String> {
+    if !dist_dir.is_dir() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(dist_dir).map_err(|error| {
+        format!(
+            "failed to inspect packaged plugin harness directory {}: {error}",
+            dist_dir.display()
+        )
+    })? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if !entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_dir()
+        {
+            continue;
+        }
+        if !packaged_plugin_dir_is_consistent(&entry.path())? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn packaged_plugin_dir_is_consistent(plugin_dir: &Path) -> Result<bool, String> {
+    let manifest_path = plugin_dir.join("plugin.toml");
+    if !manifest_path.is_file() {
+        return Ok(false);
+    }
+    let manifest = fs::read_to_string(&manifest_path).map_err(|error| {
+        format!(
+            "failed to read packaged plugin manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    let mut in_artifacts = false;
+    let mut saw_artifact = false;
+    for raw_line in manifest.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            in_artifacts = line == "[artifacts]";
+            continue;
+        }
+        if !in_artifacts {
+            continue;
+        }
+        let Some((_, value)) = line.split_once('=') else {
+            continue;
+        };
+        let artifact = value.trim().trim_matches('"');
+        if artifact.is_empty() {
+            return Ok(false);
+        }
+        saw_artifact = true;
+        if !plugin_dir.join(artifact).is_file() {
+            return Ok(false);
+        }
+    }
+    Ok(saw_artifact)
+}
+
 fn plugin_manifest_contents(
     plugin_id: &str,
     plugin_kind: PackagedPluginKind,
@@ -569,10 +661,10 @@ fn plugin_manifest_contents(
 mod tests {
     use super::{
         PACKAGED_PLUGIN_TEST_HARNESS_BUILDS, PACKAGED_PLUGIN_TEST_VARIANT_BUILDS,
-        PackagedPluginHarness, dynamic_library_filename,
+        PackagedPluginHarness, copy_packaged_plugin_tree, dynamic_library_filename,
     };
     use std::fs;
-    use tempfile::tempdir;
+    use std::path::PathBuf;
 
     fn tests_lock() -> &'static std::sync::Mutex<()> {
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
@@ -661,5 +753,65 @@ mod tests {
         assert!(cached_artifact.is_file());
         assert_eq!(after_first, before + 1);
         assert_eq!(after_second, after_first);
+    }
+
+    #[test]
+    fn scoped_target_dir_separates_build_scopes() {
+        let harness = PackagedPluginHarness {
+            dist_dir: PathBuf::from("dist"),
+            artifact_cache_dir: PathBuf::from("cache"),
+            cargo_target_dir: PathBuf::from("target-root"),
+        };
+
+        assert_eq!(
+            harness.scoped_target_dir("variant-cache"),
+            PathBuf::from("target-root").join("variant-cache")
+        );
+        assert_eq!(
+            harness.scoped_target_dir("variant/cache"),
+            PathBuf::from("target-root").join("variant_cache")
+        );
+    }
+
+    #[test]
+    fn seed_copy_keeps_plugin_manifest_detached_from_source_tree() {
+        let source_root = tempdir().expect("source temp dir should be created");
+        let destination_root = tempdir().expect("destination temp dir should be created");
+        let source_plugin = source_root.path().join("je-1_7_10");
+        let destination_plugin = destination_root.path().join("je-1_7_10");
+        fs::create_dir_all(&source_plugin).expect("source plugin dir should be created");
+        fs::write(
+            source_plugin.join("plugin.toml"),
+            "[plugin]\nid = \"je-1_7_10\"\nkind = \"protocol\"\n\n[artifacts]\n\"linux-x86_64\" = \"libsource.so\"\n",
+        )
+        .expect("source manifest should be written");
+        fs::write(source_plugin.join("libsource.so"), "artifact")
+            .expect("source artifact should be written");
+
+        copy_packaged_plugin_tree(&source_plugin, &destination_plugin)
+            .expect("plugin tree should copy");
+        fs::write(
+            destination_plugin.join("plugin.toml"),
+            "[plugin]\nid = \"je-1_7_10\"\nkind = \"protocol\"\n\n[artifacts]\n\"linux-x86_64\" = \"libdestination.so\"\n",
+        )
+        .expect("destination manifest should be overwritten");
+
+        assert!(
+            fs::read_to_string(source_plugin.join("plugin.toml"))
+                .expect("source manifest should remain readable")
+                .contains("libsource.so"),
+            "source manifest should stay unchanged when the seeded copy is edited"
+        );
+    }
+
+    fn tempdir() -> std::io::Result<tempfile::TempDir> {
+        let base_dir = super::packaged_plugin_test_workspace_root()
+            .join("target")
+            .join("test-tmp")
+            .join("mc-plugin-test-support");
+        fs::create_dir_all(&base_dir)?;
+        tempfile::Builder::new()
+            .prefix("mc-plugin-test-support-")
+            .tempdir_in(base_dir)
     }
 }

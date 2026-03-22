@@ -1,4 +1,5 @@
 use crate::RuntimeError;
+use crate::runtime::admin::remote_admin_subjects_from_config;
 use crate::runtime::{ConfigReloadResult, LiveRuntimeState, RuntimeReloadContext, RuntimeServer};
 use mc_plugin_api::codec::auth::AuthMode;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
@@ -15,6 +16,14 @@ impl RuntimeServer {
         if candidate.bootstrap != self.config.bootstrap {
             return Err(RuntimeError::Config(
                 "bootstrap config changes require a restart".to_string(),
+            ));
+        }
+        if candidate.admin.grpc.enabled != self.config.admin.grpc.enabled
+            || candidate.admin.grpc.bind_addr != self.config.admin.grpc.bind_addr
+            || candidate.admin.grpc.allow_non_loopback != self.config.admin.grpc.allow_non_loopback
+        {
+            return Err(RuntimeError::Config(
+                "admin.grpc transport changes require a restart".to_string(),
             ));
         }
         Ok(())
@@ -85,6 +94,7 @@ impl RuntimeServer {
             None
         };
         let admin_ui = loaded_plugins.resolve_admin_ui_profile(&config.admin.ui_profile);
+        let remote_admin_subjects = remote_admin_subjects_from_config(&config);
 
         Ok(LiveRuntimeState {
             config,
@@ -92,6 +102,7 @@ impl RuntimeServer {
             auth_profile,
             bedrock_auth_profile,
             admin_ui,
+            remote_admin_subjects,
         })
     }
 

@@ -556,7 +556,6 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
-    use tempfile::tempdir;
 
     #[test]
     fn plugin_spec_maps_protocol_packages_to_adapter_ids() {
@@ -744,6 +743,34 @@ mod tests {
         assert!(
             dist_dir.join("third-party").exists(),
             "third-party plugin dirs should be preserved"
+        );
+    }
+
+    fn tempdir() -> std::io::Result<tempfile::TempDir> {
+        let base_dir = workspace_test_temp_root().join("xtask");
+        fs::create_dir_all(&base_dir)?;
+        tempfile::Builder::new()
+            .prefix("xtask-")
+            .tempdir_in(base_dir)
+    }
+
+    fn workspace_test_temp_root() -> PathBuf {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        for ancestor in manifest_dir.ancestors() {
+            let manifest = ancestor.join("Cargo.toml");
+            if !manifest.is_file() {
+                continue;
+            }
+            let Ok(contents) = fs::read_to_string(&manifest) else {
+                continue;
+            };
+            if contents.contains("[workspace]") {
+                return ancestor.join("target").join("test-tmp");
+            }
+        }
+        panic!(
+            "xtask tests should run under the workspace root: {}",
+            manifest_dir.display()
         );
     }
 }
