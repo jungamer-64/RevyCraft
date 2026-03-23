@@ -1,10 +1,13 @@
 use crate::{
-    PACKET_SB_CLIENT_COMMAND, PACKET_SB_CREATIVE_INVENTORY_ACTION, PACKET_SB_FLYING,
-    PACKET_SB_HELD_ITEM_CHANGE, PACKET_SB_KEEP_ALIVE, PACKET_SB_LOOK,
+    PACKET_SB_CLICK_WINDOW, PACKET_SB_CLIENT_COMMAND, PACKET_SB_CREATIVE_INVENTORY_ACTION,
+    PACKET_SB_FLYING, PACKET_SB_HELD_ITEM_CHANGE, PACKET_SB_KEEP_ALIVE, PACKET_SB_LOOK,
     PACKET_SB_PLAYER_BLOCK_PLACEMENT, PACKET_SB_PLAYER_DIGGING, PACKET_SB_POSITION,
     PACKET_SB_POSITION_LOOK, PACKET_SB_SETTINGS,
 };
-use mc_core::{BlockFace, CoreCommand, InteractionHand, PlayerId, Vec3};
+use mc_core::{
+    BlockFace, CoreCommand, InteractionHand, InventoryClickButton, InventoryClickTarget, PlayerId,
+    Vec3,
+};
 use mc_proto_common::{PacketReader, ProtocolError};
 use mc_proto_je_common::__version_support::{
     inventory::{legacy_inventory_slot, read_legacy_slot},
@@ -44,6 +47,7 @@ pub(crate) fn decode_play_packet(
             player_id,
             slot: reader.read_i16()?,
         })),
+        PACKET_SB_CLICK_WINDOW => Ok(Some(decode_click_window_packet(player_id, &mut reader)?)),
         PACKET_SB_CREATIVE_INVENTORY_ACTION => {
             let slot = reader.read_i16()?;
             let stack = read_legacy_slot(&mut reader)?;
@@ -159,4 +163,36 @@ const fn i8_to_u8(value: i8) -> u8 {
     } else {
         value.cast_unsigned()
     }
+}
+
+fn decode_click_window_packet(
+    player_id: PlayerId,
+    reader: &mut PacketReader<'_>,
+) -> Result<CoreCommand, ProtocolError> {
+    let window_id = reader.read_i8()?;
+    let raw_slot = reader.read_i16()?;
+    let raw_button = reader.read_i8()?;
+    let _action_number = reader.read_i16()?;
+    let mode = reader.read_i8()?;
+    let _clicked_item = read_legacy_slot(reader)?;
+
+    let button = match raw_button {
+        1 => InventoryClickButton::Right,
+        _ => InventoryClickButton::Left,
+    };
+    let target = if window_id != 0 || mode != 0 || !matches!(raw_button, 0 | 1) {
+        InventoryClickTarget::Unsupported
+    } else if raw_slot == -999 {
+        InventoryClickTarget::Outside
+    } else if let Some(slot) = legacy_inventory_slot(raw_slot) {
+        InventoryClickTarget::Slot(slot)
+    } else {
+        InventoryClickTarget::Unsupported
+    };
+
+    Ok(CoreCommand::InventoryClick {
+        player_id,
+        target,
+        button,
+    })
 }

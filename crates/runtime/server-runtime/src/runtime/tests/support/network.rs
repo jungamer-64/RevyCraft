@@ -94,6 +94,39 @@ pub(crate) async fn read_until_packet_id(
     )))
 }
 
+pub(crate) async fn read_until_set_slot(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    expected_packet_id: i32,
+    wanted_window_id: i8,
+    wanted_slot: i16,
+    max_attempts: usize,
+) -> Result<Vec<u8>, RuntimeError> {
+    let max_attempts = max_attempts.max(64);
+    for _ in 0..max_attempts {
+        let packet = tokio::time::timeout(
+            Duration::from_millis(250),
+            read_packet(stream, codec, buffer),
+        )
+        .await
+        .map_err(|_| {
+            RuntimeError::Config(format!(
+                "timed out waiting for set slot window {wanted_window_id} slot {wanted_slot}"
+            ))
+        })??;
+        if let Ok((window_id, slot, _)) = decode_set_slot(&packet, expected_packet_id)
+            && window_id == wanted_window_id
+            && slot == wanted_slot
+        {
+            return Ok(packet);
+        }
+    }
+    Err(RuntimeError::Config(format!(
+        "did not receive set slot window {wanted_window_id} slot {wanted_slot}"
+    )))
+}
+
 pub(crate) async fn assert_no_packet_id(
     stream: &mut tokio::net::TcpStream,
     codec: &MinecraftWireCodec,

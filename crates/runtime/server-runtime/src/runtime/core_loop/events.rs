@@ -24,6 +24,7 @@ impl RuntimeServer {
                 | CoreCommand::MoveIntent { .. }
                 | CoreCommand::SetHeldSlot { .. }
                 | CoreCommand::CreativeInventorySet { .. }
+                | CoreCommand::InventoryClick { .. }
                 | CoreCommand::DigBlock { .. }
                 | CoreCommand::PlaceBlock { .. }
                 | CoreCommand::Disconnect { .. }

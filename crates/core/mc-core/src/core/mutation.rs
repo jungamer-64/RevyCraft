@@ -123,17 +123,33 @@ impl ServerCore {
         let Some(player) = self.online_players.get_mut(&player_id) else {
             return Vec::new();
         };
+        let before_result = player.snapshot.inventory.crafting_result().cloned();
         let _ = player.snapshot.inventory.set_slot(slot, stack.clone());
+        if slot.is_crafting_result() || slot.crafting_input_index().is_some() {
+            Self::recompute_crafting_result_for_inventory(&mut player.snapshot.inventory);
+        }
+        let after_result = player.snapshot.inventory.crafting_result().cloned();
         self.saved_players
             .insert(player_id, player.snapshot.clone());
-        vec![TargetedEvent {
+        let mut events = vec![TargetedEvent {
             target: EventTarget::Player(player_id),
             event: CoreEvent::InventorySlotChanged {
                 container: InventoryContainer::Player,
                 slot,
                 stack,
             },
-        }]
+        }];
+        if before_result != after_result && !slot.is_crafting_result() {
+            events.push(TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::InventorySlotChanged {
+                    container: InventoryContainer::Player,
+                    slot: InventorySlot::crafting_result(),
+                    stack: after_result,
+                },
+            });
+        }
+        events
     }
 
     pub(super) fn apply_block_mutation(

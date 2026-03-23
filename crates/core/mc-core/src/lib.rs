@@ -14,7 +14,10 @@ use std::collections::BTreeSet;
 use uuid::Uuid;
 
 pub use self::core::{ClientView, CoreConfig, ServerCore};
-pub use self::events::{CoreCommand, CoreEvent, EventTarget, PlayerSummary, TargetedEvent};
+pub use self::events::{
+    CoreCommand, CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget, PlayerSummary,
+    TargetedEvent,
+};
 pub use self::gameplay::{
     CanonicalGameplayPolicy, GameplayEffect, GameplayJoinEffect, GameplayMutation,
     GameplayPolicyResolver, GameplayQuery, ReadonlyGameplayPolicy,

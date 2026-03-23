@@ -1,12 +1,13 @@
 use crate::{JE_1_7_10_ADAPTER_ID, Je1710Adapter, PROTOCOL_VERSION_1_7_10, VERSION_NAME_1_7_10};
 use mc_core::{
     BlockState, ChunkColumn, ChunkPos, ConnectionId, CoreCommand, CoreConfig, CoreEvent,
-    InventoryContainer, InventorySlot, PlayerId, PlayerInventory, PlayerSnapshot, ServerCore, Vec3,
+    InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot, ItemStack,
+    PlayerId, PlayerInventory, PlayerSnapshot, ServerCore, Vec3,
 };
 use mc_proto_common::{
-    Edition, HandshakeProbe, LoginRequest, PacketWriter, PlayEncodingContext, PlaySyncAdapter,
-    ProtocolAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter, StatusRequest,
-    TransportKind, WireFormatKind,
+    Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter, PlayEncodingContext,
+    PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter,
+    StatusRequest, TransportKind, WireFormatKind,
 };
 use mc_proto_je_common::__version_support::{blocks::legacy_block, chunks::get_nibble};
 use uuid::Uuid;
@@ -209,6 +210,49 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
             ..
         } if stack.key.as_str() == "minecraft:stone"
     ));
+}
+
+#[test]
+fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
+    let adapter = Je1710Adapter::new();
+    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"window-click-1710"));
+
+    let mut click = PacketWriter::default();
+    click.write_varint(0x0e);
+    click.write_i8(0);
+    click.write_i16(1);
+    click.write_i8(0);
+    click.write_i16(7);
+    click.write_i8(0);
+    click.write_i16(-1);
+    let command = adapter
+        .decode_play(player_id, &click.into_inner())
+        .expect("click window should decode")
+        .expect("click window should produce a command");
+    assert!(matches!(
+        command,
+        CoreCommand::InventoryClick {
+            target: InventoryClickTarget::Slot(InventorySlot::Auxiliary(1)),
+            button: InventoryClickButton::Left,
+            ..
+        }
+    ));
+
+    let packet = adapter
+        .encode_play_event(
+            &CoreEvent::CursorChanged {
+                stack: Some(ItemStack::new("minecraft:oak_log", 1, 0)),
+            },
+            &PlayEncodingContext {
+                player_id,
+                entity_id: mc_core::EntityId(1),
+            },
+        )
+        .expect("cursor update should encode");
+    let mut reader = PacketReader::new(&packet[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2f);
+    assert_eq!(reader.read_i8().expect("window id should decode"), -1);
+    assert_eq!(reader.read_i16().expect("slot should decode"), -1);
 }
 
 #[test]

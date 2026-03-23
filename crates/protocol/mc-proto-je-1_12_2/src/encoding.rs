@@ -155,13 +155,13 @@ pub fn encode_block_change(position: BlockPos, block: &mc_core::BlockState) -> V
 }
 
 pub fn encode_set_slot(
-    window_id: u8,
+    window_id: i8,
     slot: i16,
     stack: Option<&ItemStack>,
 ) -> Result<Vec<u8>, ProtocolError> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_SET_SLOT);
-    writer.write_i8(i8::from_be_bytes([window_id]));
+    writer.write_i8(window_id);
     writer.write_i16(slot);
     write_legacy_slot(&mut writer, stack)?;
     Ok(writer.into_inner())

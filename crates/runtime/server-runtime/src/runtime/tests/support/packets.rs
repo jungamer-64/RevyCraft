@@ -79,6 +79,18 @@ pub(crate) fn creative_inventory_action(
     writer.into_inner()
 }
 
+pub(crate) fn click_window(slot: i16, button: i8) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x0e);
+    writer.write_i8(0);
+    writer.write_i16(slot);
+    writer.write_i8(button);
+    writer.write_i16(1);
+    writer.write_i8(0);
+    writer.write_i16(-1);
+    writer.into_inner()
+}
+
 pub(crate) fn player_block_placement(
     x: i32,
     y: u8,
@@ -151,6 +163,18 @@ pub(crate) fn creative_inventory_action_1_12(
     writer.write_i16(item_id);
     writer.write_u8(count);
     writer.write_i16(damage);
+    writer.write_i16(-1);
+    writer.into_inner()
+}
+
+pub(crate) fn click_window_1_12(slot: i16, button: i8) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x07);
+    writer.write_i8(0);
+    writer.write_i16(slot);
+    writer.write_i8(button);
+    writer.write_i16(1);
+    writer.write_varint(0);
     writer.write_i16(-1);
     writer.into_inner()
 }
@@ -250,6 +274,20 @@ pub(crate) fn set_slot_slot(packet: &[u8], expected_packet_id: i32) -> Result<i1
     }
     let _window_id = reader.read_i8()?;
     reader.read_i16().map_err(RuntimeError::from)
+}
+
+pub(crate) fn decode_set_slot(
+    packet: &[u8],
+    expected_packet_id: i32,
+) -> Result<(i8, i16, Option<(i16, u8, i16)>), RuntimeError> {
+    let mut reader = PacketReader::new(packet);
+    if reader.read_varint()? != expected_packet_id {
+        return Err(RuntimeError::Config("expected set slot packet".to_string()));
+    }
+    let window_id = reader.read_i8()?;
+    let slot = reader.read_i16()?;
+    let stack = read_slot(&mut reader)?;
+    Ok((window_id, slot, stack))
 }
 
 pub(crate) fn held_item_from_packet(packet: &[u8]) -> Result<i8, RuntimeError> {

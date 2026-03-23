@@ -197,3 +197,48 @@ async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(
 
     server.shutdown().await
 }
+
+#[tokio::test]
+async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.game_mode = 1;
+    config.topology.enabled_adapters = Some(vec![
+        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_1_12_2_ADAPTER_ID.to_string(),
+    ]);
+    let server = build_test_server(config, plugin_test_registries_all()?).await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut legacy, mut legacy_buffer) =
+        connect_and_login_java_client(addr, &codec, 5, "legacy-craft", 0x30, 12).await?;
+    let (mut modern, mut modern_buffer) =
+        connect_and_login_java_client(addr, &codec, 340, "modern-craft", 0x14, 24).await?;
+    let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+
+    write_packet(
+        &mut modern,
+        &codec,
+        &creative_inventory_action_1_12(36, 17, 1, 0),
+    )
+    .await?;
+    let _ = read_until_set_slot(&mut modern, &codec, &mut modern_buffer, 0x16, 0, 36, 16).await?;
+    write_packet(&mut modern, &codec, &click_window_1_12(36, 0)).await?;
+    let _ = read_until_set_slot(&mut modern, &codec, &mut modern_buffer, 0x16, 0, 36, 16).await?;
+    let _ = read_until_set_slot(&mut modern, &codec, &mut modern_buffer, 0x16, -1, -1, 16).await?;
+    write_packet(&mut modern, &codec, &click_window_1_12(1, 0)).await?;
+    let result_preview =
+        read_until_set_slot(&mut modern, &codec, &mut modern_buffer, 0x16, 0, 0, 16).await?;
+    assert_eq!(
+        decode_set_slot(&result_preview, 0x16)?,
+        (0, 0, Some((5, 4, 0)))
+    );
+
+    write_packet(&mut legacy, &codec, &held_item_change(4)).await?;
+    let held_item = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x09, 8).await?;
+    assert_eq!(held_item_from_packet(&held_item)?, 4);
+
+    server.shutdown().await
+}

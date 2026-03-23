@@ -45,6 +45,7 @@ pub trait JavaEditionProfile: Default + Send + Sync {
         slot: InventorySlot,
         stack: Option<&ItemStack>,
     ) -> Result<Option<Vec<u8>>, ProtocolError>;
+    fn encode_cursor_changed(&self, stack: Option<&ItemStack>) -> Result<Vec<u8>, ProtocolError>;
     fn encode_selected_hotbar_slot_changed(&self, slot: u8) -> Result<Vec<u8>, ProtocolError>;
     fn encode_block_changed(
         &self,
@@ -221,6 +222,9 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
                 .encode_inventory_slot_changed(*container, *slot, stack.as_ref())?
                 .into_iter()
                 .collect()),
+            CoreEvent::CursorChanged { stack } => {
+                Ok(vec![self.profile.encode_cursor_changed(stack.as_ref())?])
+            }
             CoreEvent::SelectedHotbarSlotChanged { slot } => Ok(vec![
                 self.profile.encode_selected_hotbar_slot_changed(*slot)?,
             ]),

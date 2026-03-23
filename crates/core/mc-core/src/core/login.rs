@@ -34,8 +34,10 @@ impl ServerCore {
             .cloned()
             .unwrap_or_else(|| default_player(player_id, username.clone(), self.config.spawn));
         player.username = username;
+        Self::recompute_crafting_result_for_inventory(&mut player.inventory);
         let join_effect = resolver.handle_player_join(self, session, &player)?;
         let join_events = Self::apply_gameplay_join_effect(&mut player, join_effect);
+        Self::recompute_crafting_result_for_inventory(&mut player.inventory);
 
         let entity_id = EntityId(self.next_entity_id);
         self.next_entity_id = self.next_entity_id.saturating_add(1);
@@ -55,6 +57,7 @@ impl ServerCore {
             OnlinePlayer {
                 entity_id,
                 snapshot: player.clone(),
+                cursor: None,
                 view,
                 pending_keep_alive_id: None,
                 last_keep_alive_sent_at: None,

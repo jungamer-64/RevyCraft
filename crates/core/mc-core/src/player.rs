@@ -47,6 +47,11 @@ impl ItemStack {
     pub fn is_supported_placeable(&self) -> bool {
         catalog::is_supported_placeable_item(self.key.as_str())
     }
+
+    #[must_use]
+    pub fn is_supported_inventory_item(&self) -> bool {
+        catalog::is_supported_inventory_item(self.key.as_str())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +143,24 @@ impl PlayerInventory {
             InteractionHand::Offhand => self.offhand.as_ref(),
         }
     }
+
+    #[must_use]
+    pub fn crafting_result(&self) -> Option<&ItemStack> {
+        self.get_slot(InventorySlot::crafting_result())
+    }
+
+    pub fn set_crafting_result(&mut self, stack: Option<ItemStack>) -> bool {
+        self.set_slot(InventorySlot::crafting_result(), stack)
+    }
+
+    #[must_use]
+    pub fn crafting_input(&self, index: u8) -> Option<&ItemStack> {
+        InventorySlot::crafting_input(index).and_then(|slot| self.get_slot(slot))
+    }
+
+    pub fn set_crafting_input(&mut self, index: u8, stack: Option<ItemStack>) -> bool {
+        InventorySlot::crafting_input(index).is_some_and(|slot| self.set_slot(slot, stack))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +177,20 @@ pub enum InventorySlot {
 }
 
 impl InventorySlot {
+    #[must_use]
+    pub const fn crafting_result() -> Self {
+        Self::Auxiliary(0)
+    }
+
+    #[must_use]
+    pub const fn crafting_input(index: u8) -> Option<Self> {
+        if index < 4 {
+            Some(Self::Auxiliary(index + 1))
+        } else {
+            None
+        }
+    }
+
     #[must_use]
     pub const fn legacy_window_index(self) -> Option<u8> {
         match self {
@@ -185,6 +222,24 @@ impl InventorySlot {
             self,
             Self::MainInventory(_) | Self::Hotbar(_) | Self::Offhand
         )
+    }
+
+    #[must_use]
+    pub const fn is_crafting_result(self) -> bool {
+        matches!(self, Self::Auxiliary(0))
+    }
+
+    #[must_use]
+    pub const fn crafting_input_index(self) -> Option<u8> {
+        match self {
+            Self::Auxiliary(index) if index >= 1 && index <= 4 => Some(index - 1),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_reserved_auxiliary(self) -> bool {
+        matches!(self, Self::Auxiliary(5..=8))
     }
 }
 

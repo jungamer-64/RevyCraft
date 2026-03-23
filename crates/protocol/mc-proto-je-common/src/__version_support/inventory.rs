@@ -2,11 +2,26 @@ use crate::__version_support::blocks::{legacy_item, semantic_item};
 use mc_core::{InventoryContainer, InventorySlot, ItemStack, PlayerInventory};
 use mc_proto_common::{PacketReader, PacketWriter, ProtocolError};
 
+pub const PLAYER_WINDOW_CRAFTING_RESULT_SLOT: i16 = 0;
+pub const PLAYER_WINDOW_CRAFTING_INPUT_SLOTS: [i16; 4] = [1, 2, 3, 4];
+pub const CURSOR_WINDOW_ID: i8 = -1;
+pub const CURSOR_SLOT_ID: i16 = -1;
+
 #[must_use]
 pub const fn player_window_id(container: InventoryContainer) -> u8 {
     match container {
         InventoryContainer::Player => 0,
     }
+}
+
+#[must_use]
+pub const fn signed_window_id(window_id: u8) -> i8 {
+    i8::from_be_bytes([window_id])
+}
+
+#[must_use]
+pub const fn player_window_id_signed(container: InventoryContainer) -> i8 {
+    signed_window_id(player_window_id(container))
 }
 
 pub fn read_legacy_slot(reader: &mut PacketReader<'_>) -> Result<Option<ItemStack>, ProtocolError> {

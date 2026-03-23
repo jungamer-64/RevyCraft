@@ -20,7 +20,10 @@ use mc_core::{
 };
 use mc_proto_common::{Edition, ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
 use mc_proto_je_common::{
-    __version_support::inventory::{legacy_window_slot, player_window_id},
+    __version_support::inventory::{
+        CURSOR_SLOT_ID, CURSOR_WINDOW_ID, legacy_window_slot, player_window_id,
+        player_window_id_signed,
+    },
     JavaEditionAdapter, JavaEditionProfile,
 };
 
@@ -58,6 +61,7 @@ const PACKET_SB_POSITION_LOOK: i32 = 0x06;
 const PACKET_SB_PLAYER_DIGGING: i32 = 0x07;
 const PACKET_SB_PLAYER_BLOCK_PLACEMENT: i32 = 0x08;
 const PACKET_SB_HELD_ITEM_CHANGE: i32 = 0x09;
+const PACKET_SB_CLICK_WINDOW: i32 = 0x0e;
 const PACKET_SB_CREATIVE_INVENTORY_ACTION: i32 = 0x10;
 const PACKET_SB_SETTINGS: i32 = 0x15;
 const PACKET_SB_CLIENT_COMMAND: i32 = 0x16;
@@ -159,10 +163,14 @@ impl JavaEditionProfile for Je1710Profile {
             return Ok(None);
         };
         Ok(Some(encode_set_slot(
-            player_window_id(container),
-            u8::try_from(protocol_slot).expect("legacy inventory slot should fit into u8"),
+            player_window_id_signed(container),
+            protocol_slot,
             stack,
         )?))
+    }
+
+    fn encode_cursor_changed(&self, stack: Option<&ItemStack>) -> Result<Vec<u8>, ProtocolError> {
+        encode_set_slot(CURSOR_WINDOW_ID, CURSOR_SLOT_ID, stack)
     }
 
     fn encode_selected_hotbar_slot_changed(&self, slot: u8) -> Result<Vec<u8>, ProtocolError> {

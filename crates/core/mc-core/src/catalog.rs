@@ -10,6 +10,8 @@ pub const SAND: &str = "minecraft:sand";
 pub const SANDSTONE: &str = "minecraft:sandstone";
 pub const GLASS: &str = "minecraft:glass";
 pub const BRICKS: &str = "minecraft:bricks";
+pub const OAK_LOG: &str = "minecraft:oak_log";
+pub const STICK: &str = "minecraft:stick";
 
 #[must_use]
 pub const fn starter_hotbar_item_keys() -> [&'static str; 9] {
@@ -45,4 +47,9 @@ pub fn placeable_block_state_from_item_key(key: &str) -> Option<BlockState> {
 #[must_use]
 pub fn is_supported_placeable_item(key: &str) -> bool {
     placeable_block_state_from_item_key(key).is_some()
+}
+
+#[must_use]
+pub fn is_supported_inventory_item(key: &str) -> bool {
+    matches!(key, OAK_LOG | STICK) || is_supported_placeable_item(key)
 }

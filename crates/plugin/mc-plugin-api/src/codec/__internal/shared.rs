@@ -1,9 +1,9 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use mc_core::{
     BlockFace, BlockPos, BlockState, CapabilitySet, ChunkColumn, ChunkSection, ConnectionId,
-    CoreCommand, CoreEvent, DimensionId, EntityId, InteractionHand, InventoryContainer,
-    InventorySlot, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3, WorldMeta,
-    WorldSnapshot, expand_block_index,
+    CoreCommand, CoreEvent, DimensionId, EntityId, InteractionHand, InventoryClickButton,
+    InventoryClickTarget, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
+    PlayerSnapshot, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
 };
 use mc_proto_common::ConnectionPhase;
 use std::collections::BTreeMap;
@@ -164,6 +164,49 @@ pub(crate) fn decode_inventory_slot(
         3 => Ok(InventorySlot::Hotbar(decoder.read_u8()?)),
         4 => Ok(InventorySlot::Offhand),
         _ => Err(ProtocolCodecError::InvalidValue("invalid inventory slot")),
+    }
+}
+
+pub(crate) fn encode_inventory_click_button(encoder: &mut Encoder, button: InventoryClickButton) {
+    encoder.write_u8(match button {
+        InventoryClickButton::Left => 1,
+        InventoryClickButton::Right => 2,
+    });
+}
+
+pub(crate) fn decode_inventory_click_button(
+    decoder: &mut Decoder<'_>,
+) -> Result<InventoryClickButton, ProtocolCodecError> {
+    match decoder.read_u8()? {
+        1 => Ok(InventoryClickButton::Left),
+        2 => Ok(InventoryClickButton::Right),
+        _ => Err(ProtocolCodecError::InvalidValue(
+            "invalid inventory click button",
+        )),
+    }
+}
+
+pub(crate) fn encode_inventory_click_target(encoder: &mut Encoder, target: InventoryClickTarget) {
+    match target {
+        InventoryClickTarget::Slot(slot) => {
+            encoder.write_u8(1);
+            encode_inventory_slot(encoder, slot);
+        }
+        InventoryClickTarget::Outside => encoder.write_u8(2),
+        InventoryClickTarget::Unsupported => encoder.write_u8(3),
+    }
+}
+
+pub(crate) fn decode_inventory_click_target(
+    decoder: &mut Decoder<'_>,
+) -> Result<InventoryClickTarget, ProtocolCodecError> {
+    match decoder.read_u8()? {
+        1 => Ok(InventoryClickTarget::Slot(decode_inventory_slot(decoder)?)),
+        2 => Ok(InventoryClickTarget::Outside),
+        3 => Ok(InventoryClickTarget::Unsupported),
+        _ => Err(ProtocolCodecError::InvalidValue(
+            "invalid inventory click target",
+        )),
     }
 }
 
@@ -566,6 +609,16 @@ pub(crate) fn encode_core_command(
             encode_inventory_slot(encoder, *slot);
             encode_option(encoder, stack.as_ref(), encode_item_stack)?;
         }
+        CoreCommand::InventoryClick {
+            player_id,
+            target,
+            button,
+        } => {
+            encoder.write_u8(11);
+            encode_player_id(encoder, *player_id);
+            encode_inventory_click_target(encoder, *target);
+            encode_inventory_click_button(encoder, *button);
+        }
         CoreCommand::DigBlock {
             player_id,
             position,
@@ -642,6 +695,11 @@ pub(crate) fn decode_core_command(
             player_id: decode_player_id(decoder)?,
             slot: decode_inventory_slot(decoder)?,
             stack: decode_option(decoder, decode_item_stack)?,
+        }),
+        11 => Ok(CoreCommand::InventoryClick {
+            player_id: decode_player_id(decoder)?,
+            target: decode_inventory_click_target(decoder)?,
+            button: decode_inventory_click_button(decoder)?,
         }),
         8 => Ok(CoreCommand::DigBlock {
             player_id: decode_player_id(decoder)?,
@@ -732,6 +790,10 @@ pub(crate) fn encode_core_event(
             encode_inventory_slot(encoder, *slot);
             encode_option(encoder, stack.as_ref(), encode_item_stack)?;
         }
+        CoreEvent::CursorChanged { stack } => {
+            encoder.write_u8(13);
+            encode_option(encoder, stack.as_ref(), encode_item_stack)?;
+        }
         CoreEvent::SelectedHotbarSlotChanged { slot } => {
             encoder.write_u8(9);
             encoder.write_u8(*slot);
@@ -799,6 +861,9 @@ pub(crate) fn decode_core_event(
         8 => Ok(CoreEvent::InventorySlotChanged {
             container: decode_inventory_container(decoder)?,
             slot: decode_inventory_slot(decoder)?,
+            stack: decode_option(decoder, decode_item_stack)?,
+        }),
+        13 => Ok(CoreEvent::CursorChanged {
             stack: decode_option(decoder, decode_item_stack)?,
         }),
         9 => Ok(CoreEvent::SelectedHotbarSlotChanged {

@@ -67,6 +67,102 @@ async fn login_java_client_with_packet(
     Ok((stream, buffer, packet))
 }
 
+async fn craft_log_into_planks_legacy(
+    stream: &mut tokio::net::TcpStream,
+    buffer: &mut BytesMut,
+    codec: &MinecraftWireCodec,
+) -> Result<(), RuntimeError> {
+    write_packet(stream, codec, &creative_inventory_action(36, 17, 1, 0)).await?;
+    let hotbar_update = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 36, 16).await?;
+    assert_eq!(
+        decode_set_slot(&hotbar_update, 0x2f)?,
+        (0, 36, Some((17, 1, 0)))
+    );
+
+    write_packet(stream, codec, &click_window(36, 0)).await?;
+    let hotbar_pickup = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 36, 16).await?;
+    assert_eq!(decode_set_slot(&hotbar_pickup, 0x2f)?, (0, 36, None));
+    let cursor_pickup = read_until_set_slot(stream, codec, buffer, 0x2f, -1, -1, 16).await?;
+    assert_eq!(
+        decode_set_slot(&cursor_pickup, 0x2f)?,
+        (-1, -1, Some((17, 1, 0)))
+    );
+
+    write_packet(stream, codec, &click_window(1, 0)).await?;
+    let result_preview = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 0, 16).await?;
+    assert_eq!(
+        decode_set_slot(&result_preview, 0x2f)?,
+        (0, 0, Some((5, 4, 0)))
+    );
+    let craft_input = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 1, 16).await?;
+    assert_eq!(
+        decode_set_slot(&craft_input, 0x2f)?,
+        (0, 1, Some((17, 1, 0)))
+    );
+    let cursor_cleared = read_until_set_slot(stream, codec, buffer, 0x2f, -1, -1, 16).await?;
+    assert_eq!(decode_set_slot(&cursor_cleared, 0x2f)?, (-1, -1, None));
+
+    write_packet(stream, codec, &click_window(0, 0)).await?;
+    let result_taken = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 0, 16).await?;
+    assert_eq!(decode_set_slot(&result_taken, 0x2f)?, (0, 0, None));
+    let input_consumed = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 1, 16).await?;
+    assert_eq!(decode_set_slot(&input_consumed, 0x2f)?, (0, 1, None));
+    let cursor_result = read_until_set_slot(stream, codec, buffer, 0x2f, -1, -1, 16).await?;
+    assert_eq!(
+        decode_set_slot(&cursor_result, 0x2f)?,
+        (-1, -1, Some((5, 4, 0)))
+    );
+    Ok(())
+}
+
+async fn craft_log_into_planks_1_12(
+    stream: &mut tokio::net::TcpStream,
+    buffer: &mut BytesMut,
+    codec: &MinecraftWireCodec,
+) -> Result<(), RuntimeError> {
+    write_packet(stream, codec, &creative_inventory_action_1_12(36, 17, 1, 0)).await?;
+    let hotbar_update = read_until_set_slot(stream, codec, buffer, 0x16, 0, 36, 16).await?;
+    assert_eq!(
+        decode_set_slot(&hotbar_update, 0x16)?,
+        (0, 36, Some((17, 1, 0)))
+    );
+
+    write_packet(stream, codec, &click_window_1_12(36, 0)).await?;
+    let hotbar_pickup = read_until_set_slot(stream, codec, buffer, 0x16, 0, 36, 16).await?;
+    assert_eq!(decode_set_slot(&hotbar_pickup, 0x16)?, (0, 36, None));
+    let cursor_pickup = read_until_set_slot(stream, codec, buffer, 0x16, -1, -1, 16).await?;
+    assert_eq!(
+        decode_set_slot(&cursor_pickup, 0x16)?,
+        (-1, -1, Some((17, 1, 0)))
+    );
+
+    write_packet(stream, codec, &click_window_1_12(1, 0)).await?;
+    let result_preview = read_until_set_slot(stream, codec, buffer, 0x16, 0, 0, 16).await?;
+    assert_eq!(
+        decode_set_slot(&result_preview, 0x16)?,
+        (0, 0, Some((5, 4, 0)))
+    );
+    let craft_input = read_until_set_slot(stream, codec, buffer, 0x16, 0, 1, 16).await?;
+    assert_eq!(
+        decode_set_slot(&craft_input, 0x16)?,
+        (0, 1, Some((17, 1, 0)))
+    );
+    let cursor_cleared = read_until_set_slot(stream, codec, buffer, 0x16, -1, -1, 16).await?;
+    assert_eq!(decode_set_slot(&cursor_cleared, 0x16)?, (-1, -1, None));
+
+    write_packet(stream, codec, &click_window_1_12(0, 0)).await?;
+    let result_taken = read_until_set_slot(stream, codec, buffer, 0x16, 0, 0, 16).await?;
+    assert_eq!(decode_set_slot(&result_taken, 0x16)?, (0, 0, None));
+    let input_consumed = read_until_set_slot(stream, codec, buffer, 0x16, 0, 1, 16).await?;
+    assert_eq!(decode_set_slot(&input_consumed, 0x16)?, (0, 1, None));
+    let cursor_result = read_until_set_slot(stream, codec, buffer, 0x16, -1, -1, 16).await?;
+    assert_eq!(
+        decode_set_slot(&cursor_result, 0x16)?,
+        (-1, -1, Some((5, 4, 0)))
+    );
+    Ok(())
+}
+
 fn assert_legacy_set_slot(
     packet: &[u8],
     expected_slot: i16,
@@ -290,6 +386,60 @@ async fn unsupported_creative_inventory_action_is_corrected() -> Result<(), Runt
     .await?;
     let set_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
     assert_legacy_set_slot(&set_slot, 36, Some((1, 64, 0)))?;
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn legacy_window_zero_crafting_round_trips_authoritative_slot_updates()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        creative_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut stream, mut buffer, _) = login_legacy(addr, "craft-legacy").await?;
+    craft_log_into_planks_legacy(&mut stream, &mut buffer, &codec).await?;
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn modern_1_8_window_zero_crafting_round_trips_authoritative_slot_updates()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        multi_version_creative_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_all()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut stream, mut buffer, _) = login_modern_1_8(addr, "craft-18").await?;
+    craft_log_into_planks_legacy(&mut stream, &mut buffer, &codec).await?;
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn modern_1_12_window_zero_crafting_round_trips_authoritative_slot_updates()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        multi_version_creative_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_all()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut stream, mut buffer, _) = login_modern_1_12(addr, "craft-1122").await?;
+    craft_log_into_planks_1_12(&mut stream, &mut buffer, &codec).await?;
 
     server.shutdown().await
 }

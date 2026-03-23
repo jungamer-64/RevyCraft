@@ -1,7 +1,8 @@
 use super::{JE_1_12_2_ADAPTER_ID, Je1122Adapter, PROTOCOL_VERSION_1_12_2, VERSION_NAME_1_12_2};
 use mc_core::{
-    CoreCommand, CoreEvent, DimensionId, InteractionHand, InventoryContainer, InventorySlot,
-    ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3,
+    CoreCommand, CoreEvent, DimensionId, InteractionHand, InventoryClickButton,
+    InventoryClickTarget, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
+    PlayerSnapshot, Vec3,
 };
 use mc_proto_common::{
     Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter, PlayEncodingContext,
@@ -137,6 +138,48 @@ fn decodes_offhand_block_place() {
             ..
         }
     ));
+}
+
+#[test]
+fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
+    let adapter = Je1122Adapter::new();
+    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"window-click-1122"));
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x07);
+    writer.write_i8(0);
+    writer.write_i16(45);
+    writer.write_i8(0);
+    writer.write_i16(11);
+    writer.write_varint(0);
+    writer.write_i16(-1);
+    let command = adapter
+        .decode_play(player_id, &writer.into_inner())
+        .expect("click window should decode")
+        .expect("click window should produce a command");
+    assert!(matches!(
+        command,
+        CoreCommand::InventoryClick {
+            target: InventoryClickTarget::Slot(InventorySlot::Offhand),
+            button: InventoryClickButton::Left,
+            ..
+        }
+    ));
+
+    let packet = adapter
+        .encode_play_event(
+            &CoreEvent::CursorChanged {
+                stack: Some(ItemStack::new("minecraft:stick", 4, 0)),
+            },
+            &PlayEncodingContext {
+                player_id,
+                entity_id: mc_core::EntityId(1),
+            },
+        )
+        .expect("cursor update should encode");
+    let mut reader = PacketReader::new(&packet[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x16);
+    assert_eq!(reader.read_i8().expect("window id should decode"), -1);
+    assert_eq!(reader.read_i16().expect("slot should decode"), -1);
 }
 
 fn pack_block_position(position: mc_core::BlockPos) -> i64 {

@@ -5,6 +5,19 @@ use crate::world::{BlockFace, BlockPos, BlockState, ChunkColumn, Vec3, WorldMeta
 use crate::{ConnectionId, EntityId, PlayerId};
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InventoryClickButton {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InventoryClickTarget {
+    Slot(InventorySlot),
+    Outside,
+    Unsupported,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CoreCommand {
     LoginStart {
@@ -40,6 +53,11 @@ pub enum CoreCommand {
         slot: InventorySlot,
         stack: Option<ItemStack>,
     },
+    InventoryClick {
+        player_id: PlayerId,
+        target: InventoryClickTarget,
+        button: InventoryClickButton,
+    },
     DigBlock {
         player_id: PlayerId,
         position: BlockPos,
@@ -69,6 +87,7 @@ impl CoreCommand {
             | Self::KeepAliveResponse { player_id, .. }
             | Self::SetHeldSlot { player_id, .. }
             | Self::CreativeInventorySet { player_id, .. }
+            | Self::InventoryClick { player_id, .. }
             | Self::DigBlock { player_id, .. }
             | Self::PlaceBlock { player_id, .. }
             | Self::Disconnect { player_id, .. } => Some(*player_id),
@@ -110,6 +129,9 @@ pub enum CoreEvent {
     InventorySlotChanged {
         container: InventoryContainer,
         slot: InventorySlot,
+        stack: Option<ItemStack>,
+    },
+    CursorChanged {
         stack: Option<ItemStack>,
     },
     SelectedHotbarSlotChanged {

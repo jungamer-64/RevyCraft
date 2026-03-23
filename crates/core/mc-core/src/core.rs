@@ -1,4 +1,5 @@
 mod command;
+mod inventory;
 mod login;
 mod mutation;
 mod projection;
@@ -91,6 +92,7 @@ pub struct ServerCore {
 pub(super) struct OnlinePlayer {
     pub(super) entity_id: EntityId,
     pub(super) snapshot: PlayerSnapshot,
+    pub(super) cursor: Option<crate::ItemStack>,
     pub(super) view: ClientView,
     pub(super) pending_keep_alive_id: Option<i32>,
     pub(super) last_keep_alive_sent_at: Option<u64>,
@@ -138,7 +140,7 @@ impl ServerCore {
     pub fn snapshot(&self) -> crate::WorldSnapshot {
         let mut players = self.saved_players.clone();
         for (player_id, player) in &self.online_players {
-            players.insert(*player_id, player.snapshot.clone());
+            players.insert(*player_id, Self::persisted_online_player_snapshot(player));
         }
         crate::WorldSnapshot {
             meta: self.world_meta.clone(),

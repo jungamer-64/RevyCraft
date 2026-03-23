@@ -1,7 +1,8 @@
 use crate::{JE_1_8_X_ADAPTER_ID, Je18xAdapter, PROTOCOL_VERSION_1_8_X, VERSION_NAME_1_8_X};
 use mc_core::{
-    ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DimensionId, InventoryContainer, InventorySlot,
-    ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3,
+    ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DimensionId, InventoryClickButton,
+    InventoryClickTarget, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
+    PlayerSnapshot, Vec3,
 };
 use mc_proto_common::{
     Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter, PlayEncodingContext,
@@ -193,4 +194,46 @@ fn decodes_creative_inventory_slot_mapping() {
             ..
         }
     ));
+}
+
+#[test]
+fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
+    let adapter = Je18xAdapter::new();
+    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"window-click-18"));
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x0e);
+    writer.write_i8(0);
+    writer.write_i16(1);
+    writer.write_i8(1);
+    writer.write_i16(3);
+    writer.write_i8(0);
+    writer.write_i16(-1);
+    let command = adapter
+        .decode_play(player_id, &writer.into_inner())
+        .expect("click window should decode")
+        .expect("click window should produce a command");
+    assert!(matches!(
+        command,
+        CoreCommand::InventoryClick {
+            target: InventoryClickTarget::Slot(InventorySlot::Auxiliary(1)),
+            button: InventoryClickButton::Right,
+            ..
+        }
+    ));
+
+    let packet = adapter
+        .encode_play_event(
+            &CoreEvent::CursorChanged {
+                stack: Some(ItemStack::new("minecraft:stick", 4, 0)),
+            },
+            &PlayEncodingContext {
+                player_id,
+                entity_id: mc_core::EntityId(1),
+            },
+        )
+        .expect("cursor update should encode");
+    let mut reader = PacketReader::new(&packet[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2f);
+    assert_eq!(reader.read_i8().expect("window id should decode"), -1);
+    assert_eq!(reader.read_i16().expect("slot should decode"), -1);
 }

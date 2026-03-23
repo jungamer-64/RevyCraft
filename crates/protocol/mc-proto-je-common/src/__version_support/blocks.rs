@@ -1,5 +1,6 @@
 use mc_core::catalog::{
-    BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_PLANKS, SAND, SANDSTONE, STONE,
+    BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_LOG, OAK_PLANKS, SAND, SANDSTONE,
+    STICK, STONE,
 };
 use mc_core::{BlockState, ItemStack};
 
@@ -52,10 +53,12 @@ pub fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
         DIRT => Some((3, damage)),
         COBBLESTONE => Some((4, damage)),
         OAK_PLANKS => Some((5, damage)),
+        OAK_LOG => Some((17, damage)),
         SAND => Some((12, damage)),
         GLASS => Some((20, damage)),
         SANDSTONE => Some((24, damage)),
         BRICKS => Some((45, damage)),
+        STICK => Some((280, damage)),
         _ => None,
     }
 }
@@ -68,10 +71,12 @@ pub fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
         3 => DIRT,
         4 => COBBLESTONE,
         5 if damage == 0 => OAK_PLANKS,
+        17 if damage == 0 => OAK_LOG,
         12 if damage == 0 => SAND,
         20 => GLASS,
         24 if damage == 0 => SANDSTONE,
         45 => BRICKS,
+        280 if damage == 0 => STICK,
         _ => return ItemStack::unsupported(count, damage),
     };
     ItemStack::new(key, count, damage)

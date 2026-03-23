@@ -151,7 +151,7 @@ impl CanonicalGameplayPolicy {
         if query.world_meta().game_mode != 1
             || !slot.is_storage_slot()
             || stack.is_some_and(|stack| {
-                !stack.is_supported_placeable() || stack.count == 0 || stack.count > 64
+                !stack.is_supported_inventory_item() || stack.count == 0 || stack.count > 64
             })
         {
             return GameplayEffect {

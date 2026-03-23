@@ -18,7 +18,10 @@ use mc_core::{
 };
 use mc_proto_common::{ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
 use mc_proto_je_common::{
-    __version_support::inventory::{modern_window_slot, player_window_id},
+    __version_support::inventory::{
+        CURSOR_SLOT_ID, CURSOR_WINDOW_ID, modern_window_slot, player_window_id,
+        player_window_id_signed,
+    },
     JavaEditionAdapter, JavaEditionProfile,
 };
 use serde_json::json;
@@ -57,6 +60,7 @@ const PACKET_SB_PLAYER_BLOCK_PLACEMENT: i32 = 0x1f;
 const PACKET_SB_USE_ITEM: i32 = 0x20;
 const PACKET_SB_CLIENT_COMMAND: i32 = 0x03;
 const PACKET_SB_SETTINGS: i32 = 0x04;
+const PACKET_SB_CLICK_WINDOW: i32 = 0x07;
 
 #[derive(Default)]
 pub struct Je1122Profile;
@@ -156,10 +160,14 @@ impl JavaEditionProfile for Je1122Profile {
             return Ok(None);
         };
         Ok(Some(encode_set_slot(
-            player_window_id(container),
+            player_window_id_signed(container),
             protocol_slot,
             stack,
         )?))
+    }
+
+    fn encode_cursor_changed(&self, stack: Option<&ItemStack>) -> Result<Vec<u8>, ProtocolError> {
+        encode_set_slot(CURSOR_WINDOW_ID, CURSOR_SLOT_ID, stack)
     }
 
     fn encode_selected_hotbar_slot_changed(&self, slot: u8) -> Result<Vec<u8>, ProtocolError> {

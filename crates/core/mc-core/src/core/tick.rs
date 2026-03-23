@@ -62,7 +62,8 @@ impl ServerCore {
         let Some(player) = self.online_players.remove(&player_id) else {
             return Vec::new();
         };
-        self.saved_players.insert(player_id, player.snapshot);
+        self.saved_players
+            .insert(player_id, Self::persisted_online_player_snapshot(&player));
         vec![TargetedEvent {
             target: EventTarget::EveryoneExcept(player_id),
             event: CoreEvent::EntityDespawned {
