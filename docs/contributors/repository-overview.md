@@ -22,6 +22,7 @@
 - [`../operators/getting-started.md`](../operators/getting-started.md)
 - [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)
 - [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)
+- [`core-command-event-flow.md`](core-command-event-flow.md)
 
 ## 先に押さえる結論
 

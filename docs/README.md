@@ -51,7 +51,8 @@
 ## 文書構成
 
 - `contributors/`
-  runtime の責務分離、plugin host、reload、安全境界、test harness を追いたい実装 contributors 向けです。
+  runtime の責務分離、plugin host、reload、安全境界、test harness、`CoreCommand` / `CoreEvent` / `GameplayEffect` の流れを追いたい実装 contributors 向けです。
+  主な文書: [`contributors/repository-overview.md`](contributors/repository-overview.md), [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md), [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md), [`contributors/reload-semantics-and-boundaries.md`](contributors/reload-semantics-and-boundaries.md)
 - `operators/`
   package、起動、設定、manual reload、watch reload、admin console / gRPC 運用を確認したい人向けです。
 - `plugin-authors/`

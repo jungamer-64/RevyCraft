@@ -20,6 +20,7 @@
 
 - [`repository-overview.md`](repository-overview.md)
 - [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)
+- [`core-command-event-flow.md`](core-command-event-flow.md)
 - [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)
 - [`../plugin-authors/plugin-model.md`](../plugin-authors/plugin-model.md)
 
@@ -153,6 +154,8 @@ network settings 応答後は Bedrock compression が有効になります。
 play phase では、protocol plugin の `decode_play()` が client packet を `CoreCommand` に変換し、`mc-core` がそれを処理します。逆方向では `CoreEvent` を protocol plugin の `encode_play_event()` が wire packet 群へ変換します。
 
 runtime は session ごとに `SessionCapabilitySet` と generation 情報を保持し、どの protocol / gameplay generation がその接続に見えているかを追跡します。
+
+`CoreCommand`、`GameplayEffect`、`CoreEvent` の役割分担と変換経路を型ベースで追いたいときは [`core-command-event-flow.md`](core-command-event-flow.md) を参照してください。
 
 ## runtime loop と snapshot
 
