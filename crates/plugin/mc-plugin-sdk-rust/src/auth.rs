@@ -1,10 +1,11 @@
 use super::*;
+use mc_core::AuthCapabilitySet;
 
 pub trait RustAuthPlugin: Send + Sync + 'static {
     fn descriptor(&self) -> AuthDescriptor;
 
-    fn capability_set(&self) -> CapabilitySet {
-        CapabilitySet::new()
+    fn capability_set(&self) -> AuthCapabilitySet {
+        AuthCapabilitySet::default()
     }
 
     /// Authenticates a Java Edition player without external services.

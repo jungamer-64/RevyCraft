@@ -1,6 +1,51 @@
 use super::*;
 use crate::runtime::RunningServer;
 
+fn plugin_host_status(server: &RunningServer) -> mc_plugin_host::host::PluginHostStatusSnapshot {
+    server
+        .runtime
+        .reload_host
+        .as_ref()
+        .expect("reloadable test server should retain a plugin reload host")
+        .status()
+}
+
+pub(crate) fn protocol_build_tag(server: &RunningServer, plugin_id: &str) -> Option<String> {
+    plugin_host_status(server)
+        .protocols
+        .iter()
+        .find(|plugin| plugin.plugin_id == plugin_id)
+        .and_then(|plugin| plugin.build_tag.as_ref())
+        .map(|tag| tag.as_str().to_string())
+}
+
+pub(crate) fn gameplay_build_tag(server: &RunningServer, profile_id: &str) -> Option<String> {
+    plugin_host_status(server)
+        .gameplay
+        .iter()
+        .find(|plugin| plugin.profile_id.as_str() == profile_id)
+        .and_then(|plugin| plugin.build_tag.as_ref())
+        .map(|tag| tag.as_str().to_string())
+}
+
+pub(crate) fn storage_build_tag(server: &RunningServer, profile_id: &str) -> Option<String> {
+    plugin_host_status(server)
+        .storage
+        .iter()
+        .find(|plugin| plugin.profile_id.as_str() == profile_id)
+        .and_then(|plugin| plugin.build_tag.as_ref())
+        .map(|tag| tag.as_str().to_string())
+}
+
+pub(crate) fn auth_build_tag(server: &RunningServer, profile_id: &str) -> Option<String> {
+    plugin_host_status(server)
+        .auth
+        .iter()
+        .find(|plugin| plugin.profile_id.as_str() == profile_id)
+        .and_then(|plugin| plugin.build_tag.as_ref())
+        .map(|tag| tag.as_str().to_string())
+}
+
 pub(crate) async fn spawn_protocol_reload_server(
     temp_dir: &tempfile::TempDir,
     scenario: &str,
@@ -42,10 +87,9 @@ pub(crate) async fn spawn_protocol_reload_server(
     let before_generation = adapter
         .plugin_generation_id()
         .expect("reload-test adapter should report generation");
-    assert!(
-        adapter
-            .capability_set()
-            .contains("build-tag:protocol-reload-v1")
+    assert_eq!(
+        protocol_build_tag(&server, JE_5_ADAPTER_ID).as_deref(),
+        Some("protocol-reload-v1")
     );
     Ok((server, dist_dir, target_dir, before_generation))
 }
@@ -100,10 +144,9 @@ pub(crate) async fn spawn_online_auth_reload_server(
     let before_generation = auth_before
         .plugin_generation_id()
         .expect("online auth profile should report generation");
-    assert!(
-        auth_before
-            .capability_set()
-            .contains("build-tag:online-auth-v1")
+    assert_eq!(
+        auth_build_tag(&server, ONLINE_STUB_AUTH_PROFILE_ID).as_deref(),
+        Some("online-auth-v1")
     );
     Ok((server, dist_dir, target_dir, before_generation))
 }

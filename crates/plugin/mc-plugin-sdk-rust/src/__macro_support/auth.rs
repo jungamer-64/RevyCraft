@@ -7,7 +7,9 @@ pub fn handle_auth_request<P: RustAuthPlugin>(
 ) -> Result<AuthResponse, String> {
     match request {
         AuthRequest::Describe => Ok(AuthResponse::Descriptor(plugin.descriptor())),
-        AuthRequest::CapabilitySet => Ok(AuthResponse::CapabilitySet(plugin.capability_set())),
+        AuthRequest::CapabilitySet => Ok(AuthResponse::CapabilitySet(
+            crate::capabilities::auth_announcement(&plugin.capability_set()),
+        )),
         AuthRequest::AuthenticateOffline { username } => plugin
             .authenticate_offline(&username)
             .map(AuthResponse::AuthenticatedPlayer),

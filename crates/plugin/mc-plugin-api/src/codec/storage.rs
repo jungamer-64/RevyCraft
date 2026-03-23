@@ -7,7 +7,7 @@ use crate::codec::__internal::storage_semantic::{
     decode_storage_request_payload, decode_storage_response_payload,
     encode_storage_request_payload, encode_storage_response_payload,
 };
-use mc_core::{CapabilitySet, StorageProfileId, WorldSnapshot};
+use mc_core::{CapabilityAnnouncement, StorageCapability, StorageProfileId, WorldSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -78,7 +78,7 @@ impl StorageRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageResponse {
     Descriptor(StorageDescriptor),
-    CapabilitySet(CapabilitySet),
+    CapabilitySet(CapabilityAnnouncement<StorageCapability>),
     Snapshot(Option<WorldSnapshot>),
     Empty,
 }

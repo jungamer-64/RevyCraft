@@ -5,10 +5,10 @@ use bedrock_jwt::verifier::{
     verify_chain,
 };
 use bedrockrs_proto::info::MOJANG_PUBLIC_KEY;
-use mc_core::{CapabilitySet, PlayerId};
+use mc_core::{AuthCapability, AuthCapabilitySet, PlayerId};
 use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode, BedrockAuthResult};
 use mc_plugin_sdk_rust::auth::RustAuthPlugin;
-use mc_plugin_sdk_rust::capabilities::capability_set as build_capability_set;
+use mc_plugin_sdk_rust::capabilities::auth_capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use p384::ecdsa::{Signature as EcdsaSignature, VerifyingKey, signature::Verifier};
@@ -29,13 +29,8 @@ impl RustAuthPlugin for BedrockXblAuthPlugin {
         }
     }
 
-    fn capability_set(&self) -> CapabilitySet {
-        build_capability_set(&[
-            "auth.bedrock",
-            "auth.bedrock.xbl",
-            "auth.profile.bedrock-xbl-v1",
-            "runtime.reload.auth",
-        ])
+    fn capability_set(&self) -> AuthCapabilitySet {
+        auth_capabilities(&[AuthCapability::RuntimeReload])
     }
 
     fn authenticate_offline(&self, _username: &str) -> Result<PlayerId, String> {
@@ -126,11 +121,7 @@ fn decode_jwt_payload(jwt: &str) -> Result<Value, String> {
 const MANIFEST: StaticPluginManifest = StaticPluginManifest::auth(
     BEDROCK_XBL_AUTH_PLUGIN_ID,
     "Bedrock XBL Authentication Plugin",
-    &[
-        "auth.profile:bedrock-xbl-v1",
-        "auth.mode:bedrock-xbl",
-        "runtime.reload.auth",
-    ],
+    BEDROCK_XBL_AUTH_PROFILE_ID,
 );
 
 export_plugin!(auth, BedrockXblAuthPlugin, MANIFEST);

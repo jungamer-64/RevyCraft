@@ -1,9 +1,9 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::{CapabilitySet, CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
-use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
-use mc_plugin_sdk_rust::capabilities::{
-    build_tag_contains, capability_set as build_capability_set,
+use mc_core::{
+    CoreCommand, CoreEvent, PlayerId, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet,
 };
+use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_sdk_rust::capabilities::{build_tag_contains, protocol_capabilities};
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::protocol::RustProtocolPlugin;
@@ -150,15 +150,16 @@ impl ProtocolAdapter for Je5ReloadTestProtocolPlugin {
         self.adapter.bedrock_listener_descriptor()
     }
 
-    fn capability_set(&self) -> CapabilitySet {
-        build_capability_set(&["protocol.je", "protocol.je.5", "runtime.reload.protocol"])
+    fn capability_set(&self) -> ProtocolCapabilitySet {
+        protocol_capabilities(&[
+            ProtocolCapability::RuntimeReload,
+            ProtocolCapability::Je,
+            ProtocolCapability::Je5,
+        ])
     }
 }
 
-const MANIFEST: StaticPluginManifest = StaticPluginManifest::protocol_with_capabilities(
-    JE_5_ADAPTER_ID,
-    "JE 1.7.10 (Protocol 5) Reload Test Plugin",
-    &["runtime.reload.protocol"],
-);
+const MANIFEST: StaticPluginManifest =
+    StaticPluginManifest::protocol(JE_5_ADAPTER_ID, "JE 1.7.10 (Protocol 5) Reload Test Plugin");
 
 export_plugin!(protocol, Je5ReloadTestProtocolPlugin, MANIFEST);

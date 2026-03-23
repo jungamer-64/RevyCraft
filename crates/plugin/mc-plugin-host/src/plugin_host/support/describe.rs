@@ -1,8 +1,10 @@
 use super::{
-    AdminUiDescriptor, AdminUiOutput, AuthDescriptor, AuthResponse, BedrockListenerDescriptor,
-    CapabilitySet, GameplayDescriptor, GameplayResponse, ProtocolDescriptor, ProtocolResponse,
-    RuntimeError, StorageDescriptor, StorageResponse,
+    AdminUiCapability, AdminUiDescriptor, AdminUiOutput, AuthCapability, AuthDescriptor,
+    AuthResponse, BedrockListenerDescriptor, GameplayCapability, GameplayDescriptor,
+    GameplayResponse, ProtocolCapability, ProtocolDescriptor, ProtocolResponse, RuntimeError,
+    StorageCapability, StorageDescriptor, StorageResponse,
 };
+use mc_core::CapabilityAnnouncement;
 
 pub(crate) fn expect_protocol_descriptor(
     plugin_id: &str,
@@ -31,7 +33,7 @@ pub(crate) fn expect_protocol_bedrock_listener_descriptor(
 pub(crate) fn expect_protocol_capabilities(
     plugin_id: &str,
     response: ProtocolResponse,
-) -> Result<CapabilitySet, RuntimeError> {
+) -> Result<CapabilityAnnouncement<ProtocolCapability>, RuntimeError> {
     match response {
         ProtocolResponse::CapabilitySet(capabilities) => Ok(capabilities),
         other => Err(RuntimeError::Config(format!(
@@ -55,7 +57,7 @@ pub(crate) fn expect_gameplay_descriptor(
 pub(crate) fn expect_gameplay_capabilities(
     plugin_id: &str,
     response: GameplayResponse,
-) -> Result<CapabilitySet, RuntimeError> {
+) -> Result<CapabilityAnnouncement<GameplayCapability>, RuntimeError> {
     match response {
         GameplayResponse::CapabilitySet(capabilities) => Ok(capabilities),
         other => Err(RuntimeError::Config(format!(
@@ -79,7 +81,7 @@ pub(crate) fn expect_storage_descriptor(
 pub(crate) fn expect_storage_capabilities(
     plugin_id: &str,
     response: StorageResponse,
-) -> Result<CapabilitySet, RuntimeError> {
+) -> Result<CapabilityAnnouncement<StorageCapability>, RuntimeError> {
     match response {
         StorageResponse::CapabilitySet(capabilities) => Ok(capabilities),
         other => Err(RuntimeError::Config(format!(
@@ -103,7 +105,7 @@ pub(crate) fn expect_auth_descriptor(
 pub(crate) fn expect_auth_capabilities(
     plugin_id: &str,
     response: AuthResponse,
-) -> Result<CapabilitySet, RuntimeError> {
+) -> Result<CapabilityAnnouncement<AuthCapability>, RuntimeError> {
     match response {
         AuthResponse::CapabilitySet(capabilities) => Ok(capabilities),
         other => Err(RuntimeError::Config(format!(
@@ -127,7 +129,7 @@ pub(crate) fn expect_admin_ui_descriptor(
 pub(crate) fn expect_admin_ui_capabilities(
     plugin_id: &str,
     response: AdminUiOutput,
-) -> Result<CapabilitySet, RuntimeError> {
+) -> Result<CapabilityAnnouncement<AdminUiCapability>, RuntimeError> {
     match response {
         AdminUiOutput::CapabilitySet(capabilities) => Ok(capabilities),
         other => Err(RuntimeError::Config(format!(

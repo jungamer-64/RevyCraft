@@ -1,7 +1,7 @@
 use super::*;
 
 pub(crate) mod failing_storage_plugin {
-    use mc_core::{CapabilitySet, WorldSnapshot};
+    use mc_core::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
     use mc_plugin_api::codec::storage::StorageDescriptor;
     use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
@@ -22,9 +22,9 @@ pub(crate) mod failing_storage_plugin {
             }
         }
 
-        fn capability_set(&self) -> CapabilitySet {
-            let mut capabilities = CapabilitySet::new();
-            let _ = capabilities.insert("runtime.reload.storage");
+        fn capability_set(&self) -> StorageCapabilitySet {
+            let mut capabilities = StorageCapabilitySet::new();
+            let _ = capabilities.insert(StorageCapability::RuntimeReload);
             capabilities
         }
 
@@ -41,11 +41,8 @@ pub(crate) mod failing_storage_plugin {
         }
     }
 
-    const MANIFEST: StaticPluginManifest = StaticPluginManifest::storage(
-        PLUGIN_ID,
-        "Failing Storage Plugin",
-        &["storage.profile:failing-storage", "runtime.reload.storage"],
-    );
+    const MANIFEST: StaticPluginManifest =
+        StaticPluginManifest::storage(PLUGIN_ID, "Failing Storage Plugin", PROFILE_ID);
 
     export_plugin!(storage, FailingStoragePlugin, MANIFEST);
 }

@@ -1,9 +1,32 @@
-use mc_core::CapabilitySet;
+use mc_core::{
+    AdminUiCapability, AdminUiCapabilitySet, AuthCapability, AuthCapabilitySet,
+    CapabilityAnnouncement, GameplayCapability, GameplayCapabilitySet, PluginBuildTag,
+    ProtocolCapability, ProtocolCapabilitySet, StorageCapability, StorageCapabilitySet,
+};
 
-/// Builds a capability set for the current plugin build.
 #[must_use]
-pub fn capability_set(names: &[&str]) -> CapabilitySet {
-    capability_set_for_build_tag(names, option_env!("REVY_PLUGIN_BUILD_TAG"))
+pub fn protocol_capabilities(capabilities: &[ProtocolCapability]) -> ProtocolCapabilitySet {
+    capability_set(capabilities)
+}
+
+#[must_use]
+pub fn gameplay_capabilities(capabilities: &[GameplayCapability]) -> GameplayCapabilitySet {
+    capability_set(capabilities)
+}
+
+#[must_use]
+pub fn storage_capabilities(capabilities: &[StorageCapability]) -> StorageCapabilitySet {
+    capability_set(capabilities)
+}
+
+#[must_use]
+pub fn auth_capabilities(capabilities: &[AuthCapability]) -> AuthCapabilitySet {
+    capability_set(capabilities)
+}
+
+#[must_use]
+pub fn admin_ui_capabilities(capabilities: &[AdminUiCapability]) -> AdminUiCapabilitySet {
+    capability_set(capabilities)
 }
 
 /// Returns whether the current plugin build tag contains the provided marker.
@@ -13,18 +36,63 @@ pub fn build_tag_contains(needle: &str) -> bool {
 }
 
 #[must_use]
-pub(crate) fn capability_set_for_build_tag(
-    names: &[&str],
+pub(crate) fn protocol_announcement(
+    capabilities: &ProtocolCapabilitySet,
+) -> CapabilityAnnouncement<ProtocolCapability> {
+    capability_announcement_for_build_tag(capabilities, option_env!("REVY_PLUGIN_BUILD_TAG"))
+}
+
+#[must_use]
+pub(crate) fn gameplay_announcement(
+    capabilities: &GameplayCapabilitySet,
+) -> CapabilityAnnouncement<GameplayCapability> {
+    capability_announcement_for_build_tag(capabilities, option_env!("REVY_PLUGIN_BUILD_TAG"))
+}
+
+#[must_use]
+pub(crate) fn storage_announcement(
+    capabilities: &StorageCapabilitySet,
+) -> CapabilityAnnouncement<StorageCapability> {
+    capability_announcement_for_build_tag(capabilities, option_env!("REVY_PLUGIN_BUILD_TAG"))
+}
+
+#[must_use]
+pub(crate) fn auth_announcement(
+    capabilities: &AuthCapabilitySet,
+) -> CapabilityAnnouncement<AuthCapability> {
+    capability_announcement_for_build_tag(capabilities, option_env!("REVY_PLUGIN_BUILD_TAG"))
+}
+
+#[must_use]
+pub(crate) fn admin_ui_announcement(
+    capabilities: &AdminUiCapabilitySet,
+) -> CapabilityAnnouncement<AdminUiCapability> {
+    capability_announcement_for_build_tag(capabilities, option_env!("REVY_PLUGIN_BUILD_TAG"))
+}
+
+fn capability_set<C>(capabilities: &[C]) -> mc_core::ClosedCapabilitySet<C>
+where
+    C: Copy + Ord,
+{
+    let mut set = mc_core::ClosedCapabilitySet::new();
+    for &capability in capabilities {
+        let _ = set.insert(capability);
+    }
+    set
+}
+
+fn capability_announcement_for_build_tag<C>(
+    capabilities: &mc_core::ClosedCapabilitySet<C>,
     build_tag: Option<&str>,
-) -> CapabilitySet {
-    let mut capabilities = CapabilitySet::new();
-    for &name in names {
-        let _ = capabilities.insert(name);
-    }
-    if let Some(build_tag) = build_tag.filter(|tag| !tag.is_empty()) {
-        let _ = capabilities.insert(format!("build-tag:{build_tag}"));
-    }
-    capabilities
+) -> CapabilityAnnouncement<C>
+where
+    C: Copy + Ord,
+{
+    let mut announced = CapabilityAnnouncement::new(capabilities.clone());
+    announced.build_tag = build_tag
+        .filter(|tag| !tag.is_empty())
+        .map(PluginBuildTag::new);
+    announced
 }
 
 #[must_use]

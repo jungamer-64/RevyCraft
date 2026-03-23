@@ -1,5 +1,5 @@
 use super::{
-    Arc, CapabilitySet, ConnectionPhase, GameplayEffect, GameplayJoinEffect,
+    Arc, ConnectionPhase, GameplayCapabilitySet, GameplayEffect, GameplayJoinEffect,
     GameplayPolicyResolver, GameplayProfileHandle, GameplayProfileId, GameplayQuery,
     GameplayRequest, GameplayResponse, GameplaySessionSnapshot, PlayerId, PlayerSnapshot,
     PluginFailureAction, PluginFailureDispatch, PluginGenerationId, PluginKind,
@@ -51,7 +51,7 @@ impl HotSwappableGameplayProfile {
         self.profile_id.clone()
     }
 
-    fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> GameplayCapabilitySet {
         self.generation.capability_set()
     }
 
@@ -194,7 +194,7 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
         Self::profile_id(self)
     }
 
-    fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> GameplayCapabilitySet {
         Self::capability_set(self)
     }
 

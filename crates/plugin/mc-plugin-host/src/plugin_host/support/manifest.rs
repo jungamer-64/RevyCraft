@@ -2,6 +2,27 @@ use super::{
     AdminUiProfileId, GameplayProfileId, PluginAbiVersion, PluginKind, PluginManifestV1,
     RuntimeError, Utf8Slice,
 };
+use mc_core::{AuthProfileId, StorageProfileId};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProtocolManifestCapabilities {
+    pub(crate) reload_required: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProfileManifestCapabilities<P> {
+    pub(crate) profile_id: P,
+    pub(crate) reload_required: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ManifestCapabilities {
+    Protocol(ProtocolManifestCapabilities),
+    Gameplay(ProfileManifestCapabilities<GameplayProfileId>),
+    Storage(ProfileManifestCapabilities<StorageProfileId>),
+    Auth(ProfileManifestCapabilities<AuthProfileId>),
+    AdminUi(ProfileManifestCapabilities<AdminUiProfileId>),
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct DecodedManifest {
@@ -10,7 +31,7 @@ pub(crate) struct DecodedManifest {
     pub(crate) plugin_abi: PluginAbiVersion,
     pub(crate) min_host_abi: PluginAbiVersion,
     pub(crate) max_host_abi: PluginAbiVersion,
-    pub(crate) capabilities: Vec<String>,
+    pub(crate) capabilities: ManifestCapabilities,
 }
 
 pub(crate) fn decode_manifest(
@@ -21,7 +42,8 @@ pub(crate) fn decode_manifest(
             .as_ref()
             .ok_or_else(|| RuntimeError::Config("plugin manifest pointer was null".to_string()))?
     };
-    let capabilities = if manifest.capabilities.is_null() || manifest.capabilities_len == 0 {
+    let plugin_id = decode_utf8_slice(manifest.plugin_id)?;
+    let raw_capabilities = if manifest.capabilities.is_null() || manifest.capabilities_len == 0 {
         Vec::new()
     } else {
         let descriptors =
@@ -32,8 +54,10 @@ pub(crate) fn decode_manifest(
         }
         capabilities
     };
+    let capabilities =
+        decode_manifest_capabilities(&plugin_id, manifest.plugin_kind, &raw_capabilities)?;
     Ok(DecodedManifest {
-        plugin_id: decode_utf8_slice(manifest.plugin_id)?,
+        plugin_id,
         plugin_kind: manifest.plugin_kind,
         plugin_abi: manifest.plugin_abi,
         min_host_abi: manifest.min_host_abi,
@@ -52,61 +76,129 @@ pub(crate) fn decode_utf8_slice(slice: Utf8Slice) -> Result<String, RuntimeError
     String::from_utf8(bytes.to_vec()).map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
-pub(crate) fn manifest_profile_id<P>(
-    manifest: &DecodedManifest,
-    prefix: &str,
+fn decode_manifest_capabilities(
     plugin_id: &str,
-    kind: &str,
-) -> Result<P, RuntimeError>
-where
-    P: From<String>,
-{
-    manifest
-        .capabilities
-        .iter()
-        .find_map(|capability| capability.strip_prefix(prefix))
-        .map(|profile_id| P::from(profile_id.to_string()))
-        .ok_or_else(|| {
-            RuntimeError::Config(format!(
-                "{kind} plugin `{plugin_id}` is missing {prefix}<id> manifest capability"
-            ))
-        })
-}
-
-pub(crate) fn gameplay_profile_id_from_manifest(
-    manifest: &DecodedManifest,
-    plugin_id: &str,
-) -> Result<GameplayProfileId, RuntimeError> {
-    manifest
-        .capabilities
-        .iter()
-        .find_map(|capability| capability.strip_prefix("gameplay.profile:"))
-        .map(GameplayProfileId::new)
-        .ok_or_else(|| {
-            RuntimeError::Config(format!(
-                "gameplay plugin `{plugin_id}` is missing gameplay.profile:<id> manifest capability"
-            ))
-        })
-}
-
-pub(crate) fn admin_ui_profile_id_from_manifest(
-    manifest: &DecodedManifest,
-    plugin_id: &str,
-) -> Result<AdminUiProfileId, RuntimeError> {
-    manifest_profile_id(manifest, "admin-ui.profile:", plugin_id, "admin-ui")
-}
-
-pub(crate) fn require_manifest_capability(
-    manifest: &DecodedManifest,
-    capability: &str,
-    plugin_id: &str,
-    kind: &str,
-) -> Result<(), RuntimeError> {
-    if manifest.capabilities.iter().any(|item| item == capability) {
-        Ok(())
-    } else {
-        Err(RuntimeError::Config(format!(
-            "{kind} plugin `{plugin_id}` is missing {capability} capability"
-        )))
+    plugin_kind: PluginKind,
+    capabilities: &[String],
+) -> Result<ManifestCapabilities, RuntimeError> {
+    match plugin_kind {
+        PluginKind::Protocol => Ok(ManifestCapabilities::Protocol(parse_protocol_manifest(
+            plugin_id,
+            capabilities,
+        )?)),
+        PluginKind::Gameplay => Ok(ManifestCapabilities::Gameplay(parse_profile_manifest(
+            plugin_id,
+            "gameplay",
+            capabilities,
+            "gameplay.profile:",
+            "runtime.reload.gameplay",
+            GameplayProfileId::new,
+        )?)),
+        PluginKind::Storage => Ok(ManifestCapabilities::Storage(parse_profile_manifest(
+            plugin_id,
+            "storage",
+            capabilities,
+            "storage.profile:",
+            "runtime.reload.storage",
+            StorageProfileId::new,
+        )?)),
+        PluginKind::Auth => Ok(ManifestCapabilities::Auth(parse_profile_manifest(
+            plugin_id,
+            "auth",
+            capabilities,
+            "auth.profile:",
+            "runtime.reload.auth",
+            AuthProfileId::new,
+        )?)),
+        PluginKind::AdminUi => Ok(ManifestCapabilities::AdminUi(parse_profile_manifest(
+            plugin_id,
+            "admin-ui",
+            capabilities,
+            "admin-ui.profile:",
+            "runtime.reload.admin-ui",
+            AdminUiProfileId::new,
+        )?)),
     }
+}
+
+fn parse_protocol_manifest(
+    plugin_id: &str,
+    capabilities: &[String],
+) -> Result<ProtocolManifestCapabilities, RuntimeError> {
+    let reload_token = "runtime.reload.protocol";
+    let mut reload_required = false;
+    for capability in capabilities {
+        if capability == reload_token {
+            if reload_required {
+                return Err(RuntimeError::Config(format!(
+                    "protocol plugin `{plugin_id}` duplicated {reload_token} manifest capability"
+                )));
+            }
+            reload_required = true;
+            continue;
+        }
+        return Err(RuntimeError::Config(format!(
+            "protocol plugin `{plugin_id}` has unknown manifest capability `{capability}`"
+        )));
+    }
+    if !reload_required {
+        return Err(RuntimeError::Config(format!(
+            "protocol plugin `{plugin_id}` is missing {reload_token} capability"
+        )));
+    }
+    Ok(ProtocolManifestCapabilities { reload_required })
+}
+
+fn parse_profile_manifest<P>(
+    plugin_id: &str,
+    kind: &str,
+    capabilities: &[String],
+    profile_prefix: &str,
+    reload_token: &str,
+    make_profile: impl Fn(String) -> P,
+) -> Result<ProfileManifestCapabilities<P>, RuntimeError> {
+    let mut profile_id = None;
+    let mut reload_required = false;
+    for capability in capabilities {
+        if capability == reload_token {
+            if reload_required {
+                return Err(RuntimeError::Config(format!(
+                    "{kind} plugin `{plugin_id}` duplicated {reload_token} manifest capability"
+                )));
+            }
+            reload_required = true;
+            continue;
+        }
+        if let Some(raw_profile_id) = capability.strip_prefix(profile_prefix) {
+            if raw_profile_id.is_empty() {
+                return Err(RuntimeError::Config(format!(
+                    "{kind} plugin `{plugin_id}` has empty {profile_prefix}<id> manifest capability"
+                )));
+            }
+            if profile_id.is_some() {
+                return Err(RuntimeError::Config(format!(
+                    "{kind} plugin `{plugin_id}` duplicated {profile_prefix}<id> manifest capability"
+                )));
+            }
+            profile_id = Some(make_profile(raw_profile_id.to_string()));
+            continue;
+        }
+        return Err(RuntimeError::Config(format!(
+            "{kind} plugin `{plugin_id}` has unknown manifest capability `{capability}`"
+        )));
+    }
+    let Some(profile_id) = profile_id else {
+        return Err(RuntimeError::Config(format!(
+            "{kind} plugin `{plugin_id}` is missing {profile_prefix}<id> manifest capability"
+        )));
+    };
+    if !reload_required {
+        return Err(RuntimeError::Config(format!(
+            "{kind} plugin `{plugin_id}` is missing {reload_token} capability"
+        )));
+    }
+    Ok(ProfileManifestCapabilities {
+        profile_id,
+        reload_required,
+    })
 }

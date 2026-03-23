@@ -13,8 +13,8 @@ use crate::codec::__internal::shared::{
     encode_player_snapshot, encode_world_meta,
 };
 use mc_core::{
-    CapabilitySet, CoreCommand, GameplayEffect, GameplayJoinEffect, GameplayProfileId, PlayerId,
-    PlayerSnapshot, WorldMeta,
+    CapabilityAnnouncement, CoreCommand, GameplayCapability, GameplayEffect, GameplayJoinEffect,
+    GameplayProfileId, PlayerId, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::ConnectionPhase;
 
@@ -109,7 +109,7 @@ impl GameplayRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub enum GameplayResponse {
     Descriptor(GameplayDescriptor),
-    CapabilitySet(CapabilitySet),
+    CapabilitySet(CapabilityAnnouncement<GameplayCapability>),
     JoinEffect(GameplayJoinEffect),
     Effect(GameplayEffect),
     SessionTransferBlob(Vec<u8>),
@@ -375,9 +375,10 @@ mod tests {
         },
     };
     use mc_core::{
-        BlockPos, BlockState, CapabilitySet, CoreCommand, CoreEvent, GameplayEffect,
-        GameplayJoinEffect, GameplayMutation, GameplayProfileId, InventoryContainer, InventorySlot,
-        ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, TargetedEvent, Vec3, WorldMeta,
+        BlockPos, BlockState, CapabilityAnnouncement, CoreCommand, CoreEvent, GameplayCapability,
+        GameplayCapabilitySet, GameplayEffect, GameplayJoinEffect, GameplayMutation,
+        GameplayProfileId, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
+        PlayerSnapshot, TargetedEvent, Vec3, WorldMeta,
     };
     use mc_proto_common::ConnectionPhase;
     use uuid::Uuid;
@@ -431,8 +432,8 @@ mod tests {
 
     #[test]
     fn gameplay_ops_round_trip_with_binary_codec() {
-        let mut capabilities = CapabilitySet::new();
-        let _ = capabilities.insert("runtime.reload.gameplay");
+        let mut capabilities = GameplayCapabilitySet::new();
+        let _ = capabilities.insert(GameplayCapability::RuntimeReload);
         let requests_and_responses = vec![
             (
                 GameplayRequest::Describe,
@@ -442,7 +443,7 @@ mod tests {
             ),
             (
                 GameplayRequest::CapabilitySet,
-                GameplayResponse::CapabilitySet(capabilities),
+                GameplayResponse::CapabilitySet(CapabilityAnnouncement::new(capabilities)),
             ),
             (
                 GameplayRequest::HandlePlayerJoin {

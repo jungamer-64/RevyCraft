@@ -2,7 +2,10 @@ use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
 use crate::codec::__internal::binary::{
     EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope, encode_envelope,
 };
-use mc_core::{AdminUiProfileId, ConnectionId, EntityId, PlayerId, PluginGenerationId};
+use mc_core::{
+    AdminUiCapability, AdminUiProfileId, CapabilityAnnouncement, ConnectionId, EntityId, PlayerId,
+    PluginGenerationId,
+};
 use mc_proto_common::{ConnectionPhase, TransportKind};
 use serde::{Deserialize, Serialize};
 
@@ -247,7 +250,7 @@ impl AdminUiInput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdminUiOutput {
     Descriptor(AdminUiDescriptor),
-    CapabilitySet(mc_core::CapabilitySet),
+    CapabilitySet(CapabilityAnnouncement<AdminUiCapability>),
     ParsedRequest(AdminRequest),
     RenderedText(String),
 }

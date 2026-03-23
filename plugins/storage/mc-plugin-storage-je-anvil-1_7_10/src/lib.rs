@@ -1,9 +1,7 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::CapabilitySet;
+use mc_core::{StorageCapability, StorageCapabilitySet};
 use mc_plugin_api::codec::storage::StorageDescriptor;
-use mc_plugin_sdk_rust::capabilities::{
-    build_tag_contains, capability_set as build_capability_set,
-};
+use mc_plugin_sdk_rust::capabilities::{build_tag_contains, storage_capabilities};
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::storage::RustStoragePlugin;
@@ -25,12 +23,8 @@ impl RustStoragePlugin for Je1710StoragePlugin {
         }
     }
 
-    fn capability_set(&self) -> CapabilitySet {
-        build_capability_set(&[
-            "storage.je-anvil",
-            "storage.profile.je-anvil-1_7_10",
-            "runtime.reload.storage",
-        ])
+    fn capability_set(&self) -> StorageCapabilitySet {
+        storage_capabilities(&[StorageCapability::RuntimeReload])
     }
 
     fn load_snapshot(
@@ -65,7 +59,7 @@ impl RustStoragePlugin for Je1710StoragePlugin {
 const MANIFEST: StaticPluginManifest = StaticPluginManifest::storage(
     JE_1_7_10_STORAGE_PLUGIN_ID,
     "JE 1.7.10 Anvil Storage Plugin",
-    &["storage.profile:je-anvil-1_7_10", "runtime.reload.storage"],
+    JE_1_7_10_STORAGE_PROFILE_ID,
 );
 
 export_plugin!(storage, Je1710StoragePlugin, MANIFEST);

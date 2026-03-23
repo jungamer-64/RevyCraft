@@ -1,10 +1,11 @@
 use super::*;
+use mc_core::StorageCapabilitySet;
 
 pub trait RustStoragePlugin: Send + Sync + 'static {
     fn descriptor(&self) -> StorageDescriptor;
 
-    fn capability_set(&self) -> CapabilitySet {
-        CapabilitySet::new()
+    fn capability_set(&self) -> StorageCapabilitySet {
+        StorageCapabilitySet::default()
     }
 
     /// Loads the current world snapshot for the provided world directory.

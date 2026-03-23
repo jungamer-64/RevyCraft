@@ -1,5 +1,8 @@
 pub(super) mod entity_id_probe_gameplay_plugin {
-    use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
+    use mc_core::{
+        CoreCommand, GameplayCapability, GameplayCapabilitySet, GameplayEffect, GameplayProfileId,
+        PlayerSnapshot,
+    };
     use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
     use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin};
@@ -28,10 +31,9 @@ pub(super) mod entity_id_probe_gameplay_plugin {
             }
         }
 
-        fn capability_set(&self) -> CapabilitySet {
-            let mut capabilities = CapabilitySet::new();
-            let _ = capabilities.insert("gameplay.profile.entity-aware");
-            let _ = capabilities.insert("runtime.reload.gameplay");
+        fn capability_set(&self) -> GameplayCapabilitySet {
+            let mut capabilities = GameplayCapabilitySet::new();
+            let _ = capabilities.insert(GameplayCapability::RuntimeReload);
             capabilities
         }
 
@@ -61,14 +63,14 @@ pub(super) mod entity_id_probe_gameplay_plugin {
     const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
         "gameplay-entity-aware",
         "Entity Aware Gameplay Plugin",
-        &["gameplay.profile:entity-aware", "runtime.reload.gameplay"],
+        "entity-aware",
     );
 
     export_plugin!(gameplay, EntityIdProbeGameplayPlugin, MANIFEST);
 }
 
 pub(super) mod custom_wire_codec_protocol_plugin {
-    use mc_core::CapabilitySet;
+    use mc_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use mc_plugin_api::abi::{
         ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
         PluginKind, Utf8Slice,
@@ -121,7 +123,11 @@ pub(super) mod custom_wire_codec_protocol_plugin {
                 Ok(ProtocolResponse::BedrockListenerDescriptor(None))
             }
             ProtocolRequest::CapabilitySet => {
-                Ok(ProtocolResponse::CapabilitySet(CapabilitySet::new()))
+                let mut capabilities = ProtocolCapabilitySet::new();
+                let _ = capabilities.insert(ProtocolCapability::RuntimeReload);
+                Ok(ProtocolResponse::CapabilitySet(
+                    CapabilityAnnouncement::new(capabilities),
+                ))
             }
             ProtocolRequest::EncodeWireFrame { payload } => {
                 let length = u8::try_from(payload.len())
@@ -227,7 +233,7 @@ pub(super) mod custom_wire_codec_protocol_plugin {
 }
 
 pub(super) mod failing_protocol_plugin {
-    use mc_core::CapabilitySet;
+    use mc_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use mc_plugin_api::abi::{
         ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
         PluginKind, Utf8Slice,
@@ -279,9 +285,11 @@ pub(super) mod failing_protocol_plugin {
                 Ok(ProtocolResponse::BedrockListenerDescriptor(None))
             }
             ProtocolRequest::CapabilitySet => {
-                let mut capabilities = CapabilitySet::new();
-                let _ = capabilities.insert("runtime.reload.protocol");
-                Ok(ProtocolResponse::CapabilitySet(capabilities))
+                let mut capabilities = ProtocolCapabilitySet::new();
+                let _ = capabilities.insert(ProtocolCapability::RuntimeReload);
+                Ok(ProtocolResponse::CapabilitySet(
+                    CapabilityAnnouncement::new(capabilities),
+                ))
             }
             ProtocolRequest::TryRoute { .. } => Err("protocol runtime failure".to_string()),
             other => Err(format!(
@@ -362,7 +370,10 @@ pub(super) mod failing_protocol_plugin {
 }
 
 pub(super) mod failing_gameplay_plugin {
-    use mc_core::{CapabilitySet, CoreCommand, GameplayEffect, GameplayProfileId, PlayerSnapshot};
+    use mc_core::{
+        CoreCommand, GameplayCapability, GameplayCapabilitySet, GameplayEffect, GameplayProfileId,
+        PlayerSnapshot,
+    };
     use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
     use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin};
@@ -378,10 +389,9 @@ pub(super) mod failing_gameplay_plugin {
             }
         }
 
-        fn capability_set(&self) -> CapabilitySet {
-            let mut capabilities = CapabilitySet::new();
-            let _ = capabilities.insert("gameplay.profile.failing");
-            let _ = capabilities.insert("runtime.reload.gameplay");
+        fn capability_set(&self) -> GameplayCapabilitySet {
+            let mut capabilities = GameplayCapabilitySet::new();
+            let _ = capabilities.insert(GameplayCapability::RuntimeReload);
             capabilities
         }
 
@@ -404,17 +414,14 @@ pub(super) mod failing_gameplay_plugin {
         }
     }
 
-    const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
-        "gameplay-failing",
-        "Failing Gameplay Plugin",
-        &["gameplay.profile:failing", "runtime.reload.gameplay"],
-    );
+    const MANIFEST: StaticPluginManifest =
+        StaticPluginManifest::gameplay("gameplay-failing", "Failing Gameplay Plugin", "failing");
 
     export_plugin!(gameplay, FailingGameplayPlugin, MANIFEST);
 }
 
 pub(super) mod failing_auth_plugin {
-    use mc_core::{CapabilitySet, PlayerId};
+    use mc_core::{AuthCapability, AuthCapabilitySet, PlayerId};
     use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode};
     use mc_plugin_sdk_rust::auth::RustAuthPlugin;
     use mc_plugin_sdk_rust::export_plugin;
@@ -433,9 +440,9 @@ pub(super) mod failing_auth_plugin {
             }
         }
 
-        fn capability_set(&self) -> CapabilitySet {
-            let mut capabilities = CapabilitySet::new();
-            let _ = capabilities.insert("runtime.reload.auth");
+        fn capability_set(&self) -> AuthCapabilitySet {
+            let mut capabilities = AuthCapabilitySet::new();
+            let _ = capabilities.insert(AuthCapability::RuntimeReload);
             capabilities
         }
 
@@ -444,15 +451,8 @@ pub(super) mod failing_auth_plugin {
         }
     }
 
-    const MANIFEST: StaticPluginManifest = StaticPluginManifest::auth(
-        "auth-failing",
-        "Failing Auth Plugin",
-        &[
-            "auth.profile:failing-auth",
-            "auth.mode:offline",
-            "runtime.reload.auth",
-        ],
-    );
+    const MANIFEST: StaticPluginManifest =
+        StaticPluginManifest::auth("auth-failing", "Failing Auth Plugin", PROFILE_ID);
 
     export_plugin!(auth, FailingAuthPlugin, MANIFEST);
 }

@@ -5,7 +5,7 @@ use crate::types::{
 };
 use bytes::BytesMut;
 use mc_core::{
-    CapabilitySet, CoreCommand, CoreEvent, PlayerId, PlayerSnapshot, PluginGenerationId,
+    CoreCommand, CoreEvent, PlayerId, PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet,
     WorldSnapshot,
 };
 use std::path::Path;
@@ -148,8 +148,8 @@ pub trait ProtocolAdapter: SessionAdapter + PlaySyncAdapter + Send + Sync {
     }
 
     #[must_use]
-    fn capability_set(&self) -> CapabilitySet {
-        CapabilitySet::default()
+    fn capability_set(&self) -> ProtocolCapabilitySet {
+        ProtocolCapabilitySet::default()
     }
 
     #[must_use]

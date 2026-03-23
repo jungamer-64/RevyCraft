@@ -1,5 +1,8 @@
 use super::*;
-use mc_core::{GameplayPolicyResolver, GameplayProfileId, GameplayQuery, SessionCapabilitySet};
+use mc_core::{
+    GameplayCapability, GameplayCapabilitySet, GameplayPolicyResolver, GameplayProfileId,
+    GameplayQuery, ProtocolCapabilitySet, SessionCapabilitySet,
+};
 
 struct HostQuery<'a> {
     host: &'a dyn GameplayHost,
@@ -32,11 +35,11 @@ impl GameplayQuery for HostQuery<'_> {
 }
 
 fn session_capabilities(
-    plugin_capabilities: &CapabilitySet,
+    plugin_capabilities: &GameplayCapabilitySet,
     session: &GameplaySessionSnapshot,
 ) -> SessionCapabilitySet {
     SessionCapabilitySet {
-        protocol: CapabilitySet::new(),
+        protocol: ProtocolCapabilitySet::new(),
         gameplay: plugin_capabilities.clone(),
         gameplay_profile: session.gameplay_profile.clone(),
         entity_id: session.entity_id,
@@ -89,8 +92,8 @@ pub trait GameplayHost {
 pub trait RustGameplayPlugin: Send + Sync + 'static {
     fn descriptor(&self) -> GameplayDescriptor;
 
-    fn capability_set(&self) -> CapabilitySet {
-        CapabilitySet::new()
+    fn capability_set(&self) -> GameplayCapabilitySet {
+        GameplayCapabilitySet::default()
     }
 
     /// Handles a player joining the gameplay session.
@@ -183,7 +186,7 @@ pub trait PolicyGameplayPlugin: Send + Sync + 'static {
     const EXPORT_TAG: &'static str;
     const IMPORT_REJECT_MESSAGE: &'static str;
 
-    fn capability_names() -> &'static [&'static str];
+    fn capabilities() -> &'static [GameplayCapability];
 }
 
 impl<T> RustGameplayPlugin for T
@@ -196,8 +199,8 @@ where
         }
     }
 
-    fn capability_set(&self) -> CapabilitySet {
-        capabilities::capability_set(T::capability_names())
+    fn capability_set(&self) -> GameplayCapabilitySet {
+        capabilities::gameplay_capabilities(T::capabilities())
     }
 
     fn handle_player_join(
@@ -207,7 +210,7 @@ where
         player: &PlayerSnapshot,
     ) -> Result<GameplayJoinEffect, String> {
         let query = HostQuery { host };
-        let capabilities = capabilities::capability_set(T::capability_names());
+        let capabilities = capabilities::gameplay_capabilities(T::capabilities());
         T::Policy::default().handle_player_join(
             &query,
             &session_capabilities(&capabilities, session),
@@ -222,7 +225,7 @@ where
         command: &CoreCommand,
     ) -> Result<GameplayEffect, String> {
         let query = HostQuery { host };
-        let capabilities = capabilities::capability_set(T::capability_names());
+        let capabilities = capabilities::gameplay_capabilities(T::capabilities());
         T::Policy::default().handle_command(
             &query,
             &session_capabilities(&capabilities, session),
@@ -237,7 +240,7 @@ where
         now_ms: u64,
     ) -> Result<GameplayEffect, String> {
         let query = HostQuery { host };
-        let capabilities = capabilities::capability_set(T::capability_names());
+        let capabilities = capabilities::gameplay_capabilities(T::capabilities());
         let Some(player_id) = session.player_id else {
             return Ok(GameplayEffect::default());
         };

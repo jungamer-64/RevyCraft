@@ -1,10 +1,11 @@
 use super::*;
+use mc_core::AdminUiCapabilitySet;
 
 pub trait RustAdminUiPlugin: Send + Sync + 'static {
     fn descriptor(&self) -> AdminUiDescriptor;
 
-    fn capability_set(&self) -> CapabilitySet {
-        CapabilitySet::new()
+    fn capability_set(&self) -> AdminUiCapabilitySet {
+        AdminUiCapabilitySet::default()
     }
 
     /// Parses a single operator line into a structured admin request.

@@ -5,13 +5,14 @@ mod profiles;
 mod reload;
 
 use super::{
-    AdminUiDescriptor, AdminUiInput, AdminUiOutput, AdminUiPluginApiV1, AdminUiProfileId, Arc,
-    AuthPluginApiV1, AuthRequest, AuthResponse, BedrockListenerDescriptor, CapabilitySet,
-    GameplayGeneration, GameplayPluginApiV2, GameplayProfileId, GameplayRequest, GameplayResponse,
-    GameplaySessionSnapshot, HashMap, HashSet, ManagedGameplayPlugin, ManagedProtocolPlugin,
-    OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind, PluginManifestV1,
-    ProtocolDescriptor, ProtocolGeneration, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse,
-    RuntimeError, RuntimeReloadContext, StorageGeneration, StoragePluginApiV1, StorageRequest,
+    AdminUiCapability, AdminUiDescriptor, AdminUiInput, AdminUiOutput, AdminUiPluginApiV1,
+    AdminUiProfileId, Arc, AuthCapability, AuthPluginApiV1, AuthRequest, AuthResponse,
+    BedrockListenerDescriptor, GameplayCapability, GameplayGeneration, GameplayPluginApiV2,
+    GameplayProfileId, GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HashMap,
+    HashSet, ManagedGameplayPlugin, ManagedProtocolPlugin, OwnedBuffer, PluginAbiVersion,
+    PluginErrorCode, PluginKind, PluginManifestV1, ProtocolCapability, ProtocolDescriptor,
+    ProtocolGeneration, ProtocolPluginApiV1, ProtocolRequest, ProtocolResponse, RuntimeError,
+    RuntimeReloadContext, StorageCapability, StorageGeneration, StoragePluginApiV1, StorageRequest,
     StorageResponse, admin_ui_host_api, decode_admin_ui_output, decode_auth_response,
     decode_gameplay_response, decode_plugin_error, decode_protocol_response,
     decode_storage_response, encode_admin_ui_input, encode_auth_request, encode_gameplay_request,
@@ -34,8 +35,7 @@ pub(super) use self::invoke::{
     invoke_admin_ui, invoke_auth, invoke_gameplay, invoke_protocol, invoke_storage,
 };
 pub(super) use self::manifest::{
-    DecodedManifest, admin_ui_profile_id_from_manifest, decode_manifest, decode_utf8_slice,
-    gameplay_profile_id_from_manifest, manifest_profile_id, require_manifest_capability,
+    DecodedManifest, ManifestCapabilities, decode_manifest, decode_utf8_slice,
 };
 pub(super) use self::profiles::{ensure_known_profiles, ensure_profile_known};
 pub(super) use self::reload::{

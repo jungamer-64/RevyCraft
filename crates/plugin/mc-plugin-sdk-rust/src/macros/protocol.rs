@@ -5,6 +5,22 @@ macro_rules! declare_protocol_plugin {
         $adapter_ty:ty,
         $plugin_id:expr,
         $display_name:expr,
+        $capabilities:expr $(,)?
+    ) => {
+        $crate::declare_protocol_plugin!(
+            $plugin_ty,
+            $adapter_ty,
+            $plugin_id,
+            $display_name,
+            $capabilities,
+            &[]
+        );
+    };
+    (
+        $plugin_ty:ident,
+        $adapter_ty:ty,
+        $plugin_id:expr,
+        $display_name:expr,
         $capabilities:expr,
         $manifest_capabilities:expr $(,)?
     ) => {
@@ -14,17 +30,13 @@ macro_rules! declare_protocol_plugin {
         }
 
         $crate::delegate_protocol_adapter!($plugin_ty, adapter, {
-            $crate::capabilities::capability_set($capabilities)
+            $crate::capabilities::protocol_capabilities($capabilities)
         });
 
         $crate::export_plugin!(
             protocol,
             $plugin_ty,
-            $crate::manifest::StaticPluginManifest::protocol_with_capabilities(
-                $plugin_id,
-                $display_name,
-                $manifest_capabilities,
-            )
+            $crate::manifest::StaticPluginManifest::protocol($plugin_id, $display_name)
         );
     };
 }
@@ -147,7 +159,7 @@ macro_rules! delegate_protocol_adapter {
                 self.$field.bedrock_listener_descriptor()
             }
 
-            fn capability_set(&self) -> mc_core::CapabilitySet {
+            fn capability_set(&self) -> mc_core::ProtocolCapabilitySet {
                 $capability_body
             }
         }

@@ -1,4 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
+use mc_core::{AdminUiCapability, AdminUiCapabilitySet};
 use mc_plugin_api::codec::admin_ui::{
     AdminConfigReloadView, AdminGenerationReloadView, AdminNamedCountView, AdminPluginsReloadView,
     AdminRequest, AdminResponse, AdminSessionSummaryView, AdminSessionsView, AdminStatusView,
@@ -19,8 +20,8 @@ impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
         }
     }
 
-    fn capability_set(&self) -> mc_core::CapabilitySet {
-        capabilities::capability_set(&["admin-ui.console", "runtime.reload.admin-ui"])
+    fn capability_set(&self) -> AdminUiCapabilitySet {
+        capabilities::admin_ui_capabilities(&[AdminUiCapability::RuntimeReload])
     }
 
     fn parse_line(&self, line: &str) -> Result<AdminRequest, String> {
@@ -63,11 +64,8 @@ impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
     }
 }
 
-const MANIFEST: StaticPluginManifest = StaticPluginManifest::admin_ui(
-    "admin-ui-console",
-    "Console Admin UI Plugin",
-    &["admin-ui.profile:console-v1", "runtime.reload.admin-ui"],
-);
+const MANIFEST: StaticPluginManifest =
+    StaticPluginManifest::admin_ui("admin-ui-console", "Console Admin UI Plugin", "console-v1");
 
 fn render_help() -> String {
     [

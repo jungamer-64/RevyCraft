@@ -9,9 +9,9 @@ pub fn handle_storage_request<P: RustStoragePlugin>(
 ) -> Result<StorageResponse, String> {
     match request {
         StorageRequest::Describe => Ok(StorageResponse::Descriptor(plugin.descriptor())),
-        StorageRequest::CapabilitySet => {
-            Ok(StorageResponse::CapabilitySet(plugin.capability_set()))
-        }
+        StorageRequest::CapabilitySet => Ok(StorageResponse::CapabilitySet(
+            crate::capabilities::storage_announcement(&plugin.capability_set()),
+        )),
         StorageRequest::LoadSnapshot { world_dir } => plugin
             .load_snapshot(Path::new(&world_dir))
             .map(StorageResponse::Snapshot)

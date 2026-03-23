@@ -1,8 +1,8 @@
 #![allow(clippy::multiple_crate_versions)]
 
 use mc_core::{
-    CapabilitySet, CoreCommand, GameplayEffect, GameplayJoinEffect, PlayerId, PlayerSnapshot,
-    WorldMeta, WorldSnapshot,
+    CoreCommand, GameplayEffect, GameplayJoinEffect, PlayerId, PlayerSnapshot, WorldMeta,
+    WorldSnapshot,
 };
 use mc_plugin_api::abi::{
     CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginAbiVersion, PluginKind,

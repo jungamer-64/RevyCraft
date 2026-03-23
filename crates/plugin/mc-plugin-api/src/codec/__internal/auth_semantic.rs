@@ -1,6 +1,7 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::shared::{
-    decode_capability_set, decode_player_id, encode_capability_set, encode_player_id,
+    decode_capability_announcement, decode_player_id, encode_capability_announcement,
+    encode_player_id,
 };
 use crate::codec::auth::{
     AuthDescriptor, AuthMode, AuthOpCode, AuthRequest, AuthResponse, BedrockAuthResult,
@@ -80,7 +81,7 @@ pub(crate) fn encode_auth_response_payload(
             Ok(())
         }
         (AuthOpCode::CapabilitySet, AuthResponse::CapabilitySet(capabilities)) => {
-            encode_capability_set(encoder, capabilities)
+            encode_capability_announcement(encoder, capabilities)
         }
         (
             AuthOpCode::AuthenticateOffline | AuthOpCode::AuthenticateOnline,
@@ -108,9 +109,9 @@ pub(crate) fn decode_auth_response_payload(
             auth_profile: AuthProfileId::new(decoder.read_string()?),
             mode: decode_auth_mode(decoder)?,
         })),
-        AuthOpCode::CapabilitySet => {
-            Ok(AuthResponse::CapabilitySet(decode_capability_set(decoder)?))
-        }
+        AuthOpCode::CapabilitySet => Ok(AuthResponse::CapabilitySet(
+            decode_capability_announcement(decoder)?,
+        )),
         AuthOpCode::AuthenticateOffline | AuthOpCode::AuthenticateOnline => Ok(
             AuthResponse::AuthenticatedPlayer(decode_player_id(decoder)?),
         ),

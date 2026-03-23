@@ -1,5 +1,5 @@
 use super::{
-    AdminRequest, AdminResponse, AdminUiGeneration, AdminUiProfileId, Arc, CapabilitySet,
+    AdminRequest, AdminResponse, AdminUiCapabilitySet, AdminUiGeneration, AdminUiProfileId, Arc,
     PluginFailureAction, PluginFailureDispatch, PluginGenerationId, PluginKind,
     ReloadableGenerationSlot, RuntimeError,
 };
@@ -42,7 +42,7 @@ impl HotSwappableAdminUiProfile {
         &self.profile_id
     }
 
-    fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> AdminUiCapabilitySet {
         self.generation.capability_set()
     }
 
@@ -84,7 +84,7 @@ impl crate::runtime::AdminUiProfileHandle for HotSwappableAdminUiProfile {
         Self::profile_id(self)
     }
 
-    fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> AdminUiCapabilitySet {
         Self::capability_set(self)
     }
 

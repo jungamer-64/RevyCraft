@@ -7,7 +7,7 @@ use crate::codec::__internal::binary::{
     Decoder, Encoder, EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope,
     encode_envelope,
 };
-use mc_core::{AuthProfileId, CapabilitySet, PlayerId};
+use mc_core::{AuthCapability, AuthProfileId, CapabilityAnnouncement, PlayerId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,7 +97,7 @@ impl AuthRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthResponse {
     Descriptor(AuthDescriptor),
-    CapabilitySet(CapabilitySet),
+    CapabilitySet(CapabilityAnnouncement<AuthCapability>),
     AuthenticatedPlayer(PlayerId),
     AuthenticatedBedrockPlayer(BedrockAuthResult),
 }
@@ -213,7 +213,7 @@ mod tests {
         AuthDescriptor, AuthMode, AuthRequest, AuthResponse, BedrockAuthResult,
         decode_auth_request, decode_auth_response, encode_auth_request, encode_auth_response,
     };
-    use mc_core::{CapabilitySet, PlayerId};
+    use mc_core::{AuthCapability, AuthCapabilitySet, CapabilityAnnouncement, PlayerId};
     use uuid::Uuid;
 
     #[test]
@@ -230,10 +230,10 @@ mod tests {
 
     #[test]
     fn auth_capability_set_roundtrip() {
-        let mut capabilities = CapabilitySet::new();
-        let _ = capabilities.insert("auth.bedrock");
+        let mut capabilities = AuthCapabilitySet::new();
+        let _ = capabilities.insert(AuthCapability::RuntimeReload);
         let request = AuthRequest::CapabilitySet;
-        let response = AuthResponse::CapabilitySet(capabilities);
+        let response = AuthResponse::CapabilitySet(CapabilityAnnouncement::new(capabilities));
         let bytes =
             encode_auth_response(&request, &response).expect("capability set should encode");
         let decoded = decode_auth_response(&request, &bytes).expect("capability set should decode");

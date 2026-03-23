@@ -1,5 +1,5 @@
 use super::{
-    Arc, CapabilitySet, Path, PluginGenerationId, ReloadableGenerationSlot, StorageAdapter,
+    Arc, Path, PluginGenerationId, ReloadableGenerationSlot, StorageAdapter, StorageCapabilitySet,
     StorageError, StorageProfileHandle, StorageRequest, StorageResponse, WorldSnapshot,
 };
 
@@ -42,7 +42,7 @@ impl HotSwappableStorageProfile {
         &self.plugin_id
     }
 
-    fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> StorageCapabilitySet {
         self.generation.capability_set()
     }
 
@@ -122,7 +122,7 @@ impl StorageProfileHandle for HotSwappableStorageProfile {
         Self::plugin_id(self)
     }
 
-    fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> StorageCapabilitySet {
         Self::capability_set(self)
     }
 

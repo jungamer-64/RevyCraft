@@ -33,10 +33,9 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
         .resolve_auth_profile(ONLINE_STUB_AUTH_PROFILE_ID)
         .expect("online auth profile should still resolve");
     assert_ne!(auth_after.plugin_generation_id(), Some(before_generation));
-    assert!(
-        auth_after
-            .capability_set()
-            .contains("build-tag:online-auth-v2")
+    assert_eq!(
+        auth_build_tag(&server, ONLINE_STUB_AUTH_PROFILE_ID).as_deref(),
+        Some("online-auth-v2")
     );
 
     let (shared_secret, shared_secret_encrypted, verify_token_encrypted) =

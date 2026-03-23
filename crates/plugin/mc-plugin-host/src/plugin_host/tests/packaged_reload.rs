@@ -28,6 +28,15 @@ fn seed_legacy_gameplay_artifact_without_v2_symbol(dist_dir: &Path) -> Result<()
     Ok(())
 }
 
+fn protocol_build_tag(host: &TestPluginHost, plugin_id: &str) -> Option<String> {
+    host.status()
+        .protocols
+        .iter()
+        .find(|plugin| plugin.plugin_id == plugin_id)
+        .and_then(|plugin| plugin.build_tag.as_ref())
+        .map(|tag| tag.as_str().to_string())
+}
+
 #[test]
 fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
@@ -40,15 +49,14 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
     let registries = host.load_protocol_plugin_set()?;
 
     for adapter_id in ["je-5", "je-47", "je-340", "be-placeholder"] {
-        let adapter = registries
-            .protocols()
-            .resolve_adapter(adapter_id)
-            .expect("packaged plugin adapter should resolve");
         assert!(
-            adapter
-                .capability_set()
-                .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG)),
-            "adapter `{adapter_id}` should expose build tag capability"
+            registries.protocols().resolve_adapter(adapter_id).is_some(),
+            "packaged plugin adapter should resolve"
+        );
+        assert_eq!(
+            protocol_build_tag(&host, adapter_id).as_deref(),
+            Some(PACKAGED_PLUGIN_TEST_HARNESS_TAG),
+            "adapter `{adapter_id}` should expose the packaged build tag"
         );
     }
 
@@ -59,7 +67,8 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
 fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
 -> Result<(), RuntimeError> {
     use mc_core::{
-        CapabilitySet, CoreCommand, EntityId, GameplayProfileId, PlayerId, SessionCapabilitySet,
+        CoreCommand, EntityId, GameplayCapabilitySet, GameplayProfileId, PlayerId,
+        ProtocolCapabilitySet, SessionCapabilitySet,
     };
     use uuid::Uuid;
 
@@ -112,8 +121,8 @@ fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
                         level_name: "world",
                     },
                     &SessionCapabilitySet {
-                        protocol: CapabilitySet::new(),
-                        gameplay: CapabilitySet::new(),
+                        protocol: ProtocolCapabilitySet::new(),
+                        gameplay: GameplayCapabilitySet::new(),
                         gameplay_profile: GameplayProfileId::new("canonical"),
                         entity_id: Some(EntityId(3)),
                         protocol_generation: None,
@@ -156,10 +165,9 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
     let first_generation = adapter
         .plugin_generation_id()
         .expect("packaged adapter should report plugin generation");
-    assert!(
-        adapter
-            .capability_set()
-            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    assert_eq!(
+        protocol_build_tag(&host, "je-5").as_deref(),
+        Some(PACKAGED_PLUGIN_TEST_HARNESS_TAG)
     );
 
     std::thread::sleep(Duration::from_secs(1));
@@ -184,7 +192,10 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
         .plugin_generation_id()
         .expect("reloaded adapter should report plugin generation");
     assert_ne!(first_generation, next_generation);
-    assert!(adapter.capability_set().contains("build-tag:reload-v2"));
+    assert_eq!(
+        protocol_build_tag(&host, "je-5").as_deref(),
+        Some("reload-v2")
+    );
     Ok(())
 }
 
@@ -218,10 +229,9 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
     let before_generation = adapter
         .plugin_generation_id()
         .expect("packaged adapter should report plugin generation");
-    assert!(
-        adapter
-            .capability_set()
-            .contains("build-tag:protocol-reload-v1")
+    assert_eq!(
+        protocol_build_tag(&host, "je-5").as_deref(),
+        Some("protocol-reload-v1")
     );
 
     let player_id = PlayerId(Uuid::from_u128(7));
@@ -260,10 +270,9 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
         .plugin_generation_id()
         .expect("reloaded adapter should report plugin generation");
     assert_ne!(before_generation, next_generation);
-    assert!(
-        adapter
-            .capability_set()
-            .contains("build-tag:protocol-reload-v2")
+    assert_eq!(
+        protocol_build_tag(&host, "je-5").as_deref(),
+        Some("protocol-reload-v2")
     );
     Ok(())
 }
@@ -332,10 +341,9 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
         .resolve_adapter("je-5")
         .expect("adapter should still resolve after failed reload");
     assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
-    assert!(
-        adapter
-            .capability_set()
-            .contains("build-tag:protocol-reload-v1")
+    assert_eq!(
+        protocol_build_tag(&host, "je-5").as_deref(),
+        Some("protocol-reload-v1")
     );
     Ok(())
 }
@@ -393,10 +401,9 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
         .resolve_adapter("je-5")
         .expect("adapter should still resolve after incompatible reload");
     assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
-    assert!(
-        adapter
-            .capability_set()
-            .contains("build-tag:protocol-reload-v1")
+    assert_eq!(
+        protocol_build_tag(&host, "je-5").as_deref(),
+        Some("protocol-reload-v1")
     );
 
     let status = host.status();

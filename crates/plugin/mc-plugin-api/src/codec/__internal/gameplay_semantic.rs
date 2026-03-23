@@ -1,9 +1,9 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::shared::{
-    decode_block_pos, decode_block_state, decode_capability_set, decode_connection_phase,
+    decode_block_pos, decode_block_state, decode_capability_announcement, decode_connection_phase,
     decode_core_command, decode_core_event, decode_entity_id, decode_f32_value,
     decode_inventory_slot, decode_option, decode_player_id, decode_player_snapshot,
-    decode_u8_value, encode_block_pos, encode_block_state, encode_capability_set,
+    decode_u8_value, encode_block_pos, encode_block_state, encode_capability_announcement,
     encode_connection_phase, encode_core_command, encode_core_event, encode_entity_id,
     encode_inventory_slot, encode_option, encode_player_id, encode_player_snapshot,
 };
@@ -87,7 +87,7 @@ pub(crate) fn encode_gameplay_response_payload(
             encode_gameplay_descriptor(encoder, descriptor)
         }
         (GameplayOpCode::CapabilitySet, GameplayResponse::CapabilitySet(capability_set)) => {
-            encode_capability_set(encoder, capability_set)
+            encode_capability_announcement(encoder, capability_set)
         }
         (GameplayOpCode::HandlePlayerJoin, GameplayResponse::JoinEffect(effect)) => {
             encode_gameplay_join_effect(encoder, effect)
@@ -118,7 +118,7 @@ pub(crate) fn decode_gameplay_response_payload(
             decoder,
         )?)),
         GameplayOpCode::CapabilitySet => Ok(GameplayResponse::CapabilitySet(
-            decode_capability_set(decoder)?,
+            decode_capability_announcement(decoder)?,
         )),
         GameplayOpCode::HandlePlayerJoin => Ok(GameplayResponse::JoinEffect(
             decode_gameplay_join_effect(decoder)?,

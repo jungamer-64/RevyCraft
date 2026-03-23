@@ -121,8 +121,9 @@ fn load_plugin_set_activates_runtime_profiles() {
 #[test]
 fn gameplay_command_snapshot_preserves_entity_id() {
     use mc_core::{
-        BlockPos, BlockState, CapabilitySet, CoreCommand, DimensionId, EntityId, GameplayProfileId,
-        GameplayQuery, PlayerId, SessionCapabilitySet, WorldMeta,
+        BlockPos, BlockState, CoreCommand, DimensionId, EntityId, GameplayCapabilitySet,
+        GameplayProfileId, GameplayQuery, PlayerId, ProtocolCapabilitySet, SessionCapabilitySet,
+        WorldMeta,
     };
 
     struct NoopQuery;
@@ -182,8 +183,8 @@ fn gameplay_command_snapshot_preserves_entity_id() {
         .handle_command(
             &NoopQuery,
             &SessionCapabilitySet {
-                protocol: CapabilitySet::new(),
-                gameplay: CapabilitySet::new(),
+                protocol: ProtocolCapabilitySet::new(),
+                gameplay: GameplayCapabilitySet::new(),
                 gameplay_profile: GameplayProfileId::new("entity-aware"),
                 entity_id: Some(EntityId(41)),
                 protocol_generation: None,

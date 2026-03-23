@@ -43,10 +43,9 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
         .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("runtime should still resolve the adapter after reload");
     assert_ne!(adapter.plugin_generation_id(), Some(before_generation));
-    assert!(
-        adapter
-            .capability_set()
-            .contains("build-tag:protocol-reload-v2")
+    assert_eq!(
+        protocol_build_tag(&server, JE_5_ADAPTER_ID).as_deref(),
+        Some("protocol-reload-v2")
     );
 
     write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
@@ -198,10 +197,9 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
         .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("runtime should still resolve the adapter after failed reload");
     assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
-    assert!(
-        adapter
-            .capability_set()
-            .contains("build-tag:protocol-reload-v1")
+    assert_eq!(
+        protocol_build_tag(&server, JE_5_ADAPTER_ID).as_deref(),
+        Some("protocol-reload-v1")
     );
 
     write_packet(&mut alpha, &codec, &held_item_change(6)).await?;
@@ -282,10 +280,9 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
             .resolve_adapter(JE_5_ADAPTER_ID)
             .expect("watch server should resolve the adapter after reload");
         if adapter.plugin_generation_id() != Some(before_generation) {
-            assert!(
-                adapter
-                    .capability_set()
-                    .contains("build-tag:protocol-reload-v2")
+            assert_eq!(
+                protocol_build_tag(&server, JE_5_ADAPTER_ID).as_deref(),
+                Some("protocol-reload-v2")
             );
             break;
         }

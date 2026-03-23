@@ -1,8 +1,8 @@
 use super::{
     AdminUiProfileId, ArtifactIdentity, ArtifactQuarantineRecord, AuthMode, AuthProfileId,
-    Deserialize, Edition, GameplayProfileId, PluginFailureAction, PluginFailureMatrix,
-    PluginGenerationId, PluginHost, PluginKind, Serialize, StorageProfileId, TransportKind,
-    system_time_ms,
+    Deserialize, Edition, GameplayProfileId, PluginBuildTag, PluginFailureAction,
+    PluginFailureMatrix, PluginGenerationId, PluginHost, PluginKind, Serialize, StorageProfileId,
+    TransportKind, system_time_ms,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,6 +17,8 @@ pub struct ProtocolPluginStatusSnapshot {
     pub plugin_id: String,
     pub adapter_id: String,
     pub generation_id: PluginGenerationId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_tag: Option<PluginBuildTag>,
     pub loaded_at_ms: u64,
     pub failure_action: PluginFailureAction,
     pub current_artifact: PluginArtifactStatusSnapshot,
@@ -34,6 +36,8 @@ pub struct GameplayPluginStatusSnapshot {
     pub plugin_id: String,
     pub profile_id: GameplayProfileId,
     pub generation_id: PluginGenerationId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_tag: Option<PluginBuildTag>,
     pub loaded_at_ms: u64,
     pub failure_action: PluginFailureAction,
     pub current_artifact: PluginArtifactStatusSnapshot,
@@ -46,6 +50,8 @@ pub struct StoragePluginStatusSnapshot {
     pub plugin_id: String,
     pub profile_id: StorageProfileId,
     pub generation_id: PluginGenerationId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_tag: Option<PluginBuildTag>,
     pub loaded_at_ms: u64,
     pub failure_action: PluginFailureAction,
     pub current_artifact: PluginArtifactStatusSnapshot,
@@ -58,6 +64,8 @@ pub struct AuthPluginStatusSnapshot {
     pub plugin_id: String,
     pub profile_id: AuthProfileId,
     pub generation_id: PluginGenerationId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_tag: Option<PluginBuildTag>,
     pub loaded_at_ms: u64,
     pub failure_action: PluginFailureAction,
     pub current_artifact: PluginArtifactStatusSnapshot,
@@ -71,6 +79,8 @@ pub struct AdminUiPluginStatusSnapshot {
     pub plugin_id: String,
     pub profile_id: AdminUiProfileId,
     pub generation_id: PluginGenerationId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_tag: Option<PluginBuildTag>,
     pub loaded_at_ms: u64,
     pub failure_action: PluginFailureAction,
     pub current_artifact: PluginArtifactStatusSnapshot,
@@ -183,6 +193,7 @@ impl PluginHost {
                     plugin_id: managed.package.plugin_id.clone(),
                     adapter_id: generation.descriptor.adapter_id.clone(),
                     generation_id: generation.generation_id,
+                    build_tag: generation.build_tag.clone(),
                     loaded_at_ms: system_time_ms(managed.active_loaded_at),
                     failure_action: self.failures.action_for_kind(PluginKind::Protocol),
                     current_artifact: artifact_status_snapshot(
@@ -219,6 +230,7 @@ impl PluginHost {
                     plugin_id: managed.package.plugin_id.clone(),
                     profile_id: managed.profile_id.clone(),
                     generation_id: generation.generation_id,
+                    build_tag: generation.build_tag.clone(),
                     loaded_at_ms: system_time_ms(managed.active_loaded_at),
                     failure_action: self.failures.action_for_kind(PluginKind::Gameplay),
                     current_artifact: artifact_status_snapshot(
@@ -248,6 +260,7 @@ impl PluginHost {
                     plugin_id: managed.package.plugin_id.clone(),
                     profile_id: managed.profile_id.clone(),
                     generation_id: generation.generation_id,
+                    build_tag: generation.build_tag.clone(),
                     loaded_at_ms: system_time_ms(managed.active_loaded_at),
                     failure_action: self.failures.action_for_kind(PluginKind::Storage),
                     current_artifact: artifact_status_snapshot(
@@ -277,6 +290,7 @@ impl PluginHost {
                     plugin_id: managed.package.plugin_id.clone(),
                     profile_id: managed.profile_id.clone(),
                     generation_id: generation.generation_id,
+                    build_tag: generation.build_tag.clone(),
                     loaded_at_ms: system_time_ms(managed.active_loaded_at),
                     failure_action: self.failures.action_for_kind(PluginKind::Auth),
                     current_artifact: artifact_status_snapshot(
@@ -307,6 +321,7 @@ impl PluginHost {
                     plugin_id: managed.package.plugin_id.clone(),
                     profile_id: managed.profile_id.clone(),
                     generation_id: generation.generation_id,
+                    build_tag: generation.build_tag.clone(),
                     loaded_at_ms: system_time_ms(managed.active_loaded_at),
                     failure_action: self.failures.action_for_kind(PluginKind::AdminUi),
                     current_artifact: artifact_status_snapshot(

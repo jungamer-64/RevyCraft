@@ -16,7 +16,9 @@ pub fn handle_admin_ui_request_with_host_api<P: RustAdminUiPlugin>(
 ) -> Result<AdminUiOutput, String> {
     match request {
         AdminUiInput::Describe => Ok(AdminUiOutput::Descriptor(plugin.descriptor())),
-        AdminUiInput::CapabilitySet => Ok(AdminUiOutput::CapabilitySet(plugin.capability_set())),
+        AdminUiInput::CapabilitySet => Ok(AdminUiOutput::CapabilitySet(
+            crate::capabilities::admin_ui_announcement(&plugin.capability_set()),
+        )),
         AdminUiInput::ParseLine { line } => {
             plugin.parse_line(&line).map(AdminUiOutput::ParsedRequest)
         }

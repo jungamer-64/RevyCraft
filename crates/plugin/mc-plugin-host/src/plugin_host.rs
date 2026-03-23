@@ -9,9 +9,11 @@ use crate::runtime::{
 use bytes::BytesMut;
 use libloading::Library;
 use mc_core::{
-    AdminUiProfileId, AuthProfileId, CapabilitySet, GameplayEffect, GameplayJoinEffect,
+    AdminUiCapability, AdminUiCapabilitySet, AdminUiProfileId, AuthCapability, AuthCapabilitySet,
+    AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayEffect, GameplayJoinEffect,
     GameplayPolicyResolver, GameplayProfileId, GameplayQuery, PlayerId, PlayerSnapshot,
-    PluginGenerationId, SessionCapabilitySet, StorageProfileId, WorldSnapshot,
+    PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet,
+    SessionCapabilitySet, StorageCapability, StorageCapabilitySet, StorageProfileId, WorldSnapshot,
 };
 use mc_plugin_api::abi::{
     ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind,
@@ -115,16 +117,15 @@ pub use self::status::{
     StoragePluginStatusSnapshot,
 };
 use self::support::{
-    DecodedManifest, admin_ui_profile_id_from_manifest, decode_manifest, decode_utf8_slice,
+    DecodedManifest, ManifestCapabilities, decode_manifest, decode_utf8_slice,
     ensure_known_profiles, ensure_profile_known, expect_admin_ui_capabilities,
     expect_admin_ui_descriptor, expect_auth_capabilities, expect_auth_descriptor,
     expect_gameplay_capabilities, expect_gameplay_descriptor,
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
-    gameplay_profile_id_from_manifest, import_storage_runtime_state, invoke_admin_ui, invoke_auth,
-    invoke_gameplay, invoke_protocol, invoke_storage, manifest_profile_id,
-    migrate_gameplay_sessions, migrate_protocol_sessions, protocol_reload_compatible,
-    require_manifest_capability,
+    import_storage_runtime_state, invoke_admin_ui, invoke_auth, invoke_gameplay, invoke_protocol,
+    invoke_storage, migrate_gameplay_sessions, migrate_protocol_sessions,
+    protocol_reload_compatible,
 };
 pub(crate) use self::topology::PreparedProtocolTopology;
 

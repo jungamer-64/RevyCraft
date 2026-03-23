@@ -1,5 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::ReadonlyGameplayPolicy;
+use mc_core::{GameplayCapability, ReadonlyGameplayPolicy};
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::gameplay::PolicyGameplayPlugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
@@ -14,15 +14,12 @@ impl PolicyGameplayPlugin for ReadonlyGameplayPlugin {
     const EXPORT_TAG: &'static str = "readonly";
     const IMPORT_REJECT_MESSAGE: &'static str = "readonly gameplay plugin refused session import";
 
-    fn capability_names() -> &'static [&'static str] {
-        &["gameplay.profile.readonly", "runtime.reload.gameplay"]
+    fn capabilities() -> &'static [GameplayCapability] {
+        &[GameplayCapability::RuntimeReload]
     }
 }
 
-const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
-    "gameplay-readonly",
-    "Readonly Gameplay Plugin",
-    &["gameplay.profile:readonly", "runtime.reload.gameplay"],
-);
+const MANIFEST: StaticPluginManifest =
+    StaticPluginManifest::gameplay("gameplay-readonly", "Readonly Gameplay Plugin", "readonly");
 
 export_plugin!(gameplay, ReadonlyGameplayPlugin, MANIFEST);

@@ -1,5 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::CanonicalGameplayPolicy;
+use mc_core::{CanonicalGameplayPolicy, GameplayCapability};
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::gameplay::PolicyGameplayPlugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
@@ -14,15 +14,15 @@ impl PolicyGameplayPlugin for CanonicalGameplayPlugin {
     const EXPORT_TAG: &'static str = "canonical";
     const IMPORT_REJECT_MESSAGE: &'static str = "canonical gameplay plugin refused session import";
 
-    fn capability_names() -> &'static [&'static str] {
-        &["gameplay.profile.canonical", "runtime.reload.gameplay"]
+    fn capabilities() -> &'static [GameplayCapability] {
+        &[GameplayCapability::RuntimeReload]
     }
 }
 
 const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
     "gameplay-canonical",
     "Canonical Gameplay Plugin",
-    &["gameplay.profile:canonical", "runtime.reload.gameplay"],
+    "canonical",
 );
 
 export_plugin!(gameplay, CanonicalGameplayPlugin, MANIFEST);

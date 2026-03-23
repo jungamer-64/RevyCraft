@@ -53,10 +53,9 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
     let readonly_generation = readonly_before
         .plugin_generation_id()
         .expect("readonly profile should report generation");
-    assert!(
-        canonical_before
-            .capability_set()
-            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    assert_eq!(
+        gameplay_build_tag(&server, "canonical").as_deref(),
+        Some(PACKAGED_PLUGIN_TEST_HARNESS_TAG)
     );
 
     let addr = listener_addr(&server);
@@ -112,10 +111,9 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         readonly_after.plugin_generation_id(),
         Some(readonly_generation)
     );
-    assert!(
-        canonical_after
-            .capability_set()
-            .contains("build-tag:gameplay-reload-v2")
+    assert_eq!(
+        gameplay_build_tag(&server, "canonical").as_deref(),
+        Some("gameplay-reload-v2")
     );
 
     write_packet(
@@ -163,10 +161,9 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
     let before_generation = canonical_before
         .plugin_generation_id()
         .expect("canonical profile should report generation");
-    assert!(
-        canonical_before
-            .capability_set()
-            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    assert_eq!(
+        gameplay_build_tag(&server, "canonical").as_deref(),
+        Some(PACKAGED_PLUGIN_TEST_HARNESS_TAG)
     );
 
     let addr = listener_addr(&server);
@@ -214,10 +211,9 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         canonical_after.plugin_generation_id(),
         Some(before_generation)
     );
-    assert!(
-        canonical_after
-            .capability_set()
-            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    assert_eq!(
+        gameplay_build_tag(&server, "canonical").as_deref(),
+        Some(PACKAGED_PLUGIN_TEST_HARNESS_TAG)
     );
 
     write_packet(
@@ -261,10 +257,9 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     let before_generation = storage_before
         .plugin_generation_id()
         .expect("storage profile should report generation");
-    assert!(
-        storage_before
-            .capability_set()
-            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    assert_eq!(
+        storage_build_tag(&server, JE_1_7_10_STORAGE_PROFILE_ID).as_deref(),
+        Some(PACKAGED_PLUGIN_TEST_HARNESS_TAG)
     );
 
     let addr = listener_addr(&server);
@@ -313,10 +308,9 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
         storage_after.plugin_generation_id(),
         Some(before_generation)
     );
-    assert!(
-        storage_after
-            .capability_set()
-            .contains("build-tag:storage-reload-v2")
+    assert_eq!(
+        storage_build_tag(&server, JE_1_7_10_STORAGE_PROFILE_ID).as_deref(),
+        Some("storage-reload-v2")
     );
 
     server.shutdown().await?;
@@ -405,10 +399,9 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
         storage_after.plugin_generation_id(),
         Some(before_generation)
     );
-    assert!(
-        storage_after
-            .capability_set()
-            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    assert_eq!(
+        storage_build_tag(&server, JE_1_7_10_STORAGE_PROFILE_ID).as_deref(),
+        Some(PACKAGED_PLUGIN_TEST_HARNESS_TAG)
     );
 
     server.shutdown().await
@@ -434,10 +427,9 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     let before_generation = auth_before
         .plugin_generation_id()
         .expect("auth profile should report generation");
-    assert!(
-        auth_before
-            .capability_set()
-            .contains(&format!("build-tag:{}", PACKAGED_PLUGIN_TEST_HARNESS_TAG))
+    assert_eq!(
+        auth_build_tag(&server, OFFLINE_AUTH_PROFILE_ID).as_deref(),
+        Some(PACKAGED_PLUGIN_TEST_HARNESS_TAG)
     );
 
     let addr = listener_addr(&server);
@@ -475,10 +467,9 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
         .resolve_auth_profile(OFFLINE_AUTH_PROFILE_ID)
         .expect("auth profile should still resolve");
     assert_ne!(auth_after.plugin_generation_id(), Some(before_generation));
-    assert!(
-        auth_after
-            .capability_set()
-            .contains("build-tag:auth-reload-v2")
+    assert_eq!(
+        auth_build_tag(&server, OFFLINE_AUTH_PROFILE_ID).as_deref(),
+        Some("auth-reload-v2")
     );
 
     write_packet(&mut alpha, &codec, &held_item_change(4)).await?;

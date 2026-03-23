@@ -1,18 +1,18 @@
 use super::{
-    AdminUiGeneration, AdminUiInput, AdminUiPluginApiV1, Arc, AuthGeneration, AuthPluginApiV1,
-    AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest, GameplayGeneration, GameplayPluginApiV2,
-    GameplayRequest, Library, Mutex, PLUGIN_ADMIN_UI_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1,
+    AdminUiCapability, AdminUiGeneration, AdminUiInput, AdminUiPluginApiV1, Arc, AuthCapability,
+    AuthGeneration, AuthPluginApiV1, AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest,
+    GameplayCapability, GameplayGeneration, GameplayPluginApiV2, GameplayRequest, Library,
+    ManifestCapabilities, Mutex, PLUGIN_ADMIN_UI_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1,
     PLUGIN_GAMEPLAY_API_SYMBOL_V2, PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V1,
     PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginGenerationId, PluginManifestV1, PluginPackage,
-    PluginSource, ProtocolGeneration, ProtocolPluginApiV1, ProtocolRequest, RuntimeError,
-    StorageGeneration, StoragePluginApiV1, StorageRequest, admin_ui_profile_id_from_manifest,
+    PluginSource, ProtocolCapability, ProtocolGeneration, ProtocolPluginApiV1, ProtocolRequest,
+    RuntimeError, StorageCapability, StorageGeneration, StoragePluginApiV1, StorageRequest,
     decode_manifest, expect_admin_ui_capabilities, expect_admin_ui_descriptor,
     expect_auth_capabilities, expect_auth_descriptor, expect_gameplay_capabilities,
     expect_gameplay_descriptor, expect_protocol_bedrock_listener_descriptor,
     expect_protocol_capabilities, expect_protocol_descriptor, expect_storage_capabilities,
-    expect_storage_descriptor, gameplay_profile_id_from_manifest, invoke_admin_ui, invoke_auth,
-    invoke_gameplay, invoke_protocol, invoke_storage, manifest_profile_id,
-    require_manifest_capability,
+    expect_storage_descriptor, invoke_admin_ui, invoke_auth, invoke_gameplay, invoke_protocol,
+    invoke_storage,
 };
 
 type LibraryGuard = Option<Arc<Mutex<Library>>>;
@@ -141,12 +141,6 @@ impl PluginLoader {
     ) -> Result<ProtocolGeneration, RuntimeError> {
         let (guard, manifest, api) = Self::load_protocol_api(package)?;
         self.validate_manifest(package, &manifest)?;
-        require_manifest_capability(
-            &manifest,
-            "runtime.reload.protocol",
-            &package.plugin_id,
-            "protocol",
-        )?;
         let descriptor = expect_protocol_descriptor(
             &package.plugin_id,
             invoke_protocol(&api, &ProtocolRequest::Describe)?,
@@ -165,12 +159,20 @@ impl PluginLoader {
             &package.plugin_id,
             invoke_protocol(&api, &ProtocolRequest::CapabilitySet)?,
         )?;
+        if !capabilities.contains(ProtocolCapability::RuntimeReload) {
+            return Err(RuntimeError::Config(format!(
+                "protocol plugin `{}` is missing {} capability",
+                package.plugin_id,
+                ProtocolCapability::RuntimeReload.as_str()
+            )));
+        }
         Ok(ProtocolGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
             descriptor,
             bedrock_listener_descriptor,
-            capabilities,
+            capabilities: capabilities.capabilities,
+            build_tag: capabilities.build_tag,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
             _library_guard: guard,
@@ -184,13 +186,13 @@ impl PluginLoader {
     ) -> Result<GameplayGeneration, RuntimeError> {
         let (guard, manifest, api) = Self::load_gameplay_api(package)?;
         self.validate_manifest(package, &manifest)?;
-        let profile_id = gameplay_profile_id_from_manifest(&manifest, &package.plugin_id)?;
-        require_manifest_capability(
-            &manifest,
-            "runtime.reload.gameplay",
-            &package.plugin_id,
-            "gameplay",
-        )?;
+        let ManifestCapabilities::Gameplay(manifest_capabilities) = &manifest.capabilities else {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` manifest kind mismatch",
+                package.plugin_id
+            )));
+        };
+        let profile_id = manifest_capabilities.profile_id.clone();
         let descriptor = expect_gameplay_descriptor(
             &package.plugin_id,
             invoke_gameplay(&package.plugin_id, &api, &GameplayRequest::Describe)?,
@@ -207,11 +209,19 @@ impl PluginLoader {
             &package.plugin_id,
             invoke_gameplay(&package.plugin_id, &api, &GameplayRequest::CapabilitySet)?,
         )?;
+        if !capabilities.contains(GameplayCapability::RuntimeReload) {
+            return Err(RuntimeError::Config(format!(
+                "gameplay plugin `{}` is missing {} capability",
+                package.plugin_id,
+                GameplayCapability::RuntimeReload.as_str()
+            )));
+        }
         Ok(GameplayGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
             profile_id,
-            capabilities,
+            capabilities: capabilities.capabilities,
+            build_tag: capabilities.build_tag,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
             _library_guard: guard,
@@ -225,14 +235,13 @@ impl PluginLoader {
     ) -> Result<StorageGeneration, RuntimeError> {
         let (guard, manifest, api) = Self::load_storage_api(package)?;
         self.validate_manifest(package, &manifest)?;
-        let profile_id =
-            manifest_profile_id(&manifest, "storage.profile:", &package.plugin_id, "storage")?;
-        require_manifest_capability(
-            &manifest,
-            "runtime.reload.storage",
-            &package.plugin_id,
-            "storage",
-        )?;
+        let ManifestCapabilities::Storage(manifest_capabilities) = &manifest.capabilities else {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` manifest kind mismatch",
+                package.plugin_id
+            )));
+        };
+        let profile_id = manifest_capabilities.profile_id.clone();
         let descriptor = expect_storage_descriptor(
             &package.plugin_id,
             invoke_storage(&package.plugin_id, &api, &StorageRequest::Describe)?,
@@ -247,11 +256,19 @@ impl PluginLoader {
             &package.plugin_id,
             invoke_storage(&package.plugin_id, &api, &StorageRequest::CapabilitySet)?,
         )?;
+        if !capabilities.contains(StorageCapability::RuntimeReload) {
+            return Err(RuntimeError::Config(format!(
+                "storage plugin `{}` is missing {} capability",
+                package.plugin_id,
+                StorageCapability::RuntimeReload.as_str()
+            )));
+        }
         Ok(StorageGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
             profile_id,
-            capabilities,
+            capabilities: capabilities.capabilities,
+            build_tag: capabilities.build_tag,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
             _library_guard: guard,
@@ -265,9 +282,13 @@ impl PluginLoader {
     ) -> Result<AuthGeneration, RuntimeError> {
         let (guard, manifest, api) = Self::load_auth_api(package)?;
         self.validate_manifest(package, &manifest)?;
-        let profile_id =
-            manifest_profile_id(&manifest, "auth.profile:", &package.plugin_id, "auth")?;
-        require_manifest_capability(&manifest, "runtime.reload.auth", &package.plugin_id, "auth")?;
+        let ManifestCapabilities::Auth(manifest_capabilities) = &manifest.capabilities else {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` manifest kind mismatch",
+                package.plugin_id
+            )));
+        };
+        let profile_id = manifest_capabilities.profile_id.clone();
         let descriptor = expect_auth_descriptor(
             &package.plugin_id,
             invoke_auth(&package.plugin_id, &api, &AuthRequest::Describe)?,
@@ -282,12 +303,20 @@ impl PluginLoader {
             &package.plugin_id,
             invoke_auth(&package.plugin_id, &api, &AuthRequest::CapabilitySet)?,
         )?;
+        if !capabilities.contains(AuthCapability::RuntimeReload) {
+            return Err(RuntimeError::Config(format!(
+                "auth plugin `{}` is missing {} capability",
+                package.plugin_id,
+                AuthCapability::RuntimeReload.as_str()
+            )));
+        }
         Ok(AuthGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
             profile_id,
             mode: descriptor.mode,
-            capabilities,
+            capabilities: capabilities.capabilities,
+            build_tag: capabilities.build_tag,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
             _library_guard: guard,
@@ -301,13 +330,13 @@ impl PluginLoader {
     ) -> Result<AdminUiGeneration, RuntimeError> {
         let (guard, manifest, api) = Self::load_admin_ui_api(package)?;
         self.validate_manifest(package, &manifest)?;
-        let profile_id = admin_ui_profile_id_from_manifest(&manifest, &package.plugin_id)?;
-        require_manifest_capability(
-            &manifest,
-            "runtime.reload.admin-ui",
-            &package.plugin_id,
-            "admin-ui",
-        )?;
+        let ManifestCapabilities::AdminUi(manifest_capabilities) = &manifest.capabilities else {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` manifest kind mismatch",
+                package.plugin_id
+            )));
+        };
+        let profile_id = manifest_capabilities.profile_id.clone();
         let descriptor = expect_admin_ui_descriptor(
             &package.plugin_id,
             invoke_admin_ui(&package.plugin_id, &api, &AdminUiInput::Describe)?,
@@ -322,11 +351,19 @@ impl PluginLoader {
             &package.plugin_id,
             invoke_admin_ui(&package.plugin_id, &api, &AdminUiInput::CapabilitySet)?,
         )?;
+        if !capabilities.contains(AdminUiCapability::RuntimeReload) {
+            return Err(RuntimeError::Config(format!(
+                "admin-ui plugin `{}` is missing {} capability",
+                package.plugin_id,
+                AdminUiCapability::RuntimeReload.as_str()
+            )));
+        }
         Ok(AdminUiGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
             profile_id,
-            capabilities,
+            capabilities: capabilities.capabilities,
+            build_tag: capabilities.build_tag,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
             _library_guard: guard,

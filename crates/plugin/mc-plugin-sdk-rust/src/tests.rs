@@ -1,9 +1,9 @@
 use super::{__macro_support, admin_ui, capabilities, gameplay, manifest, protocol};
 use bytes::BytesMut;
 use mc_core::{
-    BlockPos, CoreCommand, CoreEvent, DimensionId, GameplayEffect, GameplayJoinEffect,
-    GameplayPolicyResolver, GameplayProfileId, GameplayQuery, PlayerId, PlayerSnapshot,
-    SessionCapabilitySet, WorldMeta,
+    BlockPos, CapabilityAnnouncement, CoreCommand, CoreEvent, DimensionId, GameplayCapability,
+    GameplayEffect, GameplayJoinEffect, GameplayPolicyResolver, GameplayProfileId, GameplayQuery,
+    PlayerId, PlayerSnapshot, ProtocolCapability, SessionCapabilitySet, WorldMeta,
 };
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
 use mc_plugin_api::codec::admin_ui::{
@@ -308,14 +308,21 @@ fn direct_gameplay_requests_require_host_api_for_host_callbacks() {
 
 #[test]
 fn capability_helpers_add_build_tags_without_changing_base_names() {
-    let capabilities = capabilities::capability_set_for_build_tag(
-        &["runtime.reload.protocol", "protocol.test"],
-        Some("protocol-reload-v2"),
-    );
+    let mut announcement = CapabilityAnnouncement::new(capabilities::protocol_capabilities(&[
+        ProtocolCapability::RuntimeReload,
+        ProtocolCapability::Je,
+    ]));
+    announcement.build_tag = Some("protocol-reload-v2".into());
 
-    assert!(capabilities.contains("runtime.reload.protocol"));
-    assert!(capabilities.contains("protocol.test"));
-    assert!(capabilities.contains("build-tag:protocol-reload-v2"));
+    assert!(announcement.contains(ProtocolCapability::RuntimeReload));
+    assert!(announcement.contains(ProtocolCapability::Je));
+    assert_eq!(
+        announcement
+            .build_tag
+            .as_ref()
+            .map(mc_core::PluginBuildTag::as_str),
+        Some("protocol-reload-v2")
+    );
 }
 
 #[test]
@@ -395,16 +402,13 @@ mod plugin_a {
         const EXPORT_TAG: &'static str = "plugin-a";
         const IMPORT_REJECT_MESSAGE: &'static str = "plugin-a refused session import";
 
-        fn capability_names() -> &'static [&'static str] {
-            &["runtime.reload.gameplay"]
+        fn capabilities() -> &'static [GameplayCapability] {
+            &[GameplayCapability::RuntimeReload]
         }
     }
 
-    const MANIFEST: manifest::StaticPluginManifest = manifest::StaticPluginManifest::gameplay(
-        "plugin-a",
-        "Plugin A",
-        &["runtime.reload.gameplay"],
-    );
+    const MANIFEST: manifest::StaticPluginManifest =
+        manifest::StaticPluginManifest::gameplay("plugin-a", "Plugin A", "plugin-a");
 
     export_plugin!(gameplay, PluginA, MANIFEST);
 }
@@ -473,16 +477,13 @@ mod plugin_b {
         const EXPORT_TAG: &'static str = "plugin-b";
         const IMPORT_REJECT_MESSAGE: &'static str = "plugin-b refused session import";
 
-        fn capability_names() -> &'static [&'static str] {
-            &["runtime.reload.gameplay"]
+        fn capabilities() -> &'static [GameplayCapability] {
+            &[GameplayCapability::RuntimeReload]
         }
     }
 
-    const MANIFEST: manifest::StaticPluginManifest = manifest::StaticPluginManifest::gameplay(
-        "plugin-b",
-        "Plugin B",
-        &["runtime.reload.gameplay"],
-    );
+    const MANIFEST: manifest::StaticPluginManifest =
+        manifest::StaticPluginManifest::gameplay("plugin-b", "Plugin B", "plugin-b");
 
     export_plugin!(gameplay, PluginB, MANIFEST);
 }
@@ -530,7 +531,7 @@ mod console_admin_ui_plugin {
     const MANIFEST: manifest::StaticPluginManifest = manifest::StaticPluginManifest::admin_ui(
         "admin-ui-test",
         "Admin UI Test Plugin",
-        &["admin-ui.profile:console-v1", "runtime.reload.admin-ui"],
+        "console-v1",
     );
 
     export_plugin!(admin_ui, ConsoleAdminUiPlugin, MANIFEST);
@@ -668,8 +669,7 @@ mod declared_protocol_plugin {
         DeclaredProtocolAdapter,
         "declared-probe",
         "Declared Probe Protocol Plugin",
-        &["protocol.test", "runtime.reload.protocol"],
-        &["runtime.reload.protocol"],
+        &[ProtocolCapability::RuntimeReload],
     );
 }
 

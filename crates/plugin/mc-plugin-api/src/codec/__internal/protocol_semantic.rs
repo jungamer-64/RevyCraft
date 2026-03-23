@@ -1,9 +1,10 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::shared::{
-    decode_capability_set, decode_connection_id, decode_connection_phase, decode_core_command,
-    decode_core_event, decode_entity_id, decode_option, decode_player_id, decode_player_snapshot,
-    encode_capability_set, encode_connection_id, encode_connection_phase, encode_core_command,
-    encode_core_event, encode_entity_id, encode_option, encode_player_id, encode_player_snapshot,
+    decode_capability_announcement, decode_connection_id, decode_connection_phase,
+    decode_core_command, decode_core_event, decode_entity_id, decode_option, decode_player_id,
+    decode_player_snapshot, encode_capability_announcement, encode_connection_id,
+    encode_connection_phase, encode_core_command, encode_core_event, encode_entity_id,
+    encode_option, encode_player_id, encode_player_snapshot,
 };
 use crate::codec::protocol::{
     ProtocolOpCode, ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot,
@@ -468,7 +469,7 @@ pub(crate) fn encode_protocol_response_payload(
             encode_bedrock_listener_descriptor,
         ),
         (ProtocolOpCode::CapabilitySet, ProtocolResponse::CapabilitySet(capabilities)) => {
-            encode_capability_set(encoder, capabilities)
+            encode_capability_announcement(encoder, capabilities)
         }
         (ProtocolOpCode::TryRoute, ProtocolResponse::HandshakeIntent(intent)) => {
             encode_option(encoder, intent.as_ref(), encode_handshake_intent)
@@ -527,7 +528,7 @@ pub(crate) fn decode_protocol_response_payload(
             decode_option(decoder, decode_bedrock_listener_descriptor)?,
         )),
         ProtocolOpCode::CapabilitySet => Ok(ProtocolResponse::CapabilitySet(
-            decode_capability_set(decoder)?,
+            decode_capability_announcement(decoder)?,
         )),
         ProtocolOpCode::TryRoute => Ok(ProtocolResponse::HandshakeIntent(decode_option(
             decoder,

@@ -5,7 +5,10 @@ use crate::player::{
     InteractionHand, InventoryContainer, InventorySlot, ItemStack, PlayerInventory, PlayerSnapshot,
 };
 use crate::world::{BlockFace, BlockPos, BlockState, Vec3, WorldMeta};
-use crate::{CapabilitySet, GameplayProfileId, HOTBAR_SLOT_COUNT, PlayerId, SessionCapabilitySet};
+use crate::{
+    GameplayCapabilitySet, GameplayProfileId, HOTBAR_SLOT_COUNT, PlayerId, ProtocolCapabilitySet,
+    SessionCapabilitySet,
+};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GameplayJoinEffect {
@@ -394,11 +397,9 @@ impl GameplayPolicyResolver for ReadonlyGameplayPolicy {
 }
 
 pub fn canonical_session_capabilities() -> SessionCapabilitySet {
-    let mut gameplay = CapabilitySet::new();
-    let _ = gameplay.insert("gameplay.profile.canonical");
     SessionCapabilitySet {
-        protocol: CapabilitySet::new(),
-        gameplay,
+        protocol: ProtocolCapabilitySet::new(),
+        gameplay: GameplayCapabilitySet::new(),
         gameplay_profile: GameplayProfileId::new("canonical"),
         entity_id: None,
         protocol_generation: None,

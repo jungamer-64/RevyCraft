@@ -1,10 +1,13 @@
 use super::{
-    AdminUiGeneration, Arc, AuthGeneration, CapabilitySet, GameplayGeneration, PluginGenerationId,
-    RwLock, StorageGeneration,
+    AdminUiCapabilitySet, AdminUiGeneration, Arc, AuthCapabilitySet, AuthGeneration,
+    GameplayCapabilitySet, GameplayGeneration, PluginGenerationId, RwLock, StorageCapabilitySet,
+    StorageGeneration,
 };
 
 pub(crate) trait ProfileGenerationMetadata {
-    fn capabilities(&self) -> &CapabilitySet;
+    type Capabilities: Clone;
+
+    fn capabilities(&self) -> &Self::Capabilities;
 
     fn generation_id(&self) -> PluginGenerationId;
 }
@@ -38,7 +41,7 @@ impl<G> GenerationSlot<G> {
 }
 
 impl<G: ProfileGenerationMetadata> GenerationSlot<G> {
-    pub(crate) fn capability_set(&self) -> CapabilitySet {
+    pub(crate) fn capability_set(&self) -> G::Capabilities {
         self.current().capabilities().clone()
     }
 
@@ -100,7 +103,7 @@ impl<G> ReloadableGenerationSlot<G> {
 }
 
 impl<G: ProfileGenerationMetadata> ReloadableGenerationSlot<G> {
-    pub(crate) fn capability_set(&self) -> CapabilitySet {
+    pub(crate) fn capability_set(&self) -> G::Capabilities {
         self.generation.capability_set()
     }
 
@@ -110,7 +113,9 @@ impl<G: ProfileGenerationMetadata> ReloadableGenerationSlot<G> {
 }
 
 impl ProfileGenerationMetadata for AuthGeneration {
-    fn capabilities(&self) -> &CapabilitySet {
+    type Capabilities = AuthCapabilitySet;
+
+    fn capabilities(&self) -> &Self::Capabilities {
         &self.capabilities
     }
 
@@ -120,7 +125,9 @@ impl ProfileGenerationMetadata for AuthGeneration {
 }
 
 impl ProfileGenerationMetadata for GameplayGeneration {
-    fn capabilities(&self) -> &CapabilitySet {
+    type Capabilities = GameplayCapabilitySet;
+
+    fn capabilities(&self) -> &Self::Capabilities {
         &self.capabilities
     }
 
@@ -130,7 +137,9 @@ impl ProfileGenerationMetadata for GameplayGeneration {
 }
 
 impl ProfileGenerationMetadata for StorageGeneration {
-    fn capabilities(&self) -> &CapabilitySet {
+    type Capabilities = StorageCapabilitySet;
+
+    fn capabilities(&self) -> &Self::Capabilities {
         &self.capabilities
     }
 
@@ -140,7 +149,9 @@ impl ProfileGenerationMetadata for StorageGeneration {
 }
 
 impl ProfileGenerationMetadata for AdminUiGeneration {
-    fn capabilities(&self) -> &CapabilitySet {
+    type Capabilities = AdminUiCapabilitySet;
+
+    fn capabilities(&self) -> &Self::Capabilities {
         &self.capabilities
     }
 
@@ -152,18 +163,19 @@ impl ProfileGenerationMetadata for AdminUiGeneration {
 #[cfg(test)]
 mod tests {
     use super::ReloadableGenerationSlot;
-    use super::{
-        Arc, CapabilitySet, GenerationSlot, PluginGenerationId, ProfileGenerationMetadata,
-    };
+    use super::{Arc, GenerationSlot, PluginGenerationId, ProfileGenerationMetadata};
+    use mc_core::{ProtocolCapability, ProtocolCapabilitySet};
 
     #[derive(Clone)]
     struct TestGeneration {
-        capabilities: CapabilitySet,
+        capabilities: ProtocolCapabilitySet,
         generation_id: PluginGenerationId,
     }
 
     impl ProfileGenerationMetadata for TestGeneration {
-        fn capabilities(&self) -> &CapabilitySet {
+        type Capabilities = ProtocolCapabilitySet;
+
+        fn capabilities(&self) -> &Self::Capabilities {
             &self.capabilities
         }
 
@@ -172,8 +184,8 @@ mod tests {
         }
     }
 
-    fn test_generation(generation_id: u64, capability: &'static str) -> Arc<TestGeneration> {
-        let mut capabilities = CapabilitySet::new();
+    fn test_generation(generation_id: u64, capability: ProtocolCapability) -> Arc<TestGeneration> {
+        let mut capabilities = ProtocolCapabilitySet::new();
         let _ = capabilities.insert(capability);
         Arc::new(TestGeneration {
             capabilities,
@@ -183,7 +195,7 @@ mod tests {
 
     #[test]
     fn generation_slot_reports_current_metadata() {
-        let generation = test_generation(3, "cap.alpha");
+        let generation = test_generation(3, ProtocolCapability::Je340);
         let slot = GenerationSlot::new(
             Arc::clone(&generation),
             "test generation lock should not be poisoned",
@@ -191,27 +203,27 @@ mod tests {
 
         assert!(Arc::ptr_eq(&slot.current(), &generation));
         assert_eq!(slot.generation_id(), PluginGenerationId(3));
-        assert!(slot.capability_set().contains("cap.alpha"));
+        assert!(slot.capability_set().contains(ProtocolCapability::Je340));
     }
 
     #[test]
     fn generation_slot_swap_replaces_generation() {
-        let first = test_generation(1, "cap.first");
-        let second = test_generation(2, "cap.second");
+        let first = test_generation(1, ProtocolCapability::Je5);
+        let second = test_generation(2, ProtocolCapability::Je47);
         let slot = GenerationSlot::new(first, "test generation lock should not be poisoned");
 
         slot.swap(Arc::clone(&second));
 
         assert!(Arc::ptr_eq(&slot.current(), &second));
         assert_eq!(slot.generation_id(), PluginGenerationId(2));
-        assert!(slot.capability_set().contains("cap.second"));
-        assert!(!slot.capability_set().contains("cap.first"));
+        assert!(slot.capability_set().contains(ProtocolCapability::Je47));
+        assert!(!slot.capability_set().contains(ProtocolCapability::Je5));
     }
 
     #[test]
     fn reloadable_generation_slot_uses_latest_generation_for_reads_and_swaps() {
-        let first = test_generation(7, "cap.read");
-        let second = test_generation(8, "cap.swap");
+        let first = test_generation(7, ProtocolCapability::Je);
+        let second = test_generation(8, ProtocolCapability::Bedrock);
         let slot = ReloadableGenerationSlot::new(
             first,
             "test generation lock should not be poisoned",
@@ -225,6 +237,6 @@ mod tests {
         assert_eq!(before, PluginGenerationId(7));
         assert_eq!(after, PluginGenerationId(8));
         assert_eq!(slot.generation_id(), PluginGenerationId(8));
-        assert!(slot.capability_set().contains("cap.swap"));
+        assert!(slot.capability_set().contains(ProtocolCapability::Bedrock));
     }
 }

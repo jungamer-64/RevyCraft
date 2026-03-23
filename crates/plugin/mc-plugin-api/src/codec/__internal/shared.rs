@@ -1,10 +1,10 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use mc_core::{
-    BlockFace, BlockPos, BlockState, CapabilitySet, ChunkColumn, ChunkSection, ConnectionId,
-    CoreCommand, CoreEvent, DimensionId, EntityId, InteractionHand, InventoryClickButton,
-    InventoryClickTarget, InventoryContainer, InventorySlot, InventoryTransactionContext,
-    ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3, WorldMeta, WorldSnapshot,
-    expand_block_index,
+    BlockFace, BlockPos, BlockState, CapabilityAnnouncement, ChunkColumn, ChunkSection,
+    ClosedCapability, ClosedCapabilitySet, ConnectionId, CoreCommand, CoreEvent, DimensionId,
+    EntityId, InteractionHand, InventoryClickButton, InventoryClickTarget, InventoryContainer,
+    InventorySlot, InventoryTransactionContext, ItemStack, PlayerId, PlayerInventory,
+    PlayerSnapshot, PluginBuildTag, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
 };
 use mc_proto_common::ConnectionPhase;
 use std::collections::BTreeMap;
@@ -255,27 +255,62 @@ pub(crate) fn decode_connection_id(
     Ok(ConnectionId(decoder.read_u64()?))
 }
 
-pub(crate) fn encode_capability_set(
+pub(crate) fn encode_capability_announcement<C>(
     encoder: &mut Encoder,
-    capability_set: &CapabilitySet,
-) -> Result<(), ProtocolCodecError> {
-    let capabilities = capability_set.iter().collect::<Vec<_>>();
-    encoder.write_len(capabilities.len())?;
-    for capability in capabilities {
-        encoder.write_string(capability)?;
+    announcement: &CapabilityAnnouncement<C>,
+) -> Result<(), ProtocolCodecError>
+where
+    C: ClosedCapability,
+{
+    encoder.write_len(
+        announcement.capabilities.len() + usize::from(announcement.build_tag.is_some()),
+    )?;
+    for capability in announcement.capabilities.iter() {
+        encoder.write_string(capability.as_str())?;
+    }
+    if let Some(build_tag) = &announcement.build_tag {
+        encoder.write_string(&format!("build-tag:{}", build_tag.as_str()))?;
     }
     Ok(())
 }
 
-pub(crate) fn decode_capability_set(
+pub(crate) fn decode_capability_announcement<C>(
     decoder: &mut Decoder<'_>,
-) -> Result<CapabilitySet, ProtocolCodecError> {
+) -> Result<CapabilityAnnouncement<C>, ProtocolCodecError>
+where
+    C: ClosedCapability,
+{
     let len = decoder.read_len()?;
-    let mut capabilities = CapabilitySet::new();
+    let mut capabilities = ClosedCapabilitySet::new();
+    let mut build_tag = None;
     for _ in 0..len {
-        let _ = capabilities.insert(decoder.read_string()?);
+        let token = decoder.read_string()?;
+        if let Some(raw_build_tag) = token.strip_prefix("build-tag:") {
+            if raw_build_tag.is_empty() {
+                return Err(ProtocolCodecError::InvalidValue(
+                    "build tag capability must not be empty",
+                ));
+            }
+            if build_tag.is_some() {
+                return Err(ProtocolCodecError::InvalidValue(
+                    "duplicate build tag capability",
+                ));
+            }
+            build_tag = Some(PluginBuildTag::new(raw_build_tag));
+            continue;
+        }
+        let capability = C::parse(&token)
+            .map_err(|_| ProtocolCodecError::InvalidValue("invalid plugin capability"))?;
+        if !capabilities.insert(capability) {
+            return Err(ProtocolCodecError::InvalidValue(
+                "duplicate plugin capability",
+            ));
+        }
     }
-    Ok(capabilities)
+    Ok(CapabilityAnnouncement {
+        capabilities,
+        build_tag,
+    })
 }
 
 pub(crate) fn encode_item_stack(

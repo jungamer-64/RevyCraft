@@ -4,8 +4,9 @@ use crate::host::{PluginFailureAction, PluginHostStatusSnapshot};
 use crate::plugin_host::PreparedProtocolTopology;
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_core::{
-    AdminUiProfileId, CapabilitySet, GameplayPolicyResolver, GameplayProfileId, PlayerId,
-    PluginGenerationId, WorldSnapshot,
+    AdminUiCapabilitySet, AdminUiProfileId, AuthCapabilitySet, GameplayCapabilitySet,
+    GameplayPolicyResolver, GameplayProfileId, PlayerId, PluginGenerationId, StorageCapabilitySet,
+    WorldSnapshot,
 };
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_api::codec::admin_ui::{AdminRequest, AdminResponse};
@@ -34,7 +35,7 @@ pub struct RuntimeReloadContext {
 pub trait GameplayProfileHandle: GameplayPolicyResolver + Send + Sync {
     fn profile_id(&self) -> GameplayProfileId;
 
-    fn capability_set(&self) -> CapabilitySet;
+    fn capability_set(&self) -> GameplayCapabilitySet;
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
 
@@ -48,7 +49,7 @@ pub trait GameplayProfileHandle: GameplayPolicyResolver + Send + Sync {
 pub trait StorageProfileHandle: Send + Sync {
     fn plugin_id(&self) -> &str;
 
-    fn capability_set(&self) -> CapabilitySet;
+    fn capability_set(&self) -> StorageCapabilitySet;
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
 
@@ -81,7 +82,7 @@ pub trait AuthGenerationHandle: Send + Sync {
 }
 
 pub trait AuthProfileHandle: Send + Sync {
-    fn capability_set(&self) -> CapabilitySet;
+    fn capability_set(&self) -> AuthCapabilitySet;
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
 
@@ -132,7 +133,7 @@ pub trait AuthProfileHandle: Send + Sync {
 pub trait AdminUiProfileHandle: Send + Sync {
     fn profile_id(&self) -> &AdminUiProfileId;
 
-    fn capability_set(&self) -> CapabilitySet;
+    fn capability_set(&self) -> AdminUiCapabilitySet;
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
 

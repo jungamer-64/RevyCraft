@@ -1,7 +1,7 @@
 use super::{
-    Arc, BedrockListenerDescriptor, BytesMut, CapabilitySet, ConnectionPhase, Edition,
-    HandshakeIntent, HandshakeProbe, LoginRequest, PlayEncodingContext, PlayerId,
-    PluginFailureDispatch, PluginGenerationId, PluginKind, ProtocolAdapter, ProtocolDescriptor,
+    Arc, BedrockListenerDescriptor, BytesMut, ConnectionPhase, Edition, HandshakeIntent,
+    HandshakeProbe, LoginRequest, PlayEncodingContext, PlayerId, PluginFailureDispatch,
+    PluginGenerationId, PluginKind, ProtocolAdapter, ProtocolCapabilitySet, ProtocolDescriptor,
     ProtocolError, ProtocolGeneration, ProtocolRequest, ProtocolResponse, RwLock, ServerListStatus,
     StatusRequest, TransportKind, WireCodec, WireFormatKind, WireFrameDecodeResult,
 };
@@ -332,7 +332,7 @@ impl ProtocolAdapter for HotSwappableProtocolAdapter {
             .flatten()
     }
 
-    fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> ProtocolCapabilitySet {
         self.with_generation(|generation| Ok(generation.capabilities.clone()))
             .unwrap_or_default()
     }

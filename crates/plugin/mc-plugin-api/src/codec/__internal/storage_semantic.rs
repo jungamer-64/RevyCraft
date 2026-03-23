@@ -1,7 +1,7 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::shared::{
-    decode_capability_set, decode_option, decode_world_snapshot, encode_capability_set,
-    encode_option, encode_world_snapshot,
+    decode_capability_announcement, decode_option, decode_world_snapshot,
+    encode_capability_announcement, encode_option, encode_world_snapshot,
 };
 use crate::codec::storage::{StorageDescriptor, StorageOpCode, StorageRequest, StorageResponse};
 use mc_core::StorageProfileId;
@@ -62,7 +62,7 @@ pub(crate) fn encode_storage_response_payload(
             encoder.write_string(descriptor.storage_profile.as_str())
         }
         (StorageOpCode::CapabilitySet, StorageResponse::CapabilitySet(capabilities)) => {
-            encode_capability_set(encoder, capabilities)
+            encode_capability_announcement(encoder, capabilities)
         }
         (
             StorageOpCode::LoadSnapshot | StorageOpCode::ExportRuntimeState,
@@ -86,9 +86,9 @@ pub(crate) fn decode_storage_response_payload(
         StorageOpCode::Describe => Ok(StorageResponse::Descriptor(StorageDescriptor {
             storage_profile: StorageProfileId::new(decoder.read_string()?),
         })),
-        StorageOpCode::CapabilitySet => Ok(StorageResponse::CapabilitySet(decode_capability_set(
-            decoder,
-        )?)),
+        StorageOpCode::CapabilitySet => Ok(StorageResponse::CapabilitySet(
+            decode_capability_announcement(decoder)?,
+        )),
         StorageOpCode::LoadSnapshot | StorageOpCode::ExportRuntimeState => Ok(
             StorageResponse::Snapshot(decode_option(decoder, decode_world_snapshot)?),
         ),

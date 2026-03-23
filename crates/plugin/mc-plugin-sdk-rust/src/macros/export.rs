@@ -14,7 +14,7 @@ macro_rules! __export_plugin_non_gameplay {
         $panic_handle:literal $(,)?
     ) => {
         static MC_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> = std::sync::OnceLock::new();
-        static MC_PLUGIN_MANIFEST: std::sync::OnceLock<mc_plugin_api::manifest::PluginManifestV1> =
+        static MC_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
         static MC_PLUGIN_API: std::sync::OnceLock<$api_ty> = std::sync::OnceLock::new();
 
@@ -94,7 +94,8 @@ macro_rules! __export_plugin_non_gameplay {
         pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::manifest::PluginManifestV1 {
             std::ptr::from_ref(
                 MC_PLUGIN_MANIFEST
-                    .get_or_init(|| $crate::manifest::manifest_from_static(&$manifest)),
+                    .get_or_init(|| $crate::manifest::manifest_from_static(&$manifest))
+                    .manifest(),
             )
         }
 
@@ -124,7 +125,7 @@ macro_rules! __export_plugin_gameplay {
     ($plugin_ty:ty, $manifest:expr $(,)?) => {
         static MC_GAMEPLAY_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
             std::sync::OnceLock::new();
-        static MC_GAMEPLAY_PLUGIN_MANIFEST: std::sync::OnceLock<mc_plugin_api::manifest::PluginManifestV1> =
+        static MC_GAMEPLAY_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
         static MC_GAMEPLAY_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::host_api::GameplayPluginApiV2> =
             std::sync::OnceLock::new();
@@ -231,7 +232,8 @@ macro_rules! __export_plugin_gameplay {
         pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::manifest::PluginManifestV1 {
             std::ptr::from_ref(
                 MC_GAMEPLAY_PLUGIN_MANIFEST
-                    .get_or_init(|| $crate::manifest::manifest_from_static(&$manifest)),
+                    .get_or_init(|| $crate::manifest::manifest_from_static(&$manifest))
+                    .manifest(),
             )
         }
 
@@ -267,7 +269,7 @@ macro_rules! __export_plugin_admin_ui {
     ($plugin_ty:ty, $manifest:expr $(,)?) => {
         static MC_ADMIN_UI_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
             std::sync::OnceLock::new();
-        static MC_ADMIN_UI_PLUGIN_MANIFEST: std::sync::OnceLock<mc_plugin_api::manifest::PluginManifestV1> =
+        static MC_ADMIN_UI_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
         static MC_ADMIN_UI_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::host_api::AdminUiPluginApiV1> =
             std::sync::OnceLock::new();
@@ -374,7 +376,8 @@ macro_rules! __export_plugin_admin_ui {
         pub extern "C" fn mc_plugin_manifest_v1() -> *const mc_plugin_api::manifest::PluginManifestV1 {
             std::ptr::from_ref(
                 MC_ADMIN_UI_PLUGIN_MANIFEST
-                    .get_or_init(|| $crate::manifest::manifest_from_static(&$manifest)),
+                    .get_or_init(|| $crate::manifest::manifest_from_static(&$manifest))
+                    .manifest(),
             )
         }
 

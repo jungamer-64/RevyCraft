@@ -192,10 +192,6 @@ fn readonly_policy_rejects_block_edit_without_mutation() {
     );
     let before = core.snapshot();
     let mut readonly_capabilities = canonical_session_capabilities();
-    readonly_capabilities.gameplay = CapabilitySet::new();
-    let _ = readonly_capabilities
-        .gameplay
-        .insert("gameplay.profile.readonly");
     readonly_capabilities.gameplay_profile = GameplayProfileId::new("readonly");
 
     let effect = ReadonlyGameplayPolicy

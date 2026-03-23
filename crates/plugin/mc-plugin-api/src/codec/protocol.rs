@@ -10,7 +10,8 @@ use crate::codec::__internal::protocol_semantic::{
     encode_protocol_request_payload, encode_protocol_response_payload,
 };
 use mc_core::{
-    CapabilitySet, ConnectionId, CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot,
+    CapabilityAnnouncement, ConnectionId, CoreCommand, CoreEvent, EntityId, PlayerId,
+    PlayerSnapshot, ProtocolCapability,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, LoginRequest, PlayEncodingContext,
@@ -170,7 +171,7 @@ impl ProtocolRequest {
 pub enum ProtocolResponse {
     Descriptor(ProtocolDescriptor),
     BedrockListenerDescriptor(Option<BedrockListenerDescriptor>),
-    CapabilitySet(CapabilitySet),
+    CapabilitySet(CapabilityAnnouncement<ProtocolCapability>),
     HandshakeIntent(Option<HandshakeIntent>),
     StatusRequest(StatusRequest),
     LoginRequest(LoginRequest),
@@ -297,9 +298,10 @@ mod tests {
         decode_protocol_response, encode_protocol_request, encode_protocol_response,
     };
     use mc_core::{
-        BlockPos, CapabilitySet, ChunkColumn, ConnectionId, CoreCommand, CoreEvent, EntityId,
-        GameplayProfileId, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
-        PlayerSnapshot, PluginGenerationId, SessionCapabilitySet, Vec3, WorldMeta,
+        BlockPos, CapabilityAnnouncement, ChunkColumn, ConnectionId, CoreCommand, CoreEvent,
+        EntityId, GameplayCapabilitySet, GameplayProfileId, InventoryContainer, InventorySlot,
+        ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, PluginGenerationId,
+        ProtocolCapability, ProtocolCapabilitySet, SessionCapabilitySet, Vec3, WorldMeta,
     };
     use mc_proto_common::{
         BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState,
@@ -391,9 +393,9 @@ mod tests {
     }
 
     fn sample_protocol_round_trips_part_one() -> Vec<(ProtocolRequest, ProtocolResponse)> {
-        let mut capabilities = CapabilitySet::new();
-        let _ = capabilities.insert("protocol.je");
-        let _ = capabilities.insert("runtime.reload.protocol");
+        let mut capabilities = ProtocolCapabilitySet::new();
+        let _ = capabilities.insert(ProtocolCapability::Je);
+        let _ = capabilities.insert(ProtocolCapability::RuntimeReload);
 
         vec![
             (
@@ -408,7 +410,7 @@ mod tests {
             ),
             (
                 ProtocolRequest::CapabilitySet,
-                ProtocolResponse::CapabilitySet(capabilities),
+                ProtocolResponse::CapabilitySet(CapabilityAnnouncement::new(capabilities)),
             ),
             (
                 ProtocolRequest::TryRoute {
@@ -641,17 +643,17 @@ mod tests {
 
     #[test]
     fn capability_and_session_support_types_round_trip() {
-        let mut protocol = CapabilitySet::new();
-        let _ = protocol.insert("protocol.je.340");
+        let mut protocol = ProtocolCapabilitySet::new();
+        let _ = protocol.insert(ProtocolCapability::Je340);
         let capability_set = SessionCapabilitySet {
             protocol,
-            gameplay: CapabilitySet::new(),
+            gameplay: GameplayCapabilitySet::new(),
             gameplay_profile: GameplayProfileId::new("canonical"),
             entity_id: Some(EntityId(7)),
             protocol_generation: Some(PluginGenerationId(3)),
             gameplay_generation: Some(PluginGenerationId(4)),
         };
-        assert!(capability_set.protocol.contains("protocol.je.340"));
+        assert!(capability_set.protocol.contains(ProtocolCapability::Je340));
         assert_eq!(capability_set.gameplay_profile.as_str(), "canonical");
         assert_eq!(capability_set.entity_id, Some(EntityId(7)));
         assert_eq!(

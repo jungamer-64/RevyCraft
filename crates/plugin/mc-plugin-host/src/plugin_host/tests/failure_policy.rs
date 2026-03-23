@@ -60,7 +60,8 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
 #[test]
 fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
     use mc_core::{
-        CapabilitySet, CoreCommand, EntityId, GameplayProfileId, PlayerId, SessionCapabilitySet,
+        CoreCommand, EntityId, GameplayCapabilitySet, GameplayProfileId, PlayerId,
+        ProtocolCapabilitySet, SessionCapabilitySet,
     };
 
     let cases = [
@@ -97,8 +98,8 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
                 level_name: "world",
             },
             &SessionCapabilitySet {
-                protocol: CapabilitySet::new(),
-                gameplay: CapabilitySet::new(),
+                protocol: ProtocolCapabilitySet::new(),
+                gameplay: GameplayCapabilitySet::new(),
                 gameplay_profile: GameplayProfileId::new("failing"),
                 entity_id: Some(EntityId(9)),
                 protocol_generation: None,
@@ -139,8 +140,8 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
                             level_name: "world",
                         },
                         &SessionCapabilitySet {
-                            protocol: CapabilitySet::new(),
-                            gameplay: CapabilitySet::new(),
+                            protocol: ProtocolCapabilitySet::new(),
+                            gameplay: GameplayCapabilitySet::new(),
                             gameplay_profile: GameplayProfileId::new("failing"),
                             entity_id: Some(EntityId(9)),
                             protocol_generation: None,

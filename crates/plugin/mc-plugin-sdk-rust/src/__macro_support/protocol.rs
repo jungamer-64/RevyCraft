@@ -11,9 +11,9 @@ pub fn handle_protocol_request<P: RustProtocolPlugin>(
         ProtocolRequest::DescribeBedrockListener => Ok(
             ProtocolResponse::BedrockListenerDescriptor(plugin.bedrock_listener_descriptor()),
         ),
-        ProtocolRequest::CapabilitySet => {
-            Ok(ProtocolResponse::CapabilitySet(plugin.capability_set()))
-        }
+        ProtocolRequest::CapabilitySet => Ok(ProtocolResponse::CapabilitySet(
+            crate::capabilities::protocol_announcement(&plugin.capability_set()),
+        )),
         ProtocolRequest::TryRoute { frame } => plugin
             .try_route(&frame)
             .map(ProtocolResponse::HandshakeIntent)

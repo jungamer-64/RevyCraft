@@ -186,9 +186,9 @@ pub fn handle_gameplay_request_with_host_api<P: RustGameplayPlugin>(
         || host_api.ok_or_else(|| "gameplay host api is not configured".to_string());
     match request {
         GameplayRequest::Describe => Ok(GameplayResponse::Descriptor(plugin.descriptor())),
-        GameplayRequest::CapabilitySet => {
-            Ok(GameplayResponse::CapabilitySet(plugin.capability_set()))
-        }
+        GameplayRequest::CapabilitySet => Ok(GameplayResponse::CapabilitySet(
+            crate::capabilities::gameplay_announcement(&plugin.capability_set()),
+        )),
         GameplayRequest::HandlePlayerJoin { session, player } => {
             with_gameplay_host_api(require_host_api()?, |host| {
                 plugin.handle_player_join(host, &session, &player)

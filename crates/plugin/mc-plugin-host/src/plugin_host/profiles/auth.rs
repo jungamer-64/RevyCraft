@@ -1,5 +1,5 @@
 use super::{
-    Arc, AuthGeneration, AuthGenerationHandle, AuthMode, BedrockAuthResult, CapabilitySet,
+    Arc, AuthCapabilitySet, AuthGeneration, AuthGenerationHandle, AuthMode, BedrockAuthResult,
     GenerationSlot, PlayerId, PluginFailureDispatch, PluginGenerationId, PluginKind, RuntimeError,
 };
 
@@ -33,7 +33,7 @@ impl HotSwappableAuthProfile {
         self.generation.swap(generation);
     }
 
-    fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> AuthCapabilitySet {
         self.generation.capability_set()
     }
 
@@ -107,7 +107,7 @@ impl HotSwappableAuthProfile {
 }
 
 impl super::super::AuthProfileHandle for HotSwappableAuthProfile {
-    fn capability_set(&self) -> CapabilitySet {
+    fn capability_set(&self) -> AuthCapabilitySet {
         Self::capability_set(self)
     }
 
