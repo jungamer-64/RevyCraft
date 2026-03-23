@@ -31,17 +31,17 @@ mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gam
 mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-sdk-rust = { path = "../mc-plugin-sdk-rust", features = ["in-process-testing"] }
 mc-plugin-test-support = { path = "../../testing/mc-plugin-test-support" }
-mc-plugin-proto-be-26_3 = { path = "../../../plugins/protocol/mc-plugin-proto-be-26_3", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-be-924 = { path = "../../../plugins/protocol/mc-plugin-proto-be-924", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-1_12_2 = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_12_2", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-1_7_10 = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_7_10", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-1_8_x = { path = "../../../plugins/protocol/mc-plugin-proto-je-1_8_x", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-je-340 = { path = "../../../plugins/protocol/mc-plugin-proto-je-340", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/mc-plugin-proto-je-5", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-je-47 = { path = "../../../plugins/protocol/mc-plugin-proto-je-47", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-proto-be-26_3 = { path = "../../protocol/mc-proto-be-26_3" }
+mc-proto-be-924 = { path = "../../protocol/mc-proto-be-924" }
 mc-proto-be-placeholder = { path = "../../protocol/mc-proto-be-placeholder" }
-mc-proto-je-1_12_2 = { path = "../../protocol/mc-proto-je-1_12_2" }
-mc-proto-je-1_7_10 = { path = "../../protocol/mc-proto-je-1_7_10" }
-mc-proto-je-1_8_x = { path = "../../protocol/mc-proto-je-1_8_x" }
+mc-proto-je-340 = { path = "../../protocol/mc-proto-je-340" }
+mc-proto-je-5 = { path = "../../protocol/mc-proto-je-5" }
+mc-proto-je-47 = { path = "../../protocol/mc-proto-je-47" }
 tempfile.workspace = true
 
 [lints]

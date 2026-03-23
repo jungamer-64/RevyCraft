@@ -6,23 +6,23 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.game_mode = 1;
     config.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
-        JE_1_12_2_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
+        JE_340_ADAPTER_ID.to_string(),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
 
     let (mut legacy, mut legacy_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "legacy").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "legacy").await?;
     let (mut modern_18, mut modern_18_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je18x, "middle").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je47, "middle").await?;
     let modern_18_player_info = read_until_java_packet(
         &mut modern_18,
         &codec,
         &mut modern_18_buffer,
-        TestJavaProtocol::Je18x,
+        TestJavaProtocol::Je47,
         TestJavaPacket::PlayerInfoAdd,
     )
     .await?;
@@ -31,7 +31,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         &mut modern_18,
         &codec,
         &mut modern_18_buffer,
-        TestJavaProtocol::Je18x,
+        TestJavaProtocol::Je47,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -40,18 +40,18 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
 
     let (mut modern_112, mut modern_112_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1122, "latest").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je340, "latest").await?;
     let modern_112_player_info = read_until_java_packet(
         &mut modern_112,
         &codec,
         &mut modern_112_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         TestJavaPacket::PlayerInfoAdd,
     )
     .await?;
@@ -60,7 +60,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         &mut modern_112,
         &codec,
         &mut modern_112_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -69,7 +69,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -77,7 +77,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         &mut modern_18,
         &codec,
         &mut modern_18_buffer,
-        TestJavaProtocol::Je18x,
+        TestJavaProtocol::Je47,
         TestJavaPacket::PlayerInfoAdd,
     )
     .await?;
@@ -86,7 +86,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         &mut modern_18,
         &codec,
         &mut modern_18_buffer,
-        TestJavaProtocol::Je18x,
+        TestJavaProtocol::Je47,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -102,7 +102,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::EntityTeleport,
     )
     .await?;
@@ -110,7 +110,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         &mut modern_112,
         &codec,
         &mut modern_112_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         TestJavaPacket::EntityTeleport,
     )
     .await?;
@@ -127,7 +127,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::BlockChange,
     )
     .await?;
@@ -135,7 +135,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         &mut modern_18,
         &codec,
         &mut modern_18_buffer,
-        TestJavaProtocol::Je18x,
+        TestJavaProtocol::Je47,
         TestJavaPacket::BlockChange,
     )
     .await?;
@@ -157,29 +157,29 @@ async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), R
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.game_mode = 1;
     config.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_12_2_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_340_ADAPTER_ID.to_string(),
     ]);
     config.profiles.default_gameplay = "canonical".to_string();
     config.profiles.gameplay_map = gameplay_profile_map(&[
-        (JE_1_7_10_ADAPTER_ID, "readonly"),
-        (JE_1_12_2_ADAPTER_ID, "canonical"),
+        (JE_5_ADAPTER_ID, "readonly"),
+        (JE_340_ADAPTER_ID, "canonical"),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
 
     let (mut legacy, mut legacy_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "legacy-readonly")
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "legacy-readonly")
             .await?;
     let (mut modern, mut modern_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1122, "modern-canonical")
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je340, "modern-canonical")
             .await?;
     let _ = read_until_java_packet(
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -194,7 +194,7 @@ async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), R
         &mut modern,
         &codec,
         &mut modern_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         TestJavaPacket::BlockChange,
     )
     .await?;
@@ -202,7 +202,7 @@ async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), R
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::BlockChange,
     )
     .await?;
@@ -221,7 +221,7 @@ async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), R
         &mut modern,
         &codec,
         &mut modern_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         TestJavaPacket::BlockChange,
     )
     .await?;
@@ -236,7 +236,7 @@ async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), R
         &mut modern,
         &codec,
         &mut modern_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         TestJavaPacket::EntityTeleport,
     )
     .await?;
@@ -254,9 +254,9 @@ async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(
     config.topology.be_enabled = true;
     config.bootstrap.game_mode = 1;
     config.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
-        JE_1_12_2_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
+        JE_340_ADAPTER_ID.to_string(),
         BE_PLACEHOLDER_ADAPTER_ID.to_string(),
     ]);
     let server = build_test_server(config, registries).await?;
@@ -275,7 +275,7 @@ async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(
     write_packet(
         &mut status_stream,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 1)?,
+        &encode_handshake(TestJavaProtocol::Je5.protocol_version(), 1)?,
     )
     .await?;
     write_packet(&mut status_stream, &codec, &[0x00]).await?;
@@ -284,25 +284,25 @@ async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(
     assert_eq!(packet_id(&status), 0x00);
 
     let (mut legacy, mut legacy_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "legacy").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "legacy").await?;
     let (mut modern_18, mut modern_18_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je18x, "middle").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je47, "middle").await?;
     let _ = read_until_java_packet(
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
 
     let (mut modern_112, mut modern_112_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1122, "latest").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je340, "latest").await?;
     let _ = read_until_java_packet(
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -310,7 +310,7 @@ async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(
         &mut modern_18,
         &codec,
         &mut modern_18_buffer,
-        TestJavaProtocol::Je18x,
+        TestJavaProtocol::Je47,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -325,7 +325,7 @@ async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::EntityTeleport,
     )
     .await?;
@@ -333,7 +333,7 @@ async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(
         &mut modern_112,
         &codec,
         &mut modern_112_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         TestJavaPacket::EntityTeleport,
     )
     .await?;
@@ -350,7 +350,7 @@ async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::BlockChange,
     )
     .await?;
@@ -358,7 +358,7 @@ async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(
         &mut modern_18,
         &codec,
         &mut modern_18_buffer,
-        TestJavaProtocol::Je18x,
+        TestJavaProtocol::Je47,
         TestJavaPacket::BlockChange,
     )
     .await?;
@@ -380,25 +380,25 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.game_mode = 1;
     config.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
-        JE_1_12_2_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
+        JE_340_ADAPTER_ID.to_string(),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
 
     let (mut legacy, mut legacy_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "legacy-craft")
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "legacy-craft")
             .await?;
     let (mut modern, mut modern_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1122, "modern-craft")
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je340, "modern-craft")
             .await?;
     let _ = read_until_java_packet(
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -406,14 +406,14 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
     write_packet(
         &mut modern,
         &codec,
-        &creative_inventory_action(TestJavaProtocol::Je1122, 36, 17, 1, 0),
+        &creative_inventory_action(TestJavaProtocol::Je340, 36, 17, 1, 0),
     )
     .await?;
     let _ = read_until_set_slot(
         &mut modern,
         &codec,
         &mut modern_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         0,
         36,
         16,
@@ -422,40 +422,40 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
     write_packet(
         &mut modern,
         &codec,
-        &click_window(TestJavaProtocol::Je1122, 36, 0, 1, Some((17, 1, 0))),
+        &click_window(TestJavaProtocol::Je340, 36, 0, 1, Some((17, 1, 0))),
     )
     .await?;
     let reject_ack = read_until_confirm_transaction(
         &mut modern,
         &codec,
         &mut modern_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         0,
         1,
         16,
     )
     .await?;
     assert_eq!(
-        decode_confirm_transaction(TestJavaProtocol::Je1122, &reject_ack)?,
+        decode_confirm_transaction(TestJavaProtocol::Je340, &reject_ack)?,
         (0, 1, false)
     );
     let modern_resync = read_until_java_packet(
         &mut modern,
         &codec,
         &mut modern_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         TestJavaPacket::WindowItems,
     )
     .await?;
     assert_eq!(
-        window_items_slot(TestJavaProtocol::Je1122, &modern_resync, 36)?,
+        window_items_slot(TestJavaProtocol::Je340, &modern_resync, 36)?,
         None
     );
     let _ = read_until_set_slot(
         &mut modern,
         &codec,
         &mut modern_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         0,
         36,
         16,
@@ -465,7 +465,7 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
         &mut modern,
         &codec,
         &mut modern_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         -1,
         -1,
         16,
@@ -475,14 +475,14 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
     write_packet(
         &mut modern,
         &codec,
-        &click_window(TestJavaProtocol::Je1122, 1, 0, 2, Some((17, 1, 0))),
+        &click_window(TestJavaProtocol::Je340, 1, 0, 2, Some((17, 1, 0))),
     )
     .await?;
     assert_no_java_packet(
         &mut modern,
         &codec,
         &mut modern_buffer,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         TestJavaPacket::ConfirmTransaction,
     )
     .await?;
@@ -493,7 +493,7 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
             &mut legacy,
             &codec,
             &mut legacy_buffer,
-            TestJavaProtocol::Je1710,
+            TestJavaProtocol::Je5,
             TestJavaPacket::HeldItemChange,
         )
         .await?;
@@ -502,34 +502,34 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
         write_packet(
             &mut modern,
             &codec,
-            &confirm_transaction_ack(TestJavaProtocol::Je1122, 0, 1, false),
+            &confirm_transaction_ack(TestJavaProtocol::Je340, 0, 1, false),
         )
         .await?;
         write_packet(
             &mut modern,
             &codec,
-            &click_window(TestJavaProtocol::Je1122, 1, 0, 3, Some((17, 1, 0))),
+            &click_window(TestJavaProtocol::Je340, 1, 0, 3, Some((17, 1, 0))),
         )
         .await?;
         let accept_ack = read_until_confirm_transaction(
             &mut modern,
             &codec,
             &mut modern_buffer,
-            TestJavaProtocol::Je1122,
+            TestJavaProtocol::Je340,
             0,
             3,
             16,
         )
         .await?;
         assert_eq!(
-            decode_confirm_transaction(TestJavaProtocol::Je1122, &accept_ack)?,
+            decode_confirm_transaction(TestJavaProtocol::Je340, &accept_ack)?,
             (0, 3, true)
         );
         read_until_set_slot(
             &mut modern,
             &codec,
             &mut modern_buffer,
-            TestJavaProtocol::Je1122,
+            TestJavaProtocol::Je340,
             0,
             0,
             16,
@@ -537,7 +537,7 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
         .await?
     };
     assert_eq!(
-        decode_set_slot(TestJavaProtocol::Je1122, &result_preview)?,
+        decode_set_slot(TestJavaProtocol::Je340, &result_preview)?,
         (0, 0, Some((5, 4, 0)))
     );
 

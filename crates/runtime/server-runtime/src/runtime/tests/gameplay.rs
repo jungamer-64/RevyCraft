@@ -9,9 +9,9 @@ fn creative_server_config(world_dir: PathBuf) -> ServerConfig {
 fn multi_version_creative_server_config(world_dir: PathBuf) -> ServerConfig {
     let mut config = creative_server_config(world_dir);
     config.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
-        JE_1_12_2_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
+        JE_340_ADAPTER_ID.to_string(),
     ]);
     config
 }
@@ -32,7 +32,7 @@ async fn login_legacy(
 ) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
     login_java_client_with_packet(
         addr,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         username,
         TestJavaPacket::WindowItems,
     )
@@ -45,7 +45,7 @@ async fn login_legacy_with_position(
 ) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
     login_java_client_with_packet(
         addr,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         username,
         TestJavaPacket::PositionAndLook,
     )
@@ -58,7 +58,7 @@ async fn login_modern_1_8(
 ) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
     login_java_client_with_packet(
         addr,
-        TestJavaProtocol::Je18x,
+        TestJavaProtocol::Je47,
         username,
         TestJavaPacket::WindowItems,
     )
@@ -71,7 +71,7 @@ async fn login_modern_1_12(
 ) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
     login_java_client_with_packet(
         addr,
-        TestJavaProtocol::Je1122,
+        TestJavaProtocol::Je340,
         username,
         TestJavaPacket::WindowItems,
     )
@@ -186,19 +186,19 @@ async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), Ru
         write_packet(
             &mut modern,
             &codec,
-            &creative_inventory_action(TestJavaProtocol::Je1122, 45, 20, 64, 0),
+            &creative_inventory_action(TestJavaProtocol::Je340, 45, 20, 64, 0),
         )
         .await?;
         read_until_java_packet(
             &mut modern,
             &codec,
             &mut modern_buffer,
-            TestJavaProtocol::Je1122,
+            TestJavaProtocol::Je340,
             TestJavaPacket::SetSlot,
         )
         .await?
     };
-    assert_eq!(set_slot_slot(TestJavaProtocol::Je1122, &set_slot)?, 45);
+    assert_eq!(set_slot_slot(TestJavaProtocol::Je340, &set_slot)?, 45);
 
     server.shutdown().await?;
 
@@ -211,12 +211,12 @@ async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), Ru
 
     let (_, _, window_items) = login_modern_1_12(addr, "alpha").await?;
     assert_eq!(
-        window_items_slot(TestJavaProtocol::Je1122, &window_items, 45)?,
+        window_items_slot(TestJavaProtocol::Je340, &window_items, 45)?,
         Some((20, 64, 0))
     );
 
     let (_, _, legacy_window_items) = login_modern_1_8(addr, "beta").await?;
-    assert!(window_items_slot(TestJavaProtocol::Je18x, &legacy_window_items, 45).is_err());
+    assert!(window_items_slot(TestJavaProtocol::Je47, &legacy_window_items, 45).is_err());
 
     restarted.shutdown().await
 }
@@ -236,7 +236,7 @@ async fn creative_join_sends_inventory_selected_slot_and_abilities() -> Result<(
     write_packet(
         &mut stream,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+        &encode_handshake(TestJavaProtocol::Je5.protocol_version(), 2)?,
     )
     .await?;
     write_packet(&mut stream, &codec, &login_start("creative")).await?;
@@ -264,11 +264,11 @@ async fn creative_join_sends_inventory_selected_slot_and_abilities() -> Result<(
         .ok_or_else(|| RuntimeError::Config("player abilities not received".to_string()))?;
 
     assert_eq!(
-        window_items_slot(TestJavaProtocol::Je1710, &window_items, 36)?,
+        window_items_slot(TestJavaProtocol::Je5, &window_items, 36)?,
         Some((1, 64, 0))
     );
     assert_eq!(
-        window_items_slot(TestJavaProtocol::Je1710, &window_items, 44)?,
+        window_items_slot(TestJavaProtocol::Je5, &window_items, 44)?,
         Some((45, 64, 0))
     );
     assert_eq!(held_item_from_packet(&held_item)?, 0);
@@ -294,7 +294,7 @@ async fn creative_place_and_break_broadcast_block_changes() -> Result<(), Runtim
         &mut first,
         &codec,
         &mut first_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -309,7 +309,7 @@ async fn creative_place_and_break_broadcast_block_changes() -> Result<(), Runtim
         &mut second,
         &codec,
         &mut second_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::BlockChange,
     )
     .await?;
@@ -320,7 +320,7 @@ async fn creative_place_and_break_broadcast_block_changes() -> Result<(), Runtim
         &mut second,
         &codec,
         &mut second_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::BlockChange,
     )
     .await?;
@@ -347,7 +347,7 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -355,25 +355,25 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(TestJavaProtocol::Je1710, 36, 20, 64, 0),
+        &creative_inventory_action(TestJavaProtocol::Je5, 36, 20, 64, 0),
     )
     .await?;
     let set_slot = read_until_java_packet(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::SetSlot,
     )
     .await?;
-    assert_java_set_slot(TestJavaProtocol::Je1710, &set_slot, 36, Some((20, 64, 0)))?;
+    assert_java_set_slot(TestJavaProtocol::Je5, &set_slot, 36, Some((20, 64, 0)))?;
 
     write_packet(&mut stream, &codec, &held_item_change(4)).await?;
     let held_slot_packet = read_until_java_packet(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -392,13 +392,13 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
 
     assert_eq!(
-        window_items_slot(TestJavaProtocol::Je1710, &window_items, 36)?,
+        window_items_slot(TestJavaProtocol::Je5, &window_items, 36)?,
         Some((20, 64, 0))
     );
     assert_eq!(held_item_from_packet(&held_item)?, 4);
@@ -419,7 +419,7 @@ async fn plugin_backed_storage_and_auth_profiles_boot_and_persist() -> Result<()
     let addr = listener_addr(&server);
     let _ = login_java_client_with_packet(
         addr,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         "alpha",
         TestJavaPacket::LoginSuccess,
     )
@@ -447,18 +447,18 @@ async fn unsupported_creative_inventory_action_is_corrected() -> Result<(), Runt
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(TestJavaProtocol::Je1710, 36, 999, 64, 0),
+        &creative_inventory_action(TestJavaProtocol::Je5, 36, 999, 64, 0),
     )
     .await?;
     let set_slot = read_until_java_packet(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::SetSlot,
     )
     .await?;
-    assert_java_set_slot(TestJavaProtocol::Je1710, &set_slot, 36, Some((1, 64, 0)))?;
+    assert_java_set_slot(TestJavaProtocol::Je5, &set_slot, 36, Some((1, 64, 0)))?;
 
     server.shutdown().await
 }
@@ -476,7 +476,7 @@ async fn legacy_window_zero_crafting_round_trips_authoritative_slot_updates()
     let codec = MinecraftWireCodec;
 
     let (mut stream, mut buffer, _) = login_legacy(addr, "craft-legacy").await?;
-    craft_log_into_planks(TestJavaProtocol::Je1710, &mut stream, &mut buffer, &codec).await?;
+    craft_log_into_planks(TestJavaProtocol::Je5, &mut stream, &mut buffer, &codec).await?;
 
     server.shutdown().await
 }
@@ -494,7 +494,7 @@ async fn modern_1_8_window_zero_crafting_round_trips_authoritative_slot_updates(
     let codec = MinecraftWireCodec;
 
     let (mut stream, mut buffer, _) = login_modern_1_8(addr, "craft-18").await?;
-    craft_log_into_planks(TestJavaProtocol::Je18x, &mut stream, &mut buffer, &codec).await?;
+    craft_log_into_planks(TestJavaProtocol::Je47, &mut stream, &mut buffer, &codec).await?;
 
     server.shutdown().await
 }
@@ -512,7 +512,7 @@ async fn modern_1_12_window_zero_crafting_round_trips_authoritative_slot_updates
     let codec = MinecraftWireCodec;
 
     let (mut stream, mut buffer, _) = login_modern_1_12(addr, "craft-1122").await?;
-    craft_log_into_planks(TestJavaProtocol::Je1122, &mut stream, &mut buffer, &codec).await?;
+    craft_log_into_planks(TestJavaProtocol::Je340, &mut stream, &mut buffer, &codec).await?;
 
     server.shutdown().await
 }
@@ -533,14 +533,14 @@ async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(TestJavaProtocol::Je1710, 36, 17, 1, 0),
+        &creative_inventory_action(TestJavaProtocol::Je5, 36, 17, 1, 0),
     )
     .await?;
     let _ = read_until_set_slot(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         0,
         36,
         16,
@@ -550,54 +550,54 @@ async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
     write_packet(
         &mut stream,
         &codec,
-        &click_window(TestJavaProtocol::Je1710, 36, 0, 1, Some((17, 1, 0))),
+        &click_window(TestJavaProtocol::Je5, 36, 0, 1, Some((17, 1, 0))),
     )
     .await?;
     let reject_ack = read_until_confirm_transaction(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         0,
         1,
         16,
     )
     .await?;
     assert_eq!(
-        decode_confirm_transaction(TestJavaProtocol::Je1710, &reject_ack)?,
+        decode_confirm_transaction(TestJavaProtocol::Je5, &reject_ack)?,
         (0, 1, false)
     );
     let window_items = read_until_java_packet(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::WindowItems,
     )
     .await?;
     assert_eq!(
-        window_items_slot(TestJavaProtocol::Je1710, &window_items, 36)?,
+        window_items_slot(TestJavaProtocol::Je5, &window_items, 36)?,
         None
     );
     let slot_resync = read_until_set_slot(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         0,
         36,
         16,
     )
     .await?;
     assert_eq!(
-        decode_set_slot(TestJavaProtocol::Je1710, &slot_resync)?,
+        decode_set_slot(TestJavaProtocol::Je5, &slot_resync)?,
         (0, 36, None)
     );
     let held_slot = read_until_java_packet(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -606,28 +606,28 @@ async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         -1,
         -1,
         16,
     )
     .await?;
     assert_eq!(
-        decode_set_slot(TestJavaProtocol::Je1710, &cursor_resync)?,
+        decode_set_slot(TestJavaProtocol::Je5, &cursor_resync)?,
         (-1, -1, Some((17, 1, 0)))
     );
 
     write_packet(
         &mut stream,
         &codec,
-        &click_window(TestJavaProtocol::Je1710, 1, 0, 2, Some((17, 1, 0))),
+        &click_window(TestJavaProtocol::Je5, 1, 0, 2, Some((17, 1, 0))),
     )
     .await?;
     assert_no_java_packet(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::ConfirmTransaction,
     )
     .await?;
@@ -635,42 +635,42 @@ async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
     write_packet(
         &mut stream,
         &codec,
-        &confirm_transaction_ack(TestJavaProtocol::Je1710, 0, 1, false),
+        &confirm_transaction_ack(TestJavaProtocol::Je5, 0, 1, false),
     )
     .await?;
 
     write_packet(
         &mut stream,
         &codec,
-        &click_window(TestJavaProtocol::Je1710, 1, 0, 3, Some((17, 1, 0))),
+        &click_window(TestJavaProtocol::Je5, 1, 0, 3, Some((17, 1, 0))),
     )
     .await?;
     let accept_ack = read_until_confirm_transaction(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         0,
         3,
         16,
     )
     .await?;
     assert_eq!(
-        decode_confirm_transaction(TestJavaProtocol::Je1710, &accept_ack)?,
+        decode_confirm_transaction(TestJavaProtocol::Je5, &accept_ack)?,
         (0, 3, true)
     );
     let result_preview = read_until_set_slot(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         0,
         0,
         16,
     )
     .await?;
     assert_eq!(
-        decode_set_slot(TestJavaProtocol::Je1710, &result_preview)?,
+        decode_set_slot(TestJavaProtocol::Je5, &result_preview)?,
         (0, 0, Some((5, 4, 0)))
     );
 
@@ -700,7 +700,7 @@ async fn survival_place_is_rejected_with_block_and_inventory_correction() -> Res
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::BlockChange,
     )
     .await?;
@@ -708,13 +708,13 @@ async fn survival_place_is_rejected_with_block_and_inventory_correction() -> Res
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::SetSlot,
     )
     .await?;
 
     assert_eq!(block_change_from_packet(&block_change)?, (2, 4, 0, 0, 0));
-    assert_java_set_slot(TestJavaProtocol::Je1710, &set_slot, 36, Some((1, 64, 0)))?;
+    assert_java_set_slot(TestJavaProtocol::Je5, &set_slot, 36, Some((1, 64, 0)))?;
 
     server.shutdown().await
 }
@@ -738,7 +738,7 @@ async fn two_players_can_see_movement_and_restart_persists_position() -> Result<
         &mut first,
         &codec,
         &mut first_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;

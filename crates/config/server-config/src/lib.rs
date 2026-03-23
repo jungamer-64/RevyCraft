@@ -12,7 +12,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-pub const BEDROCK_BASELINE_ADAPTER_ID: &str = "be-26_3";
+pub const BEDROCK_BASELINE_ADAPTER_ID: &str = "be-924";
 pub const BEDROCK_OFFLINE_AUTH_PROFILE_ID: &str = "bedrock-offline-v1";
 pub const DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS: u64 = 30;
 pub const DEFAULT_ADMIN_GRPC_BIND_ADDR: SocketAddr =
@@ -160,7 +160,7 @@ impl Default for TopologyConfig {
     fn default() -> Self {
         Self {
             be_enabled: false,
-            default_adapter: "je-1_7_10".to_string(),
+            default_adapter: "je-5".to_string(),
             enabled_adapters: None,
             default_bedrock_adapter: BEDROCK_BASELINE_ADAPTER_ID.to_string(),
             enabled_bedrock_adapters: None,
@@ -410,7 +410,7 @@ impl ServerConfig {
                     .live
                     .topology
                     .default_adapter
-                    .unwrap_or_else(|| "je-1_7_10".to_string()),
+                    .unwrap_or_else(|| "je-5".to_string()),
                 enabled_adapters: normalize_optional_vec(document.live.topology.enabled_adapters),
                 default_bedrock_adapter: document
                     .live

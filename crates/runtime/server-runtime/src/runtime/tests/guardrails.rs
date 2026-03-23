@@ -85,7 +85,7 @@ async fn unsupported_login_protocol_receives_disconnect() -> Result<(), RuntimeE
     write_packet(
         &mut stream,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je18x.protocol_version(), 2)?,
+        &encode_handshake(TestJavaProtocol::Je47.protocol_version(), 2)?,
     )
     .await?;
     let mut buffer = BytesMut::new();

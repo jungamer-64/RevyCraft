@@ -5,7 +5,7 @@ fn admin_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerCo
     let mut config = loopback_server_config(world_dir);
     config.bootstrap.plugins_dir = dist_dir;
     config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     ));
     config
@@ -39,7 +39,7 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
 
@@ -52,7 +52,7 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
 
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let control = server.admin_control_plane();
@@ -136,13 +136,13 @@ async fn admin_control_plane_parse_reload_generation_uses_new_command_name()
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
 
     let server = build_reloadable_test_server(
         admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
-        plugin_test_registries_from_dist(dist_dir, &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir, &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let control = server.admin_control_plane();
@@ -172,7 +172,7 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
 
@@ -186,7 +186,7 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
 
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir, &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir, &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let control = server.admin_control_plane();
@@ -256,7 +256,7 @@ async fn admin_control_plane_reload_config_rejects_bootstrap_changes() -> Result
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
 
@@ -265,7 +265,7 @@ async fn admin_control_plane_reload_config_rejects_bootstrap_changes() -> Result
 
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let control = server.admin_control_plane();
@@ -308,7 +308,7 @@ async fn admin_control_plane_reload_config_updates_remote_tokens_for_next_reques
     let _alpha_token_path = seed_runtime_plugins_with_loopback_admin(
         &mut initial,
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
         &temp_dir.path().join("admin"),
         "ops",
@@ -322,7 +322,7 @@ async fn admin_control_plane_reload_config_updates_remote_tokens_for_next_reques
 
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let control = server.admin_control_plane();
@@ -396,7 +396,7 @@ async fn admin_control_plane_reload_config_updates_remote_permissions_for_existi
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
 
@@ -423,7 +423,7 @@ async fn admin_control_plane_reload_config_updates_remote_permissions_for_existi
 
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let control = server.admin_control_plane();
@@ -476,7 +476,7 @@ async fn admin_control_plane_reload_config_invalidates_existing_subject_when_pri
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
 
@@ -500,7 +500,7 @@ async fn admin_control_plane_reload_config_invalidates_existing_subject_when_pri
 
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let control = server.admin_control_plane();
@@ -556,7 +556,7 @@ async fn admin_control_plane_reload_config_rejects_admin_grpc_transport_changes(
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
 
@@ -580,7 +580,7 @@ async fn admin_control_plane_reload_config_rejects_admin_grpc_transport_changes(
 
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let control = server.admin_control_plane();
@@ -613,7 +613,7 @@ async fn admin_control_plane_reload_config_rejects_admin_grpc_allow_non_loopback
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
 
@@ -637,7 +637,7 @@ async fn admin_control_plane_reload_config_rejects_admin_grpc_allow_non_loopback
 
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let control = server.admin_control_plane();

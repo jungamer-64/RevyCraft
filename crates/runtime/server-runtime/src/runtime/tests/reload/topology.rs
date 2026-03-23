@@ -15,15 +15,15 @@ async fn reload_server_with_queued_old_accept(
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let mut initial =
         topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
-    initial.topology.default_adapter = JE_1_7_10_ADAPTER_ID.to_string();
+    initial.topology.default_adapter = JE_5_ADAPTER_ID.to_string();
     initial.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
     ]);
     initial.topology.drain_grace_secs = drain_grace_secs;
     write_server_toml(&config_path, &initial)?;
@@ -31,7 +31,7 @@ async fn reload_server_with_queued_old_accept(
         ServerConfigSource::Toml(config_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),
-            &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
+            &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID],
         )?,
     )
     .await?;
@@ -40,7 +40,7 @@ async fn reload_server_with_queued_old_accept(
 
     std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
-    updated.topology.default_adapter = JE_1_8_X_ADAPTER_ID.to_string();
+    updated.topology.default_adapter = JE_47_ADAPTER_ID.to_string();
     write_server_toml(&config_path, &updated)?;
     let result = server.reload_generation().await?;
     assert_ne!(result.activated_generation_id, old_generation);
@@ -81,13 +81,13 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
     let target_dir = harness.scoped_target_dir("topology-inline-manual");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            JE_1_7_10_ADAPTER_ID,
+            "mc-plugin-proto-je-5-reload-test",
+            JE_5_ADAPTER_ID,
             &dist_dir,
             &target_dir,
             "protocol-reload-v1",
@@ -95,20 +95,20 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let server = build_reloadable_test_server(
         topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let before_generation = server.runtime.active_generation();
     let before_adapter = active_protocol_registry(&server)
-        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("runtime should resolve the initial adapter");
     let before_protocol_number = before_adapter.descriptor().protocol_number;
 
     std::thread::sleep(Duration::from_secs(1));
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            JE_1_7_10_ADAPTER_ID,
+            "mc-plugin-proto-je-5-reload-test",
+            JE_5_ADAPTER_ID,
             &dist_dir,
             &target_dir,
             "reload-incompatible",
@@ -124,11 +124,11 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
         result
             .reconfigured_adapter_ids
             .iter()
-            .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID)
+            .any(|adapter_id| adapter_id == JE_5_ADAPTER_ID)
     );
 
     let after_adapter = active_protocol_registry(&server)
-        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("runtime should resolve the updated adapter");
     assert_eq!(
         after_adapter.descriptor().protocol_number,
@@ -146,18 +146,18 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
     seed_runtime_plugins(
         &dist_dir,
         &[
-            JE_1_7_10_ADAPTER_ID,
-            JE_1_8_X_ADAPTER_ID,
-            BE_26_3_ADAPTER_ID,
+            JE_5_ADAPTER_ID,
+            JE_47_ADAPTER_ID,
+            BE_924_ADAPTER_ID,
         ],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let mut initial =
         topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
-    initial.topology.default_adapter = JE_1_7_10_ADAPTER_ID.to_string();
+    initial.topology.default_adapter = JE_5_ADAPTER_ID.to_string();
     initial.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
     ]);
     write_server_toml(&config_path, &initial)?;
     let server = build_reloadable_test_server_from_source(
@@ -165,9 +165,9 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
         plugin_test_registries_from_dist(
             dist_dir.clone(),
             &[
-                JE_1_7_10_ADAPTER_ID,
-                JE_1_8_X_ADAPTER_ID,
-                BE_26_3_ADAPTER_ID,
+                JE_5_ADAPTER_ID,
+                JE_47_ADAPTER_ID,
+                BE_924_ADAPTER_ID,
             ],
         )?,
     )
@@ -177,10 +177,10 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
 
     std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
-    updated.topology.default_adapter = JE_1_8_X_ADAPTER_ID.to_string();
+    updated.topology.default_adapter = JE_47_ADAPTER_ID.to_string();
     updated.topology.be_enabled = true;
-    updated.topology.default_bedrock_adapter = BE_26_3_ADAPTER_ID.to_string();
-    updated.topology.enabled_bedrock_adapters = Some(vec![BE_26_3_ADAPTER_ID.to_string()]);
+    updated.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.to_string();
+    updated.topology.enabled_bedrock_adapters = Some(vec![BE_924_ADAPTER_ID.to_string()]);
     write_server_toml(&config_path, &updated)?;
 
     let result = server.reload_generation().await?;
@@ -200,7 +200,7 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
             .default_adapter
             .descriptor()
             .adapter_id,
-        JE_1_8_X_ADAPTER_ID
+        JE_47_ADAPTER_ID
     );
 
     server.shutdown().await
@@ -213,7 +213,7 @@ async fn plugin_reload_ignores_pending_generation_config_changes() -> Result<(),
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let mut initial =
@@ -222,7 +222,7 @@ async fn plugin_reload_ignores_pending_generation_config_changes() -> Result<(),
     write_server_toml(&config_path, &initial)?;
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir, &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir, &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let before_generation = server.runtime.active_generation().generation_id;
@@ -264,17 +264,17 @@ async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let mut initial =
         topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
-    initial.topology.default_adapter = JE_1_7_10_ADAPTER_ID.to_string();
-    initial.topology.enabled_adapters = Some(vec![JE_1_7_10_ADAPTER_ID.to_string()]);
+    initial.topology.default_adapter = JE_5_ADAPTER_ID.to_string();
+    initial.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.to_string()]);
     write_server_toml(&config_path, &initial)?;
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let before_generation = server.runtime.active_generation().generation_id;
@@ -308,35 +308,35 @@ async fn topology_reload_status_reports_draining_generation() -> Result<(), Runt
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let mut initial =
         topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
-    initial.topology.default_adapter = JE_1_7_10_ADAPTER_ID.to_string();
+    initial.topology.default_adapter = JE_5_ADAPTER_ID.to_string();
     initial.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
     ]);
     write_server_toml(&config_path, &initial)?;
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),
-            &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
+            &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID],
         )?,
     )
     .await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let (_stream, _buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "topology-status")
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "topology-status")
             .await?;
     let before_generation = server.runtime.active_generation().generation_id;
 
     std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
-    updated.topology.default_adapter = JE_1_8_X_ADAPTER_ID.to_string();
+    updated.topology.default_adapter = JE_47_ADAPTER_ID.to_string();
     write_server_toml(&config_path, &updated)?;
     let result = server.reload_generation().await?;
     assert_ne!(result.activated_generation_id, before_generation);
@@ -382,15 +382,15 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let mut initial =
         topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
-    initial.topology.default_adapter = JE_1_7_10_ADAPTER_ID.to_string();
+    initial.topology.default_adapter = JE_5_ADAPTER_ID.to_string();
     initial.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
     ]);
     initial.topology.drain_grace_secs = 0;
     write_server_toml(&config_path, &initial)?;
@@ -398,19 +398,19 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
         ServerConfigSource::Toml(config_path.clone()),
         plugin_test_registries_from_dist(
             dist_dir.clone(),
-            &[JE_1_7_10_ADAPTER_ID, JE_1_8_X_ADAPTER_ID],
+            &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID],
         )?,
     )
     .await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let (_stream, _buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "topodrain").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "topodrain").await?;
     assert_eq!(server.runtime.sessions.lock().await.len(), 1);
 
     std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
-    updated.topology.default_adapter = JE_1_8_X_ADAPTER_ID.to_string();
+    updated.topology.default_adapter = JE_47_ADAPTER_ID.to_string();
     write_server_toml(&config_path, &updated)?;
     let _ = server.reload_generation().await?;
 

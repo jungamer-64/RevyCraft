@@ -36,7 +36,7 @@ async fn running_server_exposes_listener_bindings() -> Result<(), RuntimeError> 
         binding
             .adapter_ids
             .iter()
-            .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID)
+            .any(|adapter_id| adapter_id == JE_5_ADAPTER_ID)
     );
 
     server.shutdown().await
@@ -58,7 +58,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
     );
     assert_eq!(
         status.active_generation.default_adapter_id,
-        JE_1_7_10_ADAPTER_ID
+        JE_5_ADAPTER_ID
     );
     assert!(
         status
@@ -88,7 +88,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
         summary,
         concat!(
             "runtime active-generation=1 draining-generations=0 listeners=1 sessions=0 dirty=false\n",
-            "generation tcp-default=je-1_7_10 tcp-enabled=je-1_7_10 udp-default=- udp-enabled=- max-players=20 motd=\"Multi-version Rust server\"\n",
+            "generation tcp-default=je-5 tcp-enabled=je-5 udp-default=- udp-enabled=- max-players=20 motd=\"Multi-version Rust server\"\n",
             "session-summary transport=tcp:0,udp:0 phase=handshaking:0,status:0,login:0,play:0\n",
             "plugins protocol=5 gameplay=1 storage=1 auth=1 admin-ui=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
         )
@@ -112,7 +112,7 @@ async fn supervisor_boot_keeps_listener_and_admin_bind_snapshot_after_toml_chang
     let _ops_token = seed_runtime_plugins_with_loopback_admin(
         &mut initial,
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
         temp_dir.path(),
         "ops",
@@ -263,7 +263,7 @@ async fn running_server_exposes_udp_listener_binding_when_enabled() -> Result<()
         binding
             .adapter_ids
             .iter()
-            .any(|adapter_id| adapter_id == BE_26_3_ADAPTER_ID)
+            .any(|adapter_id| adapter_id == BE_924_ADAPTER_ID)
     );
 
     server.shutdown().await
@@ -287,7 +287,7 @@ async fn running_server_session_status_reports_live_sessions() -> Result<(), Run
     let (_stream, _buffer, _) = connect_and_login_java_client_until(
         addr,
         &codec,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         "status-observer",
         TestJavaPacket::ChunkData,
     )
@@ -298,7 +298,7 @@ async fn running_server_session_status_reports_live_sessions() -> Result<(), Run
     let session = &sessions[0];
     assert_eq!(session.transport, TransportKind::Tcp);
     assert_eq!(session.phase, ConnectionPhase::Play);
-    assert_eq!(session.adapter_id.as_deref(), Some(JE_1_7_10_ADAPTER_ID));
+    assert_eq!(session.adapter_id.as_deref(), Some(JE_5_ADAPTER_ID));
     assert_eq!(session.gameplay_profile.as_deref(), Some("canonical"));
     assert!(session.player_id.is_some());
     assert!(session.entity_id.is_some());
@@ -326,7 +326,7 @@ async fn running_server_session_status_reports_live_sessions() -> Result<(), Run
             .session_summary
             .by_adapter_id
             .iter()
-            .any(|entry| entry.value.as_deref() == Some(JE_1_7_10_ADAPTER_ID) && entry.count == 1)
+            .any(|entry| entry.value.as_deref() == Some(JE_5_ADAPTER_ID) && entry.count == 1)
     );
     let serialized = toml::to_string(&SessionStatusList {
         sessions: &sessions,
@@ -354,9 +354,9 @@ async fn placeholder_bedrock_adapter_can_remain_enabled_when_not_default()
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.topology.be_enabled = true;
-    config.topology.default_bedrock_adapter = BE_26_3_ADAPTER_ID.to_string();
+    config.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.to_string();
     config.topology.enabled_bedrock_adapters = Some(vec![
-        BE_26_3_ADAPTER_ID.to_string(),
+        BE_924_ADAPTER_ID.to_string(),
         BE_PLACEHOLDER_ADAPTER_ID.to_string(),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
@@ -381,9 +381,9 @@ async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), Runt
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
-        JE_1_12_2_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
+        JE_340_ADAPTER_ID.to_string(),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
 
@@ -397,19 +397,19 @@ async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), Runt
         binding
             .adapter_ids
             .iter()
-            .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID)
+            .any(|adapter_id| adapter_id == JE_5_ADAPTER_ID)
     );
     assert!(
         binding
             .adapter_ids
             .iter()
-            .any(|adapter_id| adapter_id == JE_1_8_X_ADAPTER_ID)
+            .any(|adapter_id| adapter_id == JE_47_ADAPTER_ID)
     );
     assert!(
         binding
             .adapter_ids
             .iter()
-            .any(|adapter_id| adapter_id == JE_1_12_2_ADAPTER_ID)
+            .any(|adapter_id| adapter_id == JE_340_ADAPTER_ID)
     );
 
     server.shutdown().await
@@ -430,7 +430,7 @@ async fn status_ping_login_and_initial_world_work() -> Result<(), RuntimeError> 
     write_packet(
         &mut status_stream,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 1)?,
+        &encode_handshake(TestJavaProtocol::Je5.protocol_version(), 1)?,
     )
     .await?;
     write_packet(&mut status_stream, &codec, &status_request()).await?;
@@ -445,7 +445,7 @@ async fn status_ping_login_and_initial_world_work() -> Result<(), RuntimeError> 
     write_packet(
         &mut login_stream,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+        &encode_handshake(TestJavaProtocol::Je5.protocol_version(), 2)?,
     )
     .await?;
     write_packet(&mut login_stream, &codec, &login_start("alpha")).await?;
@@ -468,7 +468,7 @@ async fn status_ping_login_and_initial_world_work() -> Result<(), RuntimeError> 
         &mut login_stream,
         &codec,
         &mut login_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::ChunkData,
     )
     .await?;
@@ -492,7 +492,7 @@ async fn unsupported_status_protocol_receives_server_list_response() -> Result<(
     write_packet(
         &mut stream,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je18x.protocol_version(), 1)?,
+        &encode_handshake(TestJavaProtocol::Je47.protocol_version(), 1)?,
     )
     .await?;
     write_packet(&mut stream, &codec, &status_request()).await?;
@@ -550,7 +550,7 @@ async fn udp_bedrock_probe_does_not_block_je_status() -> Result<(), RuntimeError
     write_packet(
         &mut stream,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 1)?,
+        &encode_handshake(TestJavaProtocol::Je5.protocol_version(), 1)?,
     )
     .await?;
     write_packet(&mut stream, &codec, &status_request()).await?;

@@ -19,14 +19,14 @@ pub(crate) async fn spawn_protocol_reload_server(
         .scoped_target_dir(scenario);
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            JE_1_7_10_ADAPTER_ID,
+            "mc-plugin-proto-je-5-reload-test",
+            JE_5_ADAPTER_ID,
             &dist_dir,
             &target_dir,
             "protocol-reload-v1",
@@ -37,11 +37,11 @@ pub(crate) async fn spawn_protocol_reload_server(
     config.bootstrap.plugins_dir = dist_dir.clone();
     let server = build_reloadable_test_server(
         config,
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let adapter = active_protocol_registry(&server)
-        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("runtime should resolve the reload-test adapter");
     let before_generation = adapter
         .plugin_generation_id()
@@ -71,7 +71,7 @@ pub(crate) async fn spawn_online_auth_reload_server(
         .scoped_target_dir("auth-online-reload");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
     )?;
     PackagedPluginHarness::shared()
@@ -92,7 +92,7 @@ pub(crate) async fn spawn_online_auth_reload_server(
         config,
         plugin_test_registries_from_dist_with_supporting_plugins(
             dist_dir.clone(),
-            &[JE_1_7_10_ADAPTER_ID],
+            &[JE_5_ADAPTER_ID],
             &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
         )?,
     )
@@ -121,7 +121,7 @@ pub(crate) async fn begin_online_auth_handshake(
     write_packet(
         &mut alpha,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+        &encode_handshake(TestJavaProtocol::Je5.protocol_version(), 2)?,
     )
     .await?;
     write_packet(&mut alpha, &codec, &login_start("alpha-online")).await?;

@@ -4,9 +4,9 @@ pub type TestItemStack = (i16, u8, i16);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TestJavaProtocol {
-    Je1710,
-    Je18x,
-    Je1122,
+    Je5,
+    Je47,
+    Je340,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,41 +47,41 @@ impl TestJavaProtocol {
     #[must_use]
     pub const fn protocol_version(self) -> i32 {
         match self {
-            Self::Je1710 => 5,
-            Self::Je18x => 47,
-            Self::Je1122 => 340,
+            Self::Je5 => 5,
+            Self::Je47 => 47,
+            Self::Je340 => 340,
         }
     }
 
     #[must_use]
     pub const fn login_ready_packet_id(self) -> i32 {
         match self {
-            Self::Je1710 | Self::Je18x => 0x30,
-            Self::Je1122 => 0x14,
+            Self::Je5 | Self::Je47 => 0x30,
+            Self::Je340 => 0x14,
         }
     }
 
     #[must_use]
     pub const fn set_slot_packet_id(self) -> i32 {
         match self {
-            Self::Je1710 | Self::Je18x => 0x2f,
-            Self::Je1122 => 0x16,
+            Self::Je5 | Self::Je47 => 0x2f,
+            Self::Je340 => 0x16,
         }
     }
 
     #[must_use]
     pub const fn window_items_packet_id(self) -> i32 {
         match self {
-            Self::Je1710 | Self::Je18x => 0x30,
-            Self::Je1122 => 0x14,
+            Self::Je5 | Self::Je47 => 0x30,
+            Self::Je340 => 0x14,
         }
     }
 
     #[must_use]
     pub const fn confirm_transaction_packet_id(self) -> i32 {
         match self {
-            Self::Je1710 | Self::Je18x => 0x32,
-            Self::Je1122 => 0x11,
+            Self::Je5 | Self::Je47 => 0x32,
+            Self::Je340 => 0x11,
         }
     }
 
@@ -91,39 +91,39 @@ impl TestJavaProtocol {
             (_, TestJavaPacket::StatusResponse) => Some(0x00),
             (_, TestJavaPacket::StatusPong) => Some(0x01),
             (_, TestJavaPacket::LoginSuccess) => Some(0x02),
-            (Self::Je1710, TestJavaPacket::JoinGame) => Some(0x01),
-            (Self::Je18x, TestJavaPacket::JoinGame) => Some(0x01),
-            (Self::Je1122, TestJavaPacket::JoinGame) => Some(0x23),
-            (Self::Je1710, TestJavaPacket::SpawnPosition) => Some(0x05),
-            (Self::Je18x, TestJavaPacket::SpawnPosition) => Some(0x05),
-            (Self::Je1122, TestJavaPacket::SpawnPosition) => Some(0x46),
-            (Self::Je1710, TestJavaPacket::PositionAndLook) => Some(0x08),
-            (Self::Je18x, TestJavaPacket::PositionAndLook) => Some(0x08),
-            (Self::Je1122, TestJavaPacket::PositionAndLook) => Some(0x2f),
-            (Self::Je1710, TestJavaPacket::NamedEntitySpawn) => Some(0x0c),
-            (Self::Je18x, TestJavaPacket::NamedEntitySpawn) => Some(0x0c),
-            (Self::Je1122, TestJavaPacket::NamedEntitySpawn) => Some(0x05),
-            (Self::Je1710, TestJavaPacket::PlayerInfoAdd) => None,
-            (Self::Je18x, TestJavaPacket::PlayerInfoAdd) => Some(0x38),
-            (Self::Je1122, TestJavaPacket::PlayerInfoAdd) => Some(0x2d),
-            (Self::Je1710, TestJavaPacket::EntityTeleport) => Some(0x18),
-            (Self::Je18x, TestJavaPacket::EntityTeleport) => Some(0x18),
-            (Self::Je1122, TestJavaPacket::EntityTeleport) => Some(0x4c),
-            (Self::Je1710, TestJavaPacket::BlockChange) => Some(0x23),
-            (Self::Je18x, TestJavaPacket::BlockChange) => Some(0x23),
-            (Self::Je1122, TestJavaPacket::BlockChange) => Some(0x0b),
+            (Self::Je5, TestJavaPacket::JoinGame) => Some(0x01),
+            (Self::Je47, TestJavaPacket::JoinGame) => Some(0x01),
+            (Self::Je340, TestJavaPacket::JoinGame) => Some(0x23),
+            (Self::Je5, TestJavaPacket::SpawnPosition) => Some(0x05),
+            (Self::Je47, TestJavaPacket::SpawnPosition) => Some(0x05),
+            (Self::Je340, TestJavaPacket::SpawnPosition) => Some(0x46),
+            (Self::Je5, TestJavaPacket::PositionAndLook) => Some(0x08),
+            (Self::Je47, TestJavaPacket::PositionAndLook) => Some(0x08),
+            (Self::Je340, TestJavaPacket::PositionAndLook) => Some(0x2f),
+            (Self::Je5, TestJavaPacket::NamedEntitySpawn) => Some(0x0c),
+            (Self::Je47, TestJavaPacket::NamedEntitySpawn) => Some(0x0c),
+            (Self::Je340, TestJavaPacket::NamedEntitySpawn) => Some(0x05),
+            (Self::Je5, TestJavaPacket::PlayerInfoAdd) => None,
+            (Self::Je47, TestJavaPacket::PlayerInfoAdd) => Some(0x38),
+            (Self::Je340, TestJavaPacket::PlayerInfoAdd) => Some(0x2d),
+            (Self::Je5, TestJavaPacket::EntityTeleport) => Some(0x18),
+            (Self::Je47, TestJavaPacket::EntityTeleport) => Some(0x18),
+            (Self::Je340, TestJavaPacket::EntityTeleport) => Some(0x4c),
+            (Self::Je5, TestJavaPacket::BlockChange) => Some(0x23),
+            (Self::Je47, TestJavaPacket::BlockChange) => Some(0x23),
+            (Self::Je340, TestJavaPacket::BlockChange) => Some(0x0b),
             (_, TestJavaPacket::SetSlot) => Some(self.set_slot_packet_id()),
             (_, TestJavaPacket::WindowItems) => Some(self.window_items_packet_id()),
             (_, TestJavaPacket::ConfirmTransaction) => Some(self.confirm_transaction_packet_id()),
-            (Self::Je1710, TestJavaPacket::HeldItemChange) => Some(0x09),
-            (Self::Je18x, TestJavaPacket::HeldItemChange) => Some(0x09),
-            (Self::Je1122, TestJavaPacket::HeldItemChange) => Some(0x3a),
-            (Self::Je1710, TestJavaPacket::PlayerAbilities) => Some(0x39),
-            (Self::Je18x, TestJavaPacket::PlayerAbilities) => Some(0x39),
-            (Self::Je1122, TestJavaPacket::PlayerAbilities) => Some(0x2c),
-            (Self::Je1710, TestJavaPacket::ChunkData) => Some(0x26),
-            (Self::Je18x, TestJavaPacket::ChunkData) => Some(0x21),
-            (Self::Je1122, TestJavaPacket::ChunkData) => Some(0x20),
+            (Self::Je5, TestJavaPacket::HeldItemChange) => Some(0x09),
+            (Self::Je47, TestJavaPacket::HeldItemChange) => Some(0x09),
+            (Self::Je340, TestJavaPacket::HeldItemChange) => Some(0x3a),
+            (Self::Je5, TestJavaPacket::PlayerAbilities) => Some(0x39),
+            (Self::Je47, TestJavaPacket::PlayerAbilities) => Some(0x39),
+            (Self::Je340, TestJavaPacket::PlayerAbilities) => Some(0x2c),
+            (Self::Je5, TestJavaPacket::ChunkData) => Some(0x26),
+            (Self::Je47, TestJavaPacket::ChunkData) => Some(0x21),
+            (Self::Je340, TestJavaPacket::ChunkData) => Some(0x20),
         }
     }
 
@@ -137,8 +137,8 @@ impl TestJavaProtocol {
     ) -> Vec<u8> {
         let mut writer = PacketWriter::default();
         writer.write_varint(match self {
-            Self::Je1710 | Self::Je18x => 0x10,
-            Self::Je1122 => 0x1b,
+            Self::Je5 | Self::Je47 => 0x10,
+            Self::Je340 => 0x1b,
         });
         writer.write_i16(slot);
         write_slot(
@@ -171,16 +171,16 @@ impl TestJavaProtocol {
     ) -> Vec<u8> {
         let mut writer = PacketWriter::default();
         writer.write_varint(match self {
-            Self::Je1710 | Self::Je18x => 0x0e,
-            Self::Je1122 => 0x07,
+            Self::Je5 | Self::Je47 => 0x0e,
+            Self::Je340 => 0x07,
         });
         writer.write_i8(window_id);
         writer.write_i16(slot);
         writer.write_i8(button);
         writer.write_i16(action_number);
         match self {
-            Self::Je1710 | Self::Je18x => writer.write_i8(0),
-            Self::Je1122 => writer.write_varint(0),
+            Self::Je5 | Self::Je47 => writer.write_i8(0),
+            Self::Je340 => writer.write_varint(0),
         }
         write_slot(&mut writer, clicked_item, self.slot_nbt_encoding());
         writer.into_inner()
@@ -195,8 +195,8 @@ impl TestJavaProtocol {
     ) -> Vec<u8> {
         let mut writer = PacketWriter::default();
         writer.write_varint(match self {
-            Self::Je1710 | Self::Je18x => 0x0f,
-            Self::Je1122 => 0x05,
+            Self::Je5 | Self::Je47 => 0x0f,
+            Self::Je340 => 0x05,
         });
         writer.write_u8(window_id);
         writer.write_i16(action_number);
@@ -262,8 +262,8 @@ impl TestJavaProtocol {
 
     fn slot_nbt_encoding(self) -> SlotNbtEncoding {
         match self {
-            Self::Je1710 => SlotNbtEncoding::LengthPrefixedBlob,
-            Self::Je18x | Self::Je1122 => SlotNbtEncoding::RootTag,
+            Self::Je5 => SlotNbtEncoding::LengthPrefixedBlob,
+            Self::Je47 | Self::Je340 => SlotNbtEncoding::RootTag,
         }
     }
 }
@@ -398,24 +398,24 @@ mod tests {
 
     #[test]
     fn protocol_constants_match_expected_versions() {
-        assert_eq!(TestJavaProtocol::Je1710.protocol_version(), 5);
-        assert_eq!(TestJavaProtocol::Je18x.protocol_version(), 47);
-        assert_eq!(TestJavaProtocol::Je1122.protocol_version(), 340);
-        assert_eq!(TestJavaProtocol::Je1710.login_ready_packet_id(), 0x30);
-        assert_eq!(TestJavaProtocol::Je1122.login_ready_packet_id(), 0x14);
+        assert_eq!(TestJavaProtocol::Je5.protocol_version(), 5);
+        assert_eq!(TestJavaProtocol::Je47.protocol_version(), 47);
+        assert_eq!(TestJavaProtocol::Je340.protocol_version(), 340);
+        assert_eq!(TestJavaProtocol::Je5.login_ready_packet_id(), 0x30);
+        assert_eq!(TestJavaProtocol::Je340.login_ready_packet_id(), 0x14);
         assert_eq!(
-            TestJavaProtocol::Je18x.clientbound_packet_id(TestJavaPacket::PlayerInfoAdd),
+            TestJavaProtocol::Je47.clientbound_packet_id(TestJavaPacket::PlayerInfoAdd),
             Some(0x38)
         );
         assert_eq!(
-            TestJavaProtocol::Je1710.clientbound_packet_id(TestJavaPacket::PlayerInfoAdd),
+            TestJavaProtocol::Je5.clientbound_packet_id(TestJavaPacket::PlayerInfoAdd),
             None
         );
     }
 
     #[test]
     fn legacy_set_slot_round_trips_with_length_prefixed_nbt() {
-        let protocol = TestJavaProtocol::Je1710;
+        let protocol = TestJavaProtocol::Je5;
         let mut writer = PacketWriter::default();
         writer.write_varint(protocol.set_slot_packet_id());
         writer.write_i8(0);
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn modern_window_items_decode_uses_root_tag_slots() {
-        let protocol = TestJavaProtocol::Je1122;
+        let protocol = TestJavaProtocol::Je340;
         let mut writer = PacketWriter::default();
         writer.write_varint(protocol.window_items_packet_id());
         writer.write_u8(0);
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn click_window_packet_ids_follow_protocol_version() {
-        let legacy = TestJavaProtocol::Je1710.encode_click_window(36, 0, 1, None);
+        let legacy = TestJavaProtocol::Je5.encode_click_window(36, 0, 1, None);
         let mut legacy_reader = PacketReader::new(&legacy);
         assert_eq!(
             legacy_reader
@@ -470,7 +470,7 @@ mod tests {
         assert_eq!(legacy_reader.read_i16().expect("action should decode"), 1);
         assert_eq!(legacy_reader.read_i8().expect("mode should decode"), 0);
 
-        let modern = TestJavaProtocol::Je1122.encode_click_window(36, 0, 1, None);
+        let modern = TestJavaProtocol::Je340.encode_click_window(36, 0, 1, None);
         let mut modern_reader = PacketReader::new(&modern);
         assert_eq!(
             modern_reader

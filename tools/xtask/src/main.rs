@@ -1027,11 +1027,11 @@ mod tests {
     #[test]
     fn plugin_spec_maps_protocol_packages_to_adapter_ids() {
         assert_eq!(
-            plugin_spec_from_package_name("mc-plugin-proto-je-1_12_2")
+            plugin_spec_from_package_name("mc-plugin-proto-je-340")
                 .expect("valid protocol plugin"),
             PluginSpec {
-                cargo_package: "mc-plugin-proto-je-1_12_2".to_string(),
-                plugin_id: "je-1_12_2".to_string(),
+                cargo_package: "mc-plugin-proto-je-340".to_string(),
+                plugin_id: "je-340".to_string(),
                 plugin_kind: "protocol".to_string(),
             }
         );
@@ -1138,7 +1138,7 @@ mod tests {
         let runtime_dir = temp_dir.path().join("runtime");
         fs::create_dir_all(&runtime_dir).expect("runtime dir should be created");
         let example = runtime_dir.join("server.toml.example");
-        fs::write(&example, "[live.plugins]\nallowlist = [\"je-1_7_10\"]\n")
+        fs::write(&example, "[live.plugins]\nallowlist = [\"je-5\"]\n")
             .expect("example config should be written");
 
         let parsed = parse_release_bundle_args(
@@ -1168,7 +1168,7 @@ mod tests {
         let runtime_dir = temp_dir.path().join("runtime");
         fs::create_dir_all(&runtime_dir).expect("runtime dir should be created");
         let custom = runtime_dir.join("bundle.toml");
-        fs::write(&custom, "[live.plugins]\nallowlist = [\"je-1_7_10\"]\n")
+        fs::write(&custom, "[live.plugins]\nallowlist = [\"je-5\"]\n")
             .expect("custom config should be written");
 
         let parsed = parse_release_bundle_args(
@@ -1206,8 +1206,8 @@ mod tests {
     fn filter_plugins_by_ids_rejects_unknown_sample_plugin() {
         let error = filter_plugins_by_ids(
             vec![PluginSpec {
-                cargo_package: "mc-plugin-proto-je-1_7_10".to_string(),
-                plugin_id: "je-1_7_10".to_string(),
+                cargo_package: "mc-plugin-proto-je-5".to_string(),
+                plugin_id: "je-5".to_string(),
                 plugin_kind: "protocol".to_string(),
             }],
             &["missing-plugin".to_string()],
@@ -1223,9 +1223,9 @@ mod tests {
         fs::create_dir_all(&runtime_dir).expect("runtime dir should be created");
         let active = runtime_dir.join("server.toml");
         let example = runtime_dir.join("server.toml.example");
-        fs::write(&active, "[plugins]\nallowlist = [\"je-1_7_10\"]\n")
+        fs::write(&active, "[plugins]\nallowlist = [\"je-5\"]\n")
             .expect("active config should be written");
-        fs::write(&example, "[plugins]\nallowlist = [\"je-1_8_x\"]\n")
+        fs::write(&example, "[plugins]\nallowlist = [\"je-47\"]\n")
             .expect("example config should be written");
 
         assert_eq!(
@@ -1241,7 +1241,7 @@ mod tests {
         let runtime_dir = temp_dir.path().join("runtime");
         fs::create_dir_all(&runtime_dir).expect("runtime dir should be created");
         let example = runtime_dir.join("server.toml.example");
-        fs::write(&example, "[plugins]\nallowlist = [\"je-1_8_x\"]\n")
+        fs::write(&example, "[plugins]\nallowlist = [\"je-47\"]\n")
             .expect("example config should be written");
 
         assert_eq!(
@@ -1274,13 +1274,13 @@ mod tests {
         let config = temp_dir.path().join("server.toml");
         fs::write(
             &config,
-            "[live.plugins]\nallowlist = [\"je-1_7_10\", \"je-1_7_10\", \"auth-offline\"]\n",
+            "[live.plugins]\nallowlist = [\"je-5\", \"je-5\", \"auth-offline\"]\n",
         )
         .expect("config should be written");
 
         assert_eq!(
             plugin_allowlist_from_toml(&config).expect("allowlist should be parsed successfully"),
-            vec!["je-1_7_10".to_string(), "auth-offline".to_string()]
+            vec!["je-5".to_string(), "auth-offline".to_string()]
         );
     }
 
@@ -1288,12 +1288,12 @@ mod tests {
     fn plugin_allowlist_from_toml_falls_back_to_legacy_plugins_table() {
         let temp_dir = tempdir().expect("temp dir should be created");
         let config = temp_dir.path().join("server.toml");
-        fs::write(&config, "[plugins]\nallowlist = [\"je-1_8_x\"]\n")
+        fs::write(&config, "[plugins]\nallowlist = [\"je-47\"]\n")
             .expect("config should be written");
 
         assert_eq!(
             plugin_allowlist_from_toml(&config).expect("legacy allowlist should be parsed"),
-            vec!["je-1_8_x".to_string()]
+            vec!["je-47".to_string()]
         );
     }
 
@@ -1305,12 +1305,12 @@ mod tests {
         fs::create_dir_all(&dist_dir).expect("dist dir should be created");
         fs::create_dir_all(&stage_dir).expect("stage dir should be created");
 
-        let selected_dist_dir = dist_dir.join("je-1_7_10");
+        let selected_dist_dir = dist_dir.join("je-5");
         fs::create_dir_all(&selected_dist_dir).expect("selected dist dir should be created");
         fs::write(selected_dist_dir.join("stale.txt"), "stale")
             .expect("stale file should be written");
 
-        let removed_dist_dir = dist_dir.join("je-1_8_x");
+        let removed_dist_dir = dist_dir.join("je-47");
         fs::create_dir_all(&removed_dist_dir).expect("removed dist dir should be created");
         fs::write(removed_dist_dir.join("plugin.toml"), "old")
             .expect("old manifest should be written");
@@ -1320,7 +1320,7 @@ mod tests {
         fs::write(third_party_dir.join("plugin.toml"), "external")
             .expect("external manifest should be written");
 
-        let staged_plugin_dir = stage_dir.join("je-1_7_10");
+        let staged_plugin_dir = stage_dir.join("je-5");
         fs::create_dir_all(&staged_plugin_dir).expect("staged plugin dir should be created");
         fs::write(staged_plugin_dir.join("plugin.toml"), "new")
             .expect("new manifest should be written");
@@ -1328,26 +1328,26 @@ mod tests {
         reconcile_packaged_plugins(
             &dist_dir,
             &stage_dir,
-            &["je-1_7_10".to_string(), "je-1_8_x".to_string()]
+            &["je-5".to_string(), "je-47".to_string()]
                 .into_iter()
                 .collect::<BTreeSet<_>>(),
-            &["je-1_7_10".to_string()]
+            &["je-5".to_string()]
                 .into_iter()
                 .collect::<BTreeSet<_>>(),
         )
         .expect("reconcile should succeed");
 
         assert_eq!(
-            fs::read_to_string(dist_dir.join("je-1_7_10").join("plugin.toml"))
+            fs::read_to_string(dist_dir.join("je-5").join("plugin.toml"))
                 .expect("selected plugin manifest should exist"),
             "new"
         );
         assert!(
-            !dist_dir.join("je-1_7_10").join("stale.txt").exists(),
+            !dist_dir.join("je-5").join("stale.txt").exists(),
             "selected managed plugin should be fully replaced"
         );
         assert!(
-            !dist_dir.join("je-1_8_x").exists(),
+            !dist_dir.join("je-47").exists(),
             "unselected managed plugin should be removed"
         );
         assert!(
@@ -1365,7 +1365,7 @@ mod tests {
         let config_path = runtime_dir.join("server.toml.example");
         fs::write(
             &config_path,
-            "[static.plugins]\nplugins_dir = \"plugins\"\n\n[live.plugins]\nallowlist = [\"je-1_7_10\"]\n",
+            "[static.plugins]\nplugins_dir = \"plugins\"\n\n[live.plugins]\nallowlist = [\"je-5\"]\n",
         )
         .expect("config should be written");
 
@@ -1379,7 +1379,7 @@ mod tests {
         fs::write(build_dir.join("server-bootstrap"), "server-binary")
             .expect("server binary should be written");
         fs::write(
-            build_dir.join("libmc_plugin_proto_je_1_7_10.so"),
+            build_dir.join("libmc_plugin_proto_je_5.so"),
             "plugin-binary",
         )
         .expect("plugin binary should be written");
@@ -1390,8 +1390,8 @@ mod tests {
             &stage_dir,
             &target,
             &[PluginSpec {
-                cargo_package: "mc-plugin-proto-je-1_7_10".to_string(),
-                plugin_id: "je-1_7_10".to_string(),
+                cargo_package: "mc-plugin-proto-je-5".to_string(),
+                plugin_id: "je-5".to_string(),
                 plugin_kind: "protocol".to_string(),
             }],
             &config_path,
@@ -1421,8 +1421,8 @@ mod tests {
                 stage_dir
                     .join("runtime")
                     .join("plugins")
-                    .join("je-1_7_10")
-                    .join("libmc_plugin_proto_je_1_7_10.so")
+                    .join("je-5")
+                    .join("libmc_plugin_proto_je_5.so")
             )
             .expect("bundled plugin artifact should exist"),
             "plugin-binary"
@@ -1432,11 +1432,11 @@ mod tests {
                 stage_dir
                     .join("runtime")
                     .join("plugins")
-                    .join("je-1_7_10")
+                    .join("je-5")
                     .join("plugin.toml")
             )
             .expect("bundled plugin manifest should exist"),
-            "[plugin]\nid = \"je-1_7_10\"\nkind = \"protocol\"\n\n[artifacts]\n\"linux-x86_64\" = \"libmc_plugin_proto_je_1_7_10.so\"\n"
+            "[plugin]\nid = \"je-5\"\nkind = \"protocol\"\n\n[artifacts]\n\"linux-x86_64\" = \"libmc_plugin_proto_je_5.so\"\n"
         );
     }
 
@@ -1449,7 +1449,7 @@ mod tests {
         let config_path = runtime_dir.join("server.toml.example");
         fs::write(
             &config_path,
-            "[live.plugins]\nallowlist = [\"je-1_7_10\"]\n",
+            "[live.plugins]\nallowlist = [\"je-5\"]\n",
         )
         .expect("config should be written");
 
@@ -1469,8 +1469,8 @@ mod tests {
             &stage_dir,
             &target,
             &[PluginSpec {
-                cargo_package: "mc-plugin-proto-je-1_7_10".to_string(),
-                plugin_id: "je-1_7_10".to_string(),
+                cargo_package: "mc-plugin-proto-je-5".to_string(),
+                plugin_id: "je-5".to_string(),
                 plugin_kind: "protocol".to_string(),
             }],
             &config_path,

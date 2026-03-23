@@ -260,15 +260,15 @@ mod tests {
     use mc_core::{CoreConfig, ServerCore};
     use mc_plugin_host::config::{BootstrapConfig, RuntimeSelectionConfig};
     use mc_plugin_host::runtime::RuntimeReloadContext;
-    use mc_plugin_proto_je_1_7_10::in_process_plugin_entrypoints as je_1_7_10_entrypoints;
+    use mc_plugin_proto_je_5::in_process_plugin_entrypoints as je_1_7_10_entrypoints;
     use mc_plugin_test_support::PackagedPluginHarness;
-    use mc_proto_je_1_7_10::JE_1_7_10_ADAPTER_ID;
+    use mc_proto_je_5::JE_5_ADAPTER_ID;
     use std::fs;
     use std::path::PathBuf;
 
     fn je_1_7_10_protocol_plugin() -> InProcessProtocolPlugin {
         InProcessProtocolPlugin {
-            plugin_id: JE_1_7_10_ADAPTER_ID.to_string(),
+            plugin_id: JE_5_ADAPTER_ID.to_string(),
             manifest: je_1_7_10_entrypoints().manifest,
             api: je_1_7_10_entrypoints().api,
         }
@@ -287,12 +287,12 @@ mod tests {
         assert!(
             runtime_host
                 .managed_protocol_ids()
-                .contains(&JE_1_7_10_ADAPTER_ID.to_string())
+                .contains(&JE_5_ADAPTER_ID.to_string())
         );
         assert!(
             protocols
                 .protocols()
-                .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+                .resolve_adapter(JE_5_ADAPTER_ID)
                 .is_some()
         );
     }
@@ -303,14 +303,14 @@ mod tests {
         let temp_dir = tempdir().expect("temp dir should be created");
         let dist_dir = temp_dir.path().join("runtime").join("plugins");
         harness
-            .seed_subset(&dist_dir, &[JE_1_7_10_ADAPTER_ID])
+            .seed_subset(&dist_dir, &[JE_5_ADAPTER_ID])
             .expect("packaged subset should be seeded");
         let bootstrap = BootstrapConfig {
             plugins_dir: dist_dir,
             ..BootstrapConfig::default()
         };
         let _runtime_selection = RuntimeSelectionConfig {
-            plugin_allowlist: Some(vec![JE_1_7_10_ADAPTER_ID.to_string()]),
+            plugin_allowlist: Some(vec![JE_5_ADAPTER_ID.to_string()]),
             ..RuntimeSelectionConfig::default()
         };
         let host = TestPluginHost::discover(&bootstrap)
@@ -322,7 +322,7 @@ mod tests {
         assert!(
             protocols
                 .protocols()
-                .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+                .resolve_adapter(JE_5_ADAPTER_ID)
                 .is_some()
         );
         assert_eq!(

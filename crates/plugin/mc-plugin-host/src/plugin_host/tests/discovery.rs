@@ -5,7 +5,7 @@ fn in_process_protocol_plugin_swaps_generation() {
     let entrypoints = in_process_protocol_entrypoints();
     let host = build_test_plugin_host(
         TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
-            plugin_id: "je-1_7_10".to_string(),
+            plugin_id: "je-5".to_string(),
             manifest: entrypoints.manifest,
             api: entrypoints.api,
         }),
@@ -21,7 +21,7 @@ fn in_process_protocol_plugin_swaps_generation() {
 
     let adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
+        .resolve_adapter("je-5")
         .expect("registered plugin adapter should resolve");
     let first_generation = adapter
         .plugin_generation_id()
@@ -29,7 +29,7 @@ fn in_process_protocol_plugin_swaps_generation() {
 
     let next_generation = host
         .replace_in_process_protocol_plugin(InProcessProtocolPlugin {
-            plugin_id: "je-1_7_10".to_string(),
+            plugin_id: "je-5".to_string(),
             manifest: entrypoints.manifest,
             api: entrypoints.api,
         })
@@ -37,7 +37,7 @@ fn in_process_protocol_plugin_swaps_generation() {
 
     let adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
+        .resolve_adapter("je-5")
         .expect("registered plugin adapter should resolve");
     assert_eq!(adapter.plugin_generation_id(), Some(next_generation));
     assert_ne!(first_generation, next_generation);
@@ -75,9 +75,9 @@ fn discover_rejects_duplicate_plugin_ids() -> Result<(), RuntimeError> {
 fn all_protocol_plugins_register_and_resolve() {
     let mut builder = TestPluginHostBuilder::new();
     for (plugin_id, entrypoints) in [
-        ("je-1_7_10", in_process_protocol_entrypoints()),
-        ("je-1_8_x", je_1_8_x_entrypoints()),
-        ("je-1_12_2", je_1_12_2_entrypoints()),
+        ("je-5", in_process_protocol_entrypoints()),
+        ("je-47", je_1_8_x_entrypoints()),
+        ("je-340", je_1_12_2_entrypoints()),
         ("be-placeholder", be_placeholder_entrypoints()),
     ] {
         builder = builder.protocol_raw(InProcessProtocolPlugin {
@@ -99,7 +99,7 @@ fn all_protocol_plugins_register_and_resolve() {
         .load_protocol_plugin_set()
         .expect("protocol plugins should load");
 
-    for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
+    for adapter_id in ["je-5", "je-47", "je-340", "be-placeholder"] {
         assert!(
             registries.protocols().resolve_adapter(adapter_id).is_some(),
             "adapter `{adapter_id}` should resolve"
@@ -127,8 +127,8 @@ fn all_protocol_plugins_register_and_resolve() {
 fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata() {
     let mut builder = TestPluginHostBuilder::new();
     for (plugin_id, entrypoints) in [
-        ("je-1_7_10", in_process_protocol_entrypoints()),
-        ("be-26_3", be_26_3_entrypoints()),
+        ("je-5", in_process_protocol_entrypoints()),
+        ("be-924", be_26_3_entrypoints()),
         ("be-placeholder", be_placeholder_entrypoints()),
     ] {
         builder = builder.protocol_raw(InProcessProtocolPlugin {
@@ -152,7 +152,7 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
 
     let je_adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
+        .resolve_adapter("je-5")
         .expect("je adapter should resolve");
     assert_eq!(
         je_adapter.descriptor().wire_format,
@@ -162,7 +162,7 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
 
     let bedrock_adapter = registries
         .protocols()
-        .resolve_adapter("be-26_3")
+        .resolve_adapter("be-924")
         .expect("bedrock adapter should resolve");
     assert_eq!(
         bedrock_adapter.descriptor().wire_format,
@@ -235,8 +235,8 @@ fn abi_mismatch_is_rejected_before_registration() {
     let entrypoints = in_process_protocol_entrypoints();
     let host = build_test_plugin_host(
         TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
-            plugin_id: "je-1_7_10".to_string(),
-            manifest: manifest_with_abi("je-1_7_10", PluginAbiVersion { major: 9, minor: 0 }),
+            plugin_id: "je-5".to_string(),
+            manifest: manifest_with_abi("je-5", PluginAbiVersion { major: 9, minor: 0 }),
             api: entrypoints.api,
         }),
         PluginAbiRange::default(),
@@ -260,8 +260,8 @@ fn protocol_plugins_require_reload_manifest_capability() {
     let entrypoints = in_process_protocol_entrypoints();
     let host = build_test_plugin_host(
         TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
-            plugin_id: "je-1_7_10".to_string(),
-            manifest: manifest_without_reload_capability("je-1_7_10"),
+            plugin_id: "je-5".to_string(),
+            manifest: manifest_without_reload_capability("je-5"),
             api: entrypoints.api,
         }),
         PluginAbiRange::default(),

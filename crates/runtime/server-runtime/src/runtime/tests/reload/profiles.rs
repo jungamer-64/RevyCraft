@@ -4,13 +4,13 @@ fn gameplay_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> Serve
     let mut config = loopback_server_config(world_dir);
     config.bootstrap.game_mode = 1;
     config.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_12_2_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_340_ADAPTER_ID.to_string(),
     ]);
     config.profiles.default_gameplay = "canonical".to_string();
     config.profiles.gameplay_map = gameplay_profile_map(&[
-        (JE_1_7_10_ADAPTER_ID, "readonly"),
-        (JE_1_12_2_ADAPTER_ID, "canonical"),
+        (JE_5_ADAPTER_ID, "readonly"),
+        (JE_340_ADAPTER_ID, "canonical"),
     ]);
     config.bootstrap.plugins_dir = dist_dir;
     config
@@ -32,12 +32,12 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
     let target_dir = harness.scoped_target_dir("gameplay-reload-success");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let registries = plugin_test_registries_from_dist(
         dist_dir.clone(),
-        &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID],
     )?;
     let server = build_reloadable_test_server(
         gameplay_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
@@ -68,16 +68,16 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
     let codec = MinecraftWireCodec;
 
     let (mut legacy, mut legacy_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "legacy-observer")
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "legacy-observer")
             .await?;
     let (mut modern, _modern_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1122, "modern-reload")
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je340, "modern-reload")
             .await?;
     let _ = read_until_java_packet(
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -133,7 +133,7 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::EntityTeleport,
     )
     .await?;
@@ -151,12 +151,12 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
     let target_dir = harness.scoped_target_dir("gameplay-reload-failure");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let registries = plugin_test_registries_from_dist(
         dist_dir.clone(),
-        &[JE_1_7_10_ADAPTER_ID, JE_1_12_2_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID],
     )?;
     let server = build_reloadable_test_server(
         gameplay_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
@@ -180,16 +180,16 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
     let codec = MinecraftWireCodec;
 
     let (mut legacy, mut legacy_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "legacy-failure")
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "legacy-failure")
             .await?;
     let (mut modern, _modern_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1122, "modern-failure")
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je340, "modern-failure")
             .await?;
     let _ = read_until_java_packet(
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::NamedEntitySpawn,
     )
     .await?;
@@ -237,7 +237,7 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         &mut legacy,
         &codec,
         &mut legacy_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::EntityTeleport,
     )
     .await?;
@@ -256,10 +256,10 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     let world_dir = temp_dir.path().join("world");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    let registries = plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?;
+    let registries = plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?;
     let server = build_reloadable_test_server(
         packaged_reload_server_config(world_dir.clone(), dist_dir.clone()),
         registries,
@@ -281,18 +281,18 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let (mut stream, mut buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "alpha").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "alpha").await?;
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(TestJavaProtocol::Je1710, 36, 20, 64, 0),
+        &creative_inventory_action(TestJavaProtocol::Je5, 36, 20, 64, 0),
     )
     .await?;
     let _ = read_until_java_packet(
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::SetSlot,
     )
     .await?;
@@ -334,7 +334,7 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
 
     let restarted = build_test_server(
         packaged_reload_server_config(world_dir.clone(), dist_dir.clone()),
-        plugin_test_registries_from_dist(dist_dir, &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir, &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let addr = listener_addr(&restarted);
@@ -342,7 +342,7 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     write_packet(
         &mut stream,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+        &encode_handshake(TestJavaProtocol::Je5.protocol_version(), 2)?,
     )
     .await?;
     write_packet(&mut stream, &codec, &login_start("alpha")).await?;
@@ -351,12 +351,12 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::WindowItems,
     )
     .await?;
     assert_eq!(
-        window_items_slot(TestJavaProtocol::Je1710, &window_items, 36)?,
+        window_items_slot(TestJavaProtocol::Je5, &window_items, 36)?,
         Some((20, 64, 0))
     );
 
@@ -372,13 +372,13 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
     let target_dir = harness.scoped_target_dir("storage-reload-failure");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.plugins_dir = dist_dir.clone();
     config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     ));
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
@@ -438,12 +438,12 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     let target_dir = harness.scoped_target_dir("auth-reload-offline");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let server = build_reloadable_test_server(
         packaged_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let auth_before = loaded_plugins_snapshot(&server)
@@ -462,12 +462,12 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let (mut alpha, mut alpha_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "alpha").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "alpha").await?;
     let _ = read_until_java_packet(
         &mut alpha,
         &codec,
         &mut alpha_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -505,7 +505,7 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
         &mut alpha,
         &codec,
         &mut alpha_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -515,7 +515,7 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     write_packet(
         &mut beta,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+        &encode_handshake(TestJavaProtocol::Je5.protocol_version(), 2)?,
     )
     .await?;
     write_packet(&mut beta, &codec, &login_start("beta")).await?;
@@ -524,7 +524,7 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
         &mut beta,
         &codec,
         &mut beta_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::LoginSuccess,
     )
     .await?;

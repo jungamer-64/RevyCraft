@@ -63,7 +63,7 @@ fn gameplay_profiles_activate_and_resolve() {
     );
     host.activate_gameplay_profiles(&RuntimeSelectionConfig {
         default_gameplay_profile: "canonical".to_string(),
-        gameplay_profile_map: std::iter::once(("je-1_7_10".to_string(), "readonly".to_string()))
+        gameplay_profile_map: std::iter::once(("je-5".to_string(), "readonly".to_string()))
             .collect(),
         ..runtime_selection_config()
     })
@@ -82,7 +82,7 @@ fn load_plugin_set_activates_runtime_profiles() {
     let host = build_test_plugin_host(
         TestPluginHostBuilder::new()
             .protocol_raw(InProcessProtocolPlugin {
-                plugin_id: "je-1_7_10".to_string(),
+                plugin_id: "je-5".to_string(),
                 manifest: protocol.manifest,
                 api: protocol.api,
             })
@@ -111,7 +111,7 @@ fn load_plugin_set_activates_runtime_profiles() {
     assert!(
         registries
             .protocols()
-            .resolve_adapter("je-1_7_10")
+            .resolve_adapter("je-5")
             .is_some()
     );
     assert!(

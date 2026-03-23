@@ -78,7 +78,7 @@ pub(super) fn protocol_reload_session(
     entity_id: Option<EntityId>,
 ) -> ProtocolReloadSession {
     ProtocolReloadSession {
-        adapter_id: "je-1_7_10".to_string(),
+        adapter_id: "je-5".to_string(),
         session: ProtocolSessionSnapshot {
             connection_id: ConnectionId(connection_id),
             phase,

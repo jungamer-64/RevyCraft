@@ -20,22 +20,22 @@ use mc_plugin_host_test_support::raw::{
 use mc_plugin_host_test_support::{
     PluginAbiRange, PluginFailureAction, PluginFailureMatrix, TestPluginHost, TestPluginHostBuilder,
 };
-use mc_plugin_proto_be_26_3::in_process_plugin_entrypoints as be_26_3_entrypoints;
+use mc_plugin_proto_be_924::in_process_plugin_entrypoints as be_26_3_entrypoints;
 use mc_plugin_proto_be_placeholder::in_process_plugin_entrypoints as be_placeholder_entrypoints;
-use mc_plugin_proto_je_1_7_10::in_process_plugin_entrypoints as je_1_7_10_entrypoints;
-use mc_plugin_proto_je_1_8_x::in_process_plugin_entrypoints as je_1_8_x_entrypoints;
-use mc_plugin_proto_je_1_12_2::in_process_plugin_entrypoints as je_1_12_2_entrypoints;
+use mc_plugin_proto_je_5::in_process_plugin_entrypoints as je_1_7_10_entrypoints;
+use mc_plugin_proto_je_47::in_process_plugin_entrypoints as je_1_8_x_entrypoints;
+use mc_plugin_proto_je_340::in_process_plugin_entrypoints as je_1_12_2_entrypoints;
 use mc_plugin_storage_je_anvil_1_7_10::in_process_plugin_entrypoints as storage_entrypoints;
 use mc_plugin_test_support::PackagedPluginHarness;
-use mc_proto_be_26_3::BE_26_3_ADAPTER_ID;
+use mc_proto_be_924::BE_924_ADAPTER_ID;
 use mc_proto_be_placeholder::BE_PLACEHOLDER_ADAPTER_ID;
 use mc_proto_common::{
     Edition, MinecraftWireCodec, PacketReader, PacketWriter, ProtocolError, TransportKind,
     WireCodec, WireFormatKind,
 };
-use mc_proto_je_1_7_10::{JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID};
-use mc_proto_je_1_8_x::JE_1_8_X_ADAPTER_ID;
-use mc_proto_je_1_12_2::JE_1_12_2_ADAPTER_ID;
+use mc_proto_je_5::{JE_5_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID};
+use mc_proto_je_47::JE_47_ADAPTER_ID;
+use mc_proto_je_340::JE_340_ADAPTER_ID;
 use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol, TestJavaProtocolError};
 use rand::RngCore;
 use rsa::pkcs8::DecodePublicKey;

@@ -51,7 +51,7 @@ async fn offline_mode_rejects_online_auth_profile() -> Result<(), RuntimeError> 
     config.bootstrap.world_dir = temp_dir.path().join("world");
     assert_spawn_fails_with_message(
         config,
-        in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
+        in_process_online_auth_registries(&[JE_5_ADAPTER_ID])?,
         "requires an offline auth profile",
     )
     .await
@@ -61,9 +61,9 @@ async fn offline_mode_rejects_online_auth_profile() -> Result<(), RuntimeError> 
 async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let enabled_adapters = [
-        JE_1_7_10_ADAPTER_ID,
-        JE_1_8_X_ADAPTER_ID,
-        JE_1_12_2_ADAPTER_ID,
+        JE_5_ADAPTER_ID,
+        JE_47_ADAPTER_ID,
+        JE_340_ADAPTER_ID,
     ];
     let server = build_test_server(
         online_auth_server_config(temp_dir.path().join("world"), &enabled_adapters),
@@ -74,9 +74,9 @@ async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(
     let codec = MinecraftWireCodec;
 
     for (protocol, username) in [
-        (TestJavaProtocol::Je1710, "legacy-online"),
-        (TestJavaProtocol::Je18x, "middle-online"),
-        (TestJavaProtocol::Je1122, "latest-online"),
+        (TestJavaProtocol::Je5, "legacy-online"),
+        (TestJavaProtocol::Je47, "middle-online"),
+        (TestJavaProtocol::Je340, "latest-online"),
     ] {
         let mut stream = connect_tcp(addr).await?;
         let (mut encryption, mut buffer) =
@@ -113,8 +113,8 @@ async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(
 async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let server = build_test_server(
-        online_auth_server_config(temp_dir.path().join("world"), &[JE_1_7_10_ADAPTER_ID]),
-        in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
+        online_auth_server_config(temp_dir.path().join("world"), &[JE_5_ADAPTER_ID]),
+        in_process_online_auth_registries(&[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let addr = listener_addr(&server);
@@ -123,7 +123,7 @@ async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(),
     let (mut encryption, mut buffer) = perform_online_login(
         &mut stream,
         &codec,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         "encrypted-alpha",
     )
     .await?;
@@ -131,7 +131,7 @@ async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(),
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::WindowItems,
         16,
         &mut encryption,
@@ -141,7 +141,7 @@ async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(),
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
         16,
         &mut encryption,
@@ -153,7 +153,7 @@ async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(),
         &mut stream,
         &codec,
         &mut buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
         8,
         &mut encryption,
@@ -168,8 +168,8 @@ async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(),
 async fn verify_token_mismatch_disconnects_in_online_mode() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let server = build_test_server(
-        online_auth_server_config(temp_dir.path().join("world"), &[JE_1_7_10_ADAPTER_ID]),
-        in_process_online_auth_registries(&[JE_1_7_10_ADAPTER_ID])?,
+        online_auth_server_config(temp_dir.path().join("world"), &[JE_5_ADAPTER_ID]),
+        in_process_online_auth_registries(&[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let addr = listener_addr(&server);
@@ -178,7 +178,7 @@ async fn verify_token_mismatch_disconnects_in_online_mode() -> Result<(), Runtim
     write_packet(
         &mut stream,
         &codec,
-        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+        &encode_handshake(TestJavaProtocol::Je5.protocol_version(), 2)?,
     )
     .await?;
     write_packet(&mut stream, &codec, &login_start("mismatch")).await?;

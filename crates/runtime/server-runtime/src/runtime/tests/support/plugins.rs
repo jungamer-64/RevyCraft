@@ -51,13 +51,13 @@ pub(crate) mod failing_storage_plugin {
 }
 
 pub(crate) const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
-    JE_1_7_10_ADAPTER_ID,
-    JE_1_8_X_ADAPTER_ID,
-    JE_1_12_2_ADAPTER_ID,
-    BE_26_3_ADAPTER_ID,
+    JE_5_ADAPTER_ID,
+    JE_47_ADAPTER_ID,
+    JE_340_ADAPTER_ID,
+    BE_924_ADAPTER_ID,
     BE_PLACEHOLDER_ADAPTER_ID,
 ];
-pub(crate) const TCP_ONLY_PROTOCOL_PLUGIN_IDS: &[&str] = &[JE_1_7_10_ADAPTER_ID];
+pub(crate) const TCP_ONLY_PROTOCOL_PLUGIN_IDS: &[&str] = &[JE_5_ADAPTER_ID];
 pub(crate) const GAMEPLAY_PLUGIN_IDS: &[&str] = &["gameplay-canonical", "gameplay-readonly"];
 pub(crate) const ADMIN_UI_PLUGIN_IDS: &[&str] = &["admin-ui-console"];
 pub(crate) const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &[
@@ -184,23 +184,23 @@ pub(crate) fn register_in_process_protocol_adapter(
     adapter_id: &str,
 ) -> Result<TestPluginHostBuilder, RuntimeError> {
     let plugin = match adapter_id {
-        JE_1_7_10_ADAPTER_ID => InProcessProtocolPlugin {
-            plugin_id: JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID => InProcessProtocolPlugin {
+            plugin_id: JE_5_ADAPTER_ID.to_string(),
             manifest: je_1_7_10_entrypoints().manifest,
             api: je_1_7_10_entrypoints().api,
         },
-        JE_1_8_X_ADAPTER_ID => InProcessProtocolPlugin {
-            plugin_id: JE_1_8_X_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID => InProcessProtocolPlugin {
+            plugin_id: JE_47_ADAPTER_ID.to_string(),
             manifest: je_1_8_x_entrypoints().manifest,
             api: je_1_8_x_entrypoints().api,
         },
-        JE_1_12_2_ADAPTER_ID => InProcessProtocolPlugin {
-            plugin_id: JE_1_12_2_ADAPTER_ID.to_string(),
+        JE_340_ADAPTER_ID => InProcessProtocolPlugin {
+            plugin_id: JE_340_ADAPTER_ID.to_string(),
             manifest: je_1_12_2_entrypoints().manifest,
             api: je_1_12_2_entrypoints().api,
         },
-        BE_26_3_ADAPTER_ID => InProcessProtocolPlugin {
-            plugin_id: BE_26_3_ADAPTER_ID.to_string(),
+        BE_924_ADAPTER_ID => InProcessProtocolPlugin {
+            plugin_id: BE_924_ADAPTER_ID.to_string(),
             manifest: be_26_3_entrypoints().manifest,
             api: be_26_3_entrypoints().api,
         },
@@ -268,7 +268,7 @@ pub(crate) fn in_process_failing_storage_registries(
     failure_action: PluginFailureAction,
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
     let builder =
-        register_in_process_protocol_adapter(TestPluginHostBuilder::new(), JE_1_7_10_ADAPTER_ID)?;
+        register_in_process_protocol_adapter(TestPluginHostBuilder::new(), JE_5_ADAPTER_ID)?;
     let plugin_host = builder
         .gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-canonical".to_string(),

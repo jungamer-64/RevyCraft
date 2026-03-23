@@ -1701,20 +1701,20 @@ dependencies = [
  "mc-plugin-auth-offline",
  "mc-plugin-gameplay-canonical",
  "mc-plugin-gameplay-readonly",
- "mc-plugin-proto-be-26_3",
+ "mc-plugin-proto-be-924",
  "mc-plugin-proto-be-placeholder",
- "mc-plugin-proto-je-1_12_2",
- "mc-plugin-proto-je-1_7_10",
- "mc-plugin-proto-je-1_8_x",
+ "mc-plugin-proto-je-340",
+ "mc-plugin-proto-je-47",
+ "mc-plugin-proto-je-5",
  "mc-plugin-sdk-rust",
  "mc-plugin-storage-je-anvil-1_7_10",
  "mc-plugin-test-support",
- "mc-proto-be-26_3",
+ "mc-proto-be-924",
  "mc-proto-be-placeholder",
  "mc-proto-common",
- "mc-proto-je-1_12_2",
- "mc-proto-je-1_7_10",
- "mc-proto-je-1_8_x",
+ "mc-proto-je-340",
+ "mc-proto-je-47",
+ "mc-proto-je-5",
  "serde",
  "tempfile",
  "thiserror",
@@ -1728,20 +1728,20 @@ version = "0.1.0"
 dependencies = [
  "mc-core",
  "mc-plugin-host",
- "mc-plugin-proto-je-1_7_10",
+ "mc-plugin-proto-je-5",
  "mc-plugin-test-support",
- "mc-proto-je-1_7_10",
+ "mc-proto-je-5",
  "tempfile",
 ]
 
 [[package]]
-name = "mc-plugin-proto-be-26_3"
+name = "mc-plugin-proto-be-924"
 version = "0.1.0"
 dependencies = [
  "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
- "mc-proto-be-26_3",
+ "mc-proto-be-924",
  "mc-proto-common",
 ]
 
@@ -1757,47 +1757,47 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-plugin-proto-je-1_12_2"
+name = "mc-plugin-proto-je-340"
 version = "0.1.0"
 dependencies = [
  "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
- "mc-proto-je-1_12_2",
+ "mc-proto-je-340",
 ]
 
 [[package]]
-name = "mc-plugin-proto-je-1_7_10"
+name = "mc-plugin-proto-je-47"
 version = "0.1.0"
 dependencies = [
  "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
- "mc-proto-je-1_7_10",
+ "mc-proto-je-47",
 ]
 
 [[package]]
-name = "mc-plugin-proto-je-1_7_10-reload-test"
+name = "mc-plugin-proto-je-5"
 version = "0.1.0"
 dependencies = [
  "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
- "mc-proto-je-1_7_10",
+ "mc-proto-je-5",
 ]
 
 [[package]]
-name = "mc-plugin-proto-je-1_8_x"
+name = "mc-plugin-proto-je-5-reload-test"
 version = "0.1.0"
 dependencies = [
  "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
- "mc-proto-je-1_8_x",
+ "mc-proto-je-5",
 ]
 
 [[package]]
@@ -1818,7 +1818,7 @@ dependencies = [
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
- "mc-proto-je-1_7_10",
+ "mc-proto-je-5",
 ]
 
 [[package]]
@@ -1831,7 +1831,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-proto-be-26_3"
+name = "mc-proto-be-924"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -1886,7 +1886,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-proto-je-1_12_2"
+name = "mc-proto-je-340"
 version = "0.1.0"
 dependencies = [
  "mc-core",
@@ -1897,7 +1897,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-proto-je-1_7_10"
+name = "mc-proto-je-47"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-proto-common",
+ "mc-proto-je-common",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "mc-proto-je-5"
 version = "0.1.0"
 dependencies = [
  "flate2",
@@ -1908,17 +1919,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
- "uuid",
-]
-
-[[package]]
-name = "mc-proto-je-1_8_x"
-version = "0.1.0"
-dependencies = [
- "mc-core",
- "mc-proto-common",
- "mc-proto-je-common",
- "serde_json",
  "uuid",
 ]
 
@@ -3085,21 +3085,21 @@ dependencies = [
  "mc-plugin-gameplay-readonly",
  "mc-plugin-host",
  "mc-plugin-host-test-support",
- "mc-plugin-proto-be-26_3",
+ "mc-plugin-proto-be-924",
  "mc-plugin-proto-be-placeholder",
- "mc-plugin-proto-je-1_12_2",
- "mc-plugin-proto-je-1_7_10",
- "mc-plugin-proto-je-1_8_x",
+ "mc-plugin-proto-je-340",
+ "mc-plugin-proto-je-47",
+ "mc-plugin-proto-je-5",
  "mc-plugin-sdk-rust",
  "mc-plugin-storage-je-anvil-1_7_10",
  "mc-plugin-test-support",
- "mc-proto-be-26_3",
+ "mc-proto-be-924",
  "mc-proto-be-common",
  "mc-proto-be-placeholder",
  "mc-proto-common",
- "mc-proto-je-1_12_2",
- "mc-proto-je-1_7_10",
- "mc-proto-je-1_8_x",
+ "mc-proto-je-340",
+ "mc-proto-je-47",
+ "mc-proto-je-5",
  "mc-proto-je-common",
  "mc-proto-test-support",
  "md-5",

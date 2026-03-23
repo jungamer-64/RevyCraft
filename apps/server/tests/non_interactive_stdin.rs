@@ -83,13 +83,13 @@ max_players = 20
 
 [live.topology]
 be_enabled = false
-default_adapter = \"je-1_7_10\"
-enabled_adapters = [\"je-1_7_10\"]
+default_adapter = \"je-5\"
+enabled_adapters = [\"je-5\"]
 reload_watch = false
 drain_grace_secs = 30
 
 [live.plugins]
-allowlist = [\"je-1_7_10\", \"gameplay-canonical\", \"storage-je-anvil-1_7_10\", \"auth-offline\"]
+allowlist = [\"je-5\", \"gameplay-canonical\", \"storage-je-anvil-1_7_10\", \"auth-offline\"]
 reload_watch = false
 
 [live.plugins.failure_policy]

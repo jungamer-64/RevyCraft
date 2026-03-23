@@ -349,7 +349,7 @@ mod tests {
 
     fn sample_descriptor() -> ProtocolDescriptor {
         ProtocolDescriptor {
-            adapter_id: "je-1_7_10".to_string(),
+            adapter_id: "je-5".to_string(),
             transport: TransportKind::Tcp,
             wire_format: WireFormatKind::MinecraftFramed,
             edition: Edition::Je,
@@ -642,7 +642,7 @@ mod tests {
     #[test]
     fn capability_and_session_support_types_round_trip() {
         let mut protocol = CapabilitySet::new();
-        let _ = protocol.insert("protocol.je.1_12_2");
+        let _ = protocol.insert("protocol.je.340");
         let capability_set = SessionCapabilitySet {
             protocol,
             gameplay: CapabilitySet::new(),
@@ -651,7 +651,7 @@ mod tests {
             protocol_generation: Some(PluginGenerationId(3)),
             gameplay_generation: Some(PluginGenerationId(4)),
         };
-        assert!(capability_set.protocol.contains("protocol.je.1_12_2"));
+        assert!(capability_set.protocol.contains("protocol.je.340"));
         assert_eq!(capability_set.gameplay_profile.as_str(), "canonical");
         assert_eq!(capability_set.entity_id, Some(EntityId(7)));
         assert_eq!(

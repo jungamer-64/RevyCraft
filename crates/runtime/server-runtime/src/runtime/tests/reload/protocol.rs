@@ -9,12 +9,12 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
     let codec = MinecraftWireCodec;
     let addr = listener_addr(&server);
     let (mut alpha, mut alpha_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "protohot").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "protohot").await?;
     let _ = read_until_java_packet(
         &mut alpha,
         &codec,
         &mut alpha_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -23,8 +23,8 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            JE_1_7_10_ADAPTER_ID,
+            "mc-plugin-proto-je-5-reload-test",
+            JE_5_ADAPTER_ID,
             &dist_dir,
             &target_dir,
             "protocol-reload-v2",
@@ -35,12 +35,12 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
     assert!(
         reloaded
             .iter()
-            .any(|plugin_id| plugin_id == JE_1_7_10_ADAPTER_ID),
+            .any(|plugin_id| plugin_id == JE_5_ADAPTER_ID),
         "protocol reload should report a generation swap"
     );
 
     let adapter = active_protocol_registry(&server)
-        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("runtime should still resolve the adapter after reload");
     assert_ne!(adapter.plugin_generation_id(), Some(before_generation));
     assert!(
@@ -54,7 +54,7 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
         &mut alpha,
         &codec,
         &mut alpha_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -74,8 +74,8 @@ async fn manual_protocol_reload_waits_for_consistency_readers() -> Result<(), Ru
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            JE_1_7_10_ADAPTER_ID,
+            "mc-plugin-proto-je-5-reload-test",
+            JE_5_ADAPTER_ID,
             &dist_dir,
             &target_dir,
             "protocol-reload-v2",
@@ -93,7 +93,7 @@ async fn manual_protocol_reload_waits_for_consistency_readers() -> Result<(), Ru
         );
 
         let adapter = active_protocol_registry(&server)
-            .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+            .resolve_adapter(JE_5_ADAPTER_ID)
             .expect("runtime should still resolve the adapter");
         assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
 
@@ -105,7 +105,7 @@ async fn manual_protocol_reload_waits_for_consistency_readers() -> Result<(), Ru
         assert!(
             reloaded
                 .iter()
-                .any(|plugin_id| plugin_id == JE_1_7_10_ADAPTER_ID),
+                .any(|plugin_id| plugin_id == JE_5_ADAPTER_ID),
             "manual reload should complete after the consistency reader releases"
         );
     }
@@ -121,12 +121,12 @@ async fn consistency_gate_write_lock_blocks_session_commands() -> Result<(), Run
     let codec = MinecraftWireCodec;
     let addr = listener_addr(&server);
     let (mut alpha, mut alpha_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "protoblock").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "protoblock").await?;
     let _ = read_until_java_packet(
         &mut alpha,
         &codec,
         &mut alpha_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -137,7 +137,7 @@ async fn consistency_gate_write_lock_blocks_session_commands() -> Result<(), Run
         &mut alpha,
         &codec,
         &mut alpha_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -147,7 +147,7 @@ async fn consistency_gate_write_lock_blocks_session_commands() -> Result<(), Run
         &mut alpha,
         &codec,
         &mut alpha_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -164,12 +164,12 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
     let codec = MinecraftWireCodec;
     let addr = listener_addr(&server);
     let (mut alpha, mut alpha_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "protofail").await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "protofail").await?;
     let _ = read_until_java_packet(
         &mut alpha,
         &codec,
         &mut alpha_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -178,8 +178,8 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            JE_1_7_10_ADAPTER_ID,
+            "mc-plugin-proto-je-5-reload-test",
+            JE_5_ADAPTER_ID,
             &dist_dir,
             &target_dir,
             "protocol-reload-fail",
@@ -190,12 +190,12 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
     assert!(
         !reloaded
             .iter()
-            .any(|plugin_id| plugin_id == JE_1_7_10_ADAPTER_ID),
+            .any(|plugin_id| plugin_id == JE_5_ADAPTER_ID),
         "failed protocol migration should keep the current generation"
     );
 
     let adapter = active_protocol_registry(&server)
-        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("runtime should still resolve the adapter after failed reload");
     assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
     assert!(
@@ -209,7 +209,7 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
         &mut alpha,
         &codec,
         &mut alpha_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::HeldItemChange,
     )
     .await?;
@@ -227,13 +227,13 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
     let target_dir = harness.scoped_target_dir("protocol-reload-watch");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_1_7_10_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            JE_1_7_10_ADAPTER_ID,
+            "mc-plugin-proto-je-5-reload-test",
+            JE_5_ADAPTER_ID,
             &dist_dir,
             &target_dir,
             "protocol-reload-v1",
@@ -245,11 +245,11 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
     config.bootstrap.plugins_dir = dist_dir.clone();
     let server = build_reloadable_test_server(
         config,
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_1_7_10_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let before_generation = active_protocol_registry(&server)
-        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .resolve_adapter(JE_5_ADAPTER_ID)
         .and_then(|adapter| adapter.plugin_generation_id())
         .expect("watch server should report a protocol generation");
 
@@ -257,8 +257,8 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
     std::thread::sleep(Duration::from_secs(1));
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            JE_1_7_10_ADAPTER_ID,
+            "mc-plugin-proto-je-5-reload-test",
+            JE_5_ADAPTER_ID,
             &dist_dir,
             &target_dir,
             "protocol-reload-v2",
@@ -270,7 +270,7 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
     ))
     .await;
     let adapter = active_protocol_registry(&server)
-        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("watch server should still resolve the adapter");
     assert_eq!(
         adapter.plugin_generation_id(),
@@ -283,7 +283,7 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         let adapter = active_protocol_registry(&server)
-            .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+            .resolve_adapter(JE_5_ADAPTER_ID)
             .expect("watch server should resolve the adapter after reload");
         if adapter.plugin_generation_id() != Some(before_generation) {
             assert!(
@@ -314,9 +314,9 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
     seed_runtime_plugins(
         &dist_dir,
         &[
-            JE_1_7_10_ADAPTER_ID,
-            JE_1_8_X_ADAPTER_ID,
-            JE_1_12_2_ADAPTER_ID,
+            JE_5_ADAPTER_ID,
+            JE_47_ADAPTER_ID,
+            JE_340_ADAPTER_ID,
         ],
         &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
     )?;
@@ -333,9 +333,9 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
     config.bootstrap.online_mode = true;
     config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
     config.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
-        JE_1_12_2_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
+        JE_340_ADAPTER_ID.to_string(),
     ]);
     config.bootstrap.plugins_dir = dist_dir.clone();
     let server = build_reloadable_test_server(
@@ -343,9 +343,9 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
         plugin_test_registries_from_dist_with_supporting_plugins(
             dist_dir,
             &[
-                JE_1_7_10_ADAPTER_ID,
-                JE_1_8_X_ADAPTER_ID,
-                JE_1_12_2_ADAPTER_ID,
+                JE_5_ADAPTER_ID,
+                JE_47_ADAPTER_ID,
+                JE_340_ADAPTER_ID,
             ],
             &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
         )?,
@@ -355,9 +355,9 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
     let codec = MinecraftWireCodec;
 
     for (protocol, username) in [
-        (TestJavaProtocol::Je1710, "packaged-legacy"),
-        (TestJavaProtocol::Je18x, "packaged-middle"),
-        (TestJavaProtocol::Je1122, "packaged-latest"),
+        (TestJavaProtocol::Je5, "packaged-legacy"),
+        (TestJavaProtocol::Je47, "packaged-middle"),
+        (TestJavaProtocol::Je340, "packaged-latest"),
     ] {
         let mut stream = connect_tcp(addr).await?;
         let (mut encryption, mut buffer) =

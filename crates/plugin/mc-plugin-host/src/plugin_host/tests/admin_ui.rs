@@ -114,7 +114,7 @@ fn packaged_admin_ui_reload_swaps_generation_and_keeps_last_good() -> Result<(),
     std::thread::sleep(Duration::from_secs(1));
     harness
         .install_admin_ui_plugin(
-            "mc-plugin-proto-je-1_7_10",
+            "mc-plugin-proto-je-5",
             "admin-ui-console",
             &dist_dir,
             &target_dir,

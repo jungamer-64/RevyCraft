@@ -28,19 +28,19 @@ max_players = 20
 
 [live.topology]
 be_enabled = true
-default_adapter = "je-1_7_10"
-enabled_adapters = ["je-1_7_10", "je-1_8_x", "je-1_12_2"]
-default_bedrock_adapter = "be-26_3"
-enabled_bedrock_adapters = ["be-26_3"]
+default_adapter = "je-5"
+enabled_adapters = ["je-5", "je-47", "je-340"]
+default_bedrock_adapter = "be-924"
+enabled_bedrock_adapters = ["be-924"]
 reload_watch = false
 drain_grace_secs = 30
 
 [live.plugins]
 allowlist = [
-  "je-1_7_10",
-  "je-1_8_x",
-  "je-1_12_2",
-  "be-26_3",
+  "je-5",
+  "je-47",
+  "je-340",
+  "be-924",
   "gameplay-canonical",
   "gameplay-readonly",
   "storage-je-anvil-1_7_10",
@@ -102,7 +102,7 @@ local_console_permissions = [
 # Add `auth-bedrock-xbl` before using `bedrock_auth = "bedrock-xbl-v1"`.
 
 [live.profiles.gameplay_map]
-"je-1_7_10" = "readonly"
-"je-1_8_x" = "canonical"
-"je-1_12_2" = "canonical"
-"be-26_3" = "canonical"
+"je-5" = "readonly"
+"je-47" = "canonical"
+"je-340" = "canonical"
+"be-924" = "canonical"

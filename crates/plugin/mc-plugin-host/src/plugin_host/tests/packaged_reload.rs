@@ -1,7 +1,7 @@
 use super::*;
 
 fn seed_legacy_gameplay_artifact_without_v2_symbol(dist_dir: &Path) -> Result<(), RuntimeError> {
-    let protocol_dir = dist_dir.join("je-1_7_10");
+    let protocol_dir = dist_dir.join("je-5");
     let artifact_name = fs::read_dir(&protocol_dir)?
         .filter_map(Result::ok)
         .find_map(|entry| {
@@ -20,7 +20,7 @@ fn seed_legacy_gameplay_artifact_without_v2_symbol(dist_dir: &Path) -> Result<()
     fs::write(
         legacy_dir.join("plugin.toml"),
         format!(
-            "[plugin]\nid = \"gameplay-legacy\"\nkind = \"gameplay\"\n\n[artifacts]\n\"{}\" = \"../je-1_7_10/{}\"\n",
+            "[plugin]\nid = \"gameplay-legacy\"\nkind = \"gameplay\"\n\n[artifacts]\n\"{}\" = \"../je-5/{}\"\n",
             current_artifact_key(),
             artifact_name,
         ),
@@ -34,7 +34,7 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     seed_packaged_plugins(
         &dist_dir,
-        &["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"],
+        &["je-5", "je-47", "je-340", "be-placeholder"],
     )?;
 
     let bootstrap = bootstrap_config_with_plugins_dir(dist_dir);
@@ -42,7 +42,7 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
         TestPluginHost::discover(&bootstrap)?.expect("packaged plugins should be discovered");
     let registries = host.load_protocol_plugin_set()?;
 
-    for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
+    for adapter_id in ["je-5", "je-47", "je-340", "be-placeholder"] {
         let adapter = registries
             .protocols()
             .resolve_adapter(adapter_id)
@@ -76,7 +76,7 @@ fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
         seed_packaged_plugins(
             &dist_dir,
             &[
-                "je-1_7_10",
+                "je-5",
                 "gameplay-canonical",
                 "storage-je-anvil-1_7_10",
                 "auth-offline",
@@ -145,7 +145,7 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
     let target_dir = harness.scoped_target_dir("plugin-host-reload");
-    seed_packaged_plugins(&dist_dir, &["je-1_7_10"])?;
+    seed_packaged_plugins(&dist_dir, &["je-5"])?;
 
     let bootstrap = bootstrap_config_with_plugins_dir(dist_dir.clone());
     let host =
@@ -154,8 +154,8 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
 
     let adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
-        .expect("packaged je-1_7_10 adapter should resolve");
+        .resolve_adapter("je-5")
+        .expect("packaged je-5 adapter should resolve");
     let first_generation = adapter
         .plugin_generation_id()
         .expect("packaged adapter should report plugin generation");
@@ -168,8 +168,8 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
     std::thread::sleep(Duration::from_secs(1));
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10",
-            "je-1_7_10",
+            "mc-plugin-proto-je-5",
+            "je-5",
             &dist_dir,
             &target_dir,
             "reload-v2",
@@ -177,11 +177,11 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let reloaded = host.reload_modified()?;
-    assert_eq!(reloaded, vec!["je-1_7_10".to_string()]);
+    assert_eq!(reloaded, vec!["je-5".to_string()]);
 
     let adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
+        .resolve_adapter("je-5")
         .expect("reloaded adapter should resolve");
     let next_generation = adapter
         .plugin_generation_id()
@@ -198,11 +198,11 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
     let target_dir = harness.scoped_target_dir("plugin-host-protocol-migrate");
-    seed_packaged_plugins(&dist_dir, &["je-1_7_10"])?;
+    seed_packaged_plugins(&dist_dir, &["je-5"])?;
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            "je-1_7_10",
+            "mc-plugin-proto-je-5-reload-test",
+            "je-5",
             &dist_dir,
             &target_dir,
             "protocol-reload-v1",
@@ -216,8 +216,8 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
 
     let adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
-        .expect("packaged je-1_7_10 adapter should resolve");
+        .resolve_adapter("je-5")
+        .expect("packaged je-5 adapter should resolve");
     let before_generation = adapter
         .plugin_generation_id()
         .expect("packaged adapter should report plugin generation");
@@ -241,8 +241,8 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
     std::thread::sleep(Duration::from_secs(1));
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            "je-1_7_10",
+            "mc-plugin-proto-je-5-reload-test",
+            "je-5",
             &dist_dir,
             &target_dir,
             "protocol-reload-v2",
@@ -251,13 +251,13 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
 
     let reloaded = host.reload_modified_with_context(&context)?;
     assert!(
-        reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
+        reloaded.iter().any(|plugin_id| plugin_id == "je-5"),
         "protocol reload should report the migrated adapter"
     );
 
     let adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
+        .resolve_adapter("je-5")
         .expect("reloaded adapter should resolve");
     let next_generation = adapter
         .plugin_generation_id()
@@ -278,11 +278,11 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
     let target_dir = harness.scoped_target_dir("plugin-host-protocol-all-or-nothing");
-    seed_packaged_plugins(&dist_dir, &["je-1_7_10"])?;
+    seed_packaged_plugins(&dist_dir, &["je-5"])?;
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            "je-1_7_10",
+            "mc-plugin-proto-je-5-reload-test",
+            "je-5",
             &dist_dir,
             &target_dir,
             "protocol-reload-v1",
@@ -296,8 +296,8 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
 
     let adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
-        .expect("packaged je-1_7_10 adapter should resolve");
+        .resolve_adapter("je-5")
+        .expect("packaged je-5 adapter should resolve");
     let before_generation = adapter
         .plugin_generation_id()
         .expect("packaged adapter should report plugin generation");
@@ -316,8 +316,8 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
     std::thread::sleep(Duration::from_secs(1));
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            "je-1_7_10",
+            "mc-plugin-proto-je-5-reload-test",
+            "je-5",
             &dist_dir,
             &target_dir,
             "protocol-reload-fail",
@@ -326,13 +326,13 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
 
     let reloaded = host.reload_modified_with_context(&context)?;
     assert!(
-        !reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
+        !reloaded.iter().any(|plugin_id| plugin_id == "je-5"),
         "failed protocol migration should keep the current generation"
     );
 
     let adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
+        .resolve_adapter("je-5")
         .expect("adapter should still resolve after failed reload");
     assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
     assert!(
@@ -350,11 +350,11 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
     let target_dir = harness.scoped_target_dir("plugin-host-protocol-incompatible");
-    seed_packaged_plugins(&dist_dir, &["je-1_7_10"])?;
+    seed_packaged_plugins(&dist_dir, &["je-5"])?;
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            "je-1_7_10",
+            "mc-plugin-proto-je-5-reload-test",
+            "je-5",
             &dist_dir,
             &target_dir,
             "protocol-reload-v1",
@@ -368,8 +368,8 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
 
     let adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
-        .expect("packaged je-1_7_10 adapter should resolve");
+        .resolve_adapter("je-5")
+        .expect("packaged je-5 adapter should resolve");
     let before_generation = adapter
         .plugin_generation_id()
         .expect("packaged adapter should report plugin generation");
@@ -377,8 +377,8 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
     std::thread::sleep(Duration::from_secs(1));
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            "je-1_7_10",
+            "mc-plugin-proto-je-5-reload-test",
+            "je-5",
             &dist_dir,
             &target_dir,
             "protocol-reload-incompatible",
@@ -387,13 +387,13 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
 
     let reloaded = host.reload_modified()?;
     assert!(
-        !reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
+        !reloaded.iter().any(|plugin_id| plugin_id == "je-5"),
         "incompatible protocol candidate should be rejected"
     );
 
     let adapter = registries
         .protocols()
-        .resolve_adapter("je-1_7_10")
+        .resolve_adapter("je-5")
         .expect("adapter should still resolve after incompatible reload");
     assert_eq!(adapter.plugin_generation_id(), Some(before_generation));
     assert!(
@@ -406,8 +406,8 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
     let protocol = status
         .protocols
         .iter()
-        .find(|plugin| plugin.plugin_id == "je-1_7_10")
-        .expect("je-1_7_10 status snapshot should remain present");
+        .find(|plugin| plugin.plugin_id == "je-5")
+        .expect("je-5 status snapshot should remain present");
     assert_eq!(protocol.generation_id, before_generation);
     assert!(protocol.loaded_at_ms > 0);
     assert_eq!(
@@ -420,8 +420,8 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
     std::thread::sleep(Duration::from_secs(1));
     harness
         .install_protocol_plugin(
-            "mc-plugin-proto-je-1_7_10-reload-test",
-            "je-1_7_10",
+            "mc-plugin-proto-je-5-reload-test",
+            "je-5",
             &dist_dir,
             &target_dir,
             "protocol-reload-v2",
@@ -429,7 +429,7 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let reloaded = host.reload_modified()?;
     assert!(
-        reloaded.iter().any(|plugin_id| plugin_id == "je-1_7_10"),
+        reloaded.iter().any(|plugin_id| plugin_id == "je-5"),
         "successful replacement should clear the quarantined artifact"
     );
 
@@ -437,8 +437,8 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
     let protocol = status
         .protocols
         .iter()
-        .find(|plugin| plugin.plugin_id == "je-1_7_10")
-        .expect("je-1_7_10 status snapshot should remain present");
+        .find(|plugin| plugin.plugin_id == "je-5")
+        .expect("je-5 status snapshot should remain present");
     assert!(protocol.artifact_quarantine.is_none());
     assert!(protocol.generation_id > before_generation);
     assert!(protocol.loaded_at_ms > 0);

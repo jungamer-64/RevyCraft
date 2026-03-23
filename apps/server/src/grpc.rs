@@ -407,7 +407,7 @@ mod tests {
         config.network.server_port = 0;
         config.topology.be_enabled = false;
         config.plugins.allowlist = Some(vec![
-            "je-1_7_10".to_string(),
+            "je-5".to_string(),
             "gameplay-canonical".to_string(),
             "gameplay-readonly".to_string(),
             "storage-je-anvil-1_7_10".to_string(),

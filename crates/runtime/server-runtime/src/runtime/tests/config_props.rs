@@ -108,7 +108,7 @@ server_port = 0
 
 [live.topology]
 be_enabled = true
-default_adapter = "je-1_7_10"
+default_adapter = "je-5"
 
 [live.plugins]
 
@@ -124,10 +124,10 @@ auth = "offline-v1"
     assert_eq!(config.bootstrap.level_name, "flatland");
     assert_eq!(config.bootstrap.level_type, LevelType::Flat);
     assert!(config.topology.be_enabled);
-    assert_eq!(config.topology.default_adapter, JE_1_7_10_ADAPTER_ID);
+    assert_eq!(config.topology.default_adapter, JE_5_ADAPTER_ID);
     assert_eq!(
         config.topology.default_bedrock_adapter,
-        BE_26_3_ADAPTER_ID.to_string()
+        BE_924_ADAPTER_ID.to_string()
     );
     assert_eq!(
         config.bootstrap.storage_profile,
@@ -190,9 +190,9 @@ fn server_toml_parse_enabled_adapters() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = ServerConfig::default();
     config.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_8_X_ADAPTER_ID.to_string(),
-        JE_1_12_2_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_47_ADAPTER_ID.to_string(),
+        JE_340_ADAPTER_ID.to_string(),
     ]);
     let path = temp_dir.path().join("server.toml");
     write_server_toml(&path, &config)?;
@@ -210,9 +210,9 @@ fn server_toml_parse_bedrock_adapter_and_auth_profile() -> Result<(), RuntimeErr
     let temp_dir = tempdir()?;
     let mut config = ServerConfig::default();
     config.topology.be_enabled = true;
-    config.topology.default_bedrock_adapter = BE_26_3_ADAPTER_ID.to_string();
+    config.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.to_string();
     config.topology.enabled_bedrock_adapters = Some(vec![
-        BE_26_3_ADAPTER_ID.to_string(),
+        BE_924_ADAPTER_ID.to_string(),
         BE_PLACEHOLDER_ADAPTER_ID.to_string(),
     ]);
     config.profiles.bedrock_auth = "bedrock-xbl-v1".to_string();
@@ -223,12 +223,12 @@ fn server_toml_parse_bedrock_adapter_and_auth_profile() -> Result<(), RuntimeErr
     assert!(parsed.topology.be_enabled);
     assert_eq!(
         parsed.topology.default_bedrock_adapter,
-        BE_26_3_ADAPTER_ID.to_string()
+        BE_924_ADAPTER_ID.to_string()
     );
     assert_eq!(
         parsed.topology.enabled_bedrock_adapters,
         Some(vec![
-            BE_26_3_ADAPTER_ID.to_string(),
+            BE_924_ADAPTER_ID.to_string(),
             BE_PLACEHOLDER_ADAPTER_ID.to_string(),
         ])
     );
@@ -242,8 +242,8 @@ fn server_toml_parse_gameplay_profile_configuration() -> Result<(), RuntimeError
     let mut config = ServerConfig::default();
     config.profiles.default_gameplay = "canonical".to_string();
     config.profiles.gameplay_map = gameplay_profile_map(&[
-        (JE_1_7_10_ADAPTER_ID, "readonly"),
-        (JE_1_12_2_ADAPTER_ID, "canonical"),
+        (JE_5_ADAPTER_ID, "readonly"),
+        (JE_340_ADAPTER_ID, "canonical"),
     ]);
     let path = temp_dir.path().join("server.toml");
     write_server_toml(&path, &config)?;
@@ -253,8 +253,8 @@ fn server_toml_parse_gameplay_profile_configuration() -> Result<(), RuntimeError
     assert_eq!(
         parsed.profiles.gameplay_map,
         gameplay_profile_map(&[
-            (JE_1_7_10_ADAPTER_ID, "readonly"),
-            (JE_1_12_2_ADAPTER_ID, "canonical"),
+            (JE_5_ADAPTER_ID, "readonly"),
+            (JE_340_ADAPTER_ID, "canonical"),
         ])
     );
     Ok(())
@@ -616,12 +616,12 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
     config.profiles.bedrock_auth = "custom-bedrock-auth".to_string();
     config.profiles.default_gameplay = "readonly".to_string();
     config.profiles.gameplay_map = gameplay_profile_map(&[
-        (JE_1_7_10_ADAPTER_ID, "readonly"),
-        (BE_26_3_ADAPTER_ID, "canonical"),
+        (JE_5_ADAPTER_ID, "readonly"),
+        (BE_924_ADAPTER_ID, "canonical"),
     ]);
     config.bootstrap.plugins_dir = PathBuf::from("custom").join("plugins");
     config.plugins.allowlist = Some(vec![
-        "je-1_7_10".to_string(),
+        "je-5".to_string(),
         "auth-mojang-online".to_string(),
         "auth-bedrock-xbl".to_string(),
     ]);
@@ -850,7 +850,7 @@ fn be_enabled_requires_udp_adapter() {
 async fn enabled_adapters_must_include_default_adapter() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.topology.enabled_adapters = Some(vec![JE_1_8_X_ADAPTER_ID.to_string()]);
+    config.topology.enabled_adapters = Some(vec![JE_47_ADAPTER_ID.to_string()]);
     assert_spawn_fails_with_message(config, "default-adapter").await
 }
 
@@ -859,8 +859,8 @@ async fn duplicate_enabled_adapters_fail_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.topology.enabled_adapters = Some(vec![
-        JE_1_7_10_ADAPTER_ID.to_string(),
-        JE_1_7_10_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.to_string(),
     ]);
     assert_spawn_fails_with_message(config, "duplicate adapter").await
 }

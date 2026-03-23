@@ -49,7 +49,7 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
         &mut alpha,
         &codec,
         &mut alpha_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::LoginSuccess,
         8,
         &mut alpha_encryption,
@@ -59,12 +59,12 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
 
     let mut beta = connect_tcp(addr).await?;
     let (mut beta_encryption, mut beta_buffer) =
-        perform_online_login(&mut beta, &codec, TestJavaProtocol::Je1710, "beta-online").await?;
+        perform_online_login(&mut beta, &codec, TestJavaProtocol::Je5, "beta-online").await?;
     let beta_login_success = read_until_java_packet_encrypted(
         &mut beta,
         &codec,
         &mut beta_buffer,
-        TestJavaProtocol::Je1710,
+        TestJavaProtocol::Je5,
         TestJavaPacket::LoginSuccess,
         8,
         &mut beta_encryption,

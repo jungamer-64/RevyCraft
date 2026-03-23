@@ -5,18 +5,18 @@ fn protocol_registry_resolves_registered_adapter() -> Result<(), RuntimeError> {
     let registry = plugin_test_registries_tcp_only()?;
     let by_id = registry
         .protocols()
-        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("registered adapter should resolve by id");
     let by_route = registry
         .protocols()
         .resolve_route(
             TransportKind::Tcp,
             Edition::Je,
-            TestJavaProtocol::Je1710.protocol_version(),
+            TestJavaProtocol::Je5.protocol_version(),
         )
         .expect("registered adapter should resolve by route");
 
-    assert_eq!(by_id.descriptor().adapter_id, JE_1_7_10_ADAPTER_ID);
+    assert_eq!(by_id.descriptor().adapter_id, JE_5_ADAPTER_ID);
     assert_eq!(by_id.descriptor().transport, TransportKind::Tcp);
     assert_eq!(by_route.descriptor().version_name, "1.7.10");
     Ok(())
@@ -50,7 +50,7 @@ fn listener_plan_includes_tcp_binding_and_registered_adapter() -> Result<(), Run
         plans[0]
             .adapter_ids
             .iter()
-            .any(|adapter_id| adapter_id == JE_1_7_10_ADAPTER_ID)
+            .any(|adapter_id| adapter_id == JE_5_ADAPTER_ID)
     );
     Ok(())
 }
@@ -68,11 +68,11 @@ fn listener_plan_includes_udp_binding_when_bedrock_is_enabled() -> Result<(), Ru
         plans[1]
             .adapter_ids
             .iter()
-            .any(|adapter_id| adapter_id == BE_26_3_ADAPTER_ID)
+            .any(|adapter_id| adapter_id == BE_924_ADAPTER_ID)
     );
     let default_bedrock_adapter = registries
         .protocols()
-        .resolve_adapter(BE_26_3_ADAPTER_ID)
+        .resolve_adapter(BE_924_ADAPTER_ID)
         .expect("default bedrock adapter should resolve");
     let expected_bedrock_listener = default_bedrock_adapter
         .bedrock_listener_descriptor()
@@ -102,11 +102,11 @@ fn plugin_host_preserves_wire_format_per_adapter() -> Result<(), RuntimeError> {
     let registries = plugin_test_registries_all()?;
     let je_adapter = registries
         .protocols()
-        .resolve_adapter(JE_1_7_10_ADAPTER_ID)
+        .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("je adapter should resolve");
     let bedrock_adapter = registries
         .protocols()
-        .resolve_adapter(BE_26_3_ADAPTER_ID)
+        .resolve_adapter(BE_924_ADAPTER_ID)
         .expect("bedrock adapter should resolve");
 
     assert_eq!(

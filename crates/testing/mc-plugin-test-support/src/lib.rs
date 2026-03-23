@@ -733,12 +733,12 @@ mod tests {
         let temp_dir = tempdir().expect("temp dir should be created");
         let dist_dir = temp_dir.path().join("runtime").join("plugins");
         harness
-            .seed_subset(&dist_dir, &["je-1_7_10", "auth-offline"])
+            .seed_subset(&dist_dir, &["je-5", "auth-offline"])
             .expect("subset seed should succeed");
 
-        assert!(dist_dir.join("je-1_7_10").is_dir());
+        assert!(dist_dir.join("je-5").is_dir());
         assert!(dist_dir.join("auth-offline").is_dir());
-        assert!(!dist_dir.join("je-1_8_x").exists());
+        assert!(!dist_dir.join("je-47").exists());
         assert!(!dist_dir.join("gameplay-canonical").exists());
     }
 
@@ -751,7 +751,7 @@ mod tests {
         let harness = PackagedPluginHarness::shared().expect("harness should load");
         let cache_dir = harness
             .artifact_cache_dir()
-            .join("mc-plugin-proto-je-1_7_10")
+            .join("mc-plugin-proto-je-5")
             .join("cache-hit-v1");
         if cache_dir.exists() {
             fs::remove_dir_all(&cache_dir).expect("cache dir should be removable");
@@ -764,8 +764,8 @@ mod tests {
 
         harness
             .install_protocol_plugin(
-                "mc-plugin-proto-je-1_7_10",
-                "je-1_7_10",
+                "mc-plugin-proto-je-5",
+                "je-5",
                 &first_temp_dir.path().join("runtime").join("plugins"),
                 &target_dir,
                 "cache-hit-v1",
@@ -776,8 +776,8 @@ mod tests {
 
         harness
             .install_protocol_plugin(
-                "mc-plugin-proto-je-1_7_10",
-                "je-1_7_10",
+                "mc-plugin-proto-je-5",
+                "je-5",
                 &second_temp_dir.path().join("runtime").join("plugins"),
                 &target_dir,
                 "cache-hit-v1",
@@ -786,7 +786,7 @@ mod tests {
         let after_second =
             PACKAGED_PLUGIN_TEST_VARIANT_BUILDS.load(std::sync::atomic::Ordering::SeqCst);
 
-        let cached_artifact = cache_dir.join(dynamic_library_filename("mc-plugin-proto-je-1_7_10"));
+        let cached_artifact = cache_dir.join(dynamic_library_filename("mc-plugin-proto-je-5"));
         assert!(cached_artifact.is_file());
         assert_eq!(after_first, before + 1);
         assert_eq!(after_second, after_first);
@@ -814,7 +814,7 @@ mod tests {
         let harness = PackagedPluginHarness::shared().expect("harness should load");
         let cache_dir = harness
             .artifact_cache_dir()
-            .join("mc-plugin-proto-je-1_7_10")
+            .join("mc-plugin-proto-je-5")
             .join("direct-cache-v1");
         if cache_dir.exists() {
             fs::remove_dir_all(&cache_dir).expect("cache dir should be removable");
@@ -824,7 +824,7 @@ mod tests {
         let target_dir = harness.scoped_target_dir("direct-cache");
         let first = harness
             .build_cached_packaged_plugin_artifact(
-                "mc-plugin-proto-je-1_7_10",
+                "mc-plugin-proto-je-5",
                 &target_dir,
                 "direct-cache-v1",
             )
@@ -833,7 +833,7 @@ mod tests {
             PACKAGED_PLUGIN_TEST_VARIANT_BUILDS.load(std::sync::atomic::Ordering::SeqCst);
         let second = harness
             .build_cached_packaged_plugin_artifact(
-                "mc-plugin-proto-je-1_7_10",
+                "mc-plugin-proto-je-5",
                 &target_dir,
                 "direct-cache-v1",
             )
@@ -869,12 +869,12 @@ mod tests {
     fn seed_copy_keeps_plugin_manifest_detached_from_source_tree() {
         let source_root = tempdir().expect("source temp dir should be created");
         let destination_root = tempdir().expect("destination temp dir should be created");
-        let source_plugin = source_root.path().join("je-1_7_10");
-        let destination_plugin = destination_root.path().join("je-1_7_10");
+        let source_plugin = source_root.path().join("je-5");
+        let destination_plugin = destination_root.path().join("je-5");
         fs::create_dir_all(&source_plugin).expect("source plugin dir should be created");
         fs::write(
             source_plugin.join("plugin.toml"),
-            "[plugin]\nid = \"je-1_7_10\"\nkind = \"protocol\"\n\n[artifacts]\n\"linux-x86_64\" = \"libsource.so\"\n",
+            "[plugin]\nid = \"je-5\"\nkind = \"protocol\"\n\n[artifacts]\n\"linux-x86_64\" = \"libsource.so\"\n",
         )
         .expect("source manifest should be written");
         fs::write(source_plugin.join("libsource.so"), "artifact")
@@ -884,7 +884,7 @@ mod tests {
             .expect("plugin tree should copy");
         fs::write(
             destination_plugin.join("plugin.toml"),
-            "[plugin]\nid = \"je-1_7_10\"\nkind = \"protocol\"\n\n[artifacts]\n\"linux-x86_64\" = \"libdestination.so\"\n",
+            "[plugin]\nid = \"je-5\"\nkind = \"protocol\"\n\n[artifacts]\n\"linux-x86_64\" = \"libdestination.so\"\n",
         )
         .expect("destination manifest should be overwritten");
 
