@@ -129,11 +129,13 @@ pub(crate) fn plugin_test_registries_from_dist_with_supporting_plugins(
     if supporting_plugin_ids.contains(&ONLINE_STUB_AUTH_PLUGIN_ID) {
         config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
     }
-    let plugin_host = TestPluginHost::discover(&config.plugin_host_config())?.ok_or_else(|| {
+    let bootstrap = plugin_host_bootstrap_test_config(&config);
+    let runtime_selection = plugin_host_runtime_selection_test_config(&config);
+    let plugin_host = TestPluginHost::discover(&bootstrap)?.ok_or_else(|| {
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
     Ok(LoadedPluginTestEnvironment {
-        loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
+        loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
         plugin_host: Some(plugin_host),
     })
 }
@@ -141,11 +143,13 @@ pub(crate) fn plugin_test_registries_from_dist_with_supporting_plugins(
 pub(crate) fn plugin_test_registries_from_config(
     config: &ServerConfig,
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
-    let plugin_host = TestPluginHost::discover(&config.plugin_host_config())?.ok_or_else(|| {
+    let bootstrap = plugin_host_bootstrap_test_config(config);
+    let runtime_selection = plugin_host_runtime_selection_test_config(config);
+    let plugin_host = TestPluginHost::discover(&bootstrap)?.ok_or_else(|| {
         RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
     })?;
     Ok(LoadedPluginTestEnvironment {
-        loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
+        loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
         plugin_host: Some(plugin_host),
     })
 }
@@ -253,8 +257,9 @@ pub(crate) fn in_process_online_auth_registries(
         .build();
     let mut config = ServerConfig::default();
     config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+    let runtime_selection = plugin_host_runtime_selection_test_config(&config);
     Ok(LoadedPluginTestEnvironment {
-        loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
+        loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
         plugin_host: Some(plugin_host),
     })
 }
@@ -297,8 +302,9 @@ pub(crate) fn in_process_failing_storage_registries(
         .build();
     let mut config = ServerConfig::default();
     config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    let runtime_selection = plugin_host_runtime_selection_test_config(&config);
     Ok(LoadedPluginTestEnvironment {
-        loaded_plugins: plugin_host.load_plugin_set(&config.plugin_host_config())?,
+        loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
         plugin_host: Some(plugin_host),
     })
 }

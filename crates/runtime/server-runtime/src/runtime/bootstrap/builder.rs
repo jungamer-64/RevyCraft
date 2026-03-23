@@ -6,98 +6,31 @@ use crate::RuntimeError;
 use crate::config::ServerConfigSource;
 use crate::runtime::admin::remote_admin_subjects_from_config;
 use crate::runtime::{
-    LiveRuntimeState, RuntimeServer, RuntimeState, RuntimeTopologyGeneration, RuntimeTopologyState,
-    TopologyGenerationId,
+    ACCEPT_QUEUE_CAPACITY, ActiveGeneration, GenerationId, RunningServer, RuntimeGenerationState,
+    RuntimeSelectionState, RuntimeServer, RuntimeState,
 };
 use mc_plugin_host::registry::LoadedPluginSet;
 use mc_plugin_host::runtime::RuntimePluginHost;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::{Mutex, mpsc, oneshot};
-
-pub struct ServerBuilder {
+pub(crate) async fn boot_server(
     config_source: ServerConfigSource,
-    loaded_plugins: LoadedPluginSet,
-}
-
-pub struct ReloadableServerBuilder {
-    config_source: ServerConfigSource,
-    loaded_plugins: LoadedPluginSet,
-    reload_host: Arc<dyn RuntimePluginHost>,
-}
-
-impl ServerBuilder {
-    #[must_use]
-    pub fn new(config_source: ServerConfigSource, loaded_plugins: LoadedPluginSet) -> Self {
-        Self {
-            config_source,
-            loaded_plugins,
-        }
-    }
-
-    #[must_use]
-    pub fn with_reload_host(
-        self,
-        reload_host: Arc<dyn RuntimePluginHost>,
-    ) -> ReloadableServerBuilder {
-        ReloadableServerBuilder {
-            config_source: self.config_source,
-            loaded_plugins: self.loaded_plugins,
-            reload_host,
-        }
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`RuntimeError`] when the server cannot bind, load its persisted
-    /// world state, or starts with unsupported configuration such as an auth
-    /// profile mode mismatch.
-    pub async fn build(self) -> Result<crate::runtime::RunningServer, RuntimeError> {
-        build_server(self.config_source, self.loaded_plugins, None).await
-    }
-}
-
-impl ReloadableServerBuilder {
-    /// # Errors
-    ///
-    /// Returns [`RuntimeError`] when the server cannot bind, load its persisted
-    /// world state, or starts with unsupported configuration such as an auth
-    /// profile mode mismatch.
-    pub async fn build(self) -> Result<crate::runtime::ReloadableRunningServer, RuntimeError> {
-        let Self {
-            config_source,
-            loaded_plugins,
-            reload_host,
-        } = self;
-        let running = build_server(
-            config_source,
-            loaded_plugins,
-            Some(Arc::clone(&reload_host)),
-        )
-        .await?;
-        Ok(crate::runtime::ReloadableRunningServer {
-            running,
-            reload_host,
-        })
-    }
-}
-
-async fn build_server(
-    config_source: ServerConfigSource,
+    config: crate::config::ServerConfig,
     loaded_plugins: LoadedPluginSet,
     reload_host: Option<Arc<dyn RuntimePluginHost>>,
-) -> Result<crate::runtime::RunningServer, RuntimeError> {
-    let config = config_source.load()?;
+) -> Result<RunningServer, RuntimeError> {
     config.validate()?;
     if reload_host.is_none() {
         if config.plugins.reload_watch {
             return Err(RuntimeError::Config(
-                "plugins.reload_watch requires ServerBuilder::with_reload_host(...)".to_string(),
+                "plugins.reload_watch requires a reload-capable supervisor boot".to_string(),
             ));
         }
         if config.topology.reload_watch {
             return Err(RuntimeError::Config(
-                "topology.reload_watch requires ServerBuilder::with_reload_host(...)".to_string(),
+                "topology.reload_watch requires a reload-capable supervisor boot".to_string(),
             ));
         }
     }
@@ -118,8 +51,17 @@ async fn build_server(
         listener_bindings,
         bound_listeners,
     } = bind_runtime_listeners(&config, &protocols).await?;
-    let initial_generation_id = TopologyGenerationId(1);
-    let topology_generation = Arc::new(RuntimeTopologyGeneration {
+    let admin_ui = loaded_plugins.resolve_admin_ui_profile(&config.admin.ui_profile);
+    let selection_state = RuntimeSelectionState {
+        config: config.clone(),
+        loaded_plugins: loaded_plugins.clone(),
+        auth_profile,
+        bedrock_auth_profile,
+        admin_ui,
+        remote_admin_subjects: remote_admin_subjects_from_config(&config),
+    };
+    let initial_generation_id = GenerationId(1);
+    let active_generation = Arc::new(ActiveGeneration {
         generation_id: initial_generation_id,
         config: config.clone(),
         protocol_registry: protocols,
@@ -127,26 +69,23 @@ async fn build_server(
         default_bedrock_adapter,
         listener_bindings: listener_bindings.clone(),
     });
-    let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
-    let listener_workers =
-        spawn_listener_workers(bound_listeners, initial_generation_id, accepted_tx.clone())?;
-    let admin_ui = loaded_plugins.resolve_admin_ui_profile(&config.admin.ui_profile);
+    let (accepted_tx, accepted_rx) = mpsc::channel(ACCEPT_QUEUE_CAPACITY);
+    let queued_accepts = crate::runtime::QueuedAcceptTracker::default();
+    let listener_workers = spawn_listener_workers(
+        bound_listeners,
+        initial_generation_id,
+        accepted_tx.clone(),
+        queued_accepts.clone(),
+    )?;
 
     let server = Arc::new(RuntimeServer {
-        config,
+        static_config: config.static_config(),
         config_source,
-        live_state: tokio::sync::RwLock::new(LiveRuntimeState {
-            config: topology_generation.config.clone(),
-            admin_ui,
-            loaded_plugins,
-            auth_profile,
-            bedrock_auth_profile,
-            remote_admin_subjects: remote_admin_subjects_from_config(&topology_generation.config),
-        }),
         reload_host,
+        selection_state: tokio::sync::RwLock::new(selection_state),
         consistency_gate: tokio::sync::RwLock::new(()),
-        topology: std::sync::RwLock::new(RuntimeTopologyState {
-            active: topology_generation,
+        generation_state: std::sync::RwLock::new(RuntimeGenerationState {
+            active: active_generation,
             draining: Vec::new(),
             listener_workers,
             next_generation_id: 2,
@@ -155,21 +94,27 @@ async fn build_server(
         storage_profile,
         state: Mutex::new(RuntimeState { core, dirty: false }),
         sessions: Mutex::new(HashMap::new()),
+        session_tasks: Mutex::new(tokio::task::JoinSet::new()),
         next_connection_id: Mutex::new(1),
         accepted_tx,
+        queued_accepts,
+        shutting_down: AtomicBool::new(false),
         shutdown_tx: std::sync::Mutex::new(None),
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let (runtime_completion_tx, runtime_completion_rx) = tokio::sync::watch::channel(false);
     *server
         .shutdown_tx
         .lock()
         .expect("shutdown mutex should not be poisoned") = Some(shutdown_tx);
     let run_server = Arc::clone(&server);
-    let join_handle = spawn_runtime_loop(run_server, shutdown_rx, accepted_rx);
+    let join_handle =
+        spawn_runtime_loop(run_server, shutdown_rx, accepted_rx, runtime_completion_tx);
 
-    Ok(crate::runtime::RunningServer {
+    Ok(RunningServer {
         runtime: server,
         join_handle,
+        runtime_completion_rx,
     })
 }

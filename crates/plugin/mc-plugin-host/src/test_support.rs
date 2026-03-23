@@ -1,6 +1,6 @@
 use crate::__test_hooks as hooks;
 use crate::PluginHostError;
-use crate::config::ServerConfig;
+use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
 use crate::host::PluginHostStatusSnapshot;
 use crate::registry::LoadedPluginSet;
 use crate::runtime::{
@@ -25,7 +25,7 @@ impl TestPluginHost {
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when packaged plugin discovery fails.
-    pub fn discover(config: &ServerConfig) -> Result<Option<Self>, PluginHostError> {
+    pub fn discover(config: &BootstrapConfig) -> Result<Option<Self>, PluginHostError> {
         hooks::discover(config).map(|host| host.map(|inner| Self { inner }))
     }
 
@@ -39,7 +39,7 @@ impl TestPluginHost {
     /// Returns [`PluginHostError`] when the host cannot materialize the requested runtime snapshot.
     pub fn load_plugin_set(
         &self,
-        config: &ServerConfig,
+        config: &RuntimeSelectionConfig,
     ) -> Result<LoadedPluginSet, PluginHostError> {
         hooks::load_plugin_set(&self.inner, config)
     }
@@ -54,7 +54,10 @@ impl TestPluginHost {
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the gameplay profiles cannot be activated.
-    pub fn activate_gameplay_profiles(&self, config: &ServerConfig) -> Result<(), PluginHostError> {
+    pub fn activate_gameplay_profiles(
+        &self,
+        config: &RuntimeSelectionConfig,
+    ) -> Result<(), PluginHostError> {
         hooks::activate_gameplay_profiles(&self.inner, config)
     }
 

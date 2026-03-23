@@ -1,5 +1,5 @@
 use crate::PluginHostError;
-use crate::config::ServerConfig;
+use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
 use crate::host::{
     PluginAbiRange, PluginFailureMatrix, PluginHost, PluginHostStatusSnapshot,
     plugin_host_from_config,
@@ -37,9 +37,8 @@ pub struct InProcessHostBuildInput {
 /// # Errors
 ///
 /// Returns [`PluginHostError`] when packaged plugin discovery fails.
-pub fn discover(config: &ServerConfig) -> Result<Option<BuiltTestHost>, PluginHostError> {
-    plugin_host_from_config(&config.bootstrap_config())
-        .map(|host| host.map(|inner| BuiltTestHost { inner }))
+pub fn discover(config: &BootstrapConfig) -> Result<Option<BuiltTestHost>, PluginHostError> {
+    plugin_host_from_config(config).map(|host| host.map(|inner| BuiltTestHost { inner }))
 }
 
 #[must_use]
@@ -85,10 +84,9 @@ pub fn status(host: &BuiltTestHost) -> PluginHostStatusSnapshot {
 /// Returns [`PluginHostError`] when the host cannot materialize the requested runtime snapshot.
 pub fn load_plugin_set(
     host: &BuiltTestHost,
-    config: &ServerConfig,
+    config: &RuntimeSelectionConfig,
 ) -> Result<LoadedPluginSet, PluginHostError> {
-    host.inner
-        .load_plugin_set(&config.runtime_selection_config())
+    host.inner.load_plugin_set(config)
 }
 
 /// # Errors
@@ -116,10 +114,9 @@ pub fn load_protocol_plugin_set(host: &BuiltTestHost) -> Result<LoadedPluginSet,
 /// Returns [`PluginHostError`] when the gameplay profiles cannot be activated.
 pub fn activate_gameplay_profiles(
     host: &BuiltTestHost,
-    config: &ServerConfig,
+    config: &RuntimeSelectionConfig,
 ) -> Result<(), PluginHostError> {
-    host.inner
-        .activate_gameplay_profiles(&config.runtime_selection_config())
+    host.inner.activate_gameplay_profiles(config)
 }
 
 /// # Errors

@@ -27,9 +27,7 @@ impl RuntimeServer {
         current: &Arc<dyn mc_proto_common::ProtocolAdapter>,
         protocol_number: i32,
     ) -> Result<bool, RuntimeError> {
-        let topology = self
-            .topology_generation(session.topology_generation_id)
-            .ok_or_else(|| RuntimeError::Config("missing topology generation".to_string()))?;
+        let topology = Arc::clone(&session.generation);
         let Some(next_adapter) = topology.protocol_registry.resolve_route(
             TransportKind::Udp,
             Edition::Be,
@@ -77,9 +75,7 @@ impl RuntimeServer {
         {
             Arc::clone(current)
         } else {
-            let topology = self
-                .topology_generation(session.topology_generation_id)
-                .ok_or_else(|| RuntimeError::Config("missing topology generation".to_string()))?;
+            let topology = Arc::clone(&session.generation);
             topology
                 .protocol_registry
                 .resolve_route(TransportKind::Udp, Edition::Be, protocol_number)
@@ -122,7 +118,7 @@ impl RuntimeServer {
         current: &Arc<dyn mc_proto_common::ProtocolAdapter>,
         username: String,
     ) -> Result<bool, RuntimeError> {
-        if self.config.bootstrap.online_mode {
+        if self.static_config.bootstrap.online_mode {
             if session.login_challenge.is_some() {
                 return Self::disconnect_login(
                     transport_io,
@@ -137,7 +133,7 @@ impl RuntimeServer {
                 ));
             };
             let verify_token = random_verify_token();
-            let auth_profile = self.live_state.read().await.auth_profile.clone();
+            let auth_profile = self.selection_state.read().await.auth_profile.clone();
             let auth_generation = auth_profile.capture_generation()?;
             let encryption_request = current.encode_encryption_request(
                 LOGIN_SERVER_ID,
@@ -153,7 +149,7 @@ impl RuntimeServer {
             return Ok(false);
         }
 
-        let auth_profile = self.live_state.read().await.auth_profile.clone();
+        let auth_profile = self.selection_state.read().await.auth_profile.clone();
         let authenticated = auth_profile.authenticate_offline(&username)?;
         self.apply_command(
             CoreCommand::LoginStart {
@@ -176,7 +172,7 @@ impl RuntimeServer {
         shared_secret_encrypted: Vec<u8>,
         verify_token_encrypted: Vec<u8>,
     ) -> Result<bool, RuntimeError> {
-        if !self.config.bootstrap.online_mode {
+        if !self.static_config.bootstrap.online_mode {
             return Self::disconnect_login(
                 transport_io,
                 current,
@@ -224,7 +220,7 @@ impl RuntimeServer {
         let login_username = challenge.username;
         let auth_generation = Arc::clone(&challenge.auth_generation);
         let captured_generation_id = auth_generation.generation_id();
-        let auth_profile = self.live_state.read().await.auth_profile.clone();
+        let auth_profile = self.selection_state.read().await.auth_profile.clone();
         let authenticated = match tokio::task::spawn_blocking(move || {
             let current_generation_id = auth_profile
                 .plugin_generation_id()

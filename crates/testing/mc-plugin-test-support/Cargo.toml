@@ -10,6 +10,7 @@ categories.workspace = true
 description = "Shared packaged-plugin test infrastructure for RevyCraft workspace tests."
 
 [dependencies]
+fs2 = "0.4"
 thiserror.workspace = true
 
 [dev-dependencies]

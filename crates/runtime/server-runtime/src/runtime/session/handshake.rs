@@ -38,9 +38,7 @@ impl RuntimeServer {
         session: &mut SessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let topology = self
-            .topology_generation(session.topology_generation_id)
-            .ok_or_else(|| RuntimeError::Config("missing topology generation".to_string()))?;
+        let topology = Arc::clone(&session.generation);
         let Some(intent) = topology
             .protocol_registry
             .route_handshake(session.transport, frame)?
@@ -102,9 +100,7 @@ impl RuntimeServer {
         session: &SessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let topology = self
-            .topology_generation(session.topology_generation_id)
-            .ok_or_else(|| RuntimeError::Config("missing topology generation".to_string()))?;
+        let topology = Arc::clone(&session.generation);
         let current = session
             .adapter
             .as_ref()

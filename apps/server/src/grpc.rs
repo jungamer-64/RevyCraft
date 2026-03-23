@@ -1,13 +1,13 @@
 use revy_admin_grpc::admin::{
     self as proto, GetStatusResponse, ListSessionsResponse, ReloadConfigResponse,
-    ReloadPluginsResponse, ReloadTopologyResponse, ShutdownResponse,
+    ReloadGenerationResponse, ReloadPluginsResponse, ShutdownResponse,
     admin_control_plane_server::{AdminControlPlane, AdminControlPlaneServer},
 };
 use server_runtime::RuntimeError;
 use server_runtime::runtime::{
     AdminAuthError, AdminCommandError, AdminConfigReloadView, AdminControlPlaneHandle,
-    AdminNamedCountView, AdminSessionSummaryView, AdminSessionsView, AdminStatusView, AdminSubject,
-    AdminTopologyReloadView,
+    AdminGenerationReloadView, AdminNamedCountView, AdminSessionSummaryView, AdminSessionsView,
+    AdminStatusView, AdminSubject,
 };
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -108,17 +108,17 @@ impl AdminControlPlane for AdminGrpcService {
             .map_err(map_command_error)
     }
 
-    async fn reload_topology(
+    async fn reload_generation(
         &self,
-        request: Request<proto::ReloadTopologyRequest>,
-    ) -> Result<Response<ReloadTopologyResponse>, Status> {
+        request: Request<proto::ReloadGenerationRequest>,
+    ) -> Result<Response<ReloadGenerationResponse>, Status> {
         let subject = authenticate_request(&self.control_plane, request.metadata()).await?;
         self.control_plane
-            .reload_topology(&subject)
+            .reload_generation(&subject)
             .await
             .map(|result| {
-                Response::new(ReloadTopologyResponse {
-                    result: Some(map_topology_reload_view(result)),
+                Response::new(ReloadGenerationResponse {
+                    result: Some(map_generation_reload_view(result)),
                 })
             })
             .map_err(map_command_error)
@@ -287,10 +287,10 @@ fn map_session_summary(summary: AdminSessionSummaryView) -> proto::AdminSessionS
                 count: count_to_u64(count.count),
             })
             .collect(),
-        by_topology_generation: summary
-            .by_topology_generation
+        by_generation: summary
+            .by_generation
             .into_iter()
-            .map(|count| proto::AdminTopologyGenerationCountView {
+            .map(|count| proto::AdminGenerationCountView {
                 generation_id: count.generation_id,
                 count: count_to_u64(count.count),
             })
@@ -302,8 +302,8 @@ fn map_session_summary(summary: AdminSessionSummaryView) -> proto::AdminSessionS
 
 fn map_status_view(status: AdminStatusView) -> proto::AdminStatusView {
     proto::AdminStatusView {
-        active_topology_generation_id: status.active_topology_generation_id,
-        draining_topology_generation_ids: status.draining_topology_generation_ids,
+        active_generation_id: status.active_generation_id,
+        draining_generation_ids: status.draining_generation_ids,
         listener_bindings: status
             .listener_bindings
             .into_iter()
@@ -344,7 +344,7 @@ fn map_sessions_view(sessions: AdminSessionsView) -> proto::AdminSessionsView {
             .into_iter()
             .map(|session| proto::AdminSessionView {
                 connection_id: session.connection_id.0,
-                topology_generation_id: session.topology_generation_id,
+                generation_id: session.generation_id,
                 transport: map_transport(session.transport),
                 phase: map_phase(session.phase),
                 adapter_id: session.adapter_id,
@@ -360,8 +360,10 @@ fn map_sessions_view(sessions: AdminSessionsView) -> proto::AdminSessionsView {
     }
 }
 
-fn map_topology_reload_view(result: AdminTopologyReloadView) -> proto::AdminTopologyReloadView {
-    proto::AdminTopologyReloadView {
+fn map_generation_reload_view(
+    result: AdminGenerationReloadView,
+) -> proto::AdminGenerationReloadView {
+    proto::AdminGenerationReloadView {
         activated_generation_id: result.activated_generation_id,
         retired_generation_ids: result.retired_generation_ids,
         applied_config_change: result.applied_config_change,
@@ -372,17 +374,19 @@ fn map_topology_reload_view(result: AdminTopologyReloadView) -> proto::AdminTopo
 fn map_config_reload_view(result: AdminConfigReloadView) -> proto::AdminConfigReloadView {
     proto::AdminConfigReloadView {
         reloaded_plugin_ids: result.reloaded_plugin_ids,
-        topology: Some(map_topology_reload_view(result.topology)),
+        generation: Some(map_generation_reload_view(result.generation)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_plugin_host::host::plugin_host_from_config;
     use mc_plugin_test_support::PackagedPluginHarness;
-    use server_runtime::config::{AdminGrpcPrincipalConfig, ServerConfig, ServerConfigSource};
-    use server_runtime::runtime::{AdminPermission, ServerBuilder};
+    use server_runtime::config::{
+        AdminGrpcPrincipalConfig, AdminPermission as ConfigAdminPermission, ServerConfig,
+        ServerConfigSource,
+    };
+    use server_runtime::runtime::ServerSupervisor;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tonic::metadata::MetadataValue;
@@ -419,7 +423,7 @@ mod tests {
             AdminGrpcPrincipalConfig {
                 token_file: PathBuf::from("runtime/admin/ops-status.token"),
                 token: "status-token".to_string(),
-                permissions: vec![AdminPermission::Status],
+                permissions: vec![ConfigAdminPermission::Status],
             },
         );
         config.admin.grpc.principals.insert(
@@ -428,12 +432,12 @@ mod tests {
                 token_file: PathBuf::from("runtime/admin/ops-admin.token"),
                 token: "admin-token".to_string(),
                 permissions: vec![
-                    AdminPermission::Status,
-                    AdminPermission::Sessions,
-                    AdminPermission::ReloadConfig,
-                    AdminPermission::ReloadPlugins,
-                    AdminPermission::ReloadTopology,
-                    AdminPermission::Shutdown,
+                    ConfigAdminPermission::Status,
+                    ConfigAdminPermission::Sessions,
+                    ConfigAdminPermission::ReloadConfig,
+                    ConfigAdminPermission::ReloadPlugins,
+                    ConfigAdminPermission::ReloadGeneration,
+                    ConfigAdminPermission::Shutdown,
                 ],
             },
         );
@@ -442,26 +446,14 @@ mod tests {
 
     async fn start_grpc_test_server(
         config: ServerConfig,
-    ) -> Result<
-        (
-            server_runtime::runtime::ReloadableRunningServer,
-            watch::Sender<bool>,
-            AdminGrpcServerHandle,
-        ),
-        RuntimeError,
-    > {
-        let plugin_host = plugin_host_from_config(&config.plugin_host_bootstrap_config())?
-            .ok_or_else(|| RuntimeError::Config("packaged plugin host should exist".to_string()))?;
-        let loaded_plugins =
-            plugin_host.load_plugin_set(&config.plugin_host_runtime_selection_config())?;
-        let server = ServerBuilder::new(ServerConfigSource::Inline(config.clone()), loaded_plugins)
-            .with_reload_host(plugin_host)
-            .build()
-            .await?;
+    ) -> Result<(ServerSupervisor, watch::Sender<bool>, AdminGrpcServerHandle), RuntimeError> {
+        let server = ServerSupervisor::boot(ServerConfigSource::Inline(config)).await?;
         let control_plane = server.admin_control_plane();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let grpc = spawn_admin_grpc_server(
-            config.admin.grpc.bind_addr,
+            server
+                .admin_grpc_bind_addr()
+                .expect("test config should enable admin gRPC"),
             control_plane,
             shutdown_tx.clone(),
             shutdown_rx,
@@ -628,14 +620,14 @@ mod tests {
             .into_inner();
         assert!(reload_plugins.result.is_some());
 
-        let reload_topology = client
-            .reload_topology(authorized_request(
-                proto::ReloadTopologyRequest {},
+        let reload_generation = client
+            .reload_generation(authorized_request(
+                proto::ReloadGenerationRequest {},
                 "admin-token",
             ))
             .await?
             .into_inner();
-        assert!(reload_topology.result.is_some());
+        assert!(reload_generation.result.is_some());
 
         let shutdown = client
             .shutdown(authorized_request(proto::ShutdownRequest {}, "admin-token"))
@@ -651,14 +643,7 @@ mod tests {
     #[tokio::test]
     async fn grpc_bind_conflict_is_a_startup_failure() -> Result<(), Box<dyn std::error::Error>> {
         let config = grpc_test_config()?;
-        let plugin_host = plugin_host_from_config(&config.plugin_host_bootstrap_config())?
-            .ok_or_else(|| RuntimeError::Config("packaged plugin host should exist".to_string()))?;
-        let loaded_plugins =
-            plugin_host.load_plugin_set(&config.plugin_host_runtime_selection_config())?;
-        let server = ServerBuilder::new(ServerConfigSource::Inline(config.clone()), loaded_plugins)
-            .with_reload_host(plugin_host)
-            .build()
-            .await?;
+        let server = ServerSupervisor::boot(ServerConfigSource::Inline(config.clone())).await?;
         let control_plane = server.admin_control_plane();
         let occupied = TcpListener::bind("127.0.0.1:0").await?;
         let occupied_addr = occupied.local_addr()?;

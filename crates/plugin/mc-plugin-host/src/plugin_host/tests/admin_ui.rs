@@ -30,7 +30,7 @@ fn in_process_admin_ui_profile_parses_and_renders() -> Result<(), RuntimeError> 
             api: console_admin_ui_entrypoints().api,
         })
         .build();
-    let _loaded = host.load_plugin_set(&ServerConfig::default())?;
+    let _loaded = host.load_plugin_set(&runtime_selection_config())?;
     let profile = host
         .resolve_admin_ui_profile("console-v1")
         .expect("console admin-ui profile should resolve");
@@ -69,8 +69,8 @@ fn packaged_admin_ui_reload_swaps_generation_and_keeps_last_good() -> Result<(),
         ],
     )?;
 
-    let config = ServerConfig {
-        plugins_dir: dist_dir.clone(),
+    let bootstrap = bootstrap_config_with_plugins_dir(dist_dir.clone());
+    let runtime_selection = RuntimeSelectionConfig {
         plugin_allowlist: Some(vec![
             "admin-ui-console".to_string(),
             "gameplay-canonical".to_string(),
@@ -78,10 +78,11 @@ fn packaged_admin_ui_reload_swaps_generation_and_keeps_last_good() -> Result<(),
             "storage-je-anvil-1_7_10".to_string(),
             "auth-offline".to_string(),
         ]),
-        ..ServerConfig::default()
+        ..runtime_selection_config()
     };
-    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
-    let _loaded = host.load_plugin_set(&config)?;
+    let host =
+        TestPluginHost::discover(&bootstrap)?.expect("packaged plugins should be discovered");
+    let _loaded = host.load_plugin_set(&runtime_selection)?;
     let profile = host
         .resolve_admin_ui_profile("console-v1")
         .expect("console admin-ui profile should resolve");

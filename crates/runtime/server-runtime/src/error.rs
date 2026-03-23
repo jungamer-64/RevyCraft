@@ -37,3 +37,14 @@ impl From<mc_plugin_host::PluginHostError> for RuntimeError {
         }
     }
 }
+
+impl From<server_config::ServerConfigError> for RuntimeError {
+    fn from(value: server_config::ServerConfigError) -> Self {
+        match value {
+            server_config::ServerConfigError::Io(error) => Self::Io(error),
+            server_config::ServerConfigError::PluginHost(error) => Self::from(error),
+            server_config::ServerConfigError::Unsupported(message) => Self::Unsupported(message),
+            server_config::ServerConfigError::Config(message) => Self::Config(message),
+        }
+    }
+}

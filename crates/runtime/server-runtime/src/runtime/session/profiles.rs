@@ -25,14 +25,14 @@ impl RuntimeServer {
     }
 
     async fn gameplay_profile_for_adapter(&self, adapter_id: &str) -> String {
-        let live_state = self.live_state.read().await;
-        live_state
+        let selection_state = self.selection_state.read().await;
+        selection_state
             .config
             .profiles
             .gameplay_map
             .get(adapter_id)
             .cloned()
-            .unwrap_or_else(|| live_state.config.profiles.default_gameplay.clone())
+            .unwrap_or_else(|| selection_state.config.profiles.default_gameplay.clone())
     }
 
     pub(in crate::runtime::session) async fn resolve_gameplay_for_adapter(
@@ -40,7 +40,7 @@ impl RuntimeServer {
         adapter_id: &str,
     ) -> Result<Arc<dyn GameplayProfileHandle>, RuntimeError> {
         let profile_id = self.gameplay_profile_for_adapter(adapter_id).await;
-        self.live_state
+        self.selection_state
             .read()
             .await
             .loaded_plugins
@@ -55,7 +55,7 @@ impl RuntimeServer {
     pub(in crate::runtime::session) async fn resolve_bedrock_auth_profile(
         &self,
     ) -> Result<Arc<dyn AuthProfileHandle>, RuntimeError> {
-        self.live_state
+        self.selection_state
             .read()
             .await
             .bedrock_auth_profile
@@ -70,7 +70,7 @@ impl RuntimeServer {
     ) {
         let _consistency_guard = self.consistency_gate.read().await;
         if let Some(handle) = self.sessions.lock().await.get_mut(&connection_id) {
-            handle.topology_generation_id = session.topology_generation_id;
+            handle.generation = Arc::clone(&session.generation);
             handle.transport = session.transport;
             handle.phase = session.phase;
             handle.adapter_id = session
@@ -83,6 +83,7 @@ impl RuntimeServer {
                 .session_capabilities
                 .as_ref()
                 .map(|capabilities| capabilities.gameplay_profile.clone());
+            handle.gameplay = session.gameplay.clone();
             handle
                 .session_capabilities
                 .clone_from(&session.session_capabilities);

@@ -1,8 +1,8 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_plugin_api::codec::admin_ui::{
-    AdminConfigReloadView, AdminNamedCountView, AdminPluginsReloadView, AdminRequest,
-    AdminResponse, AdminSessionSummaryView, AdminSessionsView, AdminStatusView,
-    AdminTopologyReloadView, AdminUiDescriptor,
+    AdminConfigReloadView, AdminGenerationReloadView, AdminNamedCountView, AdminPluginsReloadView,
+    AdminRequest, AdminResponse, AdminSessionSummaryView, AdminSessionsView, AdminStatusView,
+    AdminUiDescriptor,
 };
 use mc_plugin_sdk_rust::admin_ui::RustAdminUiPlugin;
 use mc_plugin_sdk_rust::capabilities;
@@ -35,7 +35,7 @@ impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
             "sessions" => Ok(AdminRequest::Sessions),
             "reload config" => Ok(AdminRequest::ReloadConfig),
             "reload plugins" => Ok(AdminRequest::ReloadPlugins),
-            "reload topology" => Ok(AdminRequest::ReloadTopology),
+            "reload generation" => Ok(AdminRequest::ReloadGeneration),
             "shutdown" => Ok(AdminRequest::Shutdown),
             _ => Err(format!("unknown command `{line}`; try `help`")),
         }
@@ -48,7 +48,7 @@ impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
             AdminResponse::Sessions(sessions) => render_sessions(sessions),
             AdminResponse::ReloadConfig(result) => render_reload_config(result),
             AdminResponse::ReloadPlugins(result) => render_reload_plugins(result),
-            AdminResponse::ReloadTopology(result) => render_reload_topology(result),
+            AdminResponse::ReloadGeneration(result) => render_reload_generation(result),
             AdminResponse::ShutdownScheduled => "shutdown scheduled".to_string(),
             AdminResponse::PermissionDenied {
                 principal,
@@ -76,7 +76,7 @@ fn render_help() -> String {
         "sessions",
         "reload config",
         "reload plugins",
-        "reload topology",
+        "reload generation",
         "shutdown",
     ]
     .join("\n")
@@ -103,7 +103,7 @@ fn format_named_counts(values: &[AdminNamedCountView]) -> String {
 
 fn render_summary(summary: &AdminSessionSummaryView) -> String {
     format!(
-        "sessions={} transport={} phase={} topology={} adapter={} gameplay={}",
+        "sessions={} transport={} phase={} generation={} adapter={} gameplay={}",
         summary.total,
         summary
             .by_transport
@@ -118,7 +118,7 @@ fn render_summary(summary: &AdminSessionSummaryView) -> String {
             .collect::<Vec<_>>()
             .join(","),
         summary
-            .by_topology_generation
+            .by_generation
             .iter()
             .map(|entry| format!("{}={}", entry.generation_id, entry.count))
             .collect::<Vec<_>>()
@@ -131,9 +131,9 @@ fn render_summary(summary: &AdminSessionSummaryView) -> String {
 fn render_status(status: &AdminStatusView) -> String {
     let mut lines = vec![
         format!(
-            "runtime active-topology={} draining-topologies={} listeners={} sessions={} dirty={}",
-            status.active_topology_generation_id,
-            status.draining_topology_generation_ids.len(),
+            "runtime active-generation={} draining-generations={} listeners={} sessions={} dirty={}",
+            status.active_generation_id,
+            status.draining_generation_ids.len(),
             status.listener_bindings.len(),
             status.session_summary.total,
             status.dirty,
@@ -172,9 +172,9 @@ fn render_sessions(sessions: &AdminSessionsView) -> String {
     } else {
         for session in &sessions.sessions {
             lines.push(format!(
-                "conn={} topo={} transport={:?} phase={:?} adapter={} gameplay={} player={} entity={} proto-gen={} gameplay-gen={}",
+                "conn={} gen={} transport={:?} phase={:?} adapter={} gameplay={} player={} entity={} proto-gen={} gameplay-gen={}",
                 session.connection_id.0,
-                session.topology_generation_id,
+                session.generation_id,
                 session.transport,
                 session.phase,
                 session.adapter_id.as_deref().unwrap_or("-"),
@@ -209,9 +209,9 @@ fn render_reload_plugins(result: &AdminPluginsReloadView) -> String {
     }
 }
 
-fn render_reload_topology(result: &AdminTopologyReloadView) -> String {
+fn render_reload_generation(result: &AdminGenerationReloadView) -> String {
     format!(
-        "reload topology: active={} retired={} applied-config-change={} reconfigured={}",
+        "reload generation: active={} retired={} applied-config-change={} reconfigured={}",
         result.activated_generation_id,
         if result.retired_generation_ids.is_empty() {
             "-".to_string()
@@ -241,7 +241,7 @@ fn render_reload_config(result: &AdminConfigReloadView) -> String {
     format!(
         "reload config: plugins={} {}",
         plugins,
-        render_reload_topology(&result.topology)
+        render_reload_generation(&result.generation)
     )
 }
 

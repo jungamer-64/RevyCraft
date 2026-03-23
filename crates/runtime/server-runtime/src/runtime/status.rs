@@ -1,22 +1,21 @@
-use super::{RunningServer, RuntimeServer, TopologyGenerationId, now_ms};
+use super::{GenerationId, RunningServer, RuntimeServer, now_ms};
+use crate::{ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot};
 use mc_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
-use mc_plugin_host::host::PluginHostStatusSnapshot;
-use mc_plugin_host::registry::ListenerBinding;
 use mc_proto_common::{ConnectionPhase, TransportKind};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TopologyStatusState {
+pub enum GenerationStatusState {
     Active,
     Draining,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TopologyStatusSnapshot {
-    pub generation_id: TopologyGenerationId,
-    pub state: TopologyStatusState,
+pub struct GenerationStatusSnapshot {
+    pub generation_id: GenerationId,
+    pub state: GenerationStatusState,
     pub drain_deadline_ms: Option<u64>,
     pub listener_bindings: Vec<ListenerBinding>,
     pub default_adapter_id: String,
@@ -40,8 +39,8 @@ pub struct PhaseCountSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TopologyGenerationCountSnapshot {
-    pub generation_id: TopologyGenerationId,
+pub struct GenerationCountSnapshot {
+    pub generation_id: GenerationId,
     pub count: usize,
 }
 
@@ -56,7 +55,7 @@ pub struct SessionSummarySnapshot {
     pub total: usize,
     pub by_transport: Vec<TransportCountSnapshot>,
     pub by_phase: Vec<PhaseCountSnapshot>,
-    pub by_topology_generation: Vec<TopologyGenerationCountSnapshot>,
+    pub by_generation: Vec<GenerationCountSnapshot>,
     pub by_adapter_id: Vec<OptionalNamedCountSnapshot>,
     pub by_gameplay_profile: Vec<OptionalNamedCountSnapshot>,
 }
@@ -64,7 +63,7 @@ pub struct SessionSummarySnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionStatusSnapshot {
     pub connection_id: ConnectionId,
-    pub topology_generation_id: TopologyGenerationId,
+    pub generation_id: GenerationId,
     pub transport: TransportKind,
     pub phase: ConnectionPhase,
     pub adapter_id: Option<String>,
@@ -77,8 +76,8 @@ pub struct SessionStatusSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeStatusSnapshot {
-    pub active_topology: TopologyStatusSnapshot,
-    pub draining_topologies: Vec<TopologyStatusSnapshot>,
+    pub active_generation: GenerationStatusSnapshot,
+    pub draining_generations: Vec<GenerationStatusSnapshot>,
     pub listener_bindings: Vec<ListenerBinding>,
     pub session_summary: SessionSummarySnapshot,
     pub dirty: bool,
@@ -99,29 +98,32 @@ impl RunningServer {
 
 impl RuntimeServer {
     pub(crate) async fn status_snapshot(&self) -> RuntimeStatusSnapshot {
-        let (active_topology, draining_topologies, listener_bindings) = {
-            let topology = self
-                .topology
+        let (active_generation, draining_generations, listener_bindings) = {
+            let generation_state = self
+                .generation_state
                 .read()
-                .expect("runtime topology lock should not be poisoned");
-            let active_topology =
-                topology_status_snapshot(&topology.active, TopologyStatusState::Active, None);
-            let mut draining_topologies = topology
+                .expect("runtime generation lock should not be poisoned");
+            let active_generation = generation_status_snapshot(
+                &generation_state.active,
+                GenerationStatusState::Active,
+                None,
+            );
+            let mut draining_generations = generation_state
                 .draining
                 .iter()
                 .map(|entry| {
-                    topology_status_snapshot(
+                    generation_status_snapshot(
                         &entry.generation,
-                        TopologyStatusState::Draining,
+                        GenerationStatusState::Draining,
                         Some(entry.drain_deadline_ms),
                     )
                 })
                 .collect::<Vec<_>>();
-            draining_topologies.sort_by_key(|entry| entry.generation_id.0);
+            draining_generations.sort_by_key(|entry| entry.generation_id.0);
             (
-                active_topology,
-                draining_topologies,
-                topology.active.listener_bindings.clone(),
+                active_generation,
+                draining_generations,
+                generation_state.active.listener_bindings.clone(),
             )
         };
         let session_status = self.session_status_snapshot().await;
@@ -129,15 +131,15 @@ impl RuntimeServer {
         let dirty = self.state.lock().await.dirty;
 
         RuntimeStatusSnapshot {
-            active_topology,
-            draining_topologies,
+            active_generation,
+            draining_generations,
             listener_bindings,
             session_summary,
             dirty,
             plugin_host: self
                 .reload_host
                 .as_ref()
-                .map(|reload_host| reload_host.status()),
+                .map(|reload_host| summarize_plugin_host_status(reload_host.status())),
         }
     }
 
@@ -149,7 +151,7 @@ impl RuntimeServer {
             .iter()
             .map(|(connection_id, handle)| SessionStatusSnapshot {
                 connection_id: *connection_id,
-                topology_generation_id: handle.topology_generation_id,
+                generation_id: handle.generation.generation_id,
                 transport: handle.transport,
                 phase: handle.phase,
                 adapter_id: handle.adapter_id.clone(),
@@ -186,25 +188,25 @@ impl RuntimeServer {
 pub fn format_runtime_status_summary(snapshot: &RuntimeStatusSnapshot) -> String {
     let mut lines = vec![
         format!(
-            "runtime active-topology={} draining-topologies={} listeners={} sessions={} dirty={}",
-            snapshot.active_topology.generation_id.0,
-            snapshot.draining_topologies.len(),
+            "runtime active-generation={} draining-generations={} listeners={} sessions={} dirty={}",
+            snapshot.active_generation.generation_id.0,
+            snapshot.draining_generations.len(),
             snapshot.listener_bindings.len(),
             snapshot.session_summary.total,
             snapshot.dirty,
         ),
         format!(
-            "topology tcp-default={} tcp-enabled={} udp-default={} udp-enabled={} max-players={} motd={:?}",
-            snapshot.active_topology.default_adapter_id,
-            join_or_dash(&snapshot.active_topology.enabled_adapter_ids),
+            "generation tcp-default={} tcp-enabled={} udp-default={} udp-enabled={} max-players={} motd={:?}",
+            snapshot.active_generation.default_adapter_id,
+            join_or_dash(&snapshot.active_generation.enabled_adapter_ids),
             snapshot
-                .active_topology
+                .active_generation
                 .default_bedrock_adapter_id
                 .as_deref()
                 .unwrap_or("-"),
-            join_or_dash(&snapshot.active_topology.enabled_bedrock_adapter_ids),
-            snapshot.active_topology.max_players,
-            snapshot.active_topology.motd,
+            join_or_dash(&snapshot.active_generation.enabled_bedrock_adapter_ids),
+            snapshot.active_generation.max_players,
+            snapshot.active_generation.motd,
         ),
         format!(
             "session-summary transport={} phase={}",
@@ -213,17 +215,17 @@ pub fn format_runtime_status_summary(snapshot: &RuntimeStatusSnapshot) -> String
         ),
     ];
 
-    if !snapshot.draining_topologies.is_empty() {
+    if !snapshot.draining_generations.is_empty() {
         lines.push(format!(
             "draining {}",
             snapshot
-                .draining_topologies
+                .draining_generations
                 .iter()
-                .map(|topology| {
+                .map(|generation| {
                     format!(
                         "{}@{}",
-                        topology.generation_id.0,
-                        topology.drain_deadline_ms.unwrap_or_else(now_ms)
+                        generation.generation_id.0,
+                        generation.drain_deadline_ms.unwrap_or_else(now_ms)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -234,13 +236,13 @@ pub fn format_runtime_status_summary(snapshot: &RuntimeStatusSnapshot) -> String
     if let Some(plugin_host) = &snapshot.plugin_host {
         lines.push(format!(
             "plugins protocol={} gameplay={} storage={} auth={} admin-ui={} active-quarantines={} artifact-quarantines={} pending-fatal={}",
-            plugin_host.protocols.len(),
-            plugin_host.gameplay.len(),
-            plugin_host.storage.len(),
-            plugin_host.auth.len(),
-            plugin_host.admin_ui.len(),
-            plugin_host.active_quarantine_count(),
-            plugin_host.artifact_quarantine_count(),
+            plugin_host.protocol_count,
+            plugin_host.gameplay_count,
+            plugin_host.storage_count,
+            plugin_host.auth_count,
+            plugin_host.admin_ui_count,
+            plugin_host.active_quarantine_count,
+            plugin_host.artifact_quarantine_count,
             plugin_host.pending_fatal_error.as_deref().unwrap_or("none"),
         ));
     }
@@ -248,12 +250,12 @@ pub fn format_runtime_status_summary(snapshot: &RuntimeStatusSnapshot) -> String
     lines.join("\n")
 }
 
-fn topology_status_snapshot(
-    generation: &std::sync::Arc<super::RuntimeTopologyGeneration>,
-    state: TopologyStatusState,
+fn generation_status_snapshot(
+    generation: &std::sync::Arc<super::ActiveGeneration>,
+    state: GenerationStatusState,
     drain_deadline_ms: Option<u64>,
-) -> TopologyStatusSnapshot {
-    TopologyStatusSnapshot {
+) -> GenerationStatusSnapshot {
+    GenerationStatusSnapshot {
         generation_id: generation.generation_id,
         state,
         drain_deadline_ms,
@@ -274,6 +276,40 @@ fn topology_status_snapshot(
     }
 }
 
+fn summarize_plugin_host_status(
+    snapshot: mc_plugin_host::host::PluginHostStatusSnapshot,
+) -> PluginHostStatusSnapshot {
+    let active_quarantine_count = snapshot.active_quarantine_count();
+    let artifact_quarantine_count = snapshot.artifact_quarantine_count();
+    PluginHostStatusSnapshot {
+        failure_matrix: PluginFailureMatrix {
+            protocol: map_failure_action(snapshot.failure_matrix.protocol),
+            gameplay: map_failure_action(snapshot.failure_matrix.gameplay),
+            storage: map_failure_action(snapshot.failure_matrix.storage),
+            auth: map_failure_action(snapshot.failure_matrix.auth),
+            admin_ui: map_failure_action(snapshot.failure_matrix.admin_ui),
+        },
+        pending_fatal_error: snapshot.pending_fatal_error,
+        protocol_count: snapshot.protocols.len(),
+        gameplay_count: snapshot.gameplay.len(),
+        storage_count: snapshot.storage.len(),
+        auth_count: snapshot.auth.len(),
+        admin_ui_count: snapshot.admin_ui.len(),
+        active_quarantine_count,
+        artifact_quarantine_count,
+    }
+}
+
+const fn map_failure_action(
+    action: mc_plugin_host::host::PluginFailureAction,
+) -> PluginFailureAction {
+    match action {
+        mc_plugin_host::host::PluginFailureAction::Quarantine => PluginFailureAction::Quarantine,
+        mc_plugin_host::host::PluginFailureAction::Skip => PluginFailureAction::Skip,
+        mc_plugin_host::host::PluginFailureAction::FailFast => PluginFailureAction::FailFast,
+    }
+}
+
 pub(crate) fn summarize_sessions(sessions: &[SessionStatusSnapshot]) -> SessionSummarySnapshot {
     let mut transport_counts = HashMap::new();
     let mut phase_counts = [0_usize; 4];
@@ -284,9 +320,7 @@ pub(crate) fn summarize_sessions(sessions: &[SessionStatusSnapshot]) -> SessionS
     for session in sessions {
         *transport_counts.entry(session.transport).or_insert(0) += 1;
         phase_counts[phase_index(session.phase)] += 1;
-        *topology_counts
-            .entry(session.topology_generation_id)
-            .or_insert(0) += 1;
+        *topology_counts.entry(session.generation_id).or_insert(0) += 1;
         *adapter_counts
             .entry(session.adapter_id.clone())
             .or_insert(0) += 1;
@@ -315,14 +349,14 @@ pub(crate) fn summarize_sessions(sessions: &[SessionStatusSnapshot]) -> SessionS
     })
     .collect();
 
-    let mut by_topology_generation = topology_counts
+    let mut by_generation = topology_counts
         .into_iter()
-        .map(|(generation_id, count)| TopologyGenerationCountSnapshot {
+        .map(|(generation_id, count)| GenerationCountSnapshot {
             generation_id,
             count,
         })
         .collect::<Vec<_>>();
-    by_topology_generation.sort_by_key(|entry| entry.generation_id.0);
+    by_generation.sort_by_key(|entry| entry.generation_id.0);
 
     let mut by_adapter_id = adapter_counts
         .into_iter()
@@ -340,7 +374,7 @@ pub(crate) fn summarize_sessions(sessions: &[SessionStatusSnapshot]) -> SessionS
         total: sessions.len(),
         by_transport,
         by_phase,
-        by_topology_generation,
+        by_generation,
         by_adapter_id,
         by_gameplay_profile,
     }

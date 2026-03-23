@@ -71,7 +71,6 @@ impl RuntimeServer {
     }
 
     async fn tick_guarded(&self) -> Result<(), RuntimeError> {
-        let loaded_plugins = self.live_state.read().await.loaded_plugins.clone();
         let gameplay_sessions = {
             self.sessions
                 .lock()
@@ -80,8 +79,8 @@ impl RuntimeServer {
                 .filter_map(|handle| {
                     let player_id = handle.player_id?;
                     let session_capabilities = handle.session_capabilities.clone()?;
-                    let gameplay_profile = handle.gameplay_profile.clone()?;
-                    Some((player_id, session_capabilities, gameplay_profile))
+                    let gameplay = handle.gameplay.clone()?;
+                    Some((player_id, session_capabilities, gameplay))
                 })
                 .collect::<Vec<_>>()
         };
@@ -89,12 +88,7 @@ impl RuntimeServer {
             let mut state = self.state.lock().await;
             let now = now_ms();
             let mut events = state.core.tick(now);
-            for (player_id, session_capabilities, gameplay_profile) in &gameplay_sessions {
-                let Some(gameplay) =
-                    loaded_plugins.resolve_gameplay_profile(gameplay_profile.as_str())
-                else {
-                    continue;
-                };
+            for (player_id, session_capabilities, gameplay) in &gameplay_sessions {
                 events.extend(
                     state
                         .core
@@ -153,10 +147,20 @@ impl RuntimeServer {
                 }
             };
 
+            let mut backpressured_sessions = Vec::new();
             for recipient in recipients {
-                let _ = recipient
+                if recipient
                     .tx
-                    .send(SessionMessage::Event(std::sync::Arc::clone(&payload)));
+                    .try_send(SessionMessage::Event(std::sync::Arc::clone(&payload)))
+                    .is_err()
+                {
+                    backpressured_sessions.push(recipient);
+                }
+            }
+            for recipient in backpressured_sessions {
+                let _ = recipient.control_tx.send(Some(
+                    "server dropped the session because the outbound queue was full".to_string(),
+                ));
             }
         }
     }
@@ -196,7 +200,7 @@ impl RuntimeServer {
             self.apply_command_guarded(CoreCommand::Disconnect { player_id }, None)
                 .await?;
         }
-        let _ = self.retire_drained_topologies().await;
+        let _ = self.retire_drained_generations().await;
         Ok(())
     }
 

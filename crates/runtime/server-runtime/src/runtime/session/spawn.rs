@@ -1,28 +1,47 @@
 use crate::RuntimeError;
-use crate::runtime::{RuntimeServer, SessionHandle, SessionMessage, SessionState};
+use crate::runtime::{
+    GenerationAdmission, RuntimeServer, SESSION_OUTBOUND_QUEUE_CAPACITY, SessionHandle,
+    SessionMessage, SessionState,
+};
 use crate::transport::{AcceptedTransportSession, TransportSessionIo, default_wire_codec};
 use bytes::BytesMut;
 use mc_core::ConnectionId;
 use mc_proto_common::{ConnectionPhase, TransportKind, WireCodec};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 impl RuntimeServer {
     pub(in crate::runtime) async fn spawn_transport_session(
         self: &Arc<Self>,
-        topology_generation_id: crate::runtime::TopologyGenerationId,
+        generation_id: crate::runtime::GenerationId,
         transport_session: AcceptedTransportSession,
     ) {
-        let Some(topology) = self.topology_generation(topology_generation_id) else {
-            eprintln!(
-                "dropping transport session because topology generation {:?} is no longer active",
-                topology_generation_id
-            );
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return;
+        }
+        let _consistency_guard = self.consistency_gate.read().await;
+        let generation = match self.generation_admission(generation_id) {
+            GenerationAdmission::Active(generation) | GenerationAdmission::Draining(generation) => {
+                generation
+            }
+            GenerationAdmission::ExpiredDraining => {
+                eprintln!(
+                    "dropping transport session because generation {:?} finished draining before the session was admitted",
+                    generation_id
+                );
+                return;
+            }
+            GenerationAdmission::Missing => {
+                eprintln!(
+                    "dropping transport session because generation {:?} has already been retired",
+                    generation_id
+                );
+                return;
+            }
         };
         let session = match transport_session.transport {
             TransportKind::Tcp => SessionState {
-                topology_generation_id,
+                generation: Arc::clone(&generation),
                 transport: TransportKind::Tcp,
                 phase: ConnectionPhase::Handshaking,
                 adapter: None,
@@ -33,7 +52,7 @@ impl RuntimeServer {
                 session_capabilities: None,
             },
             TransportKind::Udp => {
-                let Some(adapter) = topology.default_bedrock_adapter.clone() else {
+                let Some(adapter) = generation.default_bedrock_adapter.clone() else {
                     eprintln!(
                         "dropping bedrock session because no default bedrock adapter is active"
                     );
@@ -52,7 +71,7 @@ impl RuntimeServer {
                     }
                 };
                 let mut session = SessionState {
-                    topology_generation_id,
+                    generation: Arc::clone(&generation),
                     transport: TransportKind::Udp,
                     phase: ConnectionPhase::Login,
                     adapter: Some(adapter),
@@ -66,16 +85,6 @@ impl RuntimeServer {
                 session
             }
         };
-        self.spawn_session_with_state(transport_session, session)
-            .await;
-    }
-
-    async fn spawn_session_with_state(
-        self: &Arc<Self>,
-        transport_session: AcceptedTransportSession,
-        session: SessionState,
-    ) {
-        let _consistency_guard = self.consistency_gate.read().await;
         self.spawn_session_with_state_guarded(transport_session, session)
             .await;
     }
@@ -92,12 +101,14 @@ impl RuntimeServer {
             connection_id
         };
 
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(SESSION_OUTBOUND_QUEUE_CAPACITY);
+        let (control_tx, control_rx) = watch::channel(None);
         self.sessions.lock().await.insert(
             connection_id,
             SessionHandle {
                 tx,
-                topology_generation_id: session.topology_generation_id,
+                control_tx,
+                generation: Arc::clone(&session.generation),
                 transport: session.transport,
                 phase: session.phase,
                 adapter_id: session
@@ -110,18 +121,19 @@ impl RuntimeServer {
                     .session_capabilities
                     .as_ref()
                     .map(|capabilities| capabilities.gameplay_profile.clone()),
+                gameplay: session.gameplay.clone(),
                 session_capabilities: session.session_capabilities.clone(),
             },
         );
 
         let server = Arc::clone(self);
-        tokio::spawn(async move {
-            if let Err(error) = server
-                .run_session(connection_id, transport_session.io, session, rx)
-                .await
-            {
-                eprintln!("session {connection_id:?} ended with error: {error}");
-            }
+        self.session_tasks.lock().await.spawn(async move {
+            (
+                connection_id,
+                server
+                    .run_session(connection_id, transport_session.io, session, rx, control_rx)
+                    .await,
+            )
         });
     }
 
@@ -130,7 +142,8 @@ impl RuntimeServer {
         connection_id: ConnectionId,
         mut transport_io: TransportSessionIo,
         mut session: SessionState,
-        mut rx: mpsc::UnboundedReceiver<SessionMessage>,
+        mut rx: mpsc::Receiver<SessionMessage>,
+        mut control_rx: watch::Receiver<Option<String>>,
     ) -> Result<(), RuntimeError> {
         let mut read_buffer = BytesMut::with_capacity(8192);
 
@@ -163,6 +176,26 @@ impl RuntimeServer {
                         }
                     }
                 }
+                control = control_rx.changed() => {
+                    if control.is_err() {
+                        break;
+                    }
+                    let reason = { control_rx.borrow().clone() };
+                    if let Some(reason) = reason {
+                        let should_close = self
+                            .handle_outgoing_message(
+                                connection_id,
+                                &mut transport_io,
+                                &mut session,
+                                SessionMessage::Terminate { reason },
+                            )
+                            .await?;
+                        if should_close {
+                            self.unregister_session(connection_id, &session).await?;
+                            return Ok(());
+                        }
+                    }
+                }
                 maybe_message = rx.recv() => {
                     let Some(message) = maybe_message else {
                         break;
@@ -185,5 +218,42 @@ impl RuntimeServer {
 
         self.unregister_session(connection_id, &session).await?;
         Ok(())
+    }
+
+    pub(in crate::runtime) async fn reap_completed_session_tasks(&self) {
+        let mut session_tasks = self.session_tasks.lock().await;
+        while let Some(result) = session_tasks.try_join_next() {
+            match result {
+                Ok((connection_id, Ok(()))) => {
+                    let _ = connection_id;
+                }
+                Ok((connection_id, Err(error))) => {
+                    eprintln!("session {connection_id:?} ended with error: {error}");
+                }
+                Err(error) => {
+                    eprintln!("session task join failed: {error}");
+                }
+            }
+        }
+    }
+
+    pub(in crate::runtime) async fn join_all_session_tasks(&self) {
+        let mut session_tasks = {
+            let mut guard = self.session_tasks.lock().await;
+            std::mem::replace(&mut *guard, tokio::task::JoinSet::new())
+        };
+        while let Some(result) = session_tasks.join_next().await {
+            match result {
+                Ok((connection_id, Ok(()))) => {
+                    let _ = connection_id;
+                }
+                Ok((connection_id, Err(error))) => {
+                    eprintln!("session {connection_id:?} ended with error: {error}");
+                }
+                Err(error) => {
+                    eprintln!("session task join failed: {error}");
+                }
+            }
+        }
     }
 }

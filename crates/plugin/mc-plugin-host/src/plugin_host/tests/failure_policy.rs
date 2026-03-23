@@ -83,9 +83,9 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
                 ..PluginFailureMatrix::default()
             },
         );
-        host.activate_gameplay_profiles(&ServerConfig {
+        host.activate_gameplay_profiles(&RuntimeSelectionConfig {
             default_gameplay_profile: "failing".to_string(),
-            ..ServerConfig::default()
+            ..runtime_selection_config()
         })
         .expect("failing gameplay profile should activate");
 

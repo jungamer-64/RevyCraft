@@ -1,8 +1,8 @@
 # RevyCraft
 
-Minecraft JE `1.7.10` / `1.8.x` / `1.12.2` と Bedrock `be-26_3` を同一プロセス・同一ポート番号で扱う Rust 製 server-only workspace です。runtime は protocol / gameplay / storage / auth / admin-ui plugin を packaged artifact から読み込み、`mc-plugin-host` がそれを `LoadedPluginSet` にまとめ、`ServerBuilder` が listener / topology / session supervision を起動します。
+Minecraft JE `1.7.10` / `1.8.x` / `1.12.2` と Bedrock `be-26_3` を同一プロセス・同一ポート番号で扱う Rust 製 server-only workspace です。runtime は protocol / gameplay / storage / auth / admin-ui plugin を packaged artifact から読み込み、`mc-plugin-host` がそれを `LoadedPluginSet` にまとめ、`ServerSupervisor` が listener / generation / session supervision を起動します。
 
-`LoadedPluginSet` は pure snapshot で、reload capability は別です。reload を使うときだけ `ServerBuilder::with_reload_host(...)` から `ReloadableRunningServer` を作ります。
+`LoadedPluginSet` は pure snapshot で、公開 API の起点は `ServerSupervisor` です。手動 reload は `ServerSupervisor::reload_plugins()` / `reload_config()` / `reload_generation()` から扱います。
 
 ## Workspace
 
@@ -21,7 +21,7 @@ Minecraft JE `1.7.10` / `1.8.x` / `1.12.2` と Bedrock `be-26_3` を同一プロ
 
 ## Run
 
-通常起動では、`cargo run -p xtask -- package-plugins` が `runtime/server.toml` を優先して読み、存在しない場合だけ `runtime/server.toml.example` に fallback します。`[plugins].allowlist` に含まれる plugin だけを package し、workspace 外で持ち込んだ third-party plugin directory は消しません。
+通常起動では、`cargo run -p xtask -- package-plugins` が `runtime/server.toml` を優先して読み、存在しない場合だけ `runtime/server.toml.example` に fallback します。`[live.plugins].allowlist` に含まれる plugin だけを package し、workspace 外で持ち込んだ third-party plugin directory は消しません。
 
 ```bash
 cargo run -p xtask -- package-plugins
@@ -53,7 +53,7 @@ config を明示したいときは次を使います。
 cargo run -p xtask -- package-plugins --config runtime/server.toml.example
 ```
 
-`server-bootstrap` は `runtime/server.toml` を読みます。設定ファイルが無い場合は default config で起動し、plugin は `runtime/plugins/<plugin-id>/plugin.toml` から解決します。runtime は `target/` の build artifact を直接読みません。`[admin].ui_profile` で有効な admin-ui profile が解決できた場合は、stdio 上に line-oriented operator loop を起動し、parse/render は plugin に委譲されます。`[admin.grpc].enabled = true` のときは同じ process に unary gRPC control plane も起動します。
+`server-bootstrap` は `runtime/server.toml` を読みます。設定ファイルが無い場合は default config で起動し、plugin は `runtime/plugins/<plugin-id>/plugin.toml` から解決します。runtime は `target/` の build artifact を直接読みません。`[live.admin].ui_profile` で有効な admin-ui profile が解決できた場合は、stdio 上に line-oriented operator loop を起動し、parse/render は plugin に委譲されます。`[static.admin.grpc].enabled = true` のときは同じ process に unary gRPC control plane も起動します。
 
 起動フローは固定です。
 
@@ -61,29 +61,29 @@ cargo run -p xtask -- package-plugins --config runtime/server.toml.example
 2. `mc-plugin-host` 構築
 3. plugin activation
 4. `LoadedPluginSet` snapshot 取得
-5. `ServerBuilder` または `ServerBuilder::with_reload_host(...)` で listener / topology / session 起動
+5. `ServerSupervisor::boot(...)` で listener / generation / session 起動
 
 ## Configuration Notes
 
-- `[bootstrap].level_type = "flat"` のみ対応です。
-- `[topology].be_enabled = true` を指定すると、同じ `[network].server_port` で `TCP(JE)` と `UDP(BE)` を同時 bind します。
-- `[topology].enabled_adapters = ["je-1_7_10", "je-1_8_x", "je-1_12_2"]` で JE multi-version routing を有効化できます。
-- `[topology].enabled_bedrock_adapters = ["be-26_3"]` で Bedrock baseline listener を有効化できます。
-- `[profiles].default_gameplay` と `[profiles.gameplay_map]` で adapter ごとの gameplay profile を固定できます。
-- `[admin].ui_profile` で active admin UI profile、`[admin].local_console_permissions` で stdio operator の権限を指定できます。
-- `[admin.grpc]` で unary gRPC control plane を opt-in できます。既定では loopback bind のみ許可され、non-loopback bind には `allow_non_loopback = true` が必要です。`enabled` / `bind_addr` / `allow_non_loopback` は restart-required で、`principals.<id>.token_file` と `permissions` は `reload_config()` で live 更新されます。
-- `[plugins].reload_watch = true` と `[topology].reload_watch = true` は reload host を渡した `ReloadableRunningServer` でだけ使えます。
-- 手動 reload は `ReloadableRunningServer::reload_plugins().await` / `ReloadableRunningServer::reload_topology().await` / `ReloadableRunningServer::reload_config().await` が使えます。
-- operator command は `RunningServer::admin_control_plane()` が実行し、stdio と gRPC の両方で `status` / `sessions` / `reload config` / `reload plugins` / `reload topology` / `shutdown` を request 単位で permission check します。
+- `[static.bootstrap].level_type = "flat"` のみ対応です。
+- `[live.topology].be_enabled = true` を指定すると、同じ `[live.network].server_port` で `TCP(JE)` と `UDP(BE)` を同時 bind します。
+- `[live.topology].enabled_adapters = ["je-1_7_10", "je-1_8_x", "je-1_12_2"]` で JE multi-version routing を有効化できます。
+- `[live.topology].enabled_bedrock_adapters = ["be-26_3"]` で Bedrock baseline listener を有効化できます。
+- `[live.profiles].default_gameplay` と `[live.profiles.gameplay_map]` で adapter ごとの gameplay profile を固定できます。
+- `[live.admin].ui_profile` で active admin UI profile、`[live.admin].local_console_permissions` で stdio operator の権限を指定できます。
+- `[static.admin.grpc]` で unary gRPC control plane を opt-in できます。既定では loopback bind のみ許可され、non-loopback bind には `allow_non_loopback = true` が必要です。`enabled` / `bind_addr` / `allow_non_loopback` は restart-required で、`principals.<id>.token_file` と `permissions` は `reload_config()` で live 更新されます。
+- `[live.plugins].reload_watch = true` と `[live.topology].reload_watch = true` は reload-capable な `ServerSupervisor::boot(...)` でだけ使えます。
+- 手動 reload は `ServerSupervisor::reload_plugins().await` / `ServerSupervisor::reload_generation().await` / `ServerSupervisor::reload_config().await` が使えます。
+- operator command は `ServerSupervisor::admin_control_plane()` が実行し、stdio と gRPC の両方で `status` / `sessions` / `reload config` / `reload plugins` / `reload generation` / `shutdown` を request 単位で permission check します。
 - built-in gRPC transport は plaintext h2 のみです。public bind は `allow_non_loopback = true` で明示 opt-in が必要で、TLS と public edge policy は reverse proxy / ingress 側で終端してください。
-- `RunningServer::status().await` は active/draining topology、listener、session summary、plugin health を返します。
+- `ServerSupervisor::status().await` は active/draining generation、listener、session summary、plugin health を返します。
 
 sample config は offline-first です。JE online auth や Bedrock XBL を使うときは `package-all-plugins` 実行後に allowlist と profile を明示してください。
 
 - JE online auth:
-  `auth-mojang-online` を allowlist に追加し、`[bootstrap].online_mode = true` と `[profiles].auth = "mojang-online-v1"`
+  `auth-mojang-online` を allowlist に追加し、`[static.bootstrap].online_mode = true` と `[live.profiles].auth = "mojang-online-v1"`
 - Bedrock XBL:
-  `auth-bedrock-xbl` を allowlist に追加し、`[profiles].bedrock_auth = "bedrock-xbl-v1"`
+  `auth-bedrock-xbl` を allowlist に追加し、`[live.profiles].bedrock_auth = "bedrock-xbl-v1"`
 
 `auth-online-stub` と `be-placeholder` は test / optional tooling 向けで、default sample には含めていません。
 

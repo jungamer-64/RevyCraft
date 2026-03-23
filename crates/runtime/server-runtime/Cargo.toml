@@ -24,6 +24,7 @@ mc-plugin-api = { path = "../../plugin/mc-plugin-api" }
 mc-plugin-host = { path = "../../plugin/mc-plugin-host" }
 mc-proto-be-common = { path = "../../protocol/mc-proto-be-common" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
+server-config = { path = "../../config/server-config" }
 md5.workspace = true
 num-bigint.workspace = true
 rand.workspace = true
@@ -33,7 +34,6 @@ sha1.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-toml.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
@@ -59,6 +59,7 @@ mc-proto-je-1_12_2 = { path = "../../protocol/mc-proto-je-1_12_2" }
 mc-proto-je-1_7_10 = { path = "../../protocol/mc-proto-je-1_7_10" }
 mc-proto-je-1_8_x = { path = "../../protocol/mc-proto-je-1_8_x" }
 tempfile.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

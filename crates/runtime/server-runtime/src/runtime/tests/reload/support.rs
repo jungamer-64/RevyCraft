@@ -1,11 +1,12 @@
 use super::*;
+use crate::runtime::RunningServer;
 
 pub(crate) async fn spawn_protocol_reload_server(
     temp_dir: &tempfile::TempDir,
     scenario: &str,
 ) -> Result<
     (
-        ReloadableRunningServer,
+        RunningServer,
         std::path::PathBuf,
         std::path::PathBuf,
         PluginGenerationId,
@@ -57,7 +58,7 @@ pub(crate) async fn spawn_online_auth_reload_server(
     temp_dir: &tempfile::TempDir,
 ) -> Result<
     (
-        ReloadableRunningServer,
+        RunningServer,
         std::path::PathBuf,
         std::path::PathBuf,
         PluginGenerationId,
@@ -112,7 +113,7 @@ pub(crate) async fn spawn_online_auth_reload_server(
 }
 
 pub(crate) async fn begin_online_auth_handshake(
-    server: &ReloadableRunningServer,
+    server: &RunningServer,
 ) -> Result<(tokio::net::TcpStream, BytesMut, RsaPublicKey, Vec<u8>), RuntimeError> {
     let addr = listener_addr(server);
     let codec = MinecraftWireCodec;

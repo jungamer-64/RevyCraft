@@ -31,17 +31,15 @@ async fn plain_server_builder_rejects_reload_watch_without_reload_host() -> Resu
     config.plugins.reload_watch = true;
     let LoadedPluginTestEnvironment { loaded_plugins, .. } =
         in_process_failing_storage_registries(PluginFailureAction::Skip)?;
-    let error = match ServerBuilder::new(ServerConfigSource::Inline(config), loaded_plugins)
-        .build()
-        .await
-    {
+    let source = ServerConfigSource::Inline(config.clone());
+    let error = match boot_server(source, config, loaded_plugins, None).await {
         Ok(_) => panic!("plain server builder should reject reload watch settings"),
         Err(error) => error,
     };
     assert!(matches!(
         error,
         RuntimeError::Config(message)
-            if message.contains("plugins.reload_watch requires ServerBuilder::with_reload_host")
+            if message.contains("plugins.reload_watch requires a reload-capable supervisor boot")
     ));
     Ok(())
 }
@@ -62,10 +60,14 @@ async fn reloadable_server_builder_applies_reload_host_failure_policy() -> Resul
     else {
         panic!("failing storage registries should include a plugin host");
     };
-    let server = ServerBuilder::new(ServerConfigSource::Inline(config), loaded_plugins)
-        .with_reload_host(reload_host.runtime_host())
-        .build()
-        .await?;
+    let source = ServerConfigSource::Inline(config.clone());
+    let server = boot_server(
+        source,
+        config,
+        loaded_plugins,
+        Some(reload_host.runtime_host()),
+    )
+    .await?;
 
     {
         let mut state = server.runtime.state.lock().await;

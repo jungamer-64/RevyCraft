@@ -1,6 +1,6 @@
 use super::{current_artifact_key, with_current_gameplay_query, with_gameplay_query};
 use crate::PluginHostError as RuntimeError;
-use crate::config::ServerConfig;
+use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
 use crate::host::{PluginAbiRange, PluginFailureAction, plugin_host_from_config};
 use crate::runtime::{ProtocolReloadSession, RuntimeReloadContext};
 use crate::test_support::{
@@ -54,6 +54,17 @@ mod test_plugins;
 
 use self::support::*;
 use self::test_plugins::*;
+
+fn runtime_selection_config() -> RuntimeSelectionConfig {
+    RuntimeSelectionConfig::default()
+}
+
+fn bootstrap_config_with_plugins_dir(plugins_dir: PathBuf) -> BootstrapConfig {
+    BootstrapConfig {
+        plugins_dir,
+        ..BootstrapConfig::default()
+    }
+}
 
 fn tempdir() -> std::io::Result<tempfile::TempDir> {
     let base_dir = workspace_test_temp_root().join("mc-plugin-host");

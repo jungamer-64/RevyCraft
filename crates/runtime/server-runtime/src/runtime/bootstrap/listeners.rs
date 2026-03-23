@@ -1,11 +1,14 @@
+use crate::ListenerBinding;
 use crate::RuntimeError;
 use crate::config::ServerConfig;
-use crate::runtime::{AcceptedTopologySession, TopologyGenerationId, TopologyListenerWorker};
+use crate::runtime::{
+    AcceptedGenerationSession, GenerationId, QueuedAcceptTracker, TopologyListenerWorker,
+};
 use crate::transport::{
     AcceptedTransportSession, BoundTransportListener, TransportSessionIo, bind_transport_listener,
     build_listener_plans,
 };
-use mc_plugin_host::registry::{ListenerBinding, ProtocolRegistry};
+use mc_plugin_host::registry::ProtocolRegistry;
 use mc_proto_common::TransportKind;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -63,12 +66,18 @@ pub(super) async fn bind_runtime_listeners(
 
 pub(super) fn spawn_listener_workers(
     bound_listeners: Vec<BoundTransportListener>,
-    generation_id: TopologyGenerationId,
-    accepted_tx: mpsc::UnboundedSender<AcceptedTopologySession>,
+    generation_id: GenerationId,
+    accepted_tx: mpsc::Sender<AcceptedGenerationSession>,
+    queued_accepts: QueuedAcceptTracker,
 ) -> Result<HashMap<TransportKind, TopologyListenerWorker>, RuntimeError> {
     let mut workers = HashMap::new();
     for listener in bound_listeners {
-        let worker = spawn_listener_worker(listener, generation_id, accepted_tx.clone())?;
+        let worker = spawn_listener_worker(
+            listener,
+            generation_id,
+            accepted_tx.clone(),
+            queued_accepts.clone(),
+        )?;
         if workers.insert(worker.transport, worker).is_some() {
             return Err(RuntimeError::Config(
                 "multiple listener workers for the same transport are not supported".to_string(),
@@ -80,8 +89,9 @@ pub(super) fn spawn_listener_workers(
 
 pub(in crate::runtime) fn spawn_listener_worker(
     listener: BoundTransportListener,
-    generation_id: TopologyGenerationId,
-    accepted_tx: mpsc::UnboundedSender<AcceptedTopologySession>,
+    generation_id: GenerationId,
+    accepted_tx: mpsc::Sender<AcceptedGenerationSession>,
+    queued_accepts: QueuedAcceptTracker,
 ) -> Result<TopologyListenerWorker, RuntimeError> {
     let binding = listener.listener_binding()?;
     let transport = binding.transport;
@@ -97,8 +107,10 @@ pub(in crate::runtime) fn spawn_listener_worker(
                         let Ok((stream, _)) = accepted else {
                             break;
                         };
-                        let _ = accepted_tx.send(AcceptedTopologySession {
-                            topology_generation_id: *generation_rx.borrow(),
+                        let generation_id = *generation_rx.borrow();
+                        queued_accepts.increment(generation_id);
+                        let session = AcceptedGenerationSession {
+                            generation_id,
                             session: AcceptedTransportSession {
                                 transport: TransportKind::Tcp,
                                 io: TransportSessionIo::Tcp {
@@ -106,7 +118,16 @@ pub(in crate::runtime) fn spawn_listener_worker(
                                     encryption: Box::default(),
                                 },
                             },
-                        });
+                        };
+                        if let Err(error) = accepted_tx.try_send(session) {
+                            queued_accepts.decrement(generation_id);
+                            match error {
+                                tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                                    eprintln!("dropping tcp session because the accept queue is full");
+                                }
+                                tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
+                            }
+                        }
                     }
                 }
             }
@@ -120,8 +141,10 @@ pub(in crate::runtime) fn spawn_listener_worker(
                         let Ok(connection) = accepted else {
                             break;
                         };
-                        let _ = accepted_tx.send(AcceptedTopologySession {
-                            topology_generation_id: *generation_rx.borrow(),
+                        let generation_id = *generation_rx.borrow();
+                        queued_accepts.increment(generation_id);
+                        let session = AcceptedGenerationSession {
+                            generation_id,
                             session: AcceptedTransportSession {
                                 transport: TransportKind::Udp,
                                 io: TransportSessionIo::Bedrock {
@@ -129,7 +152,16 @@ pub(in crate::runtime) fn spawn_listener_worker(
                                     compression: None,
                                 },
                             },
-                        });
+                        };
+                        if let Err(error) = accepted_tx.try_send(session) {
+                            queued_accepts.decrement(generation_id);
+                            match error {
+                                tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                                    eprintln!("dropping bedrock session because the accept queue is full");
+                                }
+                                tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
+                            }
+                        }
                     }
                 }
             }

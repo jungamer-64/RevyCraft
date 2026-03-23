@@ -3,15 +3,55 @@
 mod grpc;
 
 use crate::grpc::{spawn_admin_grpc_server, wait_for_shutdown_signal};
-use mc_plugin_host::host::plugin_host_from_config;
 use server_runtime::RuntimeError;
-use server_runtime::config::{ServerConfig, ServerConfigSource};
+use server_runtime::config::ServerConfigSource;
 use server_runtime::runtime::{
-    AdminControlPlaneHandle, AdminResponse, ServerBuilder, format_runtime_status_summary,
+    AdminControlPlaneHandle, AdminResponse, ServerSupervisor, format_runtime_status_summary,
 };
+use std::io::IsTerminal;
 use std::path::Path;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::watch;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConsoleLoopExit {
+    ShutdownRequested,
+    Detached,
+    NoAdminSurface,
+    ExternalShutdown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConsoleInputMode {
+    Terminal,
+    NonTerminal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConsoleEofAction {
+    Shutdown,
+    Detach,
+    WarnAndExit,
+}
+
+fn console_input_mode() -> ConsoleInputMode {
+    if std::io::stdin().is_terminal() {
+        ConsoleInputMode::Terminal
+    } else {
+        ConsoleInputMode::NonTerminal
+    }
+}
+
+fn decide_console_eof_action(
+    input_mode: ConsoleInputMode,
+    has_other_admin_surface: bool,
+) -> ConsoleEofAction {
+    match input_mode {
+        ConsoleInputMode::Terminal => ConsoleEofAction::Shutdown,
+        ConsoleInputMode::NonTerminal if has_other_admin_surface => ConsoleEofAction::Detach,
+        ConsoleInputMode::NonTerminal => ConsoleEofAction::WarnAndExit,
+    }
+}
 
 async fn wait_for_ctrl_c() -> Result<(), RuntimeError> {
     tokio::signal::ctrl_c()
@@ -20,42 +60,45 @@ async fn wait_for_ctrl_c() -> Result<(), RuntimeError> {
 }
 
 async fn run_console_loop(
-    server: &server_runtime::runtime::RunningServer,
     control_plane: &AdminControlPlaneHandle,
+    input_mode: ConsoleInputMode,
+    has_other_admin_surface: bool,
     shutdown_tx: &watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
-) -> Result<(), RuntimeError> {
-    let Some(_) = server.admin_ui().await else {
-        return Ok(());
-    };
+) -> Result<ConsoleLoopExit, RuntimeError> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     loop {
         tokio::select! {
             signal = wait_for_ctrl_c() => {
                 signal?;
                 let _ = shutdown_tx.send(true);
-                break;
+                return Ok(ConsoleLoopExit::ShutdownRequested);
             }
-            _ = wait_for_shutdown_signal(shutdown_rx.clone()) => break,
+            _ = wait_for_shutdown_signal(shutdown_rx.clone()) => {
+                return Ok(ConsoleLoopExit::ExternalShutdown);
+            }
             line = lines.next_line() => {
                 let Some(line) = line.map_err(|error| RuntimeError::Config(format!("failed to read stdin: {error}")))? else {
-                    break;
+                    return Ok(match decide_console_eof_action(input_mode, has_other_admin_surface) {
+                        ConsoleEofAction::Shutdown => {
+                            let _ = shutdown_tx.send(true);
+                            ConsoleLoopExit::ShutdownRequested
+                        }
+                        ConsoleEofAction::Detach => ConsoleLoopExit::Detached,
+                        ConsoleEofAction::WarnAndExit => ConsoleLoopExit::NoAdminSurface,
+                    });
                 };
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
                 }
-                let Some(ui) = server.admin_ui().await else {
-                    eprintln!("admin-ui became unavailable; console commands are disabled");
-                    continue;
-                };
-                let request = match ui.parse_line(line) {
+                let request = match control_plane.parse_local_command(line).await {
                     Ok(request) => request,
                     Err(error) => {
                         let response = AdminResponse::Error {
-                            message: error.to_string(),
+                            message: error,
                         };
-                        match ui.render_response(&response) {
+                        match control_plane.render_local_response(&response).await {
                             Ok(text) => println!("{text}"),
                             Err(render_error) => eprintln!("{render_error}"),
                         }
@@ -64,18 +107,21 @@ async fn run_console_loop(
                 };
                 let response = control_plane.execute_local_console(request).await;
                 let shutdown_requested = matches!(response, AdminResponse::ShutdownScheduled);
-                match ui.render_response(&response) {
+                match control_plane.render_local_response(&response).await {
                     Ok(text) => println!("{text}"),
                     Err(error) => eprintln!("{error}"),
                 }
                 if shutdown_requested {
                     let _ = shutdown_tx.send(true);
-                    break;
+                    return Ok(ConsoleLoopExit::ShutdownRequested);
                 }
             }
         }
     }
-    Ok(())
+}
+
+async fn wait_for_runtime_completion(server: &ServerSupervisor) -> Result<(), RuntimeError> {
+    server.wait_for_runtime_completion().await
 }
 
 async fn wait_for_exit_signal(shutdown_rx: watch::Receiver<bool>) -> Result<(), RuntimeError> {
@@ -95,26 +141,16 @@ async fn wait_for_grpc_server(
     result
 }
 
+async fn wait_for_console_loop(
+    console_monitor: &mut tokio::task::JoinHandle<Result<ConsoleLoopExit, RuntimeError>>,
+) -> Result<ConsoleLoopExit, RuntimeError> {
+    console_monitor.await.map_err(RuntimeError::from)?
+}
+
 #[tokio::main]
 async fn main() -> Result<(), RuntimeError> {
-    let config = ServerConfig::from_toml(Path::new("runtime/server.toml"))?;
-    let plugin_host =
-        plugin_host_from_config(&config.plugin_host_bootstrap_config())?.ok_or_else(|| {
-            RuntimeError::Config(format!(
-                "no packaged plugins discovered under `{}`",
-                config.bootstrap.plugins_dir.display()
-            ))
-        })?;
-    let loaded_plugins =
-        plugin_host.load_plugin_set(&config.plugin_host_runtime_selection_config())?;
-
-    let server = ServerBuilder::new(
-        ServerConfigSource::Toml(Path::new("runtime/server.toml").to_path_buf()),
-        loaded_plugins,
-    )
-    .with_reload_host(plugin_host)
-    .build()
-    .await?;
+    let config_source = ServerConfigSource::Toml(Path::new("runtime/server.toml").to_path_buf());
+    let server = ServerSupervisor::boot(config_source).await?;
     for binding in server.listener_bindings() {
         println!(
             "server listening on {} via {:?} for {:?}",
@@ -125,10 +161,10 @@ async fn main() -> Result<(), RuntimeError> {
 
     let control_plane = server.admin_control_plane();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let grpc = if config.admin_grpc_enabled() {
+    let grpc = if let Some(bind_addr) = server.admin_grpc_bind_addr() {
         Some(
             spawn_admin_grpc_server(
-                config.admin_grpc_bind_addr(),
+                bind_addr,
                 control_plane.clone(),
                 shutdown_tx.clone(),
                 shutdown_rx.clone(),
@@ -141,45 +177,114 @@ async fn main() -> Result<(), RuntimeError> {
     if let Some(grpc) = grpc.as_ref() {
         println!("admin gRPC listening on {}", grpc.local_addr());
     }
-    let has_admin_ui = server.admin_ui().await.is_some();
     let mut grpc_monitor = grpc.map(|grpc| tokio::spawn(async move { grpc.join().await }));
+    let console_input_mode = console_input_mode();
+    let has_other_admin_surface = grpc_monitor.is_some();
+    let mut console_monitor = Some({
+        let control_plane = control_plane.clone();
+        let shutdown_tx = shutdown_tx.clone();
+        let shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            run_console_loop(
+                &control_plane,
+                console_input_mode,
+                has_other_admin_surface,
+                &shutdown_tx,
+                shutdown_rx,
+            )
+            .await
+        })
+    });
 
-    match (has_admin_ui, grpc_monitor.as_mut()) {
-        (true, Some(grpc_monitor)) => {
-            tokio::select! {
-                result = wait_for_grpc_server(grpc_monitor) => {
-                    let _ = shutdown_tx.send(true);
-                    result?;
-                }
-                result = run_console_loop(&server, &control_plane, &shutdown_tx, shutdown_rx.clone()) => {
-                    result?;
-                    let _ = shutdown_tx.send(true);
-                    wait_for_grpc_server(grpc_monitor).await?;
+    loop {
+        tokio::select! {
+            result = async {
+                let Some(grpc_monitor) = grpc_monitor.as_mut() else {
+                    std::future::pending().await
+                };
+                wait_for_grpc_server(grpc_monitor).await
+            } => {
+                let _ = shutdown_tx.send(true);
+                result?;
+                break;
+            }
+            result = async {
+                let Some(console_monitor) = console_monitor.as_mut() else {
+                    std::future::pending().await
+                };
+                wait_for_console_loop(console_monitor).await
+            } => {
+                match result? {
+                    ConsoleLoopExit::ShutdownRequested => {
+                        let _ = shutdown_tx.send(true);
+                        if let Some(grpc_monitor) = grpc_monitor.as_mut() {
+                            wait_for_grpc_server(grpc_monitor).await?;
+                        }
+                        break;
+                    }
+                    ConsoleLoopExit::Detached => {
+                        console_monitor = None;
+                    }
+                    ConsoleLoopExit::NoAdminSurface => {
+                        eprintln!(
+                            "stdin reached EOF and no other admin surface is available; shutting down to avoid running headless"
+                        );
+                        let _ = shutdown_tx.send(true);
+                        break;
+                    }
+                    ConsoleLoopExit::ExternalShutdown => {
+                        console_monitor = None;
+                    }
                 }
             }
-        }
-        (false, Some(grpc_monitor)) => {
-            tokio::select! {
-                result = wait_for_grpc_server(grpc_monitor) => {
-                    let _ = shutdown_tx.send(true);
-                    result?;
-                }
-                result = wait_for_exit_signal(shutdown_rx.clone()) => {
-                    result?;
-                    let _ = shutdown_tx.send(true);
+            result = wait_for_runtime_completion(&server) => {
+                result?;
+                let _ = shutdown_tx.send(true);
+                break;
+            }
+            result = wait_for_exit_signal(shutdown_rx.clone()) => {
+                result?;
+                let _ = shutdown_tx.send(true);
+                if let Some(grpc_monitor) = grpc_monitor.as_mut() {
                     wait_for_grpc_server(grpc_monitor).await?;
                 }
+                break;
             }
-        }
-        (true, None) => {
-            run_console_loop(&server, &control_plane, &shutdown_tx, shutdown_rx.clone()).await?;
-        }
-        (false, None) => {
-            eprintln!("admin-ui unavailable at boot; stdio control loop is disabled");
-            wait_for_exit_signal(shutdown_rx.clone()).await?;
-            let _ = shutdown_tx.send(true);
         }
     }
 
     server.shutdown().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConsoleEofAction, ConsoleInputMode, decide_console_eof_action};
+
+    #[test]
+    fn terminal_eof_requests_shutdown() {
+        assert_eq!(
+            decide_console_eof_action(ConsoleInputMode::Terminal, false),
+            ConsoleEofAction::Shutdown
+        );
+        assert_eq!(
+            decide_console_eof_action(ConsoleInputMode::Terminal, true),
+            ConsoleEofAction::Shutdown
+        );
+    }
+
+    #[test]
+    fn non_terminal_eof_detaches_when_another_admin_surface_exists() {
+        assert_eq!(
+            decide_console_eof_action(ConsoleInputMode::NonTerminal, true),
+            ConsoleEofAction::Detach
+        );
+    }
+
+    #[test]
+    fn non_terminal_eof_warns_and_exits_without_other_admin_surface() {
+        assert_eq!(
+            decide_console_eof_action(ConsoleInputMode::NonTerminal, false),
+            ConsoleEofAction::WarnAndExit
+        );
+    }
 }

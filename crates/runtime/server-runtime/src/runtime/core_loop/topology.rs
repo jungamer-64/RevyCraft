@@ -1,10 +1,12 @@
+use crate::ListenerBinding;
 use crate::RuntimeError;
 use crate::runtime::bootstrap::{activate_protocols, spawn_listener_worker};
 use crate::runtime::{
-    RuntimeServer, RuntimeTopologyGeneration, TopologyGenerationId, TopologyReloadResult, now_ms,
+    ActiveGeneration, DrainingGeneration, GenerationAdmission, GenerationId,
+    GenerationReloadResult, RuntimeServer, now_ms,
 };
 use crate::transport::{bind_transport_listener, build_listener_plans};
-use mc_plugin_host::registry::{ListenerBinding, ProtocolRegistry};
+use mc_plugin_host::registry::ProtocolRegistry;
 use mc_plugin_host::runtime::RuntimePluginHost;
 use mc_proto_common::{BedrockListenerDescriptor, Edition, TransportKind, WireFormatKind};
 use std::collections::{BTreeMap, HashSet};
@@ -90,72 +92,100 @@ fn can_reuse_listener(
     desired_addr: SocketAddr,
     current_binding: &ListenerBinding,
 ) -> bool {
-    config.network.server_port != 0 && current_binding.local_addr == desired_addr
+    if config.network.server_port == 0 {
+        return current_binding.local_addr.ip() == desired_addr.ip();
+    }
+    current_binding.local_addr == desired_addr
 }
 
 impl RuntimeServer {
     pub(in crate::runtime) fn listener_bindings(&self) -> Vec<ListenerBinding> {
-        self.active_topology().listener_bindings.clone()
+        self.active_generation().listener_bindings.clone()
     }
 
-    pub(in crate::runtime) fn active_topology(&self) -> Arc<RuntimeTopologyGeneration> {
+    pub(in crate::runtime) fn active_generation(&self) -> Arc<ActiveGeneration> {
         Arc::clone(
             &self
-                .topology
+                .generation_state
                 .read()
                 .expect("runtime topology lock should not be poisoned")
                 .active,
         )
     }
 
-    pub(in crate::runtime) fn active_topology_generation_id(&self) -> TopologyGenerationId {
-        self.active_topology().generation_id
+    pub(in crate::runtime) fn active_generation_id(&self) -> GenerationId {
+        self.active_generation().generation_id
     }
 
-    pub(in crate::runtime) fn topology_generation(
+    #[cfg(test)]
+    pub(in crate::runtime) fn generation(
         &self,
-        generation_id: TopologyGenerationId,
-    ) -> Option<Arc<RuntimeTopologyGeneration>> {
-        let topology = self
-            .topology
+        generation_id: GenerationId,
+    ) -> Option<Arc<ActiveGeneration>> {
+        let generation_state = self
+            .generation_state
             .read()
             .expect("runtime topology lock should not be poisoned");
-        if topology.active.generation_id == generation_id {
-            return Some(Arc::clone(&topology.active));
+        if generation_state.active.generation_id == generation_id {
+            return Some(Arc::clone(&generation_state.active));
         }
-        topology
+        generation_state
             .draining
             .iter()
             .find(|entry| entry.generation.generation_id == generation_id)
             .map(|entry| Arc::clone(&entry.generation))
     }
 
-    pub(in crate::runtime) fn noop_topology_reload_result(&self) -> TopologyReloadResult {
-        TopologyReloadResult {
-            activated_generation_id: self.active_topology_generation_id(),
+    pub(in crate::runtime) fn generation_admission(
+        &self,
+        generation_id: GenerationId,
+    ) -> GenerationAdmission {
+        let generation_state = self
+            .generation_state
+            .read()
+            .expect("runtime topology lock should not be poisoned");
+        if generation_state.active.generation_id == generation_id {
+            return GenerationAdmission::Active(Arc::clone(&generation_state.active));
+        }
+        let Some(draining) = generation_state
+            .draining
+            .iter()
+            .find(|entry| entry.generation.generation_id == generation_id)
+        else {
+            return GenerationAdmission::Missing;
+        };
+        if draining.drain_deadline_ms <= now_ms() {
+            return GenerationAdmission::ExpiredDraining;
+        }
+        GenerationAdmission::Draining(Arc::clone(&draining.generation))
+    }
+
+    pub(in crate::runtime) fn noop_generation_reload_result(&self) -> GenerationReloadResult {
+        GenerationReloadResult {
+            activated_generation_id: self.active_generation_id(),
             retired_generation_ids: Vec::new(),
             applied_config_change: false,
             reconfigured_adapter_ids: Vec::new(),
         }
     }
 
-    fn next_topology_generation_id(&self) -> TopologyGenerationId {
-        let mut topology = self
-            .topology
+    fn next_generation_id(&self) -> GenerationId {
+        let mut generation_state = self
+            .generation_state
             .write()
             .expect("runtime topology lock should not be poisoned");
-        let generation_id = TopologyGenerationId(topology.next_generation_id);
-        topology.next_generation_id = topology.next_generation_id.saturating_add(1);
+        let generation_id = GenerationId(generation_state.next_generation_id);
+        generation_state.next_generation_id = generation_state.next_generation_id.saturating_add(1);
         generation_id
     }
 
     pub(in crate::runtime) async fn shutdown_listener_workers(&self) {
         let workers = {
-            let mut topology = self
-                .topology
+            let mut generation_state = self
+                .generation_state
                 .write()
                 .expect("runtime topology lock should not be poisoned");
-            topology
+            generation_state
                 .listener_workers
                 .drain()
                 .map(|(_, worker)| worker)
@@ -180,31 +210,19 @@ impl RuntimeServer {
             .cloned()
             .collect::<Vec<_>>();
         for handle in handles {
-            let _ = handle.tx.send(crate::runtime::SessionMessage::Terminate {
-                reason: reason.to_string(),
-            });
+            let _ = handle.control_tx.send(Some(reason.to_string()));
         }
     }
 
-    pub(in crate::runtime) async fn reload_topology(
+    pub(in crate::runtime) async fn reload_generation_with_config(
         &self,
         reload_host: &dyn RuntimePluginHost,
-    ) -> Result<TopologyReloadResult, RuntimeError> {
-        let loaded = self.config_source.load()?;
-        self.reload_topology_with_config(reload_host, loaded).await
-    }
-
-    pub(in crate::runtime) async fn reload_topology_with_config(
-        &self,
-        reload_host: &dyn RuntimePluginHost,
-        loaded_config: crate::config::ServerConfig,
-    ) -> Result<TopologyReloadResult, RuntimeError> {
-        let active = self.active_topology();
-        let mut candidate_config = active.config.clone();
-        let previous_config = candidate_config.clone();
-        candidate_config.network = loaded_config.network.clone();
-        candidate_config.topology = loaded_config.topology.clone();
-        let applied_config_change = previous_config != candidate_config;
+        candidate_config: crate::config::ServerConfig,
+        force_generation: bool,
+    ) -> Result<GenerationReloadResult, RuntimeError> {
+        let active = self.active_generation();
+        let applied_config_change = active.config.network != candidate_config.network
+            || active.config.topology != candidate_config.topology;
 
         let prepared = reload_host.prepare_protocol_topology_for_reload()?;
         let current_signature = protocol_topology_signature(&active.protocol_registry);
@@ -219,20 +237,20 @@ impl RuntimeServer {
             &current_managed_ids,
             prepared.managed_protocol_ids(),
         );
-        if !applied_config_change && current_signature == candidate_signature {
+        if !force_generation && !applied_config_change && current_signature == candidate_signature {
             if current_managed_ids != prepared.managed_protocol_ids() {
                 reload_host.activate_protocol_topology(prepared);
-                return Ok(TopologyReloadResult {
+                return Ok(GenerationReloadResult {
                     activated_generation_id: active.generation_id,
                     retired_generation_ids: Vec::new(),
                     applied_config_change: false,
                     reconfigured_adapter_ids,
                 });
             }
-            return Ok(self.noop_topology_reload_result());
+            return Ok(self.noop_generation_reload_result());
         }
 
-        let new_generation_id = self.next_topology_generation_id();
+        let new_generation_id = self.next_generation_id();
         let listener_plans =
             build_listener_plans(&candidate_config, &candidate_active_protocols.protocols)?;
         let current_bindings = active.listener_bindings.clone();
@@ -296,7 +314,7 @@ impl RuntimeServer {
             candidate_bindings.push(udp_binding);
         }
 
-        let candidate_generation = Arc::new(RuntimeTopologyGeneration {
+        let candidate_generation = Arc::new(ActiveGeneration {
             generation_id: new_generation_id,
             config: candidate_config.clone(),
             protocol_registry: candidate_active_protocols.protocols.clone(),
@@ -306,41 +324,45 @@ impl RuntimeServer {
         });
 
         let workers_to_shutdown = {
-            let mut topology = self
-                .topology
+            let mut generation_state = self
+                .generation_state
                 .write()
                 .expect("runtime topology lock should not be poisoned");
-            let previous_active = Arc::clone(&topology.active);
+            let previous_active = Arc::clone(&generation_state.active);
             let mut workers_to_shutdown = Vec::new();
 
-            topology.active = Arc::clone(&candidate_generation);
-            topology
-                .draining
-                .push(crate::runtime::DrainingTopologyGeneration {
-                    generation: previous_active,
-                    drain_deadline_ms: now_ms().saturating_add(
-                        candidate_config
-                            .topology
-                            .drain_grace_secs
-                            .saturating_mul(1_000),
-                    ),
-                });
+            generation_state.active = Arc::clone(&candidate_generation);
+            generation_state.draining.push(DrainingGeneration {
+                generation: previous_active,
+                drain_deadline_ms: now_ms().saturating_add(
+                    candidate_config
+                        .topology
+                        .drain_grace_secs
+                        .saturating_mul(1_000),
+                ),
+            });
 
             for transport in [TransportKind::Tcp, TransportKind::Udp] {
                 if reused_transports.contains(&transport) {
-                    if let Some(worker) = topology.listener_workers.get(&transport) {
+                    if let Some(worker) = generation_state.listener_workers.get(&transport) {
                         let _ = worker.generation_tx.send(new_generation_id);
                     }
                     continue;
                 }
-                if let Some(worker) = topology.listener_workers.remove(&transport) {
+                if let Some(worker) = generation_state.listener_workers.remove(&transport) {
                     workers_to_shutdown.push(worker);
                 }
             }
             for listener in new_bound_listeners {
-                let worker =
-                    spawn_listener_worker(listener, new_generation_id, self.accepted_tx.clone())?;
-                topology.listener_workers.insert(worker.transport, worker);
+                let worker = spawn_listener_worker(
+                    listener,
+                    new_generation_id,
+                    self.accepted_tx.clone(),
+                    self.queued_accepts.clone(),
+                )?;
+                generation_state
+                    .listener_workers
+                    .insert(worker.transport, worker);
             }
             workers_to_shutdown
         };
@@ -360,8 +382,8 @@ impl RuntimeServer {
                 let _ = join_handle.await;
             }
         }
-        let retired_generation_ids = self.retire_drained_topologies().await;
-        Ok(TopologyReloadResult {
+        let retired_generation_ids = self.retire_drained_generations().await;
+        Ok(GenerationReloadResult {
             activated_generation_id: new_generation_id,
             retired_generation_ids,
             applied_config_change,
@@ -369,14 +391,14 @@ impl RuntimeServer {
         })
     }
 
-    pub(in crate::runtime) async fn enforce_topology_drains(&self) -> Result<(), RuntimeError> {
+    pub(in crate::runtime) async fn enforce_generation_drains(&self) -> Result<(), RuntimeError> {
         let expired_generation_ids = {
-            let topology = self
-                .topology
+            let generation_state = self
+                .generation_state
                 .read()
                 .expect("runtime topology lock should not be poisoned");
             let now = now_ms();
-            topology
+            generation_state
                 .draining
                 .iter()
                 .filter(|entry| entry.drain_deadline_ms <= now)
@@ -384,7 +406,7 @@ impl RuntimeServer {
                 .collect::<Vec<_>>()
         };
         if expired_generation_ids.is_empty() {
-            let _ = self.retire_drained_topologies().await;
+            let _ = self.retire_drained_generations().await;
             return Ok(());
         }
 
@@ -392,35 +414,36 @@ impl RuntimeServer {
             let sessions = self.sessions.lock().await;
             sessions
                 .values()
-                .filter(|handle| expired_generation_ids.contains(&handle.topology_generation_id))
+                .filter(|handle| expired_generation_ids.contains(&handle.generation.generation_id))
                 .cloned()
                 .collect::<Vec<_>>()
         };
         for handle in session_handles {
-            let _ = handle.tx.send(crate::runtime::SessionMessage::Terminate {
-                reason: "Server topology reloaded".to_string(),
-            });
+            let _ = handle
+                .control_tx
+                .send(Some("Server generation reloaded".to_string()));
         }
-        let _ = self.retire_drained_topologies().await;
+        let _ = self.retire_drained_generations().await;
         Ok(())
     }
 
-    pub(in crate::runtime) async fn retire_drained_topologies(&self) -> Vec<TopologyGenerationId> {
-        let active_generations = {
+    pub(in crate::runtime) async fn retire_drained_generations(&self) -> Vec<GenerationId> {
+        let mut live_generations = {
             self.sessions
                 .lock()
                 .await
                 .values()
-                .map(|handle| handle.topology_generation_id)
+                .map(|handle| handle.generation.generation_id)
                 .collect::<HashSet<_>>()
         };
-        let mut topology = self
-            .topology
+        live_generations.extend(self.queued_accepts.generation_ids());
+        let mut generation_state = self
+            .generation_state
             .write()
             .expect("runtime topology lock should not be poisoned");
         let mut retired = Vec::new();
-        topology.draining.retain(|entry| {
-            let keep = active_generations.contains(&entry.generation.generation_id);
+        generation_state.draining.retain(|entry| {
+            let keep = live_generations.contains(&entry.generation.generation_id);
             if !keep {
                 retired.push(entry.generation.generation_id);
             }

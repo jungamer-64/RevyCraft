@@ -1,6 +1,6 @@
 # Minecraft-like runtime config for the Rust server
 
-[bootstrap]
+[static.bootstrap]
 online_mode = false
 level_name = "world"
 level_type = "flat"
@@ -9,17 +9,24 @@ difficulty = 1
 view_distance = 2
 world_dir = "world"
 storage_profile = "je-anvil-1_7_10"
+
+[static.plugins]
 plugins_dir = "plugins"
 plugin_abi_min = "3.0"
 plugin_abi_max = "3.0"
 
-[network]
+[static.admin.grpc]
+enabled = false
+bind_addr = "127.0.0.1:50051"
+allow_non_loopback = false
+
+[live.network]
 server_ip = ""
 server_port = 25565
 motd = "Multi-version Rust server"
 max_players = 20
 
-[topology]
+[live.topology]
 be_enabled = true
 default_adapter = "je-1_7_10"
 enabled_adapters = ["je-1_7_10", "je-1_8_x", "je-1_12_2"]
@@ -28,7 +35,7 @@ enabled_bedrock_adapters = ["be-26_3"]
 reload_watch = false
 drain_grace_secs = 30
 
-[plugins]
+[live.plugins]
 allowlist = [
   "je-1_7_10",
   "je-1_8_x",
@@ -43,63 +50,58 @@ allowlist = [
 ]
 reload_watch = false
 
-[plugins.failure_policy]
+[live.plugins.failure_policy]
 protocol = "quarantine"
 gameplay = "quarantine"
 storage = "fail-fast"
 auth = "skip"
 admin_ui = "skip"
 
-[profiles]
+[live.profiles]
 auth = "offline-v1"
 bedrock_auth = "bedrock-offline-v1"
 default_gameplay = "canonical"
 
-[admin]
+[live.admin]
 ui_profile = "console-v1"
 local_console_permissions = [
   "status",
   "sessions",
   "reload-config",
   "reload-plugins",
-  "reload-topology",
+  "reload-generation",
   "shutdown",
 ]
-
-[admin.grpc]
-enabled = false
-bind_addr = "127.0.0.1:50051"
-allow_non_loopback = false
 
 # To enable remote unary gRPC admin control:
 # 1. create a token file outside version control, for example `runtime/admin/ops.token`
 # 2. put a bearer token on its first line
 # 3. enable the transport and define at least one principal:
 #
-# [admin.grpc]
+# [static.admin.grpc]
 # enabled = true
 # bind_addr = "0.0.0.0:50051"
 # allow_non_loopback = true
 #
-# [admin.grpc.principals.ops]
+# [static.admin.grpc.principals.ops]
 # token_file = "admin/ops.token"
-# permissions = ["status", "sessions", "reload-config", "reload-plugins", "reload-topology", "shutdown"]
+# permissions = ["status", "sessions", "reload-config", "reload-plugins", "reload-generation", "shutdown"]
 #
 # The built-in gRPC server is plaintext h2 only. Non-loopback exposure is rejected
 # unless `allow_non_loopback = true` is set explicitly. Put TLS and public exposure
 # policy in a reverse proxy or ingress in front of this process.
 
 # For JE online mode, set:
-# [bootstrap]
+# [static.bootstrap]
 # online_mode = true
-# [profiles]
+# [live.profiles]
 # auth = "mojang-online-v1"
 #
 # This sample allowlist is a minimal baseline.
 # Add `auth-mojang-online` before enabling JE online mode.
 # Add `auth-bedrock-xbl` before using `bedrock_auth = "bedrock-xbl-v1"`.
 
-[profiles.gameplay_map]
+[live.profiles.gameplay_map]
 "je-1_7_10" = "readonly"
 "je-1_8_x" = "canonical"
 "je-1_12_2" = "canonical"

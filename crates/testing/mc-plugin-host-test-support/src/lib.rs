@@ -18,7 +18,7 @@ use mc_plugin_host::__test_hooks::{
     InProcessStoragePlugin,
 };
 use mc_plugin_host::PluginHostError;
-use mc_plugin_host::config::ServerConfig;
+use mc_plugin_host::config::{BootstrapConfig, RuntimeSelectionConfig};
 pub use mc_plugin_host::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
 use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_host::runtime::{
@@ -36,7 +36,7 @@ impl TestPluginHost {
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when packaged plugin discovery fails.
-    pub fn discover(config: &ServerConfig) -> Result<Option<Self>, PluginHostError> {
+    pub fn discover(config: &BootstrapConfig) -> Result<Option<Self>, PluginHostError> {
         discover(config).map(|host| host.map(|inner| Self { inner }))
     }
 
@@ -55,7 +55,7 @@ impl TestPluginHost {
     /// Returns [`PluginHostError`] when the host cannot materialize the requested runtime snapshot.
     pub fn load_plugin_set(
         &self,
-        config: &ServerConfig,
+        config: &RuntimeSelectionConfig,
     ) -> Result<LoadedPluginSet, PluginHostError> {
         load_plugin_set(&self.inner, config)
     }
@@ -77,7 +77,10 @@ impl TestPluginHost {
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the gameplay profiles cannot be activated.
-    pub fn activate_gameplay_profiles(&self, config: &ServerConfig) -> Result<(), PluginHostError> {
+    pub fn activate_gameplay_profiles(
+        &self,
+        config: &RuntimeSelectionConfig,
+    ) -> Result<(), PluginHostError> {
         activate_gameplay_profiles(&self.inner, config)
     }
 
@@ -255,7 +258,7 @@ mod tests {
     use super::{PluginAbiRange, TestPluginHost, TestPluginHostBuilder};
     use crate::raw::InProcessProtocolPlugin;
     use mc_core::{CoreConfig, ServerCore};
-    use mc_plugin_host::config::ServerConfig;
+    use mc_plugin_host::config::{BootstrapConfig, RuntimeSelectionConfig};
     use mc_plugin_host::runtime::RuntimeReloadContext;
     use mc_plugin_proto_je_1_7_10::in_process_plugin_entrypoints as je_1_7_10_entrypoints;
     use mc_plugin_test_support::PackagedPluginHarness;
@@ -302,12 +305,15 @@ mod tests {
         harness
             .seed_subset(&dist_dir, &[JE_1_7_10_ADAPTER_ID])
             .expect("packaged subset should be seeded");
-        let config = ServerConfig {
+        let bootstrap = BootstrapConfig {
             plugins_dir: dist_dir,
-            plugin_allowlist: Some(vec![JE_1_7_10_ADAPTER_ID.to_string()]),
-            ..ServerConfig::default()
+            ..BootstrapConfig::default()
         };
-        let host = TestPluginHost::discover(&config)
+        let _runtime_selection = RuntimeSelectionConfig {
+            plugin_allowlist: Some(vec![JE_1_7_10_ADAPTER_ID.to_string()]),
+            ..RuntimeSelectionConfig::default()
+        };
+        let host = TestPluginHost::discover(&bootstrap)
             .expect("packaged discovery should succeed")
             .expect("expected packaged host");
         let protocols = host

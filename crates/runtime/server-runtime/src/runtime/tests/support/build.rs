@@ -27,17 +27,24 @@ pub(crate) async fn build_test_server_from_source(
     match loaded_plugins.plugin_host {
         Some(plugin_host) => {
             let config = source.load()?;
-            let loaded_plugins = plugin_host.load_plugin_set(&config.plugin_host_config())?;
-            ServerBuilder::new(source, loaded_plugins)
-                .with_reload_host(plugin_host.runtime_host())
-                .build()
-                .await
-                .map(ReloadableRunningServer::into_running_server)
+            let runtime_selection = plugin_host_runtime_selection_test_config(&config);
+            let loaded_plugins = plugin_host.load_plugin_set(&runtime_selection)?;
+            boot_server(
+                source,
+                config,
+                loaded_plugins,
+                Some(plugin_host.runtime_host()),
+            )
+            .await
         }
         None => {
-            ServerBuilder::new(source, loaded_plugins.loaded_plugins)
-                .build()
-                .await
+            boot_server(
+                source.clone(),
+                source.load()?,
+                loaded_plugins.loaded_plugins,
+                None,
+            )
+            .await
         }
     }
 }
@@ -45,7 +52,7 @@ pub(crate) async fn build_test_server_from_source(
 pub(crate) async fn build_reloadable_test_server(
     config: ServerConfig,
     loaded_plugins: LoadedPluginTestEnvironment,
-) -> Result<ReloadableRunningServer, RuntimeError> {
+) -> Result<RunningServer, RuntimeError> {
     build_reloadable_test_server_from_source(ServerConfigSource::Inline(config), loaded_plugins)
         .await
 }
@@ -53,7 +60,7 @@ pub(crate) async fn build_reloadable_test_server(
 pub(crate) async fn build_reloadable_test_server_from_source(
     source: ServerConfigSource,
     loaded_plugins: LoadedPluginTestEnvironment,
-) -> Result<ReloadableRunningServer, RuntimeError> {
+) -> Result<RunningServer, RuntimeError> {
     let LoadedPluginTestEnvironment {
         loaded_plugins: _loaded_plugins,
         plugin_host,
@@ -62,13 +69,17 @@ pub(crate) async fn build_reloadable_test_server_from_source(
         RuntimeError::Config("reloadable test server requires a reload host".to_string())
     })?;
     let config = source.load()?;
-    let loaded_plugins = plugin_host.load_plugin_set(&config.plugin_host_config())?;
-    ServerBuilder::new(source, loaded_plugins)
-        .with_reload_host(plugin_host.runtime_host())
-        .build()
-        .await
+    let runtime_selection = plugin_host_runtime_selection_test_config(&config);
+    let loaded_plugins = plugin_host.load_plugin_set(&runtime_selection)?;
+    boot_server(
+        source,
+        config,
+        loaded_plugins,
+        Some(plugin_host.runtime_host()),
+    )
+    .await
 }
 
 pub(crate) fn active_protocol_registry(server: &RunningServer) -> ProtocolRegistry {
-    server.runtime.active_topology().protocol_registry.clone()
+    server.runtime.active_generation().protocol_registry.clone()
 }

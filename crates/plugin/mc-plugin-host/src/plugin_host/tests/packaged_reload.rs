@@ -37,11 +37,9 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
         &["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"],
     )?;
 
-    let config = ServerConfig {
-        plugins_dir: dist_dir,
-        ..ServerConfig::default()
-    };
-    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+    let bootstrap = bootstrap_config_with_plugins_dir(dist_dir);
+    let host =
+        TestPluginHost::discover(&bootstrap)?.expect("packaged plugins should be discovered");
     let registries = host.load_protocol_plugin_set()?;
 
     for adapter_id in ["je-1_7_10", "je-1_8_x", "je-1_12_2", "be-placeholder"] {
@@ -86,17 +84,17 @@ fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
         )?;
         seed_legacy_gameplay_artifact_without_v2_symbol(&dist_dir)?;
 
-        let config = ServerConfig {
-            plugins_dir: dist_dir,
+        let bootstrap = bootstrap_config_with_plugins_dir(dist_dir);
+        let runtime_selection = RuntimeSelectionConfig {
             plugin_failure_policy_gameplay: action,
-            ..ServerConfig::default()
+            ..runtime_selection_config()
         };
         let host =
-            TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+            TestPluginHost::discover(&bootstrap)?.expect("packaged plugins should be discovered");
 
         match action {
             PluginFailureAction::FailFast => {
-                let error = match host.load_plugin_set(&config) {
+                let error = match host.load_plugin_set(&runtime_selection) {
                     Ok(_) => panic!("fail-fast should reject the incompatible gameplay artifact"),
                     Err(error) => error,
                 };
@@ -108,7 +106,7 @@ fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
                 ));
             }
             PluginFailureAction::Skip | PluginFailureAction::Quarantine => {
-                let loaded = host.load_plugin_set(&config)?;
+                let loaded = host.load_plugin_set(&runtime_selection)?;
                 let profile = loaded
                     .resolve_gameplay_profile("canonical")
                     .expect("canonical gameplay profile should resolve");
@@ -149,11 +147,9 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
     let target_dir = harness.scoped_target_dir("plugin-host-reload");
     seed_packaged_plugins(&dist_dir, &["je-1_7_10"])?;
 
-    let config = ServerConfig {
-        plugins_dir: dist_dir.clone(),
-        ..ServerConfig::default()
-    };
-    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+    let bootstrap = bootstrap_config_with_plugins_dir(dist_dir.clone());
+    let host =
+        TestPluginHost::discover(&bootstrap)?.expect("packaged plugins should be discovered");
     let registries = host.load_protocol_plugin_set()?;
 
     let adapter = registries
@@ -213,11 +209,9 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let config = ServerConfig {
-        plugins_dir: dist_dir.clone(),
-        ..ServerConfig::default()
-    };
-    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+    let bootstrap = bootstrap_config_with_plugins_dir(dist_dir.clone());
+    let host =
+        TestPluginHost::discover(&bootstrap)?.expect("packaged plugins should be discovered");
     let registries = host.load_protocol_plugin_set()?;
 
     let adapter = registries
@@ -295,11 +289,9 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let config = ServerConfig {
-        plugins_dir: dist_dir.clone(),
-        ..ServerConfig::default()
-    };
-    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+    let bootstrap = bootstrap_config_with_plugins_dir(dist_dir.clone());
+    let host =
+        TestPluginHost::discover(&bootstrap)?.expect("packaged plugins should be discovered");
     let registries = host.load_protocol_plugin_set()?;
 
     let adapter = registries
@@ -369,11 +361,9 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let config = ServerConfig {
-        plugins_dir: dist_dir.clone(),
-        ..ServerConfig::default()
-    };
-    let host = TestPluginHost::discover(&config)?.expect("packaged plugins should be discovered");
+    let bootstrap = bootstrap_config_with_plugins_dir(dist_dir.clone());
+    let host =
+        TestPluginHost::discover(&bootstrap)?.expect("packaged plugins should be discovered");
     let registries = host.load_protocol_plugin_set()?;
 
     let adapter = registries

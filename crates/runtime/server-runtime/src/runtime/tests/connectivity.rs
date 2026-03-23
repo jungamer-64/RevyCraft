@@ -52,12 +52,20 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
     .await?;
 
     let status = server.status().await;
-    assert_eq!(status.active_topology.state, TopologyStatusState::Active);
     assert_eq!(
-        status.active_topology.default_adapter_id,
+        status.active_generation.state,
+        GenerationStatusState::Active
+    );
+    assert_eq!(
+        status.active_generation.default_adapter_id,
         JE_1_7_10_ADAPTER_ID
     );
-    assert!(status.active_topology.default_bedrock_adapter_id.is_none());
+    assert!(
+        status
+            .active_generation
+            .default_bedrock_adapter_id
+            .is_none()
+    );
     assert_eq!(status.listener_bindings, server.listener_bindings());
     assert_eq!(status.session_summary.total, 0);
 
@@ -65,37 +73,176 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
         .plugin_host
         .as_ref()
         .expect("runtime status should expose the plugin host snapshot");
-    assert_eq!(plugin_host.protocols.len(), 5);
-    assert_eq!(plugin_host.gameplay.len(), 1);
-    assert_eq!(plugin_host.storage.len(), 1);
-    assert_eq!(plugin_host.auth.len(), 1);
-    assert_eq!(plugin_host.admin_ui.len(), 1);
-    assert!(
-        plugin_host
-            .protocols
-            .iter()
-            .any(|plugin| plugin.adapter_id == JE_1_7_10_ADAPTER_ID)
-    );
+    assert_eq!(plugin_host.protocol_count, 5);
+    assert_eq!(plugin_host.gameplay_count, 1);
+    assert_eq!(plugin_host.storage_count, 1);
+    assert_eq!(plugin_host.auth_count, 1);
+    assert_eq!(plugin_host.admin_ui_count, 1);
     assert_eq!(
         plugin_host.failure_matrix.protocol,
-        PluginFailureMatrix::default().protocol
+        crate::PluginFailureAction::Quarantine
     );
 
     let summary = format_runtime_status_summary(&status);
     assert_eq!(
         summary,
         concat!(
-            "runtime active-topology=1 draining-topologies=0 listeners=1 sessions=0 dirty=false\n",
-            "topology tcp-default=je-1_7_10 tcp-enabled=je-1_7_10 udp-default=- udp-enabled=- max-players=20 motd=\"Multi-version Rust server\"\n",
+            "runtime active-generation=1 draining-generations=0 listeners=1 sessions=0 dirty=false\n",
+            "generation tcp-default=je-1_7_10 tcp-enabled=je-1_7_10 udp-default=- udp-enabled=- max-players=20 motd=\"Multi-version Rust server\"\n",
             "session-summary transport=tcp:0,udp:0 phase=handshaking:0,status:0,login:0,play:0\n",
             "plugins protocol=5 gameplay=1 storage=1 auth=1 admin-ui=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
         )
     );
     let serialized = toml::to_string(&status).expect("runtime status snapshot should serialize");
-    assert!(serialized.contains("active_topology"));
+    assert!(serialized.contains("active_generation"));
     assert!(serialized.contains("plugin_host"));
 
     server.shutdown().await
+}
+
+#[tokio::test]
+async fn supervisor_boot_keeps_listener_and_admin_bind_snapshot_after_toml_changes()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let config_path = temp_dir.path().join("server.toml");
+
+    let mut initial = loopback_server_config(temp_dir.path().join("world"));
+    initial.network.server_port = 0;
+    let _ops_token = seed_runtime_plugins_with_loopback_admin(
+        &mut initial,
+        &dist_dir,
+        &[JE_1_7_10_ADAPTER_ID],
+        STORAGE_AND_AUTH_PLUGIN_IDS,
+        temp_dir.path(),
+        "ops",
+        "ops-token",
+        vec![crate::config::AdminPermission::Status],
+        "127.0.0.1:50051"
+            .parse()
+            .expect("loopback admin grpc addr should parse"),
+    )?;
+    write_server_toml(&config_path, &initial)?;
+
+    let server =
+        crate::runtime::ServerSupervisor::boot(ServerConfigSource::Toml(config_path.clone()))
+            .await?;
+    let expected_admin_grpc = server.admin_grpc_bind_addr();
+    let expected_listener_bindings = server.listener_bindings();
+
+    let mut updated = initial;
+    updated.network.server_port = 25565;
+    updated.admin.grpc.bind_addr = "127.0.0.1:50052"
+        .parse()
+        .expect("loopback admin grpc addr should parse");
+    write_server_toml(&config_path, &updated)?;
+
+    assert_eq!(server.admin_grpc_bind_addr(), expected_admin_grpc);
+    assert_eq!(server.listener_bindings(), expected_listener_bindings);
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_active_handshaking_sessions() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        loopback_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+    let _stream = connect_tcp(listener_addr(&server)).await?;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if server.session_status().await.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| RuntimeError::Config("session did not become visible before shutdown".into()))?;
+
+    tokio::time::timeout(Duration::from_secs(1), server.shutdown())
+        .await
+        .map_err(|_| RuntimeError::Config("shutdown timed out with an active session".into()))?
+}
+
+#[tokio::test]
+async fn runtime_loop_storage_error_shuts_down_listeners_and_sessions() -> Result<(), RuntimeError>
+{
+    let temp_dir = tempdir()?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.plugins.failure_policy.storage = PluginFailureAction::Quarantine;
+    let LoadedPluginTestEnvironment {
+        loaded_plugins,
+        plugin_host,
+    } = in_process_failing_storage_registries(PluginFailureAction::Quarantine)?;
+    let server = build_test_server(
+        config,
+        LoadedPluginTestEnvironment {
+            loaded_plugins,
+            plugin_host,
+        },
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let _stream = connect_tcp(addr).await?;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if server.session_status().await.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        RuntimeError::Config("session did not become visible before save failure".into())
+    })?;
+
+    {
+        let mut state = server.runtime.state.lock().await;
+        state.dirty = true;
+    }
+
+    tokio::time::timeout(Duration::from_secs(3), server.wait_for_runtime_completion())
+        .await
+        .map_err(|_| {
+            RuntimeError::Config("runtime loop did not exit after save failure".into())
+        })??;
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if server.session_status().await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        RuntimeError::Config("sessions were not torn down after runtime failure".into())
+    })?;
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if connect_tcp(addr).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| RuntimeError::Config("listener stayed reachable after runtime failure".into()))?;
+
+    let error = server
+        .shutdown()
+        .await
+        .expect_err("runtime save failure should surface during shutdown");
+    assert!(matches!(error, RuntimeError::Storage(_)));
+    Ok(())
 }
 
 #[tokio::test]

@@ -61,11 +61,11 @@ fn gameplay_profiles_activate_and_resolve() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
-    host.activate_gameplay_profiles(&ServerConfig {
+    host.activate_gameplay_profiles(&RuntimeSelectionConfig {
         default_gameplay_profile: "canonical".to_string(),
         gameplay_profile_map: std::iter::once(("je-1_7_10".to_string(), "readonly".to_string()))
             .collect(),
-        ..ServerConfig::default()
+        ..runtime_selection_config()
     })
     .expect("known gameplay profiles should activate");
 
@@ -105,7 +105,7 @@ fn load_plugin_set_activates_runtime_profiles() {
         PluginFailureMatrix::default(),
     );
     let registries = host
-        .load_plugin_set(&ServerConfig::default())
+        .load_plugin_set(&runtime_selection_config())
         .expect("load_plugin_set should initialize runtime profiles");
 
     assert!(
@@ -174,9 +174,9 @@ fn gameplay_command_snapshot_preserves_entity_id() {
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
     );
-    host.activate_gameplay_profiles(&ServerConfig {
+    host.activate_gameplay_profiles(&RuntimeSelectionConfig {
         default_gameplay_profile: "entity-aware".to_string(),
-        ..ServerConfig::default()
+        ..runtime_selection_config()
     })
     .expect("entity-aware gameplay profile should activate");
 
@@ -219,9 +219,9 @@ fn unknown_gameplay_profile_fails_activation() {
         PluginFailureMatrix::default(),
     );
     let error = host
-        .activate_gameplay_profiles(&ServerConfig {
+        .activate_gameplay_profiles(&RuntimeSelectionConfig {
             default_gameplay_profile: "readonly".to_string(),
-            ..ServerConfig::default()
+            ..runtime_selection_config()
         })
         .expect_err("unknown gameplay profile should fail fast");
     assert!(matches!(

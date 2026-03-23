@@ -1,5 +1,48 @@
 use super::*;
 
+fn assert_server_config_error_contains(
+    error: crate::config::ServerConfigError,
+    expected_fragment: &str,
+) {
+    match error {
+        crate::config::ServerConfigError::Config(message) => {
+            assert!(
+                message.contains(expected_fragment),
+                "unexpected config error: {message}"
+            );
+        }
+        crate::config::ServerConfigError::PluginHost(mc_plugin_host::PluginHostError::Config(
+            message,
+        )) => {
+            assert!(
+                message.contains(expected_fragment),
+                "unexpected plugin-host config error: {message}"
+            );
+        }
+        other => panic!("unexpected config error: {other:?}"),
+    }
+}
+
+fn tracked_runtime_config_path(file_name: &str) -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for ancestor in manifest_dir.ancestors() {
+        let manifest = ancestor.join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&manifest) else {
+            continue;
+        };
+        if contents.contains("[workspace]") {
+            return ancestor.join("runtime").join(file_name);
+        }
+    }
+    panic!(
+        "server-runtime tests should run under the workspace root: {}",
+        manifest_dir.display()
+    );
+}
+
 async fn assert_spawn_fails_with_message(
     mut config: ServerConfig,
     expected_fragment: &str,
@@ -25,30 +68,53 @@ async fn assert_spawn_fails_with_message(
 }
 
 #[test]
-fn server_toml_accepts_grouped_schema_and_resolves_relative_paths() -> Result<(), RuntimeError> {
-    let temp_dir = tempdir()?;
+fn server_toml_rejects_legacy_grouped_schema() {
+    let temp_dir = tempdir().expect("tempdir should be available");
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
         r#"
 [bootstrap]
+level_name = "legacy"
+"#,
+    )
+    .expect("server.toml should write");
+
+    let error = ServerConfig::from_toml(&path).expect_err("legacy grouped schema should fail");
+    assert!(matches!(
+        error,
+        crate::config::ServerConfigError::Config(message)
+            if message.contains("unknown field `bootstrap`")
+                || message.contains("expected `static` or `live`")
+    ));
+}
+
+#[test]
+fn server_toml_accepts_static_live_schema_and_resolves_relative_paths() -> Result<(), RuntimeError>
+{
+    let temp_dir = tempdir()?;
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[static.bootstrap]
 online_mode = false
 level_name = "flatland"
 level_type = "FLAT"
 
-[network]
+[live.network]
 server_ip = "127.0.0.1"
 server_port = 0
 
-[topology]
+[live.topology]
 be_enabled = true
 default_adapter = "je-1_7_10"
 
-[plugins]
+[live.plugins]
 
-[plugins.failure_policy]
+[live.plugins.failure_policy]
 
-[profiles]
+[live.profiles]
 auth = "offline-v1"
 "#,
     )?;
@@ -76,6 +142,32 @@ auth = "offline-v1"
     assert_eq!(
         config.bootstrap.plugins_dir,
         temp_dir.path().join("plugins")
+    );
+    Ok(())
+}
+
+#[test]
+fn tracked_runtime_server_toml_parses() -> Result<(), RuntimeError> {
+    let config = ServerConfig::from_toml(&tracked_runtime_config_path("server.toml"))?;
+    assert!(config.topology.be_enabled);
+    assert!(
+        config
+            .admin
+            .local_console_permissions
+            .contains(&crate::config::AdminPermission::ReloadGeneration)
+    );
+    Ok(())
+}
+
+#[test]
+fn tracked_runtime_server_toml_example_parses() -> Result<(), RuntimeError> {
+    let config = ServerConfig::from_toml(&tracked_runtime_config_path("server.toml.example"))?;
+    assert!(config.topology.be_enabled);
+    assert!(
+        config
+            .admin
+            .local_console_permissions
+            .contains(&crate::config::AdminPermission::ReloadGeneration)
     );
     Ok(())
 }
@@ -189,20 +281,20 @@ fn server_toml_parse_admin_section_and_failure_policy() -> Result<(), RuntimeErr
     fs::write(
         &path,
         r#"
-[plugins.failure_policy]
+[live.plugins.failure_policy]
 admin_ui = "quarantine"
 
-[admin]
+[live.admin]
 ui_profile = "console-v2"
-local_console_permissions = ["status", "reload_config", "status"]
+local_console_permissions = ["status", "reload-config", "status"]
 
-[admin.grpc]
+[static.admin.grpc]
 enabled = true
 bind_addr = "127.0.0.1:50052"
 
-[admin.grpc.principals.ops]
+[static.admin.grpc.principals.ops]
 token_file = "ops.token"
-permissions = ["status", "reload_plugins", "status"]
+permissions = ["status", "reload-plugins", "status"]
 "#,
     )?;
 
@@ -216,8 +308,8 @@ permissions = ["status", "reload_plugins", "status"]
     assert_eq!(
         parsed.admin.local_console_permissions,
         vec![
-            crate::runtime::AdminPermission::Status,
-            crate::runtime::AdminPermission::ReloadConfig,
+            crate::config::AdminPermission::Status,
+            crate::config::AdminPermission::ReloadConfig,
         ]
     );
     assert!(parsed.admin.grpc.enabled);
@@ -245,11 +337,72 @@ permissions = ["status", "reload_plugins", "status"]
             .expect("ops principal should exist")
             .permissions,
         vec![
-            crate::runtime::AdminPermission::Status,
-            crate::runtime::AdminPermission::ReloadPlugins,
+            crate::config::AdminPermission::Status,
+            crate::config::AdminPermission::ReloadPlugins,
         ]
     );
     Ok(())
+}
+
+#[test]
+fn server_toml_accepts_reload_generation_admin_permission() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    fs::write(temp_dir.path().join("ops.token"), "token-ops\n")?;
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[live.admin]
+local_console_permissions = ["reload-generation"]
+
+[static.admin.grpc]
+enabled = true
+bind_addr = "127.0.0.1:50052"
+
+[static.admin.grpc.principals.ops]
+token_file = "ops.token"
+permissions = ["reload-generation"]
+"#,
+    )?;
+
+    let parsed = ServerConfig::from_toml(&path)?;
+    assert_eq!(
+        parsed.admin.local_console_permissions,
+        vec![crate::config::AdminPermission::ReloadGeneration]
+    );
+    assert_eq!(
+        parsed
+            .admin
+            .grpc
+            .principals
+            .get("ops")
+            .expect("ops principal should exist")
+            .permissions,
+        vec![crate::config::AdminPermission::ReloadGeneration]
+    );
+    Ok(())
+}
+
+#[test]
+fn server_toml_rejects_reload_topology_admin_permission_token() {
+    let temp_dir = tempdir().expect("tempdir should be available");
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        r#"
+[live.admin]
+local_console_permissions = ["reload-topology"]
+"#,
+    )
+    .expect("server.toml should write");
+
+    let error =
+        ServerConfig::from_toml(&path).expect_err("reload-topology token should be rejected");
+    assert!(matches!(
+        error,
+        crate::config::ServerConfigError::Config(message)
+            if message.contains("unsupported live.admin.local_console_permissions entry `reload-topology`")
+    ));
 }
 
 #[test]
@@ -263,14 +416,14 @@ fn server_toml_reject_duplicate_admin_grpc_tokens() {
     fs::write(
         &path,
         r#"
-[admin.grpc]
+[static.admin.grpc]
 enabled = true
 
-[admin.grpc.principals.ops_a]
+[static.admin.grpc.principals.ops_a]
 token_file = "ops-a.token"
 permissions = ["status"]
 
-[admin.grpc.principals.ops_b]
+[static.admin.grpc.principals.ops_b]
 token_file = "ops-b.token"
 permissions = ["status"]
 "#,
@@ -281,7 +434,8 @@ permissions = ["status"]
         .expect_err("duplicate remote admin tokens should be rejected");
     assert!(matches!(
         error,
-        RuntimeError::Config(message) if message.contains("resolved to the same token")
+        crate::config::ServerConfigError::Config(message)
+            if message.contains("resolved to the same token")
     ));
 }
 
@@ -294,7 +448,7 @@ fn inline_server_config_source_rejects_duplicate_admin_grpc_tokens() {
         crate::config::AdminGrpcPrincipalConfig {
             token_file: PathBuf::from("runtime/admin/ops-a.token"),
             token: "shared-token".to_string(),
-            permissions: vec![crate::runtime::AdminPermission::Status],
+            permissions: vec![crate::config::AdminPermission::Status],
         },
     );
     config.admin.grpc.principals.insert(
@@ -302,7 +456,7 @@ fn inline_server_config_source_rejects_duplicate_admin_grpc_tokens() {
         crate::config::AdminGrpcPrincipalConfig {
             token_file: PathBuf::from("runtime/admin/ops-b.token"),
             token: "shared-token".to_string(),
-            permissions: vec![crate::runtime::AdminPermission::Sessions],
+            permissions: vec![crate::config::AdminPermission::Sessions],
         },
     );
 
@@ -311,7 +465,8 @@ fn inline_server_config_source_rejects_duplicate_admin_grpc_tokens() {
         .expect_err("duplicate remote admin tokens should be rejected for inline configs");
     assert!(matches!(
         error,
-        RuntimeError::Config(message) if message.contains("resolved to the same token")
+        crate::config::ServerConfigError::Config(message)
+            if message.contains("resolved to the same token")
     ));
 }
 
@@ -322,7 +477,7 @@ fn server_toml_reject_enabled_admin_grpc_without_principals() {
     fs::write(
         &path,
         r#"
-[admin.grpc]
+[static.admin.grpc]
 enabled = true
 "#,
     )
@@ -330,10 +485,10 @@ enabled = true
 
     let error = ServerConfig::from_toml(&path)
         .expect_err("enabled admin gRPC without principals should fail");
-    assert!(matches!(
+    assert_server_config_error_contains(
         error,
-        RuntimeError::Config(message) if message.contains("requires at least one admin.grpc.principals entry")
-    ));
+        "requires at least one static.admin.grpc.principals entry",
+    );
 }
 
 #[test]
@@ -344,9 +499,9 @@ fn server_toml_reject_empty_admin_grpc_permissions() {
     fs::write(
         &path,
         r#"
-[admin.grpc]
+[static.admin.grpc]
 
-[admin.grpc.principals.ops]
+[static.admin.grpc.principals.ops]
 token_file = "ops.token"
 permissions = []
 "#,
@@ -357,7 +512,8 @@ permissions = []
         ServerConfig::from_toml(&path).expect_err("empty remote admin permissions should fail");
     assert!(matches!(
         error,
-        RuntimeError::Config(message) if message.contains("admin.grpc.principals.ops.permissions must not be empty")
+        crate::config::ServerConfigError::Config(message)
+            if message.contains("admin.grpc.principals.ops.permissions must not be empty")
     ));
 }
 
@@ -369,11 +525,11 @@ fn server_toml_reject_non_loopback_admin_grpc_bind_without_opt_in() {
     fs::write(
         &path,
         r#"
-[admin.grpc]
+[static.admin.grpc]
 enabled = true
 bind_addr = "0.0.0.0:50051"
 
-[admin.grpc.principals.ops]
+[static.admin.grpc.principals.ops]
 token_file = "ops.token"
 permissions = ["status"]
 "#,
@@ -384,8 +540,9 @@ permissions = ["status"]
         .expect_err("non-loopback admin gRPC bind should require explicit opt-in");
     assert!(matches!(
         error,
-        RuntimeError::Config(message)
+        crate::config::ServerConfigError::Config(message)
             if message.contains("admin.grpc.allow_non_loopback=true")
+                || message.contains("static.admin.grpc.allow_non_loopback=true")
     ));
 }
 
@@ -397,12 +554,12 @@ fn server_toml_accepts_non_loopback_admin_grpc_bind_with_opt_in() -> Result<(), 
     fs::write(
         &path,
         r#"
-[admin.grpc]
+[static.admin.grpc]
 enabled = true
 bind_addr = "0.0.0.0:50051"
 allow_non_loopback = true
 
-[admin.grpc.principals.ops]
+[static.admin.grpc.principals.ops]
 token_file = "ops.token"
 permissions = ["status"]
 "#,
@@ -422,7 +579,7 @@ fn admin_grpc_debug_redacts_tokens() {
     let principal = crate::config::AdminGrpcPrincipalConfig {
         token_file: PathBuf::from("runtime/admin/ops.token"),
         token: "super-secret-token".to_string(),
-        permissions: vec![crate::runtime::AdminPermission::Status],
+        permissions: vec![crate::config::AdminPermission::Status],
     };
 
     let principal_debug = format!("{principal:?}");
@@ -451,7 +608,7 @@ fn admin_subject_debug_redacts_remote_credentials() {
 }
 
 #[test]
-fn plugin_host_config_copies_all_plugin_host_fields() {
+fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
     let mut config = ServerConfig::default();
     config.topology.be_enabled = true;
     config.bootstrap.storage_profile = "custom-storage".to_string();
@@ -475,66 +632,91 @@ fn plugin_host_config_copies_all_plugin_host_fields() {
     config.plugins.failure_policy.admin_ui = PluginFailureAction::Quarantine;
     config.admin.ui_profile = "console-v2".to_string();
     config.admin.local_console_permissions = vec![
-        crate::runtime::AdminPermission::Status,
-        crate::runtime::AdminPermission::ReloadPlugins,
+        crate::config::AdminPermission::Status,
+        crate::config::AdminPermission::ReloadPlugins,
     ];
     config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 0 };
     config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 1 };
 
-    let plugin_host_config = config.plugin_host_config();
+    let bootstrap = config.plugin_host_bootstrap_config();
+    let runtime_selection = config.plugin_host_runtime_selection_config();
 
-    assert_eq!(plugin_host_config.be_enabled, config.topology.be_enabled);
+    assert_eq!(bootstrap.storage_profile, config.bootstrap.storage_profile);
+    assert_eq!(bootstrap.plugins_dir, config.bootstrap.plugins_dir);
+    assert_eq!(bootstrap.plugin_abi_min, config.bootstrap.plugin_abi_min);
+    assert_eq!(bootstrap.plugin_abi_max, config.bootstrap.plugin_abi_max);
+
+    assert_eq!(runtime_selection.be_enabled, config.topology.be_enabled);
+    assert_eq!(runtime_selection.auth_profile, config.profiles.auth);
     assert_eq!(
-        plugin_host_config.storage_profile,
-        config.bootstrap.storage_profile
-    );
-    assert_eq!(plugin_host_config.auth_profile, config.profiles.auth);
-    assert_eq!(
-        plugin_host_config.bedrock_auth_profile,
+        runtime_selection.bedrock_auth_profile,
         config.profiles.bedrock_auth
     );
     assert_eq!(
-        plugin_host_config.default_gameplay_profile,
+        runtime_selection.default_gameplay_profile,
         config.profiles.default_gameplay
     );
     assert_eq!(
-        plugin_host_config.gameplay_profile_map,
+        runtime_selection.gameplay_profile_map,
         config.profiles.gameplay_map
     );
-    assert_eq!(plugin_host_config.plugins_dir, config.bootstrap.plugins_dir);
+    assert_eq!(runtime_selection.admin_ui_profile, config.admin.ui_profile);
+    assert_eq!(runtime_selection.plugin_allowlist, config.plugins.allowlist);
     assert_eq!(
-        plugin_host_config.plugin_allowlist,
-        config.plugins.allowlist
-    );
-    assert_eq!(
-        plugin_host_config.plugin_failure_policy_protocol,
+        runtime_selection.plugin_failure_policy_protocol,
         config.plugins.failure_policy.protocol
     );
     assert_eq!(
-        plugin_host_config.plugin_failure_policy_gameplay,
+        runtime_selection.plugin_failure_policy_gameplay,
         config.plugins.failure_policy.gameplay
     );
     assert_eq!(
-        plugin_host_config.plugin_failure_policy_storage,
+        runtime_selection.plugin_failure_policy_storage,
         config.plugins.failure_policy.storage
     );
     assert_eq!(
-        plugin_host_config.plugin_failure_policy_auth,
+        runtime_selection.plugin_failure_policy_auth,
         config.plugins.failure_policy.auth
     );
     assert_eq!(
-        plugin_host_config.plugin_failure_policy_admin_ui,
+        runtime_selection.plugin_failure_policy_admin_ui,
         config.plugins.failure_policy.admin_ui
     );
-    assert_eq!(plugin_host_config.admin_ui_profile, config.admin.ui_profile);
+}
+
+#[test]
+fn server_config_splits_static_and_live_views() {
+    let mut config = ServerConfig::default();
+    config.bootstrap.level_name = "split-world".to_string();
+    config.bootstrap.online_mode = true;
+    config.bootstrap.world_dir = PathBuf::from("runtime").join("split-world");
+    config.bootstrap.plugins_dir = PathBuf::from("runtime").join("split-plugins");
+    config.network.motd = "Split runtime".to_string();
+    config.network.max_players = 32;
+    config.topology.reload_watch = true;
+    config.plugins.reload_watch = true;
+    config.profiles.default_gameplay = "readonly".to_string();
+    config.admin.ui_profile = "console-v2".to_string();
+    config.admin.grpc.enabled = true;
+    config.admin.grpc.bind_addr = "127.0.0.1:50052".parse().expect("socket addr should parse");
+    config.admin.grpc.allow_non_loopback = true;
+
+    let static_config = config.static_config();
+    let live_config = config.live_config();
+
+    assert_eq!(static_config.bootstrap, config.bootstrap);
+    assert!(static_config.admin_grpc.enabled);
     assert_eq!(
-        plugin_host_config.plugin_abi_min,
-        config.bootstrap.plugin_abi_min
+        static_config.admin_grpc.bind_addr,
+        config.admin.grpc.bind_addr
     );
-    assert_eq!(
-        plugin_host_config.plugin_abi_max,
-        config.bootstrap.plugin_abi_max
-    );
+    assert!(static_config.admin_grpc.allow_non_loopback);
+
+    assert_eq!(live_config.network, config.network);
+    assert_eq!(live_config.topology, config.topology);
+    assert_eq!(live_config.plugins, config.plugins);
+    assert_eq!(live_config.profiles, config.profiles);
+    assert_eq!(live_config.admin, config.admin);
 }
 
 #[test]
@@ -616,28 +798,17 @@ fn server_toml_reject_invalid_failure_policy_for_kind() {
     fs::write(
         &path,
         r#"
-[bootstrap]
+[live.plugins]
 
-[network]
-
-[topology]
-
-[plugins]
-
-[plugins.failure_policy]
+[live.plugins.failure_policy]
 storage = "quarantine"
-
-[profiles]
 "#,
     )
     .expect("server.toml should write");
 
     let error = ServerConfig::from_toml(&path)
         .expect_err("storage failure policy should reject quarantine");
-    assert!(matches!(
-        error,
-        RuntimeError::Config(message) if message.contains("plugin-failure-policy-storage")
-    ));
+    assert_server_config_error_contains(error, "plugin-failure-policy-storage");
 }
 
 #[test]
@@ -647,18 +818,8 @@ fn server_toml_reject_non_flat_level_type() {
     fs::write(
         &path,
         r#"
-[bootstrap]
+[static.bootstrap]
 level_type = "DEFAULT"
-
-[network]
-
-[topology]
-
-[plugins]
-
-[plugins.failure_policy]
-
-[profiles]
 "#,
     )
     .expect("server.toml should write");
@@ -666,7 +827,8 @@ level_type = "DEFAULT"
     let error = ServerConfig::from_toml(&path).expect_err("DEFAULT should be rejected");
     assert!(matches!(
         error,
-        RuntimeError::Unsupported(message) if message.contains("only `flat`")
+        crate::config::ServerConfigError::Unsupported(message)
+            if message.contains("only `flat`")
     ));
 }
 

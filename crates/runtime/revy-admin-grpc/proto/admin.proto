@@ -7,7 +7,7 @@ service AdminControlPlane {
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc ReloadConfig(ReloadConfigRequest) returns (ReloadConfigResponse);
   rpc ReloadPlugins(ReloadPluginsRequest) returns (ReloadPluginsResponse);
-  rpc ReloadTopology(ReloadTopologyRequest) returns (ReloadTopologyResponse);
+  rpc ReloadGeneration(ReloadGenerationRequest) returns (ReloadGenerationResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
@@ -41,7 +41,7 @@ message AdminPhaseCountView {
   uint64 count = 2;
 }
 
-message AdminTopologyGenerationCountView {
+message AdminGenerationCountView {
   uint64 generation_id = 1;
   uint64 count = 2;
 }
@@ -55,7 +55,7 @@ message AdminSessionSummaryView {
   uint64 total = 1;
   repeated AdminTransportCountView by_transport = 2;
   repeated AdminPhaseCountView by_phase = 3;
-  repeated AdminTopologyGenerationCountView by_topology_generation = 4;
+  repeated AdminGenerationCountView by_generation = 4;
   repeated AdminNamedCountView by_adapter_id = 5;
   repeated AdminNamedCountView by_gameplay_profile = 6;
 }
@@ -72,8 +72,8 @@ message AdminPluginHostView {
 }
 
 message AdminStatusView {
-  uint64 active_topology_generation_id = 1;
-  repeated uint64 draining_topology_generation_ids = 2;
+  uint64 active_generation_id = 1;
+  repeated uint64 draining_generation_ids = 2;
   repeated AdminListenerBindingView listener_bindings = 3;
   string default_adapter_id = 4;
   optional string default_bedrock_adapter_id = 5;
@@ -88,7 +88,7 @@ message AdminStatusView {
 
 message AdminSessionView {
   uint64 connection_id = 1;
-  uint64 topology_generation_id = 2;
+  uint64 generation_id = 2;
   TransportKind transport = 3;
   ConnectionPhase phase = 4;
   optional string adapter_id = 5;
@@ -108,7 +108,7 @@ message AdminPluginsReloadView {
   repeated string reloaded_plugin_ids = 1;
 }
 
-message AdminTopologyReloadView {
+message AdminGenerationReloadView {
   uint64 activated_generation_id = 1;
   repeated uint64 retired_generation_ids = 2;
   bool applied_config_change = 3;
@@ -117,7 +117,7 @@ message AdminTopologyReloadView {
 
 message AdminConfigReloadView {
   repeated string reloaded_plugin_ids = 1;
-  AdminTopologyReloadView topology = 2;
+  AdminGenerationReloadView generation = 2;
 }
 
 message GetStatusRequest {}
@@ -144,10 +144,10 @@ message ReloadPluginsResponse {
   AdminPluginsReloadView result = 1;
 }
 
-message ReloadTopologyRequest {}
+message ReloadGenerationRequest {}
 
-message ReloadTopologyResponse {
-  AdminTopologyReloadView result = 1;
+message ReloadGenerationResponse {
+  AdminGenerationReloadView result = 1;
 }
 
 message ShutdownRequest {}
