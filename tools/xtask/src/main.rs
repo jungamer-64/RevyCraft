@@ -39,13 +39,20 @@ struct PackageArgs {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 struct ServerConfigDocument {
+    plugins: PluginConfigDocument,
+    live: LiveConfigScopeDocument,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LiveConfigScopeDocument {
     plugins: PluginConfigDocument,
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 struct PluginConfigDocument {
     allowlist: Option<Vec<String>>,
 }
@@ -191,8 +198,29 @@ fn managed_plugin_ids(plugins: &[PluginSpec]) -> BTreeSet<String> {
 }
 
 fn workspace_root() -> Result<PathBuf, String> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    for ancestor in manifest_dir.ancestors() {
+    let mut attempted = Vec::new();
+    let candidates = [
+        env::current_dir().ok(),
+        env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf)),
+        Some(PathBuf::from(env!("CARGO_MANIFEST_DIR"))),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        attempted.push(candidate.display().to_string());
+        if let Some(root) = find_workspace_root(&candidate)? {
+            return Ok(root);
+        }
+    }
+    Err(format!(
+        "failed to locate workspace root from {}",
+        attempted.join(", ")
+    ))
+}
+
+fn find_workspace_root(start: &Path) -> Result<Option<PathBuf>, String> {
+    for ancestor in start.ancestors() {
         let manifest = ancestor.join("Cargo.toml");
         if !manifest.is_file() {
             continue;
@@ -204,13 +232,10 @@ fn workspace_root() -> Result<PathBuf, String> {
             )
         })?;
         if contents.contains("[workspace]") {
-            return Ok(ancestor.to_path_buf());
+            return Ok(Some(ancestor.to_path_buf()));
         }
     }
-    Err(format!(
-        "failed to locate workspace root from {}",
-        manifest_dir.display()
-    ))
+    Ok(None)
 }
 
 fn resolve_package_config_path(
@@ -281,12 +306,17 @@ fn plugin_allowlist_from_toml(config_path: &Path) -> Result<Vec<String>, String>
         .map_err(|error| format!("failed to read config {}: {error}", config_path.display()))?;
     let document: ServerConfigDocument = toml::from_str(&contents)
         .map_err(|error| format!("failed to parse config {}: {error}", config_path.display()))?;
-    let raw_ids = document.plugins.allowlist.ok_or_else(|| {
-        format!(
-            "config {} did not define plugins.allowlist",
-            config_path.display()
-        )
-    })?;
+    let raw_ids = document
+        .live
+        .plugins
+        .allowlist
+        .or(document.plugins.allowlist)
+        .ok_or_else(|| {
+            format!(
+                "config {} did not define live.plugins.allowlist or plugins.allowlist",
+                config_path.display()
+            )
+        })?;
     let mut seen = BTreeSet::new();
     let plugin_ids = raw_ids
         .into_iter()
@@ -549,9 +579,9 @@ fn packaged_artifact_name_with_tag(base_name: &str, build_tag: Option<String>) -
 #[cfg(test)]
 mod tests {
     use super::{
-        PackageArgs, PluginSpec, filter_plugins_by_ids, packaged_artifact_name_with_tag,
-        parse_package_args, plugin_allowlist_from_toml, plugin_spec_from_package_name,
-        reconcile_packaged_plugins, resolve_package_config_path,
+        PackageArgs, PluginSpec, filter_plugins_by_ids, find_workspace_root,
+        packaged_artifact_name_with_tag, parse_package_args, plugin_allowlist_from_toml,
+        plugin_spec_from_package_name, reconcile_packaged_plugins, resolve_package_config_path,
     };
     use std::collections::BTreeSet;
     use std::fs;
@@ -672,18 +702,48 @@ mod tests {
     }
 
     #[test]
+    fn find_workspace_root_walks_up_from_nested_directory() {
+        let temp_dir = tempdir().expect("temp dir should be created");
+        fs::write(
+            temp_dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = []\n",
+        )
+        .expect("workspace manifest should be written");
+        let nested = temp_dir.path().join("tools").join("xtask").join("src");
+        fs::create_dir_all(&nested).expect("nested dir should be created");
+
+        assert_eq!(
+            find_workspace_root(&nested).expect("workspace root lookup should succeed"),
+            Some(temp_dir.path().to_path_buf())
+        );
+    }
+
+    #[test]
     fn plugin_allowlist_from_toml_reads_deduplicated_ids() {
         let temp_dir = tempdir().expect("temp dir should be created");
         let config = temp_dir.path().join("server.toml");
         fs::write(
             &config,
-            "[plugins]\nallowlist = [\"je-1_7_10\", \"je-1_7_10\", \"auth-offline\"]\n",
+            "[live.plugins]\nallowlist = [\"je-1_7_10\", \"je-1_7_10\", \"auth-offline\"]\n",
         )
         .expect("config should be written");
 
         assert_eq!(
             plugin_allowlist_from_toml(&config).expect("allowlist should be parsed successfully"),
             vec!["je-1_7_10".to_string(), "auth-offline".to_string()]
+        );
+    }
+
+    #[test]
+    fn plugin_allowlist_from_toml_falls_back_to_legacy_plugins_table() {
+        let temp_dir = tempdir().expect("temp dir should be created");
+        let config = temp_dir.path().join("server.toml");
+        fs::write(&config, "[plugins]\nallowlist = [\"je-1_8_x\"]\n")
+            .expect("config should be written");
+
+        assert_eq!(
+            plugin_allowlist_from_toml(&config).expect("legacy allowlist should be parsed"),
+            vec!["je-1_8_x".to_string()]
         );
     }
 
@@ -756,17 +816,10 @@ mod tests {
 
     fn workspace_test_temp_root() -> PathBuf {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        for ancestor in manifest_dir.ancestors() {
-            let manifest = ancestor.join("Cargo.toml");
-            if !manifest.is_file() {
-                continue;
-            }
-            let Ok(contents) = fs::read_to_string(&manifest) else {
-                continue;
-            };
-            if contents.contains("[workspace]") {
-                return ancestor.join("target").join("test-tmp");
-            }
+        if let Some(root) = find_workspace_root(&manifest_dir)
+            .expect("workspace root lookup should succeed for xtask tests")
+        {
+            return root.join("target").join("test-tmp");
         }
         panic!(
             "xtask tests should run under the workspace root: {}",
