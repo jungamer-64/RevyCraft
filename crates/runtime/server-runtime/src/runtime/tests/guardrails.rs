@@ -82,7 +82,12 @@ async fn unsupported_login_protocol_receives_disconnect() -> Result<(), RuntimeE
     let codec = MinecraftWireCodec;
 
     let mut stream = connect_tcp(addr).await?;
-    write_packet(&mut stream, &codec, &encode_handshake(47, 2)?).await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je18x.protocol_version(), 2)?,
+    )
+    .await?;
     let mut buffer = BytesMut::new();
     let disconnect = read_packet(&mut stream, &codec, &mut buffer).await?;
     let mut reader = PacketReader::new(&disconnect);

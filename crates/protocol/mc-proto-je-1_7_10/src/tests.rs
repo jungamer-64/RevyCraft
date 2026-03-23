@@ -106,6 +106,16 @@ fn encodes_status_and_login_events() {
 }
 
 #[test]
+fn encodes_spawn_position_as_position_iii() {
+    let packet = crate::encoding::encode_spawn_position(mc_core::BlockPos::new(12, 64, -3));
+    let mut reader = PacketReader::new(&packet);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x05);
+    assert_eq!(reader.read_i32().expect("x should decode"), 12);
+    assert_eq!(reader.read_i32().expect("y should decode"), 64);
+    assert_eq!(reader.read_i32().expect("z should decode"), -3);
+}
+
+#[test]
 fn decodes_play_packets_into_core_commands() {
     let adapter = Je1710Adapter::new();
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"decode-play"));
@@ -317,6 +327,23 @@ fn chunk_encoding_uses_legacy_block_layout() {
     assert_eq!(data[1], 1);
     assert_eq!(get_nibble(&data[4096..6144], 0), 0);
     assert_eq!(legacy_block(&BlockState::grass_block()), (2, 0));
+}
+
+#[test]
+fn encodes_legacy_slots_with_length_sentinel() {
+    let packet = crate::encoding::encode_window_items(0, &PlayerInventory::creative_starter())
+        .expect("window items should encode");
+    let mut reader = PacketReader::new(&packet);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x30);
+    assert_eq!(reader.read_i8().expect("window id should decode"), 0);
+    assert_eq!(reader.read_i16().expect("slot count should decode"), 45);
+    for _ in 0..36 {
+        assert_eq!(reader.read_i16().expect("empty slot should decode"), -1);
+    }
+    assert!(reader.read_i16().expect("item id should decode") >= 0);
+    assert_eq!(reader.read_u8().expect("count should decode"), 64);
+    let _ = reader.read_i16().expect("damage should decode");
+    assert_eq!(reader.read_i16().expect("nbt sentinel should decode"), -1);
 }
 
 #[test]

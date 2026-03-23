@@ -9,7 +9,7 @@ use decoding::decode_play_packet;
 use encoding::{
     encode_block_change, encode_chunk, encode_confirm_transaction, encode_destroy_entities,
     encode_entity_head_rotation, encode_entity_teleport, encode_held_item_change, encode_join_game,
-    encode_keep_alive, encode_named_entity_spawn, encode_player_abilities,
+    encode_keep_alive, encode_named_entity_spawn, encode_player_abilities, encode_player_info_add,
     encode_position_and_look, encode_set_slot, encode_spawn_position, encode_time_update,
     encode_update_health, encode_window_items,
 };
@@ -20,8 +20,8 @@ use mc_core::{
 use mc_proto_common::{Edition, ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
 use mc_proto_je_common::{
     __version_support::inventory::{
-        CURSOR_SLOT_ID, CURSOR_WINDOW_ID, legacy_window_slot, player_window_id,
-        player_window_id_signed,
+        CURSOR_SLOT_ID, CURSOR_WINDOW_ID, InventoryProtocolSpec, JE_1_8_X_INVENTORY_SPEC,
+        player_window_id, player_window_id_signed, protocol_slot,
     },
     JavaEditionAdapter, JavaEditionProfile,
 };
@@ -30,6 +30,7 @@ use serde_json::json;
 const PROTOCOL_VERSION_1_8_X: i32 = 47;
 const VERSION_NAME_1_8_X: &str = "1.8.x";
 pub const JE_1_8_X_ADAPTER_ID: &str = "je-1_8_x";
+pub(crate) const INVENTORY_SPEC: InventoryProtocolSpec = JE_1_8_X_INVENTORY_SPEC;
 
 const PACKET_CB_KEEP_ALIVE: i32 = 0x00;
 const PACKET_CB_JOIN_GAME: i32 = 0x01;
@@ -47,6 +48,7 @@ const PACKET_CB_BLOCK_CHANGE: i32 = 0x23;
 const PACKET_CB_SET_SLOT: i32 = 0x2f;
 const PACKET_CB_WINDOW_ITEMS: i32 = 0x30;
 const PACKET_CB_TRANSACTION: i32 = 0x32;
+const PACKET_CB_PLAYER_INFO: i32 = 0x38;
 const PACKET_CB_PLAYER_ABILITIES: i32 = 0x39;
 const PACKET_CB_PLAY_DISCONNECT: i32 = 0x40;
 
@@ -124,6 +126,7 @@ impl JavaEditionProfile for Je18xProfile {
         player: &PlayerSnapshot,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         Ok(vec![
+            encode_player_info_add(player)?,
             encode_named_entity_spawn(entity_id, player),
             encode_entity_head_rotation(entity_id, player.yaw),
         ])
@@ -158,7 +161,7 @@ impl JavaEditionProfile for Je18xProfile {
         slot: InventorySlot,
         stack: Option<&ItemStack>,
     ) -> Result<Option<Vec<u8>>, ProtocolError> {
-        let Some(protocol_slot) = legacy_window_slot(slot) else {
+        let Some(protocol_slot) = protocol_slot(INVENTORY_SPEC.layout, slot) else {
             return Ok(None);
         };
         Ok(Some(encode_set_slot(

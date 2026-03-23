@@ -16,175 +16,155 @@ fn multi_version_creative_server_config(world_dir: PathBuf) -> ServerConfig {
     config
 }
 
+async fn login_java_client_with_packet(
+    addr: SocketAddr,
+    protocol: TestJavaProtocol,
+    username: &str,
+    expected_packet: TestJavaPacket,
+) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
+    let codec = MinecraftWireCodec;
+    connect_and_login_java_client_until(addr, &codec, protocol, username, expected_packet).await
+}
+
 async fn login_legacy(
     addr: SocketAddr,
     username: &str,
 ) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
-    login_java_client_with_packet(addr, 5, username, 0x30, 12).await
+    login_java_client_with_packet(
+        addr,
+        TestJavaProtocol::Je1710,
+        username,
+        TestJavaPacket::WindowItems,
+    )
+    .await
 }
 
 async fn login_legacy_with_position(
     addr: SocketAddr,
     username: &str,
 ) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
-    login_java_client_with_packet(addr, 5, username, 0x08, 8).await
+    login_java_client_with_packet(
+        addr,
+        TestJavaProtocol::Je1710,
+        username,
+        TestJavaPacket::PositionAndLook,
+    )
+    .await
 }
 
 async fn login_modern_1_8(
     addr: SocketAddr,
     username: &str,
 ) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
-    login_java_client_with_packet(addr, 47, username, 0x30, 24).await
+    login_java_client_with_packet(
+        addr,
+        TestJavaProtocol::Je18x,
+        username,
+        TestJavaPacket::WindowItems,
+    )
+    .await
 }
 
 async fn login_modern_1_12(
     addr: SocketAddr,
     username: &str,
 ) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
-    login_java_client_with_packet(addr, 340, username, 0x14, 24).await
+    login_java_client_with_packet(
+        addr,
+        TestJavaProtocol::Je1122,
+        username,
+        TestJavaPacket::WindowItems,
+    )
+    .await
 }
 
-async fn login_java_client_with_packet(
-    addr: SocketAddr,
-    protocol_version: i32,
-    username: &str,
-    expected_packet_id: i32,
-    max_packets: usize,
-) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
-    let codec = MinecraftWireCodec;
-    let mut stream = connect_tcp(addr).await?;
-    write_packet(&mut stream, &codec, &encode_handshake(protocol_version, 2)?).await?;
-    write_packet(&mut stream, &codec, &login_start(username)).await?;
-    let mut buffer = BytesMut::new();
-    let packet = read_until_packet_id(
-        &mut stream,
-        &codec,
-        &mut buffer,
-        expected_packet_id,
-        max_packets,
+async fn craft_log_into_planks(
+    protocol: TestJavaProtocol,
+    stream: &mut tokio::net::TcpStream,
+    buffer: &mut BytesMut,
+    codec: &MinecraftWireCodec,
+) -> Result<(), RuntimeError> {
+    write_packet(
+        stream,
+        codec,
+        &creative_inventory_action(protocol, 36, 17, 1, 0),
     )
     .await?;
-    Ok((stream, buffer, packet))
-}
-
-async fn craft_log_into_planks_legacy(
-    stream: &mut tokio::net::TcpStream,
-    buffer: &mut BytesMut,
-    codec: &MinecraftWireCodec,
-) -> Result<(), RuntimeError> {
-    write_packet(stream, codec, &creative_inventory_action(36, 17, 1, 0)).await?;
-    let hotbar_update = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 36, 16).await?;
+    let hotbar_update = read_until_set_slot(stream, codec, buffer, protocol, 0, 36, 16).await?;
     assert_eq!(
-        decode_set_slot(&hotbar_update, 0x2f)?,
+        decode_set_slot(protocol, &hotbar_update)?,
         (0, 36, Some((17, 1, 0)))
     );
 
-    write_packet(stream, codec, &click_window(36, 0, 1, None)).await?;
-    let pickup_ack = read_until_confirm_transaction(stream, codec, buffer, 0x32, 0, 1, 16).await?;
-    assert_eq!(decode_confirm_transaction(&pickup_ack, 0x32)?, (0, 1, true));
-    let hotbar_pickup = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 36, 16).await?;
-    assert_eq!(decode_set_slot(&hotbar_pickup, 0x2f)?, (0, 36, None));
-    let cursor_pickup = read_until_set_slot(stream, codec, buffer, 0x2f, -1, -1, 16).await?;
+    write_packet(stream, codec, &click_window(protocol, 36, 0, 1, None)).await?;
+    let pickup_ack =
+        read_until_confirm_transaction(stream, codec, buffer, protocol, 0, 1, 16).await?;
     assert_eq!(
-        decode_set_slot(&cursor_pickup, 0x2f)?,
+        decode_confirm_transaction(protocol, &pickup_ack)?,
+        (0, 1, true)
+    );
+    let hotbar_pickup = read_until_set_slot(stream, codec, buffer, protocol, 0, 36, 16).await?;
+    assert_eq!(decode_set_slot(protocol, &hotbar_pickup)?, (0, 36, None));
+    let cursor_pickup = read_until_set_slot(stream, codec, buffer, protocol, -1, -1, 16).await?;
+    assert_eq!(
+        decode_set_slot(protocol, &cursor_pickup)?,
         (-1, -1, Some((17, 1, 0)))
     );
 
-    write_packet(stream, codec, &click_window(1, 0, 2, Some((17, 1, 0)))).await?;
-    let place_ack = read_until_confirm_transaction(stream, codec, buffer, 0x32, 0, 2, 16).await?;
-    assert_eq!(decode_confirm_transaction(&place_ack, 0x32)?, (0, 2, true));
-    let result_preview = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 0, 16).await?;
+    write_packet(
+        stream,
+        codec,
+        &click_window(protocol, 1, 0, 2, Some((17, 1, 0))),
+    )
+    .await?;
+    let place_ack =
+        read_until_confirm_transaction(stream, codec, buffer, protocol, 0, 2, 16).await?;
     assert_eq!(
-        decode_set_slot(&result_preview, 0x2f)?,
+        decode_confirm_transaction(protocol, &place_ack)?,
+        (0, 2, true)
+    );
+    let result_preview = read_until_set_slot(stream, codec, buffer, protocol, 0, 0, 16).await?;
+    assert_eq!(
+        decode_set_slot(protocol, &result_preview)?,
         (0, 0, Some((5, 4, 0)))
     );
-    let craft_input = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 1, 16).await?;
+    let craft_input = read_until_set_slot(stream, codec, buffer, protocol, 0, 1, 16).await?;
     assert_eq!(
-        decode_set_slot(&craft_input, 0x2f)?,
+        decode_set_slot(protocol, &craft_input)?,
         (0, 1, Some((17, 1, 0)))
     );
-    let cursor_cleared = read_until_set_slot(stream, codec, buffer, 0x2f, -1, -1, 16).await?;
-    assert_eq!(decode_set_slot(&cursor_cleared, 0x2f)?, (-1, -1, None));
+    let cursor_cleared = read_until_set_slot(stream, codec, buffer, protocol, -1, -1, 16).await?;
+    assert_eq!(decode_set_slot(protocol, &cursor_cleared)?, (-1, -1, None));
 
-    write_packet(stream, codec, &click_window(0, 0, 3, None)).await?;
-    let result_ack = read_until_confirm_transaction(stream, codec, buffer, 0x32, 0, 3, 16).await?;
-    assert_eq!(decode_confirm_transaction(&result_ack, 0x32)?, (0, 3, true));
-    let result_taken = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 0, 16).await?;
-    assert_eq!(decode_set_slot(&result_taken, 0x2f)?, (0, 0, None));
-    let input_consumed = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 1, 16).await?;
-    assert_eq!(decode_set_slot(&input_consumed, 0x2f)?, (0, 1, None));
-    let cursor_result = read_until_set_slot(stream, codec, buffer, 0x2f, -1, -1, 16).await?;
+    write_packet(stream, codec, &click_window(protocol, 0, 0, 3, None)).await?;
+    let result_ack =
+        read_until_confirm_transaction(stream, codec, buffer, protocol, 0, 3, 16).await?;
     assert_eq!(
-        decode_set_slot(&cursor_result, 0x2f)?,
+        decode_confirm_transaction(protocol, &result_ack)?,
+        (0, 3, true)
+    );
+    let result_taken = read_until_set_slot(stream, codec, buffer, protocol, 0, 0, 16).await?;
+    assert_eq!(decode_set_slot(protocol, &result_taken)?, (0, 0, None));
+    let input_consumed = read_until_set_slot(stream, codec, buffer, protocol, 0, 1, 16).await?;
+    assert_eq!(decode_set_slot(protocol, &input_consumed)?, (0, 1, None));
+    let cursor_result = read_until_set_slot(stream, codec, buffer, protocol, -1, -1, 16).await?;
+    assert_eq!(
+        decode_set_slot(protocol, &cursor_result)?,
         (-1, -1, Some((5, 4, 0)))
     );
     Ok(())
 }
 
-async fn craft_log_into_planks_1_12(
-    stream: &mut tokio::net::TcpStream,
-    buffer: &mut BytesMut,
-    codec: &MinecraftWireCodec,
-) -> Result<(), RuntimeError> {
-    write_packet(stream, codec, &creative_inventory_action_1_12(36, 17, 1, 0)).await?;
-    let hotbar_update = read_until_set_slot(stream, codec, buffer, 0x16, 0, 36, 16).await?;
-    assert_eq!(
-        decode_set_slot(&hotbar_update, 0x16)?,
-        (0, 36, Some((17, 1, 0)))
-    );
-
-    write_packet(stream, codec, &click_window_1_12(36, 0, 1, None)).await?;
-    let pickup_ack = read_until_confirm_transaction(stream, codec, buffer, 0x11, 0, 1, 16).await?;
-    assert_eq!(decode_confirm_transaction(&pickup_ack, 0x11)?, (0, 1, true));
-    let hotbar_pickup = read_until_set_slot(stream, codec, buffer, 0x16, 0, 36, 16).await?;
-    assert_eq!(decode_set_slot(&hotbar_pickup, 0x16)?, (0, 36, None));
-    let cursor_pickup = read_until_set_slot(stream, codec, buffer, 0x16, -1, -1, 16).await?;
-    assert_eq!(
-        decode_set_slot(&cursor_pickup, 0x16)?,
-        (-1, -1, Some((17, 1, 0)))
-    );
-
-    write_packet(stream, codec, &click_window_1_12(1, 0, 2, Some((17, 1, 0)))).await?;
-    let place_ack = read_until_confirm_transaction(stream, codec, buffer, 0x11, 0, 2, 16).await?;
-    assert_eq!(decode_confirm_transaction(&place_ack, 0x11)?, (0, 2, true));
-    let result_preview = read_until_set_slot(stream, codec, buffer, 0x16, 0, 0, 16).await?;
-    assert_eq!(
-        decode_set_slot(&result_preview, 0x16)?,
-        (0, 0, Some((5, 4, 0)))
-    );
-    let craft_input = read_until_set_slot(stream, codec, buffer, 0x16, 0, 1, 16).await?;
-    assert_eq!(
-        decode_set_slot(&craft_input, 0x16)?,
-        (0, 1, Some((17, 1, 0)))
-    );
-    let cursor_cleared = read_until_set_slot(stream, codec, buffer, 0x16, -1, -1, 16).await?;
-    assert_eq!(decode_set_slot(&cursor_cleared, 0x16)?, (-1, -1, None));
-
-    write_packet(stream, codec, &click_window_1_12(0, 0, 3, None)).await?;
-    let result_ack = read_until_confirm_transaction(stream, codec, buffer, 0x11, 0, 3, 16).await?;
-    assert_eq!(decode_confirm_transaction(&result_ack, 0x11)?, (0, 3, true));
-    let result_taken = read_until_set_slot(stream, codec, buffer, 0x16, 0, 0, 16).await?;
-    assert_eq!(decode_set_slot(&result_taken, 0x16)?, (0, 0, None));
-    let input_consumed = read_until_set_slot(stream, codec, buffer, 0x16, 0, 1, 16).await?;
-    assert_eq!(decode_set_slot(&input_consumed, 0x16)?, (0, 1, None));
-    let cursor_result = read_until_set_slot(stream, codec, buffer, 0x16, -1, -1, 16).await?;
-    assert_eq!(
-        decode_set_slot(&cursor_result, 0x16)?,
-        (-1, -1, Some((5, 4, 0)))
-    );
-    Ok(())
-}
-
-fn assert_legacy_set_slot(
+fn assert_java_set_slot(
+    protocol: TestJavaProtocol,
     packet: &[u8],
     expected_slot: i16,
     expected_item: Option<(i16, u8, i16)>,
 ) -> Result<(), RuntimeError> {
-    let mut reader = PacketReader::new(packet);
-    assert_eq!(reader.read_varint()?, 0x2f);
-    assert_eq!(reader.read_i8()?, 0);
-    assert_eq!(reader.read_i16()?, expected_slot);
-    assert_eq!(read_slot(&mut reader)?, expected_item);
+    assert_eq!(
+        decode_set_slot(protocol, packet)?,
+        (0, expected_slot, expected_item)
+    );
     Ok(())
 }
 
@@ -206,12 +186,19 @@ async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), Ru
         write_packet(
             &mut modern,
             &codec,
-            &creative_inventory_action_1_12(45, 20, 64, 0),
+            &creative_inventory_action(TestJavaProtocol::Je1122, 45, 20, 64, 0),
         )
         .await?;
-        read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x16, 8).await?
+        read_until_java_packet(
+            &mut modern,
+            &codec,
+            &mut modern_buffer,
+            TestJavaProtocol::Je1122,
+            TestJavaPacket::SetSlot,
+        )
+        .await?
     };
-    assert_eq!(set_slot_slot(&set_slot, 0x16)?, 45);
+    assert_eq!(set_slot_slot(TestJavaProtocol::Je1122, &set_slot)?, 45);
 
     server.shutdown().await?;
 
@@ -224,12 +211,12 @@ async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), Ru
 
     let (_, _, window_items) = login_modern_1_12(addr, "alpha").await?;
     assert_eq!(
-        window_items_slot_with_packet_id(&window_items, 0x14, 45)?,
+        window_items_slot(TestJavaProtocol::Je1122, &window_items, 45)?,
         Some((20, 64, 0))
     );
 
     let (_, _, legacy_window_items) = login_modern_1_8(addr, "beta").await?;
-    assert!(window_items_slot(&legacy_window_items, 45).is_err());
+    assert!(window_items_slot(TestJavaProtocol::Je18x, &legacy_window_items, 45).is_err());
 
     restarted.shutdown().await
 }
@@ -246,7 +233,12 @@ async fn creative_join_sends_inventory_selected_slot_and_abilities() -> Result<(
     let codec = MinecraftWireCodec;
 
     let mut stream = connect_tcp(addr).await?;
-    write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+    )
+    .await?;
     write_packet(&mut stream, &codec, &login_start("creative")).await?;
     let mut buffer = BytesMut::new();
     let mut window_items = None;
@@ -271,8 +263,14 @@ async fn creative_join_sends_inventory_selected_slot_and_abilities() -> Result<(
     let abilities = abilities
         .ok_or_else(|| RuntimeError::Config("player abilities not received".to_string()))?;
 
-    assert_eq!(window_items_slot(&window_items, 36)?, Some((1, 64, 0)));
-    assert_eq!(window_items_slot(&window_items, 44)?, Some((45, 64, 0)));
+    assert_eq!(
+        window_items_slot(TestJavaProtocol::Je1710, &window_items, 36)?,
+        Some((1, 64, 0))
+    );
+    assert_eq!(
+        window_items_slot(TestJavaProtocol::Je1710, &window_items, 44)?,
+        Some((45, 64, 0))
+    );
     assert_eq!(held_item_from_packet(&held_item)?, 0);
     assert_eq!(player_abilities_flags(&abilities)? & 0x0d, 0x0d);
 
@@ -292,7 +290,14 @@ async fn creative_place_and_break_broadcast_block_changes() -> Result<(), Runtim
 
     let (mut first, mut first_buffer, _) = login_legacy(addr, "alpha").await?;
     let (mut second, mut second_buffer, _) = login_legacy(addr, "beta").await?;
-    let _ = read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x0c, 12).await?;
+    let _ = read_until_java_packet(
+        &mut first,
+        &codec,
+        &mut first_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::NamedEntitySpawn,
+    )
+    .await?;
 
     write_packet(
         &mut first,
@@ -300,13 +305,25 @@ async fn creative_place_and_break_broadcast_block_changes() -> Result<(), Runtim
         &player_block_placement(2, 3, 0, 1, Some((1, 64, 0))),
     )
     .await?;
-    let place_change =
-        read_until_packet_id(&mut second, &codec, &mut second_buffer, 0x23, 8).await?;
+    let place_change = read_until_java_packet(
+        &mut second,
+        &codec,
+        &mut second_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
     assert_eq!(block_change_from_packet(&place_change)?, (2, 4, 0, 1, 0));
 
     write_packet(&mut first, &codec, &player_digging(0, 2, 4, 0, 1)).await?;
-    let break_change =
-        read_until_packet_id(&mut second, &codec, &mut second_buffer, 0x23, 8).await?;
+    let break_change = read_until_java_packet(
+        &mut second,
+        &codec,
+        &mut second_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
     assert_eq!(block_change_from_packet(&break_change)?, (2, 4, 0, 0, 0));
 
     server.shutdown().await
@@ -326,19 +343,40 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
     let addr = listener_addr(&server);
 
     let (mut stream, mut buffer, _) = login_legacy(addr, "alpha").await?;
-    let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 12).await?;
+    let _ = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
 
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(36, 20, 64, 0),
+        &creative_inventory_action(TestJavaProtocol::Je1710, 36, 20, 64, 0),
     )
     .await?;
-    let set_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
-    assert_legacy_set_slot(&set_slot, 36, Some((20, 64, 0)))?;
+    let set_slot = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::SetSlot,
+    )
+    .await?;
+    assert_java_set_slot(TestJavaProtocol::Je1710, &set_slot, 36, Some((20, 64, 0)))?;
 
     write_packet(&mut stream, &codec, &held_item_change(4)).await?;
-    let held_slot_packet = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 8).await?;
+    let held_slot_packet = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
     assert_eq!(held_item_from_packet(&held_slot_packet)?, 4);
 
     server.shutdown().await?;
@@ -350,9 +388,19 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
     .await?;
     let addr = listener_addr(&restarted);
     let (mut stream, mut buffer, window_items) = login_legacy(addr, "alpha").await?;
-    let held_item = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 12).await?;
+    let held_item = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
 
-    assert_eq!(window_items_slot(&window_items, 36)?, Some((20, 64, 0)));
+    assert_eq!(
+        window_items_slot(TestJavaProtocol::Je1710, &window_items, 36)?,
+        Some((20, 64, 0))
+    );
     assert_eq!(held_item_from_packet(&held_item)?, 4);
 
     restarted.shutdown().await
@@ -369,7 +417,13 @@ async fn plugin_backed_storage_and_auth_profiles_boot_and_persist() -> Result<()
     let server = build_test_server(config, plugin_test_registries_tcp_only()?).await?;
 
     let addr = listener_addr(&server);
-    let _ = login_java_client_with_packet(addr, 5, "alpha", 0x02, 8).await?;
+    let _ = login_java_client_with_packet(
+        addr,
+        TestJavaProtocol::Je1710,
+        "alpha",
+        TestJavaPacket::LoginSuccess,
+    )
+    .await?;
 
     server.shutdown().await?;
 
@@ -393,11 +447,18 @@ async fn unsupported_creative_inventory_action_is_corrected() -> Result<(), Runt
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(36, 999, 64, 0),
+        &creative_inventory_action(TestJavaProtocol::Je1710, 36, 999, 64, 0),
     )
     .await?;
-    let set_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
-    assert_legacy_set_slot(&set_slot, 36, Some((1, 64, 0)))?;
+    let set_slot = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::SetSlot,
+    )
+    .await?;
+    assert_java_set_slot(TestJavaProtocol::Je1710, &set_slot, 36, Some((1, 64, 0)))?;
 
     server.shutdown().await
 }
@@ -415,7 +476,7 @@ async fn legacy_window_zero_crafting_round_trips_authoritative_slot_updates()
     let codec = MinecraftWireCodec;
 
     let (mut stream, mut buffer, _) = login_legacy(addr, "craft-legacy").await?;
-    craft_log_into_planks_legacy(&mut stream, &mut buffer, &codec).await?;
+    craft_log_into_planks(TestJavaProtocol::Je1710, &mut stream, &mut buffer, &codec).await?;
 
     server.shutdown().await
 }
@@ -433,7 +494,7 @@ async fn modern_1_8_window_zero_crafting_round_trips_authoritative_slot_updates(
     let codec = MinecraftWireCodec;
 
     let (mut stream, mut buffer, _) = login_modern_1_8(addr, "craft-18").await?;
-    craft_log_into_planks_legacy(&mut stream, &mut buffer, &codec).await?;
+    craft_log_into_planks(TestJavaProtocol::Je18x, &mut stream, &mut buffer, &codec).await?;
 
     server.shutdown().await
 }
@@ -451,7 +512,7 @@ async fn modern_1_12_window_zero_crafting_round_trips_authoritative_slot_updates
     let codec = MinecraftWireCodec;
 
     let (mut stream, mut buffer, _) = login_modern_1_12(addr, "craft-1122").await?;
-    craft_log_into_planks_1_12(&mut stream, &mut buffer, &codec).await?;
+    craft_log_into_planks(TestJavaProtocol::Je1122, &mut stream, &mut buffer, &codec).await?;
 
     server.shutdown().await
 }
@@ -472,60 +533,144 @@ async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(36, 17, 1, 0),
+        &creative_inventory_action(TestJavaProtocol::Je1710, 36, 17, 1, 0),
     )
     .await?;
-    let _ = read_until_set_slot(&mut stream, &codec, &mut buffer, 0x2f, 0, 36, 16).await?;
+    let _ = read_until_set_slot(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        0,
+        36,
+        16,
+    )
+    .await?;
 
     write_packet(
         &mut stream,
         &codec,
-        &click_window(36, 0, 1, Some((17, 1, 0))),
+        &click_window(TestJavaProtocol::Je1710, 36, 0, 1, Some((17, 1, 0))),
     )
     .await?;
-    let reject_ack =
-        read_until_confirm_transaction(&mut stream, &codec, &mut buffer, 0x32, 0, 1, 16).await?;
+    let reject_ack = read_until_confirm_transaction(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        0,
+        1,
+        16,
+    )
+    .await?;
     assert_eq!(
-        decode_confirm_transaction(&reject_ack, 0x32)?,
+        decode_confirm_transaction(TestJavaProtocol::Je1710, &reject_ack)?,
         (0, 1, false)
     );
-    let window_items = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 16).await?;
-    assert_eq!(window_items_slot(&window_items, 36)?, None);
-    let slot_resync =
-        read_until_set_slot(&mut stream, &codec, &mut buffer, 0x2f, 0, 36, 16).await?;
-    assert_eq!(decode_set_slot(&slot_resync, 0x2f)?, (0, 36, None));
-    let held_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 16).await?;
-    assert_eq!(held_item_from_packet(&held_slot)?, 0);
-    let cursor_resync =
-        read_until_set_slot(&mut stream, &codec, &mut buffer, 0x2f, -1, -1, 16).await?;
+    let window_items = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::WindowItems,
+    )
+    .await?;
     assert_eq!(
-        decode_set_slot(&cursor_resync, 0x2f)?,
+        window_items_slot(TestJavaProtocol::Je1710, &window_items, 36)?,
+        None
+    );
+    let slot_resync = read_until_set_slot(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        0,
+        36,
+        16,
+    )
+    .await?;
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je1710, &slot_resync)?,
+        (0, 36, None)
+    );
+    let held_slot = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+    assert_eq!(held_item_from_packet(&held_slot)?, 0);
+    let cursor_resync = read_until_set_slot(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        -1,
+        -1,
+        16,
+    )
+    .await?;
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je1710, &cursor_resync)?,
         (-1, -1, Some((17, 1, 0)))
     );
 
     write_packet(
         &mut stream,
         &codec,
-        &click_window(1, 0, 2, Some((17, 1, 0))),
+        &click_window(TestJavaProtocol::Je1710, 1, 0, 2, Some((17, 1, 0))),
     )
     .await?;
-    assert_no_packet_id(&mut stream, &codec, &mut buffer, 0x32).await?;
-
-    write_packet(&mut stream, &codec, &confirm_transaction(0, 1, false)).await?;
+    assert_no_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::ConfirmTransaction,
+    )
+    .await?;
 
     write_packet(
         &mut stream,
         &codec,
-        &click_window(1, 0, 3, Some((17, 1, 0))),
+        &confirm_transaction_ack(TestJavaProtocol::Je1710, 0, 1, false),
     )
     .await?;
-    let accept_ack =
-        read_until_confirm_transaction(&mut stream, &codec, &mut buffer, 0x32, 0, 3, 16).await?;
-    assert_eq!(decode_confirm_transaction(&accept_ack, 0x32)?, (0, 3, true));
-    let result_preview =
-        read_until_set_slot(&mut stream, &codec, &mut buffer, 0x2f, 0, 0, 16).await?;
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window(TestJavaProtocol::Je1710, 1, 0, 3, Some((17, 1, 0))),
+    )
+    .await?;
+    let accept_ack = read_until_confirm_transaction(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        0,
+        3,
+        16,
+    )
+    .await?;
     assert_eq!(
-        decode_set_slot(&result_preview, 0x2f)?,
+        decode_confirm_transaction(TestJavaProtocol::Je1710, &accept_ack)?,
+        (0, 3, true)
+    );
+    let result_preview = read_until_set_slot(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        0,
+        0,
+        16,
+    )
+    .await?;
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je1710, &result_preview)?,
         (0, 0, Some((5, 4, 0)))
     );
 
@@ -551,11 +696,25 @@ async fn survival_place_is_rejected_with_block_and_inventory_correction() -> Res
         &player_block_placement(2, 3, 0, 1, Some((1, 64, 0))),
     )
     .await?;
-    let block_change = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x23, 8).await?;
-    let set_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
+    let block_change = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
+    let set_slot = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::SetSlot,
+    )
+    .await?;
 
     assert_eq!(block_change_from_packet(&block_change)?, (2, 4, 0, 0, 0));
-    assert_legacy_set_slot(&set_slot, 36, Some((1, 64, 0)))?;
+    assert_java_set_slot(TestJavaProtocol::Je1710, &set_slot, 36, Some((1, 64, 0)))?;
 
     server.shutdown().await
 }
@@ -575,7 +734,14 @@ async fn two_players_can_see_movement_and_restart_persists_position() -> Result<
 
     let (mut first, mut first_buffer, _) = login_legacy_with_position(addr, "alpha").await?;
     let (mut second, _, _) = login_legacy_with_position(addr, "beta").await?;
-    let spawn_packet = read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x0c, 8).await?;
+    let spawn_packet = read_until_java_packet(
+        &mut first,
+        &codec,
+        &mut first_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::NamedEntitySpawn,
+    )
+    .await?;
     assert_eq!(packet_id(&spawn_packet), 0x0c);
 
     write_packet(

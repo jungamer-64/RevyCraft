@@ -141,7 +141,7 @@ fn decodes_play_packets_into_core_commands() {
 fn encodes_chunk_and_spawn_packets() {
     let adapter = Je18xAdapter::new();
     let player = player_snapshot("alpha");
-    let packet = adapter
+    let packets = adapter
         .encode_play_event(
             &CoreEvent::EntitySpawned {
                 entity_id: mc_core::EntityId(7),
@@ -153,7 +153,39 @@ fn encodes_chunk_and_spawn_packets() {
             },
         )
         .expect("spawn should encode");
-    assert_eq!(packet.len(), 2);
+    assert_eq!(packets.len(), 3);
+
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x38);
+    assert_eq!(reader.read_varint().expect("action should decode"), 0);
+    assert_eq!(reader.read_varint().expect("count should decode"), 1);
+    assert_eq!(
+        reader.read_bytes(16).expect("uuid should decode"),
+        player.id.0.as_bytes()
+    );
+    assert_eq!(
+        reader.read_string(16).expect("username should decode"),
+        player.username
+    );
+    assert_eq!(reader.read_varint().expect("properties should decode"), 0);
+    assert_eq!(reader.read_varint().expect("gamemode should decode"), 0);
+    assert_eq!(reader.read_varint().expect("ping should decode"), 0);
+    assert!(!reader.read_bool().expect("display name flag should decode"));
+    assert!(reader.is_exhausted());
+
+    let mut spawn_reader = PacketReader::new(&packets[1]);
+    assert_eq!(
+        spawn_reader.read_varint().expect("spawn id should decode"),
+        0x0c
+    );
+
+    let mut head_reader = PacketReader::new(&packets[2]);
+    assert_eq!(
+        head_reader
+            .read_varint()
+            .expect("head rotation id should decode"),
+        0x19
+    );
 
     let chunk = ChunkColumn::new(ChunkPos::new(0, 0));
     let packets = adapter
@@ -181,7 +213,7 @@ fn decodes_creative_inventory_slot_mapping() {
     writer.write_i16(20);
     writer.write_u8(64);
     writer.write_i16(0);
-    writer.write_i16(-1);
+    writer.write_u8(0);
 
     let command = adapter
         .decode_play(player_id, &writer.into_inner())
@@ -210,7 +242,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     writer.write_i16(5);
     writer.write_u8(4);
     writer.write_i16(0);
-    writer.write_i16(-1);
+    writer.write_u8(0);
     let command = adapter
         .decode_play(player_id, &writer.into_inner())
         .expect("click window should decode")
@@ -286,4 +318,21 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2f);
     assert_eq!(reader.read_i8().expect("window id should decode"), -1);
     assert_eq!(reader.read_i16().expect("slot should decode"), -1);
+}
+
+#[test]
+fn encodes_legacy_slots_with_tag_end_marker() {
+    let packet = crate::encoding::encode_window_items(0, &PlayerInventory::creative_starter())
+        .expect("window items should encode");
+    let mut reader = PacketReader::new(&packet);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x30);
+    assert_eq!(reader.read_u8().expect("window id should decode"), 0);
+    assert_eq!(reader.read_i16().expect("slot count should decode"), 45);
+    for _ in 0..36 {
+        assert_eq!(reader.read_i16().expect("empty slot should decode"), -1);
+    }
+    assert!(reader.read_i16().expect("item id should decode") >= 0);
+    assert_eq!(reader.read_u8().expect("count should decode"), 64);
+    let _ = reader.read_i16().expect("damage should decode");
+    assert_eq!(reader.read_u8().expect("nbt tag should decode"), 0);
 }

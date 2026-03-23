@@ -14,7 +14,7 @@ use mc_proto_common::{PacketWriter, ProtocolError};
 use mc_proto_je_common::__version_support::{
     blocks::legacy_block,
     chunks::{build_chunk_data_1_7, zlib_compress},
-    inventory::{legacy_window_items, write_legacy_slot},
+    inventory::{window_items, write_slot},
     metadata::write_empty_metadata_1_8,
     positions::{to_angle_byte, to_fixed_point},
 };
@@ -40,7 +40,7 @@ pub(crate) fn encode_spawn_position(spawn: BlockPos) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_SPAWN_POSITION);
     writer.write_i32(spawn.x);
-    writer.write_u8(u8::try_from(spawn.y).expect("spawn y should fit into u8"));
+    writer.write_i32(spawn.y);
     writer.write_i32(spawn.z);
     writer.into_inner()
 }
@@ -171,7 +171,7 @@ pub(crate) fn encode_set_slot(
     writer.write_varint(PACKET_CB_SET_SLOT);
     writer.write_i8(window_id);
     writer.write_i16(slot);
-    write_legacy_slot(&mut writer, stack)?;
+    write_slot(&mut writer, stack, crate::INVENTORY_SPEC.slot_nbt)?;
     Ok(writer.into_inner())
 }
 
@@ -198,8 +198,8 @@ pub(crate) fn encode_window_items(
     writer.write_varint(PACKET_CB_WINDOW_ITEMS);
     writer.write_i8(i8::from_be_bytes([window_id]));
     writer.write_i16(slot_count);
-    for slot in &legacy_window_items(inventory) {
-        write_legacy_slot(&mut writer, slot.as_ref())?;
+    for slot in &window_items(crate::INVENTORY_SPEC.layout, inventory) {
+        write_slot(&mut writer, slot.as_ref(), crate::INVENTORY_SPEC.slot_nbt)?;
     }
     Ok(writer.into_inner())
 }

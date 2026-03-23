@@ -9,7 +9,11 @@ fn protocol_registry_resolves_registered_adapter() -> Result<(), RuntimeError> {
         .expect("registered adapter should resolve by id");
     let by_route = registry
         .protocols()
-        .resolve_route(TransportKind::Tcp, Edition::Je, 5)
+        .resolve_route(
+            TransportKind::Tcp,
+            Edition::Je,
+            TestJavaProtocol::Je1710.protocol_version(),
+        )
         .expect("registered adapter should resolve by route");
 
     assert_eq!(by_id.descriptor().adapter_id, JE_1_7_10_ADAPTER_ID);

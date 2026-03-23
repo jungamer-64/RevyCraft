@@ -1,0 +1,487 @@
+use mc_proto_common::{PacketReader, PacketWriter, ProtocolError};
+
+pub type TestItemStack = (i16, u8, i16);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestJavaProtocol {
+    Je1710,
+    Je18x,
+    Je1122,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestJavaPacket {
+    StatusResponse,
+    StatusPong,
+    LoginSuccess,
+    JoinGame,
+    SpawnPosition,
+    PositionAndLook,
+    NamedEntitySpawn,
+    PlayerInfoAdd,
+    EntityTeleport,
+    BlockChange,
+    SetSlot,
+    WindowItems,
+    ConfirmTransaction,
+    HeldItemChange,
+    PlayerAbilities,
+    ChunkData,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlotNbtEncoding {
+    LengthPrefixedBlob,
+    RootTag,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TestJavaProtocolError {
+    #[error("{0}")]
+    Message(&'static str),
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+}
+
+impl TestJavaProtocol {
+    #[must_use]
+    pub const fn protocol_version(self) -> i32 {
+        match self {
+            Self::Je1710 => 5,
+            Self::Je18x => 47,
+            Self::Je1122 => 340,
+        }
+    }
+
+    #[must_use]
+    pub const fn login_ready_packet_id(self) -> i32 {
+        match self {
+            Self::Je1710 | Self::Je18x => 0x30,
+            Self::Je1122 => 0x14,
+        }
+    }
+
+    #[must_use]
+    pub const fn set_slot_packet_id(self) -> i32 {
+        match self {
+            Self::Je1710 | Self::Je18x => 0x2f,
+            Self::Je1122 => 0x16,
+        }
+    }
+
+    #[must_use]
+    pub const fn window_items_packet_id(self) -> i32 {
+        match self {
+            Self::Je1710 | Self::Je18x => 0x30,
+            Self::Je1122 => 0x14,
+        }
+    }
+
+    #[must_use]
+    pub const fn confirm_transaction_packet_id(self) -> i32 {
+        match self {
+            Self::Je1710 | Self::Je18x => 0x32,
+            Self::Je1122 => 0x11,
+        }
+    }
+
+    #[must_use]
+    pub const fn clientbound_packet_id(self, packet: TestJavaPacket) -> Option<i32> {
+        match (self, packet) {
+            (_, TestJavaPacket::StatusResponse) => Some(0x00),
+            (_, TestJavaPacket::StatusPong) => Some(0x01),
+            (_, TestJavaPacket::LoginSuccess) => Some(0x02),
+            (Self::Je1710, TestJavaPacket::JoinGame) => Some(0x01),
+            (Self::Je18x, TestJavaPacket::JoinGame) => Some(0x01),
+            (Self::Je1122, TestJavaPacket::JoinGame) => Some(0x23),
+            (Self::Je1710, TestJavaPacket::SpawnPosition) => Some(0x05),
+            (Self::Je18x, TestJavaPacket::SpawnPosition) => Some(0x05),
+            (Self::Je1122, TestJavaPacket::SpawnPosition) => Some(0x46),
+            (Self::Je1710, TestJavaPacket::PositionAndLook) => Some(0x08),
+            (Self::Je18x, TestJavaPacket::PositionAndLook) => Some(0x08),
+            (Self::Je1122, TestJavaPacket::PositionAndLook) => Some(0x2f),
+            (Self::Je1710, TestJavaPacket::NamedEntitySpawn) => Some(0x0c),
+            (Self::Je18x, TestJavaPacket::NamedEntitySpawn) => Some(0x0c),
+            (Self::Je1122, TestJavaPacket::NamedEntitySpawn) => Some(0x05),
+            (Self::Je1710, TestJavaPacket::PlayerInfoAdd) => None,
+            (Self::Je18x, TestJavaPacket::PlayerInfoAdd) => Some(0x38),
+            (Self::Je1122, TestJavaPacket::PlayerInfoAdd) => Some(0x2d),
+            (Self::Je1710, TestJavaPacket::EntityTeleport) => Some(0x18),
+            (Self::Je18x, TestJavaPacket::EntityTeleport) => Some(0x18),
+            (Self::Je1122, TestJavaPacket::EntityTeleport) => Some(0x4c),
+            (Self::Je1710, TestJavaPacket::BlockChange) => Some(0x23),
+            (Self::Je18x, TestJavaPacket::BlockChange) => Some(0x23),
+            (Self::Je1122, TestJavaPacket::BlockChange) => Some(0x0b),
+            (_, TestJavaPacket::SetSlot) => Some(self.set_slot_packet_id()),
+            (_, TestJavaPacket::WindowItems) => Some(self.window_items_packet_id()),
+            (_, TestJavaPacket::ConfirmTransaction) => Some(self.confirm_transaction_packet_id()),
+            (Self::Je1710, TestJavaPacket::HeldItemChange) => Some(0x09),
+            (Self::Je18x, TestJavaPacket::HeldItemChange) => Some(0x09),
+            (Self::Je1122, TestJavaPacket::HeldItemChange) => Some(0x3a),
+            (Self::Je1710, TestJavaPacket::PlayerAbilities) => Some(0x39),
+            (Self::Je18x, TestJavaPacket::PlayerAbilities) => Some(0x39),
+            (Self::Je1122, TestJavaPacket::PlayerAbilities) => Some(0x2c),
+            (Self::Je1710, TestJavaPacket::ChunkData) => Some(0x26),
+            (Self::Je18x, TestJavaPacket::ChunkData) => Some(0x21),
+            (Self::Je1122, TestJavaPacket::ChunkData) => Some(0x20),
+        }
+    }
+
+    #[must_use]
+    pub fn encode_creative_inventory_action(
+        self,
+        slot: i16,
+        item_id: i16,
+        count: u8,
+        damage: i16,
+    ) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(match self {
+            Self::Je1710 | Self::Je18x => 0x10,
+            Self::Je1122 => 0x1b,
+        });
+        writer.write_i16(slot);
+        write_slot(
+            &mut writer,
+            Some((item_id, count, damage)),
+            self.slot_nbt_encoding(),
+        );
+        writer.into_inner()
+    }
+
+    #[must_use]
+    pub fn encode_click_window(
+        self,
+        slot: i16,
+        button: i8,
+        action_number: i16,
+        clicked_item: Option<TestItemStack>,
+    ) -> Vec<u8> {
+        self.encode_click_window_in_window(0, slot, button, action_number, clicked_item)
+    }
+
+    #[must_use]
+    pub fn encode_click_window_in_window(
+        self,
+        window_id: i8,
+        slot: i16,
+        button: i8,
+        action_number: i16,
+        clicked_item: Option<TestItemStack>,
+    ) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(match self {
+            Self::Je1710 | Self::Je18x => 0x0e,
+            Self::Je1122 => 0x07,
+        });
+        writer.write_i8(window_id);
+        writer.write_i16(slot);
+        writer.write_i8(button);
+        writer.write_i16(action_number);
+        match self {
+            Self::Je1710 | Self::Je18x => writer.write_i8(0),
+            Self::Je1122 => writer.write_varint(0),
+        }
+        write_slot(&mut writer, clicked_item, self.slot_nbt_encoding());
+        writer.into_inner()
+    }
+
+    #[must_use]
+    pub fn encode_confirm_transaction_ack(
+        self,
+        window_id: u8,
+        action_number: i16,
+        accepted: bool,
+    ) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(match self {
+            Self::Je1710 | Self::Je18x => 0x0f,
+            Self::Je1122 => 0x05,
+        });
+        writer.write_u8(window_id);
+        writer.write_i16(action_number);
+        writer.write_bool(accepted);
+        writer.into_inner()
+    }
+
+    pub fn decode_set_slot(
+        self,
+        packet: &[u8],
+    ) -> Result<(i8, i16, Option<TestItemStack>), TestJavaProtocolError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != self.set_slot_packet_id() {
+            return Err(TestJavaProtocolError::Message("expected set slot packet"));
+        }
+        let window_id = reader.read_i8()?;
+        let slot = reader.read_i16()?;
+        let stack = read_slot(&mut reader, self.slot_nbt_encoding())?;
+        Ok((window_id, slot, stack))
+    }
+
+    pub fn decode_confirm_transaction(
+        self,
+        packet: &[u8],
+    ) -> Result<(u8, i16, bool), TestJavaProtocolError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != self.confirm_transaction_packet_id() {
+            return Err(TestJavaProtocolError::Message(
+                "expected confirm transaction packet",
+            ));
+        }
+        let window_id = reader.read_u8()?;
+        let action_number = reader.read_i16()?;
+        let accepted = reader.read_bool()?;
+        Ok((window_id, action_number, accepted))
+    }
+
+    pub fn window_items_slot(
+        self,
+        packet: &[u8],
+        wanted_slot: usize,
+    ) -> Result<Option<TestItemStack>, TestJavaProtocolError> {
+        let mut reader = PacketReader::new(packet);
+        if reader.read_varint()? != self.window_items_packet_id() {
+            return Err(TestJavaProtocolError::Message(
+                "expected window items packet",
+            ));
+        }
+        let _window_id = reader.read_u8()?;
+        let count = usize::try_from(reader.read_i16()?)
+            .map_err(|_| TestJavaProtocolError::Message("negative window item count"))?;
+        if wanted_slot >= count {
+            return Err(TestJavaProtocolError::Message("wanted slot out of bounds"));
+        }
+        for slot in 0..count {
+            let item = read_slot(&mut reader, self.slot_nbt_encoding())?;
+            if slot == wanted_slot {
+                return Ok(item);
+            }
+        }
+        Err(TestJavaProtocolError::Message("wanted slot missing"))
+    }
+
+    fn slot_nbt_encoding(self) -> SlotNbtEncoding {
+        match self {
+            Self::Je1710 => SlotNbtEncoding::LengthPrefixedBlob,
+            Self::Je18x | Self::Je1122 => SlotNbtEncoding::RootTag,
+        }
+    }
+}
+
+fn write_slot(writer: &mut PacketWriter, stack: Option<TestItemStack>, slot_nbt: SlotNbtEncoding) {
+    let Some((item_id, count, damage)) = stack else {
+        writer.write_i16(-1);
+        return;
+    };
+    writer.write_i16(item_id);
+    writer.write_u8(count);
+    writer.write_i16(damage);
+    match slot_nbt {
+        SlotNbtEncoding::LengthPrefixedBlob => writer.write_i16(-1),
+        SlotNbtEncoding::RootTag => writer.write_u8(0),
+    }
+}
+
+fn read_slot(
+    reader: &mut PacketReader<'_>,
+    slot_nbt: SlotNbtEncoding,
+) -> Result<Option<TestItemStack>, TestJavaProtocolError> {
+    let item_id = reader.read_i16()?;
+    if item_id < 0 {
+        return Ok(None);
+    }
+    let count = reader.read_u8()?;
+    let damage = reader.read_i16()?;
+    skip_slot_nbt(reader, slot_nbt)?;
+    Ok(Some((item_id, count, damage)))
+}
+
+fn skip_slot_nbt(
+    reader: &mut PacketReader<'_>,
+    slot_nbt: SlotNbtEncoding,
+) -> Result<(), TestJavaProtocolError> {
+    match slot_nbt {
+        SlotNbtEncoding::LengthPrefixedBlob => {
+            let length = reader.read_i16()?;
+            if length < 0 {
+                return Ok(());
+            }
+            let length = usize::try_from(length)
+                .map_err(|_| TestJavaProtocolError::Message("negative slot nbt length"))?;
+            let _ = reader.read_bytes(length)?;
+            Ok(())
+        }
+        SlotNbtEncoding::RootTag => {
+            let tag_type = reader.read_u8()?;
+            if tag_type == 0 {
+                return Ok(());
+            }
+            skip_nbt_name(reader)?;
+            skip_nbt_payload(reader, tag_type)
+        }
+    }
+}
+
+fn skip_nbt_name(reader: &mut PacketReader<'_>) -> Result<(), TestJavaProtocolError> {
+    let length = usize::from(reader.read_u16()?);
+    let _ = reader.read_bytes(length)?;
+    Ok(())
+}
+
+fn skip_nbt_payload(
+    reader: &mut PacketReader<'_>,
+    tag_type: u8,
+) -> Result<(), TestJavaProtocolError> {
+    match tag_type {
+        1 => {
+            let _ = reader.read_u8()?;
+        }
+        2 => {
+            let _ = reader.read_i16()?;
+        }
+        3 => {
+            let _ = reader.read_i32()?;
+        }
+        4 => {
+            let _ = reader.read_i64()?;
+        }
+        5 => {
+            let _ = reader.read_f32()?;
+        }
+        6 => {
+            let _ = reader.read_f64()?;
+        }
+        7 => skip_nbt_array(reader, 1)?,
+        8 => skip_nbt_name(reader)?,
+        9 => {
+            let child_type = reader.read_u8()?;
+            let len = read_nbt_length(reader)?;
+            for _ in 0..len {
+                skip_nbt_payload(reader, child_type)?;
+            }
+        }
+        10 => loop {
+            let child_type = reader.read_u8()?;
+            if child_type == 0 {
+                break;
+            }
+            skip_nbt_name(reader)?;
+            skip_nbt_payload(reader, child_type)?;
+        },
+        11 => skip_nbt_array(reader, 4)?,
+        12 => skip_nbt_array(reader, 8)?,
+        _ => return Err(TestJavaProtocolError::Message("invalid slot nbt tag type")),
+    }
+    Ok(())
+}
+
+fn skip_nbt_array(
+    reader: &mut PacketReader<'_>,
+    element_width: usize,
+) -> Result<(), TestJavaProtocolError> {
+    let len = read_nbt_length(reader)?;
+    let bytes = len
+        .checked_mul(element_width)
+        .ok_or(TestJavaProtocolError::Message("slot nbt array too large"))?;
+    let _ = reader.read_bytes(bytes)?;
+    Ok(())
+}
+
+fn read_nbt_length(reader: &mut PacketReader<'_>) -> Result<usize, TestJavaProtocolError> {
+    usize::try_from(reader.read_i32()?)
+        .map_err(|_| TestJavaProtocolError::Message("negative slot nbt length"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protocol_constants_match_expected_versions() {
+        assert_eq!(TestJavaProtocol::Je1710.protocol_version(), 5);
+        assert_eq!(TestJavaProtocol::Je18x.protocol_version(), 47);
+        assert_eq!(TestJavaProtocol::Je1122.protocol_version(), 340);
+        assert_eq!(TestJavaProtocol::Je1710.login_ready_packet_id(), 0x30);
+        assert_eq!(TestJavaProtocol::Je1122.login_ready_packet_id(), 0x14);
+        assert_eq!(
+            TestJavaProtocol::Je18x.clientbound_packet_id(TestJavaPacket::PlayerInfoAdd),
+            Some(0x38)
+        );
+        assert_eq!(
+            TestJavaProtocol::Je1710.clientbound_packet_id(TestJavaPacket::PlayerInfoAdd),
+            None
+        );
+    }
+
+    #[test]
+    fn legacy_set_slot_round_trips_with_length_prefixed_nbt() {
+        let protocol = TestJavaProtocol::Je1710;
+        let mut writer = PacketWriter::default();
+        writer.write_varint(protocol.set_slot_packet_id());
+        writer.write_i8(0);
+        writer.write_i16(36);
+        write_slot(
+            &mut writer,
+            Some((17, 1, 0)),
+            SlotNbtEncoding::LengthPrefixedBlob,
+        );
+
+        assert_eq!(
+            protocol
+                .decode_set_slot(&writer.into_inner())
+                .expect("legacy set slot should decode"),
+            (0, 36, Some((17, 1, 0)))
+        );
+    }
+
+    #[test]
+    fn modern_window_items_decode_uses_root_tag_slots() {
+        let protocol = TestJavaProtocol::Je1122;
+        let mut writer = PacketWriter::default();
+        writer.write_varint(protocol.window_items_packet_id());
+        writer.write_u8(0);
+        writer.write_i16(46);
+        for _ in 0..45 {
+            write_slot(&mut writer, None, SlotNbtEncoding::RootTag);
+        }
+        write_slot(&mut writer, Some((20, 64, 0)), SlotNbtEncoding::RootTag);
+
+        assert_eq!(
+            protocol
+                .window_items_slot(&writer.into_inner(), 45)
+                .expect("modern offhand slot should decode"),
+            Some((20, 64, 0))
+        );
+    }
+
+    #[test]
+    fn click_window_packet_ids_follow_protocol_version() {
+        let legacy = TestJavaProtocol::Je1710.encode_click_window(36, 0, 1, None);
+        let mut legacy_reader = PacketReader::new(&legacy);
+        assert_eq!(
+            legacy_reader
+                .read_varint()
+                .expect("legacy id should decode"),
+            0x0e
+        );
+        assert_eq!(legacy_reader.read_i8().expect("window should decode"), 0);
+        assert_eq!(legacy_reader.read_i16().expect("slot should decode"), 36);
+        assert_eq!(legacy_reader.read_i8().expect("button should decode"), 0);
+        assert_eq!(legacy_reader.read_i16().expect("action should decode"), 1);
+        assert_eq!(legacy_reader.read_i8().expect("mode should decode"), 0);
+
+        let modern = TestJavaProtocol::Je1122.encode_click_window(36, 0, 1, None);
+        let mut modern_reader = PacketReader::new(&modern);
+        assert_eq!(
+            modern_reader
+                .read_varint()
+                .expect("modern id should decode"),
+            0x07
+        );
+        assert_eq!(modern_reader.read_i8().expect("window should decode"), 0);
+        assert_eq!(modern_reader.read_i16().expect("slot should decode"), 36);
+        assert_eq!(modern_reader.read_i8().expect("button should decode"), 0);
+        assert_eq!(modern_reader.read_i16().expect("action should decode"), 1);
+        assert_eq!(modern_reader.read_varint().expect("mode should decode"), 0);
+    }
+}

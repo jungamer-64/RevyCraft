@@ -141,6 +141,57 @@ fn decodes_offhand_block_place() {
 }
 
 #[test]
+fn encodes_player_spawn_with_player_info() {
+    let adapter = Je1122Adapter::new();
+    let player = player_snapshot("alpha");
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::EntitySpawned {
+                entity_id: mc_core::EntityId(7),
+                player: player.clone(),
+            },
+            &PlayEncodingContext {
+                player_id: player.id,
+                entity_id: mc_core::EntityId(7),
+            },
+        )
+        .expect("spawn should encode");
+    assert_eq!(packets.len(), 3);
+
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2d);
+    assert_eq!(reader.read_varint().expect("action should decode"), 0);
+    assert_eq!(reader.read_varint().expect("count should decode"), 1);
+    assert_eq!(
+        reader.read_bytes(16).expect("uuid should decode"),
+        player.id.0.as_bytes()
+    );
+    assert_eq!(
+        reader.read_string(16).expect("username should decode"),
+        player.username
+    );
+    assert_eq!(reader.read_varint().expect("properties should decode"), 0);
+    assert_eq!(reader.read_varint().expect("gamemode should decode"), 0);
+    assert_eq!(reader.read_varint().expect("ping should decode"), 0);
+    assert!(!reader.read_bool().expect("display name flag should decode"));
+    assert!(reader.is_exhausted());
+
+    let mut spawn_reader = PacketReader::new(&packets[1]);
+    assert_eq!(
+        spawn_reader.read_varint().expect("spawn id should decode"),
+        0x05
+    );
+
+    let mut head_reader = PacketReader::new(&packets[2]);
+    assert_eq!(
+        head_reader
+            .read_varint()
+            .expect("head rotation id should decode"),
+        0x36
+    );
+}
+
+#[test]
 fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     let adapter = Je1122Adapter::new();
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"window-click-1122"));
@@ -154,7 +205,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     writer.write_i16(20);
     writer.write_u8(1);
     writer.write_i16(0);
-    writer.write_i16(-1);
+    writer.write_u8(0);
     let command = adapter
         .decode_play(player_id, &writer.into_inner())
         .expect("click window should decode")

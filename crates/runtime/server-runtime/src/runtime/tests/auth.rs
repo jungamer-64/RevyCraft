@@ -73,35 +73,37 @@ async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
 
-    for (protocol_version, username, expected_packet_id) in [
-        (5, "legacy-online", 0x30),
-        (47, "middle-online", 0x30),
-        (340, "latest-online", 0x14),
+    for (protocol, username) in [
+        (TestJavaProtocol::Je1710, "legacy-online"),
+        (TestJavaProtocol::Je18x, "middle-online"),
+        (TestJavaProtocol::Je1122, "latest-online"),
     ] {
         let mut stream = connect_tcp(addr).await?;
         let (mut encryption, mut buffer) =
-            perform_online_login(&mut stream, &codec, protocol_version, username).await?;
-        let login_success = read_until_packet_id_encrypted(
+            perform_online_login(&mut stream, &codec, protocol, username).await?;
+        let login_success = read_until_java_packet_encrypted(
             &mut stream,
             &codec,
             &mut buffer,
-            0x02,
+            protocol,
+            TestJavaPacket::LoginSuccess,
             8,
             &mut encryption,
         )
         .await?;
         assert_eq!(packet_id(&login_success), 0x02);
 
-        let bootstrap = read_until_packet_id_encrypted(
+        let bootstrap = read_until_java_packet_encrypted(
             &mut stream,
             &codec,
             &mut buffer,
-            expected_packet_id,
+            protocol,
+            TestJavaPacket::WindowItems,
             24,
             &mut encryption,
         )
         .await?;
-        assert_eq!(packet_id(&bootstrap), expected_packet_id);
+        assert_eq!(packet_id(&bootstrap), protocol.window_items_packet_id());
     }
 
     server.shutdown().await
@@ -118,19 +120,45 @@ async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(),
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let mut stream = connect_tcp(addr).await?;
-    let (mut encryption, mut buffer) =
-        perform_online_login(&mut stream, &codec, 5, "encrypted-alpha").await?;
-    let _ =
-        read_until_packet_id_encrypted(&mut stream, &codec, &mut buffer, 0x30, 16, &mut encryption)
-            .await?;
-    let _ =
-        read_until_packet_id_encrypted(&mut stream, &codec, &mut buffer, 0x09, 16, &mut encryption)
-            .await?;
+    let (mut encryption, mut buffer) = perform_online_login(
+        &mut stream,
+        &codec,
+        TestJavaProtocol::Je1710,
+        "encrypted-alpha",
+    )
+    .await?;
+    let _ = read_until_java_packet_encrypted(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::WindowItems,
+        16,
+        &mut encryption,
+    )
+    .await?;
+    let _ = read_until_java_packet_encrypted(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+        16,
+        &mut encryption,
+    )
+    .await?;
 
     write_packet_encrypted(&mut stream, &codec, &held_item_change(4), &mut encryption).await?;
-    let held_item =
-        read_until_packet_id_encrypted(&mut stream, &codec, &mut buffer, 0x09, 8, &mut encryption)
-            .await?;
+    let held_item = read_until_java_packet_encrypted(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+        8,
+        &mut encryption,
+    )
+    .await?;
     assert_eq!(held_item_from_packet(&held_item)?, 4);
 
     server.shutdown().await
@@ -147,7 +175,12 @@ async fn verify_token_mismatch_disconnects_in_online_mode() -> Result<(), Runtim
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let mut stream = connect_tcp(addr).await?;
-    write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+    )
+    .await?;
     write_packet(&mut stream, &codec, &login_start("mismatch")).await?;
     let mut buffer = BytesMut::new();
     let request = read_packet(&mut stream, &codec, &mut buffer).await?;
@@ -171,8 +204,7 @@ async fn verify_token_mismatch_disconnects_in_online_mode() -> Result<(), Runtim
 
     let mut encryption = TestClientEncryptionState::new(shared_secret);
     let disconnect =
-        read_until_packet_id_encrypted(&mut stream, &codec, &mut buffer, 0x00, 4, &mut encryption)
-            .await?;
+        read_packet_encrypted(&mut stream, &codec, &mut buffer, &mut encryption).await?;
     assert_eq!(packet_id(&disconnect), 0x00);
 
     server.shutdown().await

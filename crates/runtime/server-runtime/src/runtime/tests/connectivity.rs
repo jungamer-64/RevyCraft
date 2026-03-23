@@ -284,8 +284,14 @@ async fn running_server_session_status_reports_live_sessions() -> Result<(), Run
     .await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
-    let (_stream, _buffer) =
-        connect_and_login_java_client(addr, &codec, 5, "status-observer", 0x26, 8).await?;
+    let (_stream, _buffer, _) = connect_and_login_java_client_until(
+        addr,
+        &codec,
+        TestJavaProtocol::Je1710,
+        "status-observer",
+        TestJavaPacket::ChunkData,
+    )
+    .await?;
 
     let sessions = server.session_status().await;
     assert_eq!(sessions.len(), 1);
@@ -421,7 +427,12 @@ async fn status_ping_login_and_initial_world_work() -> Result<(), RuntimeError> 
     let codec = MinecraftWireCodec;
 
     let mut status_stream = connect_tcp(addr).await?;
-    write_packet(&mut status_stream, &codec, &encode_handshake(5, 1)?).await?;
+    write_packet(
+        &mut status_stream,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 1)?,
+    )
+    .await?;
     write_packet(&mut status_stream, &codec, &status_request()).await?;
     let mut buffer = BytesMut::new();
     let status_response = read_packet(&mut status_stream, &codec, &mut buffer).await?;
@@ -431,15 +442,36 @@ async fn status_ping_login_and_initial_world_work() -> Result<(), RuntimeError> 
     assert_eq!(packet_id(&pong), 0x01);
 
     let mut login_stream = connect_tcp(addr).await?;
-    write_packet(&mut login_stream, &codec, &encode_handshake(5, 2)?).await?;
+    write_packet(
+        &mut login_stream,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+    )
+    .await?;
     write_packet(&mut login_stream, &codec, &login_start("alpha")).await?;
     let mut login_buffer = BytesMut::new();
     let login_success = read_packet(&mut login_stream, &codec, &mut login_buffer).await?;
     assert_eq!(packet_id(&login_success), 0x02);
     let join_game = read_packet(&mut login_stream, &codec, &mut login_buffer).await?;
     assert_eq!(packet_id(&join_game), 0x01);
-    let chunk_bulk =
-        read_until_packet_id(&mut login_stream, &codec, &mut login_buffer, 0x26, 8).await?;
+    let spawn_position = read_packet(&mut login_stream, &codec, &mut login_buffer).await?;
+    assert_eq!(packet_id(&spawn_position), 0x05);
+    let mut spawn_reader = PacketReader::new(&spawn_position);
+    assert_eq!(
+        spawn_reader.read_varint().expect("packet id should decode"),
+        0x05
+    );
+    assert_eq!(spawn_reader.read_i32().expect("x should decode"), 0);
+    assert_eq!(spawn_reader.read_i32().expect("y should decode"), 4);
+    assert_eq!(spawn_reader.read_i32().expect("z should decode"), 0);
+    let chunk_bulk = read_until_java_packet(
+        &mut login_stream,
+        &codec,
+        &mut login_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::ChunkData,
+    )
+    .await?;
     assert_eq!(packet_id(&chunk_bulk), 0x26);
 
     server.shutdown().await
@@ -457,7 +489,12 @@ async fn unsupported_status_protocol_receives_server_list_response() -> Result<(
     let codec = MinecraftWireCodec;
 
     let mut stream = connect_tcp(addr).await?;
-    write_packet(&mut stream, &codec, &encode_handshake(47, 1)?).await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je18x.protocol_version(), 1)?,
+    )
+    .await?;
     write_packet(&mut stream, &codec, &status_request()).await?;
     let mut buffer = BytesMut::new();
     let status_response = read_packet(&mut stream, &codec, &mut buffer).await?;
@@ -510,7 +547,12 @@ async fn udp_bedrock_probe_does_not_block_je_status() -> Result<(), RuntimeError
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let mut stream = connect_tcp(addr).await?;
-    write_packet(&mut stream, &codec, &encode_handshake(5, 1)?).await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 1)?,
+    )
+    .await?;
     write_packet(&mut stream, &codec, &status_request()).await?;
     let mut buffer = BytesMut::new();
     let status_response = read_packet(&mut stream, &codec, &mut buffer).await?;

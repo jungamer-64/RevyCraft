@@ -18,18 +18,39 @@ pub(crate) async fn connect_tcp(addr: SocketAddr) -> Result<tokio::net::TcpStrea
 pub(crate) async fn connect_and_login_java_client(
     addr: SocketAddr,
     codec: &MinecraftWireCodec,
-    protocol_version: i32,
+    protocol: TestJavaProtocol,
     username: &str,
-    ready_packet_id: i32,
-    max_reads: usize,
 ) -> Result<(tokio::net::TcpStream, BytesMut), RuntimeError> {
+    let (stream, buffer, _) = connect_and_login_java_client_until(
+        addr,
+        codec,
+        protocol,
+        username,
+        TestJavaPacket::WindowItems,
+    )
+    .await?;
+    Ok((stream, buffer))
+}
+
+pub(crate) async fn connect_and_login_java_client_until(
+    addr: SocketAddr,
+    codec: &MinecraftWireCodec,
+    protocol: TestJavaProtocol,
+    username: &str,
+    wanted_packet: TestJavaPacket,
+) -> Result<(tokio::net::TcpStream, BytesMut, Vec<u8>), RuntimeError> {
     let mut stream = connect_tcp(addr).await?;
-    write_packet(&mut stream, codec, &encode_handshake(protocol_version, 2)?).await?;
+    write_packet(
+        &mut stream,
+        codec,
+        &encode_handshake(protocol.protocol_version(), 2)?,
+    )
+    .await?;
     write_packet(&mut stream, codec, &login_start(username)).await?;
     let mut buffer = BytesMut::new();
-    let _ =
-        read_until_packet_id(&mut stream, codec, &mut buffer, ready_packet_id, max_reads).await?;
-    Ok((stream, buffer))
+    let packet =
+        read_until_java_packet(&mut stream, codec, &mut buffer, protocol, wanted_packet).await?;
+    Ok((stream, buffer, packet))
 }
 
 pub(crate) fn listener_addr(server: &RunningServer) -> SocketAddr {
@@ -94,11 +115,24 @@ pub(crate) async fn read_until_packet_id(
     )))
 }
 
+pub(crate) async fn read_until_java_packet(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    packet: TestJavaPacket,
+) -> Result<Vec<u8>, RuntimeError> {
+    let wanted_packet_id = protocol
+        .clientbound_packet_id(packet)
+        .ok_or_else(|| RuntimeError::Config(format!("packet {packet:?} is unsupported")))?;
+    read_until_packet_id(stream, codec, buffer, wanted_packet_id, 1).await
+}
+
 pub(crate) async fn read_until_set_slot(
     stream: &mut tokio::net::TcpStream,
     codec: &MinecraftWireCodec,
     buffer: &mut BytesMut,
-    expected_packet_id: i32,
+    protocol: TestJavaProtocol,
     wanted_window_id: i8,
     wanted_slot: i16,
     max_attempts: usize,
@@ -115,7 +149,7 @@ pub(crate) async fn read_until_set_slot(
                 "timed out waiting for set slot window {wanted_window_id} slot {wanted_slot}"
             ))
         })??;
-        if let Ok((window_id, slot, _)) = decode_set_slot(&packet, expected_packet_id)
+        if let Ok((window_id, slot, _)) = decode_set_slot(protocol, &packet)
             && window_id == wanted_window_id
             && slot == wanted_slot
         {
@@ -131,7 +165,7 @@ pub(crate) async fn read_until_confirm_transaction(
     stream: &mut tokio::net::TcpStream,
     codec: &MinecraftWireCodec,
     buffer: &mut BytesMut,
-    expected_packet_id: i32,
+    protocol: TestJavaProtocol,
     wanted_window_id: u8,
     wanted_action_number: i16,
     max_attempts: usize,
@@ -148,8 +182,7 @@ pub(crate) async fn read_until_confirm_transaction(
                 "timed out waiting for confirm transaction window {wanted_window_id} action {wanted_action_number}"
             ))
         })??;
-        if let Ok((window_id, action_number, _)) =
-            decode_confirm_transaction(&packet, expected_packet_id)
+        if let Ok((window_id, action_number, _)) = decode_confirm_transaction(protocol, &packet)
             && window_id == wanted_window_id
             && action_number == wanted_action_number
         {
@@ -159,6 +192,19 @@ pub(crate) async fn read_until_confirm_transaction(
     Err(RuntimeError::Config(format!(
         "did not receive confirm transaction window {wanted_window_id} action {wanted_action_number}"
     )))
+}
+
+pub(crate) async fn assert_no_java_packet(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    packet: TestJavaPacket,
+) -> Result<(), RuntimeError> {
+    let wanted_packet_id = protocol
+        .clientbound_packet_id(packet)
+        .ok_or_else(|| RuntimeError::Config(format!("packet {packet:?} is unsupported")))?;
+    assert_no_packet_id(stream, codec, buffer, wanted_packet_id).await
 }
 
 pub(crate) async fn assert_no_packet_id(
@@ -258,14 +304,46 @@ pub(crate) async fn read_until_packet_id_encrypted(
     )))
 }
 
+pub(crate) async fn read_until_java_packet_encrypted(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    wanted_packet: TestJavaPacket,
+    max_attempts: usize,
+    encryption: &mut TestClientEncryptionState,
+) -> Result<Vec<u8>, RuntimeError> {
+    let wanted_packet_id = protocol
+        .clientbound_packet_id(wanted_packet)
+        .ok_or_else(|| {
+            RuntimeError::Config(format!(
+                "packet {wanted_packet:?} is not available for protocol {protocol:?}"
+            ))
+        })?;
+    read_until_packet_id_encrypted(
+        stream,
+        codec,
+        buffer,
+        wanted_packet_id,
+        max_attempts,
+        encryption,
+    )
+    .await
+}
+
 pub(crate) async fn perform_online_login(
     stream: &mut tokio::net::TcpStream,
     codec: &MinecraftWireCodec,
-    protocol_version: i32,
+    protocol: TestJavaProtocol,
     username: &str,
 ) -> Result<(TestClientEncryptionState, BytesMut), RuntimeError> {
     let mut buffer = BytesMut::new();
-    write_packet(stream, codec, &encode_handshake(protocol_version, 2)?).await?;
+    write_packet(
+        stream,
+        codec,
+        &encode_handshake(protocol.protocol_version(), 2)?,
+    )
+    .await?;
     write_packet(stream, codec, &login_start(username)).await?;
     let request = read_packet(stream, codec, &mut buffer).await?;
     let (server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;

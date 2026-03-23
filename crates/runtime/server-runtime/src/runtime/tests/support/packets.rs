@@ -64,66 +64,32 @@ pub(crate) fn held_item_change(slot: i16) -> Vec<u8> {
 }
 
 pub(crate) fn creative_inventory_action(
+    protocol: TestJavaProtocol,
     slot: i16,
     item_id: i16,
     count: u8,
     damage: i16,
 ) -> Vec<u8> {
-    let mut writer = PacketWriter::default();
-    writer.write_varint(0x10);
-    writer.write_i16(slot);
-    writer.write_i16(item_id);
-    writer.write_u8(count);
-    writer.write_i16(damage);
-    writer.write_i16(-1);
-    writer.into_inner()
-}
-
-fn write_test_slot(writer: &mut PacketWriter, stack: Option<(i16, u8, i16)>) {
-    if let Some((item_id, count, damage)) = stack {
-        writer.write_i16(item_id);
-        writer.write_u8(count);
-        writer.write_i16(damage);
-        writer.write_i16(-1);
-    } else {
-        writer.write_i16(-1);
-    }
+    protocol.encode_creative_inventory_action(slot, item_id, count, damage)
 }
 
 pub(crate) fn click_window(
+    protocol: TestJavaProtocol,
     slot: i16,
     button: i8,
     action_number: i16,
     clicked_item: Option<(i16, u8, i16)>,
 ) -> Vec<u8> {
-    click_window_in_window(0, slot, button, action_number, clicked_item)
+    protocol.encode_click_window(slot, button, action_number, clicked_item)
 }
 
-pub(crate) fn click_window_in_window(
-    window_id: i8,
-    slot: i16,
-    button: i8,
+pub(crate) fn confirm_transaction_ack(
+    protocol: TestJavaProtocol,
+    window_id: u8,
     action_number: i16,
-    clicked_item: Option<(i16, u8, i16)>,
+    accepted: bool,
 ) -> Vec<u8> {
-    let mut writer = PacketWriter::default();
-    writer.write_varint(0x0e);
-    writer.write_i8(window_id);
-    writer.write_i16(slot);
-    writer.write_i8(button);
-    writer.write_i16(action_number);
-    writer.write_i8(0);
-    write_test_slot(&mut writer, clicked_item);
-    writer.into_inner()
-}
-
-pub(crate) fn confirm_transaction(window_id: u8, action_number: i16, accepted: bool) -> Vec<u8> {
-    let mut writer = PacketWriter::default();
-    writer.write_varint(0x0f);
-    writer.write_u8(window_id);
-    writer.write_i16(action_number);
-    writer.write_bool(accepted);
-    writer.into_inner()
+    protocol.encode_confirm_transaction_ack(window_id, action_number, accepted)
 }
 
 pub(crate) fn player_block_placement(
@@ -143,8 +109,10 @@ pub(crate) fn player_block_placement(
         writer.write_i16(item_id);
         writer.write_u8(count);
         writer.write_i16(damage);
+        writer.write_i16(-1);
+    } else {
+        writer.write_i16(-1);
     }
-    writer.write_i16(-1);
     writer.write_u8(8);
     writer.write_u8(8);
     writer.write_u8(8);
@@ -186,62 +154,6 @@ pub(crate) fn player_position_look_1_12(x: f64, y: f64, z: f64, yaw: f32, pitch:
     writer.into_inner()
 }
 
-pub(crate) fn creative_inventory_action_1_12(
-    slot: i16,
-    item_id: i16,
-    count: u8,
-    damage: i16,
-) -> Vec<u8> {
-    let mut writer = PacketWriter::default();
-    writer.write_varint(0x1b);
-    writer.write_i16(slot);
-    writer.write_i16(item_id);
-    writer.write_u8(count);
-    writer.write_i16(damage);
-    writer.write_i16(-1);
-    writer.into_inner()
-}
-
-pub(crate) fn click_window_1_12(
-    slot: i16,
-    button: i8,
-    action_number: i16,
-    clicked_item: Option<(i16, u8, i16)>,
-) -> Vec<u8> {
-    click_window_1_12_in_window(0, slot, button, action_number, clicked_item)
-}
-
-pub(crate) fn click_window_1_12_in_window(
-    window_id: i8,
-    slot: i16,
-    button: i8,
-    action_number: i16,
-    clicked_item: Option<(i16, u8, i16)>,
-) -> Vec<u8> {
-    let mut writer = PacketWriter::default();
-    writer.write_varint(0x07);
-    writer.write_i8(window_id);
-    writer.write_i16(slot);
-    writer.write_i8(button);
-    writer.write_i16(action_number);
-    writer.write_varint(0);
-    write_test_slot(&mut writer, clicked_item);
-    writer.into_inner()
-}
-
-pub(crate) fn confirm_transaction_1_12(
-    window_id: u8,
-    action_number: i16,
-    accepted: bool,
-) -> Vec<u8> {
-    let mut writer = PacketWriter::default();
-    writer.write_varint(0x05);
-    writer.write_u8(window_id);
-    writer.write_i16(action_number);
-    writer.write_bool(accepted);
-    writer.into_inner()
-}
-
 pub(crate) fn player_block_placement_1_12(x: i32, y: i32, z: i32, face: i32, hand: i32) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(0x1f);
@@ -277,96 +189,34 @@ pub(crate) fn unpack_block_position(packed: i64) -> mc_core::BlockPos {
     )
 }
 
-pub(crate) fn read_slot(
-    reader: &mut PacketReader<'_>,
-) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
-    let item_id = reader.read_i16()?;
-    if item_id < 0 {
-        return Ok(None);
-    }
-    let count = reader.read_u8()?;
-    let damage = reader.read_i16()?;
-    let nbt_length = reader.read_i16()?;
-    if nbt_length != -1 {
-        return Err(RuntimeError::Config(
-            "test helper only supports empty slot nbt".to_string(),
-        ));
-    }
-    Ok(Some((item_id, count, damage)))
-}
-
 pub(crate) fn window_items_slot(
+    protocol: TestJavaProtocol,
     packet: &[u8],
     wanted_slot: usize,
 ) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
-    window_items_slot_with_packet_id(packet, 0x30, wanted_slot)
+    Ok(protocol.window_items_slot(packet, wanted_slot)?)
 }
 
-pub(crate) fn window_items_slot_with_packet_id(
+pub(crate) fn set_slot_slot(
+    protocol: TestJavaProtocol,
     packet: &[u8],
-    expected_packet_id: i32,
-    wanted_slot: usize,
-) -> Result<Option<(i16, u8, i16)>, RuntimeError> {
-    let mut reader = PacketReader::new(packet);
-    if reader.read_varint()? != expected_packet_id {
-        return Err(RuntimeError::Config(
-            "expected window items packet".to_string(),
-        ));
-    }
-    let _window_id = reader.read_u8()?;
-    let count = usize::try_from(reader.read_i16()?)
-        .map_err(|_| RuntimeError::Config("negative window item count".to_string()))?;
-    if wanted_slot >= count {
-        return Err(RuntimeError::Config(
-            "wanted slot out of bounds".to_string(),
-        ));
-    }
-    for slot in 0..count {
-        let item = read_slot(&mut reader)?;
-        if slot == wanted_slot {
-            return Ok(item);
-        }
-    }
-    Err(RuntimeError::Config("wanted slot missing".to_string()))
-}
-
-pub(crate) fn set_slot_slot(packet: &[u8], expected_packet_id: i32) -> Result<i16, RuntimeError> {
-    let mut reader = PacketReader::new(packet);
-    if reader.read_varint()? != expected_packet_id {
-        return Err(RuntimeError::Config("expected set slot packet".to_string()));
-    }
-    let _window_id = reader.read_i8()?;
-    reader.read_i16().map_err(RuntimeError::from)
+) -> Result<i16, RuntimeError> {
+    let (_, slot, _) = protocol.decode_set_slot(packet)?;
+    Ok(slot)
 }
 
 pub(crate) fn decode_set_slot(
+    protocol: TestJavaProtocol,
     packet: &[u8],
-    expected_packet_id: i32,
 ) -> Result<(i8, i16, Option<(i16, u8, i16)>), RuntimeError> {
-    let mut reader = PacketReader::new(packet);
-    if reader.read_varint()? != expected_packet_id {
-        return Err(RuntimeError::Config("expected set slot packet".to_string()));
-    }
-    let window_id = reader.read_i8()?;
-    let slot = reader.read_i16()?;
-    let stack = read_slot(&mut reader)?;
-    Ok((window_id, slot, stack))
+    Ok(protocol.decode_set_slot(packet)?)
 }
 
 pub(crate) fn decode_confirm_transaction(
+    protocol: TestJavaProtocol,
     packet: &[u8],
-    expected_packet_id: i32,
 ) -> Result<(u8, i16, bool), RuntimeError> {
-    let mut reader = PacketReader::new(packet);
-    if reader.read_varint()? != expected_packet_id {
-        return Err(RuntimeError::Config(
-            "expected confirm transaction packet".to_string(),
-        ));
-    }
-    let window_id = reader.read_u8()?;
-    let action_number = reader.read_i16()?;
-    let accepted = reader.read_bool()?;
-    Ok((window_id, action_number, accepted))
+    Ok(protocol.decode_confirm_transaction(packet)?)
 }
 
 pub(crate) fn held_item_from_packet(packet: &[u8]) -> Result<i8, RuntimeError> {

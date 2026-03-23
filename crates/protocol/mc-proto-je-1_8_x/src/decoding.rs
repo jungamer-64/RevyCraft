@@ -10,7 +10,7 @@ use mc_core::{
 };
 use mc_proto_common::{PacketReader, ProtocolError};
 use mc_proto_je_common::__version_support::{
-    inventory::{legacy_inventory_slot, read_legacy_slot},
+    inventory::{inventory_slot, read_slot},
     positions::unpack_block_position,
 };
 
@@ -54,12 +54,14 @@ pub(crate) fn decode_play_packet(
         PACKET_SB_CLICK_WINDOW => Ok(Some(decode_click_window_packet(player_id, &mut reader)?)),
         PACKET_SB_CREATIVE_INVENTORY_ACTION => {
             let slot = reader.read_i16()?;
-            let stack = read_legacy_slot(&mut reader)?;
+            let stack = read_slot(&mut reader, crate::INVENTORY_SPEC.slot_nbt)?;
             Ok(
-                legacy_inventory_slot(slot).map(|slot| CoreCommand::CreativeInventorySet {
-                    player_id,
-                    slot,
-                    stack,
+                inventory_slot(crate::INVENTORY_SPEC.layout, slot).map(|slot| {
+                    CoreCommand::CreativeInventorySet {
+                        player_id,
+                        slot,
+                        stack,
+                    }
                 }),
             )
         }
@@ -128,7 +130,7 @@ fn decode_place_block_packet(
 ) -> Result<Option<CoreCommand>, ProtocolError> {
     let position = unpack_block_position(reader.read_i64()?);
     let direction = reader.read_i8()?;
-    let held_item = read_legacy_slot(reader)?;
+    let held_item = read_slot(reader, crate::INVENTORY_SPEC.slot_nbt)?;
     let _cursor_x = reader.read_i8()?;
     let _cursor_y = reader.read_i8()?;
     let _cursor_z = reader.read_i8()?;
@@ -178,7 +180,7 @@ fn decode_click_window_packet(
     let raw_button = reader.read_i8()?;
     let action_number = reader.read_i16()?;
     let mode = reader.read_i8()?;
-    let clicked_item = read_legacy_slot(reader)?;
+    let clicked_item = read_slot(reader, crate::INVENTORY_SPEC.slot_nbt)?;
 
     let button = match raw_button {
         1 => InventoryClickButton::Right,
@@ -188,7 +190,7 @@ fn decode_click_window_packet(
         InventoryClickTarget::Unsupported
     } else if raw_slot == -999 {
         InventoryClickTarget::Outside
-    } else if let Some(slot) = legacy_inventory_slot(raw_slot) {
+    } else if let Some(slot) = inventory_slot(crate::INVENTORY_SPEC.layout, raw_slot) {
         InventoryClickTarget::Slot(slot)
     } else {
         InventoryClickTarget::Unsupported

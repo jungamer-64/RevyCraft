@@ -21,8 +21,8 @@ use mc_core::{
 use mc_proto_common::{Edition, ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
 use mc_proto_je_common::{
     __version_support::inventory::{
-        CURSOR_SLOT_ID, CURSOR_WINDOW_ID, legacy_window_slot, player_window_id,
-        player_window_id_signed,
+        CURSOR_SLOT_ID, CURSOR_WINDOW_ID, InventoryProtocolSpec, JE_1_7_10_INVENTORY_SPEC,
+        player_window_id, player_window_id_signed, protocol_slot,
     },
     JavaEditionAdapter, JavaEditionProfile,
 };
@@ -33,6 +33,7 @@ const PROTOCOL_VERSION_1_7_10: i32 = 5;
 const VERSION_NAME_1_7_10: &str = "1.7.10";
 pub const JE_1_7_10_ADAPTER_ID: &str = "je-1_7_10";
 pub const JE_1_7_10_STORAGE_PROFILE_ID: &str = "je-anvil-1_7_10";
+pub(crate) const INVENTORY_SPEC: InventoryProtocolSpec = JE_1_7_10_INVENTORY_SPEC;
 
 const PACKET_CB_KEEP_ALIVE: i32 = 0x00;
 const PACKET_CB_JOIN_GAME: i32 = 0x01;
@@ -161,7 +162,7 @@ impl JavaEditionProfile for Je1710Profile {
         slot: InventorySlot,
         stack: Option<&ItemStack>,
     ) -> Result<Option<Vec<u8>>, ProtocolError> {
-        let Some(protocol_slot) = legacy_window_slot(slot) else {
+        let Some(protocol_slot) = protocol_slot(INVENTORY_SPEC.layout, slot) else {
             return Ok(None);
         };
         Ok(Some(encode_set_slot(

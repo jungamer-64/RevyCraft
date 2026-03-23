@@ -1935,6 +1935,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-proto-test-support"
+version = "0.1.0"
+dependencies = [
+ "mc-proto-common",
+ "thiserror",
+]
+
+[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3093,6 +3101,7 @@ dependencies = [
  "mc-proto-je-1_7_10",
  "mc-proto-je-1_8_x",
  "mc-proto-je-common",
+ "mc-proto-test-support",
  "md-5",
  "num-bigint",
  "rand 0.8.5",

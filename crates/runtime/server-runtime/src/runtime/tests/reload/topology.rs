@@ -330,7 +330,8 @@ async fn topology_reload_status_reports_draining_generation() -> Result<(), Runt
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let (_stream, _buffer) =
-        connect_and_login_java_client(addr, &codec, 5, "topology-status", 0x30, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "topology-status")
+            .await?;
     let before_generation = server.runtime.active_generation().generation_id;
 
     std::thread::sleep(Duration::from_secs(1));
@@ -404,7 +405,7 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let (_stream, _buffer) =
-        connect_and_login_java_client(addr, &codec, 5, "topodrain", 0x30, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "topodrain").await?;
     assert_eq!(server.runtime.sessions.lock().await.len(), 1);
 
     std::thread::sleep(Duration::from_secs(1));

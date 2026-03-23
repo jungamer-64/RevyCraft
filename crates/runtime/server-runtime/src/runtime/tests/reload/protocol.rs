@@ -9,8 +9,15 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
     let codec = MinecraftWireCodec;
     let addr = listener_addr(&server);
     let (mut alpha, mut alpha_buffer) =
-        connect_and_login_java_client(addr, &codec, 5, "protohot", 0x30, 12).await?;
-    let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "protohot").await?;
+    let _ = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
 
     std::thread::sleep(Duration::from_secs(1));
     PackagedPluginHarness::shared()
@@ -43,7 +50,14 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
     );
 
     write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
-    let held_item = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
+    let held_item = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
     assert_eq!(held_item_from_packet(&held_item)?, 4);
 
     server.shutdown().await
@@ -107,15 +121,36 @@ async fn consistency_gate_write_lock_blocks_session_commands() -> Result<(), Run
     let codec = MinecraftWireCodec;
     let addr = listener_addr(&server);
     let (mut alpha, mut alpha_buffer) =
-        connect_and_login_java_client(addr, &codec, 5, "protoblock", 0x30, 12).await?;
-    let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "protoblock").await?;
+    let _ = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
 
     let consistency_guard = server.runtime.consistency_gate.write().await;
     write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
-    assert_no_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09).await?;
+    assert_no_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
     drop(consistency_guard);
 
-    let held_item = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
+    let held_item = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
     assert_eq!(held_item_from_packet(&held_item)?, 4);
 
     server.shutdown().await
@@ -129,8 +164,15 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
     let codec = MinecraftWireCodec;
     let addr = listener_addr(&server);
     let (mut alpha, mut alpha_buffer) =
-        connect_and_login_java_client(addr, &codec, 5, "protofail", 0x30, 12).await?;
-    let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "protofail").await?;
+    let _ = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
 
     std::thread::sleep(Duration::from_secs(1));
     PackagedPluginHarness::shared()
@@ -163,7 +205,14 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
     );
 
     write_packet(&mut alpha, &codec, &held_item_change(6)).await?;
-    let held_item = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
+    let held_item = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
     assert_eq!(held_item_from_packet(&held_item)?, 6);
 
     server.shutdown().await
@@ -305,35 +354,37 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
 
-    for (protocol_version, username, expected_packet_id) in [
-        (5, "packaged-legacy", 0x30),
-        (47, "packaged-middle", 0x30),
-        (340, "packaged-latest", 0x14),
+    for (protocol, username) in [
+        (TestJavaProtocol::Je1710, "packaged-legacy"),
+        (TestJavaProtocol::Je18x, "packaged-middle"),
+        (TestJavaProtocol::Je1122, "packaged-latest"),
     ] {
         let mut stream = connect_tcp(addr).await?;
         let (mut encryption, mut buffer) =
-            perform_online_login(&mut stream, &codec, protocol_version, username).await?;
-        let login_success = read_until_packet_id_encrypted(
+            perform_online_login(&mut stream, &codec, protocol, username).await?;
+        let login_success = read_until_java_packet_encrypted(
             &mut stream,
             &codec,
             &mut buffer,
-            0x02,
+            protocol,
+            TestJavaPacket::LoginSuccess,
             8,
             &mut encryption,
         )
         .await?;
         assert_eq!(packet_id(&login_success), 0x02);
 
-        let bootstrap = read_until_packet_id_encrypted(
+        let bootstrap = read_until_java_packet_encrypted(
             &mut stream,
             &codec,
             &mut buffer,
-            expected_packet_id,
+            protocol,
+            TestJavaPacket::WindowItems,
             24,
             &mut encryption,
         )
         .await?;
-        assert_eq!(packet_id(&bootstrap), expected_packet_id);
+        assert_eq!(packet_id(&bootstrap), protocol.window_items_packet_id());
     }
 
     server.shutdown().await

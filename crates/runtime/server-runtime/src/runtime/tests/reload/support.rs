@@ -118,7 +118,12 @@ pub(crate) async fn begin_online_auth_handshake(
     let addr = listener_addr(server);
     let codec = MinecraftWireCodec;
     let mut alpha = connect_tcp(addr).await?;
-    write_packet(&mut alpha, &codec, &encode_handshake(5, 2)?).await?;
+    write_packet(
+        &mut alpha,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+    )
+    .await?;
     write_packet(&mut alpha, &codec, &login_start("alpha-online")).await?;
     let mut alpha_buffer = BytesMut::new();
     let request = read_packet(&mut alpha, &codec, &mut alpha_buffer).await?;

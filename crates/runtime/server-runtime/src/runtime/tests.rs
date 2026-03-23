@@ -36,6 +36,7 @@ use mc_proto_common::{
 use mc_proto_je_1_7_10::{JE_1_7_10_ADAPTER_ID, JE_1_7_10_STORAGE_PROFILE_ID};
 use mc_proto_je_1_8_x::JE_1_8_X_ADAPTER_ID;
 use mc_proto_je_1_12_2::JE_1_12_2_ADAPTER_ID;
+use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol, TestJavaProtocolError};
 use rand::RngCore;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
@@ -62,6 +63,12 @@ mod multiversion;
 
 #[cfg(target_os = "linux")]
 mod reload;
+
+impl From<TestJavaProtocolError> for RuntimeError {
+    fn from(error: TestJavaProtocolError) -> Self {
+        Self::Config(error.to_string())
+    }
+}
 
 fn tempdir() -> std::io::Result<tempfile::TempDir> {
     let base_dir = workspace_test_temp_root().join("server-runtime");

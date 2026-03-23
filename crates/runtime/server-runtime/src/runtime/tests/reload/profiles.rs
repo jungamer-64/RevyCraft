@@ -68,10 +68,19 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
     let codec = MinecraftWireCodec;
 
     let (mut legacy, mut legacy_buffer) =
-        connect_and_login_java_client(addr, &codec, 5, "legacy-observer", 0x30, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "legacy-observer")
+            .await?;
     let (mut modern, _modern_buffer) =
-        connect_and_login_java_client(addr, &codec, 340, "modern-reload", 0x14, 24).await?;
-    let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1122, "modern-reload")
+            .await?;
+    let _ = read_until_java_packet(
+        &mut legacy,
+        &codec,
+        &mut legacy_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::NamedEntitySpawn,
+    )
+    .await?;
 
     std::thread::sleep(Duration::from_secs(1));
     harness
@@ -120,8 +129,14 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         &player_position_look_1_12(18.5, 4.0, 0.5, 30.0, 0.0),
     )
     .await?;
-    let legacy_teleport =
-        read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x18, 16).await?;
+    let legacy_teleport = read_until_java_packet(
+        &mut legacy,
+        &codec,
+        &mut legacy_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::EntityTeleport,
+    )
+    .await?;
     assert_eq!(packet_id(&legacy_teleport), 0x18);
 
     server.shutdown().await
@@ -165,10 +180,19 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
     let codec = MinecraftWireCodec;
 
     let (mut legacy, mut legacy_buffer) =
-        connect_and_login_java_client(addr, &codec, 5, "legacy-failure", 0x30, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "legacy-failure")
+            .await?;
     let (mut modern, _modern_buffer) =
-        connect_and_login_java_client(addr, &codec, 340, "modern-failure", 0x14, 24).await?;
-    let _ = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x0c, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1122, "modern-failure")
+            .await?;
+    let _ = read_until_java_packet(
+        &mut legacy,
+        &codec,
+        &mut legacy_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::NamedEntitySpawn,
+    )
+    .await?;
 
     std::thread::sleep(Duration::from_secs(1));
     harness
@@ -209,8 +233,14 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         &player_position_look_1_12(22.5, 4.0, 0.5, 45.0, 0.0),
     )
     .await?;
-    let legacy_teleport =
-        read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x18, 16).await?;
+    let legacy_teleport = read_until_java_packet(
+        &mut legacy,
+        &codec,
+        &mut legacy_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::EntityTeleport,
+    )
+    .await?;
     assert_eq!(packet_id(&legacy_teleport), 0x18);
 
     server.shutdown().await
@@ -251,14 +281,21 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let (mut stream, mut buffer) =
-        connect_and_login_java_client(addr, &codec, 5, "alpha", 0x30, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "alpha").await?;
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(36, 20, 64, 0),
+        &creative_inventory_action(TestJavaProtocol::Je1710, 36, 20, 64, 0),
     )
     .await?;
-    let _ = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x2f, 8).await?;
+    let _ = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::SetSlot,
+    )
+    .await?;
 
     std::thread::sleep(Duration::from_secs(1));
     harness
@@ -302,11 +339,26 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     .await?;
     let addr = listener_addr(&restarted);
     let mut stream = connect_tcp(addr).await?;
-    write_packet(&mut stream, &codec, &encode_handshake(5, 2)?).await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+    )
+    .await?;
     write_packet(&mut stream, &codec, &login_start("alpha")).await?;
     let mut buffer = BytesMut::new();
-    let window_items = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 12).await?;
-    assert_eq!(window_items_slot(&window_items, 36)?, Some((20, 64, 0)));
+    let window_items = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::WindowItems,
+    )
+    .await?;
+    assert_eq!(
+        window_items_slot(TestJavaProtocol::Je1710, &window_items, 36)?,
+        Some((20, 64, 0))
+    );
 
     restarted.shutdown().await
 }
@@ -410,8 +462,15 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
     let (mut alpha, mut alpha_buffer) =
-        connect_and_login_java_client(addr, &codec, 5, "alpha", 0x30, 12).await?;
-    let _ = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 12).await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je1710, "alpha").await?;
+    let _ = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
 
     std::thread::sleep(Duration::from_secs(1));
     harness
@@ -442,14 +501,33 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     );
 
     write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
-    let held_item = read_until_packet_id(&mut alpha, &codec, &mut alpha_buffer, 0x09, 8).await?;
+    let held_item = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
     assert_eq!(held_item_from_packet(&held_item)?, 4);
 
     let mut beta = connect_tcp(addr).await?;
-    write_packet(&mut beta, &codec, &encode_handshake(5, 2)?).await?;
+    write_packet(
+        &mut beta,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je1710.protocol_version(), 2)?,
+    )
+    .await?;
     write_packet(&mut beta, &codec, &login_start("beta")).await?;
     let mut beta_buffer = BytesMut::new();
-    let login_success = read_until_packet_id(&mut beta, &codec, &mut beta_buffer, 0x02, 8).await?;
+    let login_success = read_until_java_packet(
+        &mut beta,
+        &codec,
+        &mut beta_buffer,
+        TestJavaProtocol::Je1710,
+        TestJavaPacket::LoginSuccess,
+    )
+    .await?;
     assert_eq!(packet_id(&login_success), 0x02);
 
     server.shutdown().await
