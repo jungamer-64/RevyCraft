@@ -653,7 +653,7 @@ mod tests {
             protocol_generation: Some(PluginGenerationId(3)),
             gameplay_generation: Some(PluginGenerationId(4)),
         };
-        assert!(capability_set.protocol.contains(ProtocolCapability::Je340));
+        assert!(capability_set.protocol.contains(&ProtocolCapability::Je340));
         assert_eq!(capability_set.gameplay_profile.as_str(), "canonical");
         assert_eq!(capability_set.entity_id, Some(EntityId(7)));
         assert_eq!(

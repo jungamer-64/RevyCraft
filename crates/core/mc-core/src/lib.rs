@@ -205,7 +205,7 @@ impl CapabilityParseError {
     }
 
     #[must_use]
-    pub fn capability_kind(&self) -> &'static str {
+    pub const fn capability_kind(&self) -> &'static str {
         self.capability_kind
     }
 
@@ -378,8 +378,8 @@ where
     }
 
     #[must_use]
-    pub fn contains(&self, capability: C) -> bool {
-        self.capabilities.contains(&capability)
+    pub fn contains(&self, capability: &C) -> bool {
+        self.capabilities.contains(capability)
     }
 }
 
@@ -431,7 +431,7 @@ pub struct CapabilityAnnouncement<C> {
 
 impl<C> CapabilityAnnouncement<C> {
     #[must_use]
-    pub fn new(capabilities: ClosedCapabilitySet<C>) -> Self {
+    pub const fn new(capabilities: ClosedCapabilitySet<C>) -> Self {
         Self {
             capabilities,
             build_tag: None,
@@ -451,7 +451,7 @@ where
 {
     #[must_use]
     pub fn contains(&self, capability: C) -> bool {
-        self.capabilities.contains(capability)
+        self.capabilities.contains(&capability)
     }
 }
 

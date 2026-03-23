@@ -203,7 +203,7 @@ mod tests {
 
         assert!(Arc::ptr_eq(&slot.current(), &generation));
         assert_eq!(slot.generation_id(), PluginGenerationId(3));
-        assert!(slot.capability_set().contains(ProtocolCapability::Je340));
+        assert!(slot.capability_set().contains(&ProtocolCapability::Je340));
     }
 
     #[test]
@@ -216,8 +216,8 @@ mod tests {
 
         assert!(Arc::ptr_eq(&slot.current(), &second));
         assert_eq!(slot.generation_id(), PluginGenerationId(2));
-        assert!(slot.capability_set().contains(ProtocolCapability::Je47));
-        assert!(!slot.capability_set().contains(ProtocolCapability::Je5));
+        assert!(slot.capability_set().contains(&ProtocolCapability::Je47));
+        assert!(!slot.capability_set().contains(&ProtocolCapability::Je5));
     }
 
     #[test]
@@ -237,6 +237,6 @@ mod tests {
         assert_eq!(before, PluginGenerationId(7));
         assert_eq!(after, PluginGenerationId(8));
         assert_eq!(slot.generation_id(), PluginGenerationId(8));
-        assert!(slot.capability_set().contains(ProtocolCapability::Bedrock));
+        assert!(slot.capability_set().contains(&ProtocolCapability::Bedrock));
     }
 }

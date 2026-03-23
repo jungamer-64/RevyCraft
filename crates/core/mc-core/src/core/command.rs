@@ -50,7 +50,7 @@ impl ServerCore {
             CoreCommand::ClientStatus {
                 player_id: _,
                 action_id: _,
-            } => Ok(Vec::new()),
+            } | CoreCommand::InventoryTransactionAck { .. } => Ok(Vec::new()),
             CoreCommand::InventoryClick {
                 player_id,
                 transaction,
@@ -62,9 +62,8 @@ impl ServerCore {
                 transaction,
                 target,
                 button,
-                clicked_item,
+                clicked_item.as_ref(),
             )),
-            CoreCommand::InventoryTransactionAck { .. } => Ok(Vec::new()),
             CoreCommand::MoveIntent { .. }
             | CoreCommand::SetHeldSlot { .. }
             | CoreCommand::CreativeInventorySet { .. }

@@ -43,9 +43,9 @@ pub enum PackagedPluginTestError {
 
 #[derive(Debug)]
 pub struct PackagedPluginHarness {
-    dist_dir: PathBuf,
-    artifact_cache_dir: PathBuf,
-    cargo_target_dir: PathBuf,
+    dist: PathBuf,
+    artifact_cache: PathBuf,
+    cargo_target: PathBuf,
 }
 
 struct PackagedPluginFileLock(std::fs::File);
@@ -67,15 +67,15 @@ impl PackagedPluginHarness {
                 let root_dir = packaged_plugin_test_stamp_root(&stamp);
                 let dist_dir = root_dir.join("runtime").join("plugins");
                 let artifact_cache_dir = root_dir.join("artifacts");
-                let cargo_target_dir = root_dir.join("cargo-targets");
+                let cargo_target_dir = packaged_plugin_test_cargo_target_root();
                 let stamp_path = root_dir.join("stamp.txt");
-                let harness = PackagedPluginHarness {
-                    dist_dir,
-                    artifact_cache_dir,
-                    cargo_target_dir,
+                let harness = Self {
+                    dist: dist_dir,
+                    artifact_cache: artifact_cache_dir,
+                    cargo_target: cargo_target_dir,
                 };
                 if packaged_plugin_harness_is_ready(&harness, &stamp_path, &stamp)? {
-                    fs::create_dir_all(&harness.artifact_cache_dir)
+                    fs::create_dir_all(&harness.artifact_cache)
                         .map_err(|error| error.to_string())?;
                     fs::create_dir_all(harness.shared_harness_target_dir())
                         .map_err(|error| error.to_string())?;
@@ -88,7 +88,7 @@ impl PackagedPluginHarness {
                 let _file_lock =
                     packaged_plugin_test_file_lock(&packaged_plugin_test_shared_lock_path())?;
                 if packaged_plugin_harness_is_ready(&harness, &stamp_path, &stamp)? {
-                    fs::create_dir_all(&harness.artifact_cache_dir)
+                    fs::create_dir_all(&harness.artifact_cache)
                         .map_err(|error| error.to_string())?;
                     fs::create_dir_all(harness.shared_harness_target_dir())
                         .map_err(|error| error.to_string())?;
@@ -97,12 +97,12 @@ impl PackagedPluginHarness {
                 if root_dir.exists() {
                     fs::remove_dir_all(&root_dir).map_err(|error| error.to_string())?;
                 }
-                fs::create_dir_all(&harness.dist_dir).map_err(|error| error.to_string())?;
-                fs::create_dir_all(&harness.artifact_cache_dir)
+                fs::create_dir_all(&harness.dist).map_err(|error| error.to_string())?;
+                fs::create_dir_all(&harness.artifact_cache)
                     .map_err(|error| error.to_string())?;
-                fs::create_dir_all(&harness.cargo_target_dir).map_err(|error| error.to_string())?;
+                fs::create_dir_all(&harness.cargo_target).map_err(|error| error.to_string())?;
                 packaged_plugin_test_run_xtask_package_all_plugins(
-                    &harness.dist_dir,
+                    &harness.dist,
                     &harness.shared_harness_target_dir(),
                     PACKAGED_PLUGIN_TEST_HARNESS_TAG,
                 )?;
@@ -120,36 +120,29 @@ impl PackagedPluginHarness {
 
     #[must_use]
     pub fn dist_dir(&self) -> &Path {
-        &self.dist_dir
+        &self.dist
     }
 
     #[must_use]
     pub fn scoped_target_dir(&self, scope: &str) -> PathBuf {
-        self.cargo_target_dir
+        self.cargo_target
             .join(sanitize_packaged_plugin_test_scope(scope))
     }
 
     fn shared_harness_target_dir(&self) -> PathBuf {
-        self.cargo_target_dir.join("shared")
-    }
-
-    fn variant_target_dir(&self, cargo_package: &str, build_tag: &str) -> PathBuf {
-        self.cargo_target_dir
-            .join("variants")
-            .join(sanitize_packaged_plugin_test_scope(cargo_package))
-            .join(sanitize_packaged_plugin_test_scope(build_tag))
+        self.cargo_target.join("shared")
     }
 
     #[cfg(test)]
     #[must_use]
     fn artifact_cache_dir(&self) -> &Path {
-        &self.artifact_cache_dir
+        &self.artifact_cache
     }
 
     #[cfg(test)]
     #[must_use]
     fn cargo_target_dir(&self) -> &Path {
-        &self.cargo_target_dir
+        &self.cargo_target
     }
 
     /// # Errors
@@ -169,7 +162,7 @@ impl PackagedPluginHarness {
             .copied()
             .collect::<std::collections::BTreeSet<_>>();
         for plugin_id in requested {
-            let source = self.dist_dir.join(plugin_id);
+            let source = self.dist.join(plugin_id);
             if !source.is_dir() {
                 return Err(PackagedPluginTestError::Message(format!(
                     "packaged plugin test harness is missing `{plugin_id}`"
@@ -329,12 +322,12 @@ impl PackagedPluginHarness {
     fn build_cached_packaged_plugin_artifact(
         &self,
         cargo_package: &str,
-        _target_dir: &Path,
+        target_dir: &Path,
         build_tag: &str,
     ) -> Result<PathBuf, PackagedPluginTestError> {
         let artifact_name = dynamic_library_filename(cargo_package);
         let cached_artifact = self
-            .artifact_cache_dir
+            .artifact_cache
             .join(cargo_package)
             .join(build_tag)
             .join(&artifact_name);
@@ -350,13 +343,12 @@ impl PackagedPluginHarness {
         if cached_artifact.is_file() {
             return Ok(cached_artifact);
         }
-        let target_dir = self.variant_target_dir(cargo_package, build_tag);
-        fs::create_dir_all(&target_dir)?;
+        fs::create_dir_all(target_dir)?;
 
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo"));
         let status = std::process::Command::new(&cargo)
             .current_dir(packaged_plugin_test_workspace_root())
-            .env("CARGO_TARGET_DIR", &target_dir)
+            .env("CARGO_TARGET_DIR", target_dir)
             .env("REVY_PLUGIN_BUILD_TAG", build_tag)
             .arg("build")
             .arg("-p")
@@ -416,6 +408,10 @@ fn packaged_plugin_test_cache_root() -> PathBuf {
         .join("server-runtime-plugin-test-cache")
 }
 
+fn packaged_plugin_test_cargo_target_root() -> PathBuf {
+    packaged_plugin_test_cache_root().join("cargo-targets")
+}
+
 fn packaged_plugin_test_stamp_root(stamp: &str) -> PathBuf {
     packaged_plugin_test_cache_root().join(stamp)
 }
@@ -449,12 +445,12 @@ fn packaged_plugin_harness_is_ready(
     stamp_path: &Path,
     stamp: &str,
 ) -> Result<bool, String> {
-    Ok(harness.dist_dir.is_dir()
+    Ok(harness.dist.is_dir()
         && stamp_path.is_file()
         && fs::read_to_string(stamp_path)
             .map(|current| current == stamp)
             .unwrap_or(false)
-        && packaged_plugin_harness_is_consistent(&harness.dist_dir)?)
+        && packaged_plugin_harness_is_consistent(&harness.dist)?)
 }
 
 fn sanitize_packaged_plugin_test_scope(scope: &str) -> String {
@@ -799,6 +795,10 @@ mod tests {
             .lock()
             .expect("packaged plugin test lock should not be poisoned");
         let harness = PackagedPluginHarness::shared().expect("harness should load");
+        assert_eq!(
+            harness.cargo_target_dir(),
+            super::packaged_plugin_test_cargo_target_root()
+        );
         assert!(
             harness.cargo_target_dir().join("shared").is_dir(),
             "shared packaged-plugin target dir should persist for incremental reuse"
@@ -842,6 +842,13 @@ mod tests {
             PACKAGED_PLUGIN_TEST_VARIANT_BUILDS.load(std::sync::atomic::Ordering::SeqCst);
 
         assert!(first.is_file());
+        assert!(
+            target_dir
+                .join("debug")
+                .join(dynamic_library_filename("mc-plugin-proto-je-5"))
+                .is_file(),
+            "direct builds should place intermediates under the requested target dir"
+        );
         assert_eq!(second, first);
         assert_eq!(after_first, before + 1);
         assert_eq!(after_second, after_first);
@@ -850,9 +857,9 @@ mod tests {
     #[test]
     fn scoped_target_dir_separates_build_scopes() {
         let harness = PackagedPluginHarness {
-            dist_dir: PathBuf::from("dist"),
-            artifact_cache_dir: PathBuf::from("cache"),
-            cargo_target_dir: PathBuf::from("target-root"),
+            dist: PathBuf::from("dist"),
+            artifact_cache: PathBuf::from("cache"),
+            cargo_target: PathBuf::from("target-root"),
         };
 
         assert_eq!(

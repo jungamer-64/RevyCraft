@@ -23,7 +23,7 @@ impl ServerCore {
         transaction: InventoryTransactionContext,
         target: InventoryClickTarget,
         button: InventoryClickButton,
-        clicked_item: Option<ItemStack>,
+        clicked_item: Option<&ItemStack>,
     ) -> Vec<TargetedEvent> {
         let Some(before_player) = self.online_players.get(&player_id) else {
             return Vec::new();
@@ -61,7 +61,7 @@ impl ServerCore {
         let accepted = transaction.window_id == 0
             && applied
             && matches!(target, InventoryClickTarget::Slot(_))
-            && clicked_item == clicked_slot_stack;
+            && clicked_item == clicked_slot_stack.as_ref();
 
         let mut events = vec![TargetedEvent {
             target: EventTarget::Player(player_id),
@@ -152,7 +152,7 @@ impl ServerCore {
     }
 }
 
-fn slot_target(target: InventoryClickTarget) -> Option<InventorySlot> {
+const fn slot_target(target: InventoryClickTarget) -> Option<InventorySlot> {
     match target {
         InventoryClickTarget::Slot(slot) => Some(slot),
         InventoryClickTarget::Outside | InventoryClickTarget::Unsupported => None,

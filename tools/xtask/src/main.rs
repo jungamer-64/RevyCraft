@@ -927,10 +927,7 @@ fn compiled_artifact_dir(
 ) -> PathBuf {
     let build_profile = if release { "release" } else { "debug" };
     let base = target_dir(workspace_root);
-    match target {
-        Some(target) => base.join(&target.triple).join(build_profile),
-        None => base.join(build_profile),
-    }
+    target.map_or_else(|| base.join(build_profile), |target| base.join(&target.triple).join(build_profile))
 }
 
 fn compiled_dynamic_library_path(
@@ -1330,7 +1327,7 @@ mod tests {
             &["je-5".to_string(), "je-47".to_string()]
                 .into_iter()
                 .collect::<BTreeSet<_>>(),
-            &["je-5".to_string()].into_iter().collect::<BTreeSet<_>>(),
+            &std::iter::once("je-5".to_string()).collect::<BTreeSet<_>>(),
         )
         .expect("reconcile should succeed");
 
