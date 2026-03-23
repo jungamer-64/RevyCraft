@@ -234,6 +234,11 @@ pub trait ClosedCapability: Copy + Ord + Eq + std::fmt::Debug + Send + Sync + 's
 
     fn as_str(self) -> &'static str;
 
+    /// Parses a capability from a string value.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CapabilityParseError`] if the value does not correspond to a valid capability.
     fn parse(value: &str) -> Result<Self, CapabilityParseError>
     where
         Self: Sized;

@@ -379,17 +379,20 @@ fn occupied_recipe_slots(inputs: &[Option<ItemStack>; 4], key: &str) -> Vec<usiz
 
 fn consume_crafting_inputs(inventory: &mut PlayerInventory, recipe: &CraftingRecipe) {
     for (index, amount) in recipe.consume.into_iter().enumerate() {
+        let Some(index) = u8::try_from(index).ok() else {
+            continue;
+        };
         if amount == 0 {
             continue;
         }
-        let Some(mut stack) = inventory.crafting_input(index as u8).cloned() else {
+        let Some(mut stack) = inventory.crafting_input(index).cloned() else {
             continue;
         };
         stack.count = stack.count.saturating_sub(amount);
         if stack.count == 0 {
-            let _ = inventory.set_crafting_input(index as u8, None);
+            let _ = inventory.set_crafting_input(index, None);
         } else {
-            let _ = inventory.set_crafting_input(index as u8, Some(stack));
+            let _ = inventory.set_crafting_input(index, Some(stack));
         }
     }
 }

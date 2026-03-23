@@ -89,7 +89,7 @@ pub struct ServerCore {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct OnlinePlayer {
+pub struct OnlinePlayer {
     pub(super) entity_id: EntityId,
     pub(super) snapshot: PlayerSnapshot,
     pub(super) cursor: Option<crate::ItemStack>,

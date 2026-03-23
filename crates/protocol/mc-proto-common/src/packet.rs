@@ -241,7 +241,7 @@ impl<'a> PacketReader<'a> {
     }
 }
 
-pub(crate) fn peek_varint(buffer: &BytesMut) -> Option<(i32, usize)> {
+pub fn peek_varint(buffer: &BytesMut) -> Option<(i32, usize)> {
     let mut num_read = 0;
     let mut result = 0_u32;
     for byte in buffer.iter().copied() {

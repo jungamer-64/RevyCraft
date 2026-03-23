@@ -60,6 +60,10 @@ impl PackagedPluginHarness {
     /// # Errors
     ///
     /// Returns an error when the shared packaged-plugin harness cannot be built or loaded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the packaged plugin build lock is poisoned.
     pub fn shared() -> Result<&'static Self, PackagedPluginTestError> {
         match PACKAGED_PLUGIN_TEST_HARNESS
             .get_or_init(|| {
