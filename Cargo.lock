@@ -3110,6 +3110,7 @@ dependencies = [
  "server-config",
  "sha1",
  "sha2",
+ "socket2 0.6.3",
  "tempfile",
  "thiserror",
  "tokio",

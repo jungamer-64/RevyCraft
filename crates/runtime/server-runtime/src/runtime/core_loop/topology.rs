@@ -10,7 +10,7 @@ use mc_plugin_host::registry::ProtocolRegistry;
 use mc_plugin_host::runtime::RuntimePluginHost;
 use mc_proto_common::{BedrockListenerDescriptor, Edition, TransportKind, WireFormatKind};
 use std::collections::{BTreeMap, HashSet};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,10 +92,14 @@ fn can_reuse_listener(
     desired_addr: SocketAddr,
     current_binding: &ListenerBinding,
 ) -> bool {
+    let same_bind_ip = |left: IpAddr, right: IpAddr| {
+        left == right || (left.is_unspecified() && right.is_unspecified())
+    };
     if config.network.server_port == 0 {
-        return current_binding.local_addr.ip() == desired_addr.ip();
+        return same_bind_ip(current_binding.local_addr.ip(), desired_addr.ip());
     }
-    current_binding.local_addr == desired_addr
+    current_binding.local_addr.port() == desired_addr.port()
+        && same_bind_ip(current_binding.local_addr.ip(), desired_addr.ip())
 }
 
 impl RuntimeServer {

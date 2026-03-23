@@ -1,5 +1,10 @@
 use super::*;
 use mc_proto_common::ConnectionPhase;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+fn ipv6_loopback_available() -> bool {
+    std::net::TcpListener::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0)).is_ok()
+}
 
 async fn assert_spawn_fails_with_message(
     config: ServerConfig,
@@ -43,6 +48,51 @@ async fn running_server_exposes_listener_bindings() -> Result<(), RuntimeError> 
 }
 
 #[tokio::test]
+async fn wildcard_ipv4_listener_accepts_ipv6_loopback_when_available() -> Result<(), RuntimeError> {
+    if !ipv6_loopback_available() {
+        return Ok(());
+    }
+
+    let temp_dir = tempdir()?;
+    let mut config = ServerConfig::default();
+    config.network.server_ip = Some(Ipv4Addr::UNSPECIFIED.into());
+    config.network.server_port = 0;
+    config.topology.be_enabled = false;
+    config.bootstrap.world_dir = temp_dir.path().join("world");
+    let server = build_test_server(config, plugin_test_registries_tcp_only()?).await?;
+
+    let port = listener_addr(&server).port();
+    let ipv4_stream = connect_tcp(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)).await?;
+    drop(ipv4_stream);
+    let ipv6_stream = connect_tcp(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port)).await?;
+    drop(ipv6_stream);
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn wildcard_ipv4_dual_stack_listener_is_reused_on_noop_reload() -> Result<(), RuntimeError> {
+    if !ipv6_loopback_available() {
+        return Ok(());
+    }
+
+    let temp_dir = tempdir()?;
+    let mut config = ServerConfig::default();
+    config.network.server_ip = Some(Ipv4Addr::UNSPECIFIED.into());
+    config.network.server_port = 0;
+    config.topology.be_enabled = false;
+    config.bootstrap.world_dir = temp_dir.path().join("world");
+    let server = build_reloadable_test_server(config, plugin_test_registries_tcp_only()?).await?;
+
+    let before = listener_addr(&server);
+    let _reload = server.reload_generation().await?;
+    let after = listener_addr(&server);
+    assert_eq!(after, before);
+
+    server.shutdown().await
+}
+
+#[tokio::test]
 async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let server = build_test_server(
@@ -56,10 +106,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
         status.active_generation.state,
         GenerationStatusState::Active
     );
-    assert_eq!(
-        status.active_generation.default_adapter_id,
-        JE_5_ADAPTER_ID
-    );
+    assert_eq!(status.active_generation.default_adapter_id, JE_5_ADAPTER_ID);
     assert!(
         status
             .active_generation

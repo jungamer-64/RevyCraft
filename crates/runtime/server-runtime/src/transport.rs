@@ -8,9 +8,13 @@ use bedrockrs_proto::compression::Compression as BedrockCompression;
 use bytes::BytesMut;
 use mc_plugin_host::registry::ProtocolRegistry;
 use mc_proto_common::{MinecraftWireCodec, TransportKind, WireCodec};
-use std::net::SocketAddr;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use std::io;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+
+const TCP_LISTENER_BACKLOG: i32 = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListenerPlan {
@@ -181,6 +185,46 @@ pub struct MinecraftStreamCipher {
     shift_register: [u8; 16],
 }
 
+fn dual_stack_bind_addr(bind_addr: SocketAddr) -> Option<SocketAddr> {
+    match bind_addr {
+        SocketAddr::V4(addr) if addr.ip().is_unspecified() => Some(SocketAddr::new(
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+            addr.port(),
+        )),
+        SocketAddr::V4(_) | SocketAddr::V6(_) => None,
+    }
+}
+
+fn should_fallback_from_dual_stack(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::AddrNotAvailable | io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+    ) || matches!(error.raw_os_error(), Some(22 | 92 | 97 | 99))
+}
+
+fn bind_dual_stack_tcp_listener(bind_addr: SocketAddr) -> Result<TcpListener, io::Error> {
+    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    #[cfg(not(windows))]
+    socket.set_reuse_address(true)?;
+    socket.set_only_v6(false)?;
+    socket.bind(&SockAddr::from(bind_addr))?;
+    socket.listen(TCP_LISTENER_BACKLOG)?;
+    socket.set_nonblocking(true)?;
+    let std_listener: std::net::TcpListener = socket.into();
+    TcpListener::from_std(std_listener)
+}
+
+async fn bind_tcp_listener(bind_addr: SocketAddr) -> Result<TcpListener, io::Error> {
+    if let Some(dual_stack_addr) = dual_stack_bind_addr(bind_addr) {
+        match bind_dual_stack_tcp_listener(dual_stack_addr) {
+            Ok(listener) => return Ok(listener),
+            Err(error) if should_fallback_from_dual_stack(&error) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    TcpListener::bind(bind_addr).await
+}
+
 impl MinecraftStreamCipher {
     pub fn new(shared_secret: [u8; 16]) -> Self {
         Self {
@@ -276,7 +320,7 @@ pub async fn bind_transport_listener(
 ) -> Result<BoundTransportListener, RuntimeError> {
     match plan.transport {
         TransportKind::Tcp => Ok(BoundTransportListener::Tcp {
-            listener: TcpListener::bind(plan.bind_addr).await?,
+            listener: bind_tcp_listener(plan.bind_addr).await?,
             adapter_ids: plan.adapter_ids,
         }),
         TransportKind::Udp => {
