@@ -19,7 +19,7 @@ async fn assert_spawn_fails_with_message(
 async fn unknown_default_adapter_fails_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.topology.default_adapter = "missing".to_string();
+    config.topology.default_adapter = "missing".into();
     assert_spawn_fails_with_message(config, "unknown default-adapter").await
 }
 
@@ -27,7 +27,7 @@ async fn unknown_default_adapter_fails_fast() -> Result<(), RuntimeError> {
 async fn unknown_gameplay_profile_fails_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.profiles.default_gameplay = "missing".to_string();
+    config.profiles.default_gameplay = "missing".into();
     assert_spawn_fails_with_message(config, "unknown gameplay profile").await
 }
 
@@ -35,7 +35,7 @@ async fn unknown_gameplay_profile_fails_fast() -> Result<(), RuntimeError> {
 async fn unknown_storage_profile_fails_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.bootstrap.storage_profile = "missing".to_string();
+    config.bootstrap.storage_profile = "missing".into();
     assert_spawn_fails_with_message(config, "unknown storage-profile").await
 }
 
@@ -43,7 +43,7 @@ async fn unknown_storage_profile_fails_fast() -> Result<(), RuntimeError> {
 async fn unknown_auth_profile_fails_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.profiles.auth = "missing".to_string();
+    config.profiles.auth = "missing".into();
     assert_spawn_fails_with_message(config, "unknown auth profile").await
 }
 

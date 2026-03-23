@@ -1,3 +1,4 @@
+use mc_core::{AdapterId, AdminUiProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use mc_plugin_host::config::{
     BootstrapConfig as PluginHostBootstrapConfig,
@@ -102,7 +103,7 @@ pub struct BootstrapConfig {
     pub difficulty: u8,
     pub view_distance: u8,
     pub world_dir: PathBuf,
-    pub storage_profile: String,
+    pub storage_profile: StorageProfileId,
     pub plugins_dir: PathBuf,
     pub plugin_abi_min: PluginAbiVersion,
     pub plugin_abi_max: PluginAbiVersion,
@@ -118,7 +119,7 @@ impl Default for BootstrapConfig {
             difficulty: 1,
             view_distance: 2,
             world_dir: PathBuf::from("runtime").join("world"),
-            storage_profile: "je-anvil-1_7_10".to_string(),
+            storage_profile: StorageProfileId::new("je-anvil-1_7_10"),
             plugins_dir: PathBuf::from("runtime").join("plugins"),
             plugin_abi_min: CURRENT_PLUGIN_ABI,
             plugin_abi_max: CURRENT_PLUGIN_ABI,
@@ -148,10 +149,10 @@ impl Default for NetworkConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TopologyConfig {
     pub be_enabled: bool,
-    pub default_adapter: String,
-    pub enabled_adapters: Option<Vec<String>>,
-    pub default_bedrock_adapter: String,
-    pub enabled_bedrock_adapters: Option<Vec<String>>,
+    pub default_adapter: AdapterId,
+    pub enabled_adapters: Option<Vec<AdapterId>>,
+    pub default_bedrock_adapter: AdapterId,
+    pub enabled_bedrock_adapters: Option<Vec<AdapterId>>,
     pub reload_watch: bool,
     pub drain_grace_secs: u64,
 }
@@ -160,9 +161,9 @@ impl Default for TopologyConfig {
     fn default() -> Self {
         Self {
             be_enabled: false,
-            default_adapter: "je-5".to_string(),
+            default_adapter: AdapterId::new("je-5"),
             enabled_adapters: None,
-            default_bedrock_adapter: BEDROCK_BASELINE_ADAPTER_ID.to_string(),
+            default_bedrock_adapter: AdapterId::new(BEDROCK_BASELINE_ADAPTER_ID),
             enabled_bedrock_adapters: None,
             reload_watch: false,
             drain_grace_secs: DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS,
@@ -189,18 +190,18 @@ impl Default for PluginsConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfilesConfig {
-    pub auth: String,
-    pub bedrock_auth: String,
-    pub default_gameplay: String,
-    pub gameplay_map: HashMap<String, String>,
+    pub auth: AuthProfileId,
+    pub bedrock_auth: AuthProfileId,
+    pub default_gameplay: GameplayProfileId,
+    pub gameplay_map: HashMap<AdapterId, GameplayProfileId>,
 }
 
 impl Default for ProfilesConfig {
     fn default() -> Self {
         Self {
-            auth: "offline-v1".to_string(),
-            bedrock_auth: BEDROCK_OFFLINE_AUTH_PROFILE_ID.to_string(),
-            default_gameplay: "canonical".to_string(),
+            auth: AuthProfileId::new("offline-v1"),
+            bedrock_auth: AuthProfileId::new(BEDROCK_OFFLINE_AUTH_PROFILE_ID),
+            default_gameplay: GameplayProfileId::new("canonical"),
             gameplay_map: HashMap::new(),
         }
     }
@@ -208,7 +209,7 @@ impl Default for ProfilesConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdminConfig {
-    pub ui_profile: String,
+    pub ui_profile: AdminUiProfileId,
     pub local_console_permissions: Vec<AdminPermission>,
     pub grpc: AdminGrpcConfig,
 }
@@ -216,7 +217,7 @@ pub struct AdminConfig {
 impl Default for AdminConfig {
     fn default() -> Self {
         Self {
-            ui_profile: "console-v1".to_string(),
+            ui_profile: AdminUiProfileId::new("console-v1"),
             local_console_permissions: all_admin_permissions().to_vec(),
             grpc: AdminGrpcConfig::default(),
         }
@@ -377,7 +378,7 @@ impl ServerConfig {
                     .static_config
                     .bootstrap
                     .storage_profile
-                    .unwrap_or_else(|| "je-anvil-1_7_10".to_string()),
+                    .unwrap_or_else(|| StorageProfileId::new("je-anvil-1_7_10")),
                 plugins_dir: resolve_config_path(
                     parent,
                     document.static_config.plugins.plugins_dir.as_deref(),
@@ -410,13 +411,13 @@ impl ServerConfig {
                     .live
                     .topology
                     .default_adapter
-                    .unwrap_or_else(|| "je-5".to_string()),
+                    .unwrap_or_else(|| AdapterId::new("je-5")),
                 enabled_adapters: normalize_optional_vec(document.live.topology.enabled_adapters),
                 default_bedrock_adapter: document
                     .live
                     .topology
                     .default_bedrock_adapter
-                    .unwrap_or_else(|| BEDROCK_BASELINE_ADAPTER_ID.to_string()),
+                    .unwrap_or_else(|| AdapterId::new(BEDROCK_BASELINE_ADAPTER_ID)),
                 enabled_bedrock_adapters: normalize_optional_vec(
                     document.live.topology.enabled_bedrock_adapters,
                 ),
@@ -463,17 +464,17 @@ impl ServerConfig {
                     .live
                     .profiles
                     .auth
-                    .unwrap_or_else(|| "offline-v1".to_string()),
+                    .unwrap_or_else(|| AuthProfileId::new("offline-v1")),
                 bedrock_auth: document
                     .live
                     .profiles
                     .bedrock_auth
-                    .unwrap_or_else(|| BEDROCK_OFFLINE_AUTH_PROFILE_ID.to_string()),
+                    .unwrap_or_else(|| AuthProfileId::new(BEDROCK_OFFLINE_AUTH_PROFILE_ID)),
                 default_gameplay: document
                     .live
                     .profiles
                     .default_gameplay
-                    .unwrap_or_else(|| "canonical".to_string()),
+                    .unwrap_or_else(|| GameplayProfileId::new("canonical")),
                 gameplay_map: document.live.profiles.gameplay_map,
             },
             admin: AdminConfig {
@@ -481,7 +482,7 @@ impl ServerConfig {
                     .live
                     .admin
                     .ui_profile
-                    .unwrap_or_else(|| "console-v1".to_string()),
+                    .unwrap_or_else(|| AdminUiProfileId::new("console-v1")),
                 local_console_permissions: parse_admin_permissions(
                     document.live.admin.local_console_permissions,
                     "live.admin.local_console_permissions",
@@ -516,7 +517,7 @@ impl ServerConfig {
     }
 
     #[must_use]
-    pub fn effective_enabled_adapters(&self) -> Vec<String> {
+    pub fn effective_enabled_adapters(&self) -> Vec<AdapterId> {
         self.topology
             .enabled_adapters
             .as_ref()
@@ -524,7 +525,7 @@ impl ServerConfig {
     }
 
     #[must_use]
-    pub fn effective_enabled_bedrock_adapters(&self) -> Vec<String> {
+    pub fn effective_enabled_bedrock_adapters(&self) -> Vec<AdapterId> {
         self.topology.enabled_bedrock_adapters.as_ref().map_or_else(
             || vec![self.topology.default_bedrock_adapter.clone()],
             Clone::clone,
@@ -616,7 +617,7 @@ struct StaticBootstrapDocument {
     difficulty: Option<u8>,
     view_distance: Option<u8>,
     world_dir: Option<PathBuf>,
-    storage_profile: Option<String>,
+    storage_profile: Option<StorageProfileId>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -656,10 +657,10 @@ struct NetworkDocument {
 #[serde(default, deny_unknown_fields)]
 struct TopologyDocument {
     be_enabled: Option<bool>,
-    default_adapter: Option<String>,
-    enabled_adapters: Option<Vec<String>>,
-    default_bedrock_adapter: Option<String>,
-    enabled_bedrock_adapters: Option<Vec<String>>,
+    default_adapter: Option<AdapterId>,
+    enabled_adapters: Option<Vec<AdapterId>>,
+    default_bedrock_adapter: Option<AdapterId>,
+    enabled_bedrock_adapters: Option<Vec<AdapterId>>,
     reload_watch: Option<bool>,
     drain_grace_secs: Option<u64>,
 }
@@ -685,16 +686,16 @@ struct FailurePolicyDocument {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct ProfilesDocument {
-    auth: Option<String>,
-    bedrock_auth: Option<String>,
-    default_gameplay: Option<String>,
-    gameplay_map: HashMap<String, String>,
+    auth: Option<AuthProfileId>,
+    bedrock_auth: Option<AuthProfileId>,
+    default_gameplay: Option<GameplayProfileId>,
+    gameplay_map: HashMap<AdapterId, GameplayProfileId>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct LiveAdminDocument {
-    ui_profile: Option<String>,
+    ui_profile: Option<AdminUiProfileId>,
     local_console_permissions: Option<Vec<String>>,
 }
 
@@ -776,7 +777,7 @@ fn parse_admin_grpc_config(
     Ok(config)
 }
 
-fn normalize_optional_vec(values: Option<Vec<String>>) -> Option<Vec<String>> {
+fn normalize_optional_vec<T>(values: Option<Vec<T>>) -> Option<Vec<T>> {
     match values {
         Some(values) if values.is_empty() => None,
         other => other,

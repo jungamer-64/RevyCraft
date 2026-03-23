@@ -1,4 +1,4 @@
-use mc_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
+use mc_core::{AdapterId, ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use mc_proto_common::{ConnectionPhase, TransportKind};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 pub struct ListenerBinding {
     pub transport: TransportKind,
     pub local_addr: SocketAddr,
-    pub adapter_ids: Vec<String>,
+    pub adapter_ids: Vec<AdapterId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

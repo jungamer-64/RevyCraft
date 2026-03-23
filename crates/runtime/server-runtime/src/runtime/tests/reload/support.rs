@@ -17,11 +17,7 @@ pub(crate) async fn spawn_protocol_reload_server(
     let target_dir = PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
         .scoped_target_dir(scenario);
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
         .install_protocol_plugin(
@@ -86,7 +82,7 @@ pub(crate) async fn spawn_online_auth_reload_server(
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.online_mode = true;
-    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.into();
     config.bootstrap.plugins_dir = dist_dir.clone();
     let server = build_reloadable_test_server(
         config,

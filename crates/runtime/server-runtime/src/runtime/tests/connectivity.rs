@@ -220,7 +220,7 @@ async fn runtime_loop_storage_error_shuts_down_listeners_and_sessions() -> Resul
 {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.into();
     config.plugins.failure_policy.storage = PluginFailureAction::Quarantine;
     let LoadedPluginTestEnvironment {
         loaded_plugins,
@@ -390,8 +390,8 @@ async fn default_bedrock_adapter_requires_listener_metadata() -> Result<(), Runt
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.topology.be_enabled = true;
-    config.topology.default_bedrock_adapter = BE_PLACEHOLDER_ADAPTER_ID.to_string();
-    config.topology.enabled_bedrock_adapters = Some(vec![BE_PLACEHOLDER_ADAPTER_ID.to_string()]);
+    config.topology.default_bedrock_adapter = BE_PLACEHOLDER_ADAPTER_ID.into();
+    config.topology.enabled_bedrock_adapters = Some(vec![BE_PLACEHOLDER_ADAPTER_ID.into()]);
     assert_spawn_fails_with_message(config, "must provide bedrock listener metadata").await
 }
 
@@ -401,10 +401,10 @@ async fn placeholder_bedrock_adapter_can_remain_enabled_when_not_default()
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.topology.be_enabled = true;
-    config.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.to_string();
+    config.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.into();
     config.topology.enabled_bedrock_adapters = Some(vec![
-        BE_924_ADAPTER_ID.to_string(),
-        BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+        BE_924_ADAPTER_ID.into(),
+        BE_PLACEHOLDER_ADAPTER_ID.into(),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
 
@@ -428,9 +428,9 @@ async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), Runt
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.topology.enabled_adapters = Some(vec![
-        JE_5_ADAPTER_ID.to_string(),
-        JE_47_ADAPTER_ID.to_string(),
-        JE_340_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.into(),
+        JE_47_ADAPTER_ID.into(),
+        JE_340_ADAPTER_ID.into(),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
 

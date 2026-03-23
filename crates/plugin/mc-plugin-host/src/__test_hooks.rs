@@ -14,7 +14,7 @@ use crate::runtime::{
     AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
     RuntimeReloadContext, StorageProfileHandle,
 };
-use mc_core::PluginGenerationId;
+use mc_core::{PluginGenerationId, StorageProfileId};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -126,7 +126,8 @@ pub fn activate_storage_profile(
     host: &BuiltTestHost,
     profile_id: &str,
 ) -> Result<(), PluginHostError> {
-    host.inner.activate_storage_profile(profile_id)
+    host.inner
+        .activate_storage_profile(&StorageProfileId::new(profile_id))
 }
 
 /// # Errors

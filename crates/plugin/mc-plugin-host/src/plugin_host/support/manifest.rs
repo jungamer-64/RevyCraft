@@ -1,5 +1,6 @@
 use super::{
-    GameplayProfileId, PluginAbiVersion, PluginKind, PluginManifestV1, RuntimeError, Utf8Slice,
+    AdminUiProfileId, GameplayProfileId, PluginAbiVersion, PluginKind, PluginManifestV1,
+    RuntimeError, Utf8Slice,
 };
 
 #[derive(Clone, Debug)]
@@ -51,17 +52,20 @@ pub(crate) fn decode_utf8_slice(slice: Utf8Slice) -> Result<String, RuntimeError
     String::from_utf8(bytes.to_vec()).map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
-pub(crate) fn manifest_profile_id(
+pub(crate) fn manifest_profile_id<P>(
     manifest: &DecodedManifest,
     prefix: &str,
     plugin_id: &str,
     kind: &str,
-) -> Result<String, RuntimeError> {
+) -> Result<P, RuntimeError>
+where
+    P: From<String>,
+{
     manifest
         .capabilities
         .iter()
         .find_map(|capability| capability.strip_prefix(prefix))
-        .map(ToString::to_string)
+        .map(|profile_id| P::from(profile_id.to_string()))
         .ok_or_else(|| {
             RuntimeError::Config(format!(
                 "{kind} plugin `{plugin_id}` is missing {prefix}<id> manifest capability"
@@ -88,7 +92,7 @@ pub(crate) fn gameplay_profile_id_from_manifest(
 pub(crate) fn admin_ui_profile_id_from_manifest(
     manifest: &DecodedManifest,
     plugin_id: &str,
-) -> Result<String, RuntimeError> {
+) -> Result<AdminUiProfileId, RuntimeError> {
     manifest_profile_id(manifest, "admin-ui.profile:", plugin_id, "admin-ui")
 }
 

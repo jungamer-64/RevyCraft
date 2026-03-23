@@ -51,7 +51,7 @@ pub(crate) async fn boot_server(
         listener_bindings,
         bound_listeners,
     } = bind_runtime_listeners(&config, &protocols).await?;
-    let admin_ui = loaded_plugins.resolve_admin_ui_profile(&config.admin.ui_profile);
+    let admin_ui = loaded_plugins.resolve_admin_ui_profile(config.admin.ui_profile.as_str());
     let selection_state = RuntimeSelectionState {
         config: config.clone(),
         loaded_plugins: loaded_plugins.clone(),

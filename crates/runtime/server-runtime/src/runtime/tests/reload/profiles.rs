@@ -3,11 +3,8 @@ use super::*;
 fn gameplay_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerConfig {
     let mut config = loopback_server_config(world_dir);
     config.bootstrap.game_mode = 1;
-    config.topology.enabled_adapters = Some(vec![
-        JE_5_ADAPTER_ID.to_string(),
-        JE_340_ADAPTER_ID.to_string(),
-    ]);
-    config.profiles.default_gameplay = "canonical".to_string();
+    config.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into(), JE_340_ADAPTER_ID.into()]);
+    config.profiles.default_gameplay = "canonical".into();
     config.profiles.gameplay_map = gameplay_profile_map(&[
         (JE_5_ADAPTER_ID, "readonly"),
         (JE_340_ADAPTER_ID, "canonical"),
@@ -35,10 +32,8 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    let registries = plugin_test_registries_from_dist(
-        dist_dir.clone(),
-        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID],
-    )?;
+    let registries =
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID])?;
     let server = build_reloadable_test_server(
         gameplay_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
         registries,
@@ -154,10 +149,8 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    let registries = plugin_test_registries_from_dist(
-        dist_dir.clone(),
-        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID],
-    )?;
+    let registries =
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID])?;
     let server = build_reloadable_test_server(
         gameplay_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
         registries,
@@ -254,11 +247,7 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
     let target_dir = harness.scoped_target_dir("storage-reload-success");
     let world_dir = temp_dir.path().join("world");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
     let registries = plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?;
     let server = build_reloadable_test_server(
         packaged_reload_server_config(world_dir.clone(), dist_dir.clone()),
@@ -370,11 +359,7 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
     let target_dir = harness.scoped_target_dir("storage-reload-failure");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.plugins_dir = dist_dir.clone();
     config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
@@ -436,11 +421,7 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
     let target_dir = harness.scoped_target_dir("auth-reload-offline");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
     let server = build_reloadable_test_server(
         packaged_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,

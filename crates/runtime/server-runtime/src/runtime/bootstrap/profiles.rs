@@ -20,26 +20,29 @@ pub(super) fn resolve_runtime_profiles(
     loaded_plugins: &LoadedPluginSet,
 ) -> Result<RuntimeProfiles, RuntimeError> {
     let storage_profile = loaded_plugins
-        .resolve_storage_profile(&config.bootstrap.storage_profile)
+        .resolve_storage_profile(config.bootstrap.storage_profile.as_str())
         .ok_or_else(|| {
             RuntimeError::Config(format!(
                 "unknown storage-profile `{}`",
-                config.bootstrap.storage_profile
+                config.bootstrap.storage_profile.as_str()
             ))
         })?;
     let auth_profile = loaded_plugins
-        .resolve_auth_profile(&config.profiles.auth)
+        .resolve_auth_profile(config.profiles.auth.as_str())
         .ok_or_else(|| {
-            RuntimeError::Config(format!("unknown auth-profile `{}`", config.profiles.auth))
+            RuntimeError::Config(format!(
+                "unknown auth-profile `{}`",
+                config.profiles.auth.as_str()
+            ))
         })?;
     let bedrock_auth_profile = if config.topology.be_enabled {
         Some(
             loaded_plugins
-                .resolve_auth_profile(&config.profiles.bedrock_auth)
+                .resolve_auth_profile(config.profiles.bedrock_auth.as_str())
                 .ok_or_else(|| {
                     RuntimeError::Config(format!(
                         "unknown bedrock-auth-profile `{}`",
-                        config.profiles.bedrock_auth
+                        config.profiles.bedrock_auth.as_str()
                     ))
                 })?,
         )

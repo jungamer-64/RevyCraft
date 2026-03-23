@@ -151,11 +151,7 @@ impl ProtocolAdapter for Je5ReloadTestProtocolPlugin {
     }
 
     fn capability_set(&self) -> CapabilitySet {
-        build_capability_set(&[
-            "protocol.je",
-            "protocol.je.5",
-            "runtime.reload.protocol",
-        ])
+        build_capability_set(&["protocol.je", "protocol.je.5", "runtime.reload.protocol"])
     }
 }
 

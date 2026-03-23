@@ -16,7 +16,7 @@ pub struct OnlineStubAuthPlugin;
 impl RustAuthPlugin for OnlineStubAuthPlugin {
     fn descriptor(&self) -> AuthDescriptor {
         AuthDescriptor {
-            auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.to_string(),
+            auth_profile: ONLINE_STUB_AUTH_PROFILE_ID.into(),
             mode: AuthMode::Online,
         }
     }

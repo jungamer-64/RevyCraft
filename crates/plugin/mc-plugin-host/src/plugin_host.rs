@@ -9,9 +9,9 @@ use crate::runtime::{
 use bytes::BytesMut;
 use libloading::Library;
 use mc_core::{
-    CapabilitySet, GameplayEffect, GameplayJoinEffect, GameplayPolicyResolver, GameplayProfileId,
-    GameplayQuery, PlayerId, PlayerSnapshot, PluginGenerationId, SessionCapabilitySet,
-    WorldSnapshot,
+    AdminUiProfileId, AuthProfileId, CapabilitySet, GameplayEffect, GameplayJoinEffect,
+    GameplayPolicyResolver, GameplayProfileId, GameplayQuery, PlayerId, PlayerSnapshot,
+    PluginGenerationId, SessionCapabilitySet, StorageProfileId, WorldSnapshot,
 };
 use mc_plugin_api::abi::{
     ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind,
@@ -181,10 +181,10 @@ pub struct PluginHost {
     generations: Arc<GenerationManager>,
     failures: Arc<PluginFailureDispatch>,
     protocols: Mutex<HashMap<String, ManagedProtocolPlugin>>,
-    gameplay: Mutex<HashMap<String, ManagedGameplayPlugin>>,
-    storage: Mutex<HashMap<String, ManagedStoragePlugin>>,
-    auth: Mutex<HashMap<String, ManagedAuthPlugin>>,
-    admin_ui: Mutex<HashMap<String, ManagedAdminUiPlugin>>,
+    gameplay: Mutex<HashMap<GameplayProfileId, ManagedGameplayPlugin>>,
+    storage: Mutex<HashMap<StorageProfileId, ManagedStoragePlugin>>,
+    auth: Mutex<HashMap<AuthProfileId, ManagedAuthPlugin>>,
+    admin_ui: Mutex<HashMap<AdminUiProfileId, ManagedAdminUiPlugin>>,
 }
 
 impl PluginHost {
@@ -257,7 +257,7 @@ impl PluginHost {
         self.gameplay
             .lock()
             .expect("plugin host mutex should not be poisoned")
-            .get(profile_id)
+            .get(&GameplayProfileId::new(profile_id))
             .map(|managed| Arc::clone(&managed.profile))
     }
 
@@ -274,7 +274,7 @@ impl PluginHost {
         self.storage
             .lock()
             .expect("plugin host mutex should not be poisoned")
-            .get(profile_id)
+            .get(&StorageProfileId::new(profile_id))
             .map(|managed| Arc::clone(&managed.profile))
     }
 
@@ -291,7 +291,7 @@ impl PluginHost {
         self.auth
             .lock()
             .expect("plugin host mutex should not be poisoned")
-            .get(profile_id)
+            .get(&AuthProfileId::new(profile_id))
             .map(|managed| Arc::clone(&managed.profile))
     }
 
@@ -308,7 +308,7 @@ impl PluginHost {
         self.admin_ui
             .lock()
             .expect("plugin host mutex should not be poisoned")
-            .get(profile_id)
+            .get(&AdminUiProfileId::new(profile_id))
             .map(|managed| Arc::clone(&managed.profile))
     }
 

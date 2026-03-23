@@ -1,7 +1,8 @@
 use super::{
-    ArtifactIdentity, ArtifactQuarantineRecord, AuthMode, Deserialize, Edition, GameplayProfileId,
-    PluginFailureAction, PluginFailureMatrix, PluginGenerationId, PluginHost, PluginKind,
-    Serialize, TransportKind, system_time_ms,
+    AdminUiProfileId, ArtifactIdentity, ArtifactQuarantineRecord, AuthMode, AuthProfileId,
+    Deserialize, Edition, GameplayProfileId, PluginFailureAction, PluginFailureMatrix,
+    PluginGenerationId, PluginHost, PluginKind, Serialize, StorageProfileId, TransportKind,
+    system_time_ms,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,7 +44,7 @@ pub struct GameplayPluginStatusSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoragePluginStatusSnapshot {
     pub plugin_id: String,
-    pub profile_id: String,
+    pub profile_id: StorageProfileId,
     pub generation_id: PluginGenerationId,
     pub loaded_at_ms: u64,
     pub failure_action: PluginFailureAction,
@@ -55,7 +56,7 @@ pub struct StoragePluginStatusSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthPluginStatusSnapshot {
     pub plugin_id: String,
-    pub profile_id: String,
+    pub profile_id: AuthProfileId,
     pub generation_id: PluginGenerationId,
     pub loaded_at_ms: u64,
     pub failure_action: PluginFailureAction,
@@ -68,7 +69,7 @@ pub struct AuthPluginStatusSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminUiPluginStatusSnapshot {
     pub plugin_id: String,
-    pub profile_id: String,
+    pub profile_id: AdminUiProfileId,
     pub generation_id: PluginGenerationId,
     pub loaded_at_ms: u64,
     pub failure_action: PluginFailureAction,

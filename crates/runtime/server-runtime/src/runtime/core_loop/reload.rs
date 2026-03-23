@@ -38,7 +38,7 @@ impl RuntimeServer {
         let _ = active_profiles.insert(candidate.profiles.default_gameplay.clone());
         active_profiles.extend(candidate.profiles.gameplay_map.values().cloned());
         for session in &context.gameplay_sessions {
-            if !active_profiles.contains(session.gameplay_profile.as_str()) {
+            if !active_profiles.contains(&session.gameplay_profile) {
                 return Err(RuntimeError::Config(format!(
                     "cannot remove gameplay profile `{}` while sessions are still using it",
                     session.gameplay_profile.as_str()
@@ -54,7 +54,7 @@ impl RuntimeServer {
         loaded_plugins: LoadedPluginSet,
     ) -> Result<RuntimeSelectionState, RuntimeError> {
         let auth_profile = loaded_plugins
-            .resolve_auth_profile(&config.profiles.auth)
+            .resolve_auth_profile(config.profiles.auth.as_str())
             .ok_or_else(|| {
                 RuntimeError::Config(format!("unknown auth-profile `{}`", config.profiles.auth))
             })?;
@@ -77,7 +77,7 @@ impl RuntimeServer {
 
         let bedrock_auth_profile = if config.topology.be_enabled {
             let profile = loaded_plugins
-                .resolve_auth_profile(&config.profiles.bedrock_auth)
+                .resolve_auth_profile(config.profiles.bedrock_auth.as_str())
                 .ok_or_else(|| {
                     RuntimeError::Config(format!(
                         "unknown bedrock-auth-profile `{}`",
@@ -96,7 +96,7 @@ impl RuntimeServer {
         } else {
             None
         };
-        let admin_ui = loaded_plugins.resolve_admin_ui_profile(&config.admin.ui_profile);
+        let admin_ui = loaded_plugins.resolve_admin_ui_profile(config.admin.ui_profile.as_str());
         let remote_admin_subjects = remote_admin_subjects_from_config(&config);
 
         Ok(RuntimeSelectionState {

@@ -6,6 +6,7 @@ use bedrockrs_network::connection::Connection as BedrockConnection;
 use bedrockrs_network::listener::Listener as BedrockListener;
 use bedrockrs_proto::compression::Compression as BedrockCompression;
 use bytes::BytesMut;
+use mc_core::AdapterId;
 use mc_plugin_host::registry::ProtocolRegistry;
 use mc_proto_common::{MinecraftWireCodec, TransportKind, WireCodec};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -20,7 +21,7 @@ const TCP_LISTENER_BACKLOG: i32 = 1024;
 pub struct ListenerPlan {
     pub transport: TransportKind,
     pub bind_addr: SocketAddr,
-    pub adapter_ids: Vec<String>,
+    pub adapter_ids: Vec<AdapterId>,
     pub bedrock_bind_metadata: Option<BedrockBindMetadata>,
 }
 
@@ -133,11 +134,11 @@ impl TransportSessionIo {
 pub enum BoundTransportListener {
     Tcp {
         listener: TcpListener,
-        adapter_ids: Vec<String>,
+        adapter_ids: Vec<AdapterId>,
     },
     Bedrock {
         listener: Box<BedrockListener>,
-        adapter_ids: Vec<String>,
+        adapter_ids: Vec<AdapterId>,
         bind_addr: SocketAddr,
     },
 }
@@ -284,7 +285,7 @@ pub fn build_listener_plans(
             ));
         }
         let default_bedrock_adapter = protocols
-            .resolve_adapter(&config.topology.default_bedrock_adapter)
+            .resolve_adapter(config.topology.default_bedrock_adapter.as_str())
             .ok_or_else(|| {
                 RuntimeError::Config(format!(
                     "default-bedrock-adapter `{}` is not registered",

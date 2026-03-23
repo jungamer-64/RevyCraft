@@ -9,9 +9,9 @@ fn creative_server_config(world_dir: PathBuf) -> ServerConfig {
 fn multi_version_creative_server_config(world_dir: PathBuf) -> ServerConfig {
     let mut config = creative_server_config(world_dir);
     config.topology.enabled_adapters = Some(vec![
-        JE_5_ADAPTER_ID.to_string(),
-        JE_47_ADAPTER_ID.to_string(),
-        JE_340_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.into(),
+        JE_47_ADAPTER_ID.into(),
+        JE_340_ADAPTER_ID.into(),
     ]);
     config
 }
@@ -411,8 +411,8 @@ async fn plugin_backed_storage_and_auth_profiles_boot_and_persist() -> Result<()
     let temp_dir = tempdir()?;
     let world_dir = temp_dir.path().join("world");
     let mut config = loopback_server_config(world_dir.clone());
-    config.bootstrap.storage_profile = JE_1_7_10_STORAGE_PROFILE_ID.to_string();
-    config.profiles.auth = OFFLINE_AUTH_PROFILE_ID.to_string();
+    config.bootstrap.storage_profile = JE_1_7_10_STORAGE_PROFILE_ID.into();
+    config.profiles.auth = OFFLINE_AUTH_PROFILE_ID.into();
 
     let server = build_test_server(config, plugin_test_registries_tcp_only()?).await?;
 

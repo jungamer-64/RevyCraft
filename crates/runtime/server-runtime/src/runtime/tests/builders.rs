@@ -4,7 +4,7 @@ use super::*;
 async fn storage_skip_keeps_dirty_state_after_runtime_save_failure() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.into();
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     let server = build_test_server(
         config,
@@ -27,7 +27,7 @@ async fn plain_server_builder_rejects_reload_watch_without_reload_host() -> Resu
 {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.into();
     config.plugins.reload_watch = true;
     let LoadedPluginTestEnvironment { loaded_plugins, .. } =
         in_process_failing_storage_registries(PluginFailureAction::Skip)?;
@@ -49,7 +49,7 @@ async fn reloadable_server_builder_applies_reload_host_failure_policy() -> Resul
 {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.into();
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     let LoadedPluginTestEnvironment { loaded_plugins, .. } =
         in_process_failing_storage_registries(PluginFailureAction::Skip)?;
@@ -97,7 +97,7 @@ async fn storage_fail_fast_returns_plugin_fatal_on_runtime_save_failure() -> Res
 {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.into();
     config.plugins.failure_policy.storage = PluginFailureAction::FailFast;
     let server = build_test_server(
         config,

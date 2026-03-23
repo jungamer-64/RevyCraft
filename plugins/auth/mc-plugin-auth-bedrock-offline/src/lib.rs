@@ -17,7 +17,7 @@ pub struct BedrockOfflineAuthPlugin;
 impl RustAuthPlugin for BedrockOfflineAuthPlugin {
     fn descriptor(&self) -> AuthDescriptor {
         AuthDescriptor {
-            auth_profile: BEDROCK_OFFLINE_AUTH_PROFILE_ID.to_string(),
+            auth_profile: BEDROCK_OFFLINE_AUTH_PROFILE_ID.into(),
             mode: AuthMode::BedrockOffline,
         }
     }

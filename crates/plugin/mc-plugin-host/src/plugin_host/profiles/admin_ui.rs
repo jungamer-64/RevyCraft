@@ -1,11 +1,12 @@
 use super::{
-    AdminRequest, AdminResponse, AdminUiGeneration, Arc, CapabilitySet, PluginFailureAction,
-    PluginFailureDispatch, PluginGenerationId, PluginKind, ReloadableGenerationSlot, RuntimeError,
+    AdminRequest, AdminResponse, AdminUiGeneration, AdminUiProfileId, Arc, CapabilitySet,
+    PluginFailureAction, PluginFailureDispatch, PluginGenerationId, PluginKind,
+    ReloadableGenerationSlot, RuntimeError,
 };
 
 pub(crate) struct HotSwappableAdminUiProfile {
     plugin_id: String,
-    profile_id: String,
+    profile_id: AdminUiProfileId,
     generation: ReloadableGenerationSlot<AdminUiGeneration>,
     failures: Arc<PluginFailureDispatch>,
 }
@@ -13,7 +14,7 @@ pub(crate) struct HotSwappableAdminUiProfile {
 impl HotSwappableAdminUiProfile {
     pub(crate) const fn new(
         plugin_id: String,
-        profile_id: String,
+        profile_id: AdminUiProfileId,
         generation: Arc<AdminUiGeneration>,
         failures: Arc<PluginFailureDispatch>,
     ) -> Self {
@@ -37,7 +38,7 @@ impl HotSwappableAdminUiProfile {
         self.generation.swap(generation);
     }
 
-    fn profile_id(&self) -> &str {
+    fn profile_id(&self) -> &AdminUiProfileId {
         &self.profile_id
     }
 
@@ -79,7 +80,7 @@ impl HotSwappableAdminUiProfile {
 }
 
 impl crate::runtime::AdminUiProfileHandle for HotSwappableAdminUiProfile {
-    fn profile_id(&self) -> &str {
+    fn profile_id(&self) -> &AdminUiProfileId {
         Self::profile_id(self)
     }
 

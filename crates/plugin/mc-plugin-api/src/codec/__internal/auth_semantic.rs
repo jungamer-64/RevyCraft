@@ -5,6 +5,7 @@ use crate::codec::__internal::shared::{
 use crate::codec::auth::{
     AuthDescriptor, AuthMode, AuthOpCode, AuthRequest, AuthResponse, BedrockAuthResult,
 };
+use mc_core::AuthProfileId;
 
 pub(crate) fn encode_auth_request_payload(
     encoder: &mut Encoder,
@@ -74,7 +75,7 @@ pub(crate) fn encode_auth_response_payload(
 ) -> Result<(), ProtocolCodecError> {
     match (op_code, response) {
         (AuthOpCode::Describe, AuthResponse::Descriptor(descriptor)) => {
-            encoder.write_string(&descriptor.auth_profile)?;
+            encoder.write_string(descriptor.auth_profile.as_str())?;
             encode_auth_mode(encoder, descriptor.mode);
             Ok(())
         }
@@ -104,7 +105,7 @@ pub(crate) fn decode_auth_response_payload(
 ) -> Result<AuthResponse, ProtocolCodecError> {
     match op_code {
         AuthOpCode::Describe => Ok(AuthResponse::Descriptor(AuthDescriptor {
-            auth_profile: decoder.read_string()?,
+            auth_profile: AuthProfileId::new(decoder.read_string()?),
             mode: decode_auth_mode(decoder)?,
         })),
         AuthOpCode::CapabilitySet => {

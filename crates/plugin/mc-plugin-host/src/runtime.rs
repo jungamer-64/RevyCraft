@@ -4,8 +4,8 @@ use crate::host::{PluginFailureAction, PluginHostStatusSnapshot};
 use crate::plugin_host::PreparedProtocolTopology;
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_core::{
-    CapabilitySet, GameplayPolicyResolver, GameplayProfileId, PlayerId, PluginGenerationId,
-    WorldSnapshot,
+    AdminUiProfileId, CapabilitySet, GameplayPolicyResolver, GameplayProfileId, PlayerId,
+    PluginGenerationId, WorldSnapshot,
 };
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_api::codec::admin_ui::{AdminRequest, AdminResponse};
@@ -130,7 +130,7 @@ pub trait AuthProfileHandle: Send + Sync {
 }
 
 pub trait AdminUiProfileHandle: Send + Sync {
-    fn profile_id(&self) -> &str;
+    fn profile_id(&self) -> &AdminUiProfileId;
 
     fn capability_set(&self) -> CapabilitySet;
 

@@ -21,7 +21,7 @@ pub struct Je1710StoragePlugin {
 impl RustStoragePlugin for Je1710StoragePlugin {
     fn descriptor(&self) -> StorageDescriptor {
         StorageDescriptor {
-            storage_profile: JE_1_7_10_STORAGE_PROFILE_ID.to_string(),
+            storage_profile: JE_1_7_10_STORAGE_PROFILE_ID.into(),
         }
     }
 

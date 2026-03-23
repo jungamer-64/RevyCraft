@@ -25,7 +25,7 @@ struct HasJoinedResponse {
 impl RustAuthPlugin for MojangOnlineAuthPlugin {
     fn descriptor(&self) -> AuthDescriptor {
         AuthDescriptor {
-            auth_profile: MOJANG_ONLINE_AUTH_PROFILE_ID.to_string(),
+            auth_profile: MOJANG_ONLINE_AUTH_PROFILE_ID.into(),
             mode: AuthMode::Online,
         }
     }

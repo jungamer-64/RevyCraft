@@ -1,9 +1,9 @@
 use super::{
-    Arc, HashMap, HashSet, HotSwappableAdminUiProfile, HotSwappableAuthProfile,
-    HotSwappableGameplayProfile, HotSwappableStorageProfile, ManagedAdminUiPlugin,
-    ManagedAuthPlugin, ManagedGameplayPlugin, ManagedStoragePlugin, PluginFailureStage, PluginHost,
-    PluginKind, PluginPackage, RuntimeError, RuntimeSelectionConfig, ensure_known_profiles,
-    ensure_profile_known,
+    AdminUiProfileId, Arc, AuthProfileId, GameplayProfileId, HashMap, HashSet,
+    HotSwappableAdminUiProfile, HotSwappableAuthProfile, HotSwappableGameplayProfile,
+    HotSwappableStorageProfile, ManagedAdminUiPlugin, ManagedAuthPlugin, ManagedGameplayPlugin,
+    ManagedStoragePlugin, PluginFailureStage, PluginHost, PluginKind, PluginPackage, RuntimeError,
+    RuntimeSelectionConfig, StorageProfileId, ensure_known_profiles, ensure_profile_known,
 };
 use crate::registry::LoadedPluginSet;
 
@@ -67,14 +67,14 @@ impl PluginHost {
         loaded
     }
 
-    fn required_gameplay_profiles(config: &RuntimeSelectionConfig) -> HashSet<String> {
+    fn required_gameplay_profiles(config: &RuntimeSelectionConfig) -> HashSet<GameplayProfileId> {
         let mut required_profiles = HashSet::new();
         required_profiles.insert(config.default_gameplay_profile.clone());
         required_profiles.extend(config.gameplay_profile_map.values().cloned());
         required_profiles
     }
 
-    pub(crate) fn runtime_auth_profiles(config: &RuntimeSelectionConfig) -> Vec<String> {
+    pub(crate) fn runtime_auth_profiles(config: &RuntimeSelectionConfig) -> Vec<AuthProfileId> {
         let mut auth_profiles = vec![config.auth_profile.clone()];
         if config.be_enabled && !auth_profiles.contains(&config.bedrock_auth_profile) {
             auth_profiles.push(config.bedrock_auth_profile.clone());
@@ -82,10 +82,12 @@ impl PluginHost {
         auth_profiles
     }
 
-    fn requested_auth_profiles(auth_profiles: &[String]) -> Result<HashSet<String>, RuntimeError> {
+    fn requested_auth_profiles(
+        auth_profiles: &[AuthProfileId],
+    ) -> Result<HashSet<AuthProfileId>, RuntimeError> {
         let requested = auth_profiles
             .iter()
-            .filter(|profile_id| !profile_id.is_empty())
+            .filter(|profile_id| !profile_id.as_str().is_empty())
             .cloned()
             .collect::<HashSet<_>>();
         if requested.is_empty() {
@@ -96,15 +98,15 @@ impl PluginHost {
         Ok(requested)
     }
 
-    fn requested_admin_ui_profile(config: &RuntimeSelectionConfig) -> Option<&str> {
-        (!config.admin_ui_profile.is_empty()).then_some(config.admin_ui_profile.as_str())
+    fn requested_admin_ui_profile(config: &RuntimeSelectionConfig) -> Option<&AdminUiProfileId> {
+        (!config.admin_ui_profile.as_str().is_empty()).then_some(&config.admin_ui_profile)
     }
 
     fn load_requested_gameplay_plugin(
         &self,
-        gameplay: &mut HashMap<String, ManagedGameplayPlugin>,
+        gameplay: &mut HashMap<GameplayProfileId, ManagedGameplayPlugin>,
         package: &PluginPackage,
-        required_profiles: &HashSet<String>,
+        required_profiles: &HashSet<GameplayProfileId>,
     ) -> Result<(), RuntimeError> {
         let modified_at = package.modified_at()?;
         let identity = package.artifact_identity(modified_at);
@@ -135,19 +137,19 @@ impl PluginHost {
                 return Ok(());
             }
         };
-        if !required_profiles.contains(generation.profile_id.as_str()) {
+        if !required_profiles.contains(&generation.profile_id) {
             return Ok(());
         }
 
         let profile_id = generation.profile_id.clone();
-        if gameplay.contains_key(profile_id.as_str()) {
+        if gameplay.contains_key(&profile_id) {
             return Err(RuntimeError::Config(format!(
                 "duplicate gameplay profile `{}` discovered",
                 profile_id.as_str()
             )));
         }
         gameplay.insert(
-            profile_id.as_str().to_string(),
+            profile_id.clone(),
             ManagedGameplayPlugin {
                 package: package.clone(),
                 profile_id: profile_id.clone(),
@@ -167,9 +169,9 @@ impl PluginHost {
 
     fn load_requested_storage_plugin(
         &self,
-        storage: &mut HashMap<String, ManagedStoragePlugin>,
+        storage: &mut HashMap<StorageProfileId, ManagedStoragePlugin>,
         package: &PluginPackage,
-        storage_profile: &str,
+        storage_profile: &StorageProfileId,
     ) -> Result<(), RuntimeError> {
         let modified_at = package.modified_at()?;
         let identity = package.artifact_identity(modified_at);
@@ -200,7 +202,7 @@ impl PluginHost {
                 return Ok(());
             }
         };
-        if generation.profile_id != storage_profile {
+        if generation.profile_id != *storage_profile {
             return Ok(());
         }
         if storage.contains_key(storage_profile) {
@@ -209,10 +211,10 @@ impl PluginHost {
             )));
         }
         storage.insert(
-            storage_profile.to_string(),
+            storage_profile.clone(),
             ManagedStoragePlugin {
                 package: package.clone(),
-                profile_id: storage_profile.to_string(),
+                profile_id: storage_profile.clone(),
                 profile: Arc::new(HotSwappableStorageProfile::new(
                     package.plugin_id.clone(),
                     generation,
@@ -227,9 +229,9 @@ impl PluginHost {
 
     fn load_requested_auth_plugin(
         &self,
-        auth: &mut HashMap<String, ManagedAuthPlugin>,
+        auth: &mut HashMap<AuthProfileId, ManagedAuthPlugin>,
         package: &PluginPackage,
-        requested_profiles: &HashSet<String>,
+        requested_profiles: &HashSet<AuthProfileId>,
     ) -> Result<(), RuntimeError> {
         let modified_at = package.modified_at()?;
         let identity = package.artifact_identity(modified_at);
@@ -290,9 +292,9 @@ impl PluginHost {
 
     fn load_requested_admin_ui_plugin(
         &self,
-        admin_ui: &mut HashMap<String, ManagedAdminUiPlugin>,
+        admin_ui: &mut HashMap<AdminUiProfileId, ManagedAdminUiPlugin>,
         package: &PluginPackage,
-        requested_profile: Option<&str>,
+        requested_profile: Option<&AdminUiProfileId>,
     ) -> Result<(), RuntimeError> {
         let Some(requested_profile) = requested_profile else {
             return Ok(());
@@ -326,7 +328,7 @@ impl PluginHost {
                 return Ok(());
             }
         };
-        if generation.profile_id != requested_profile {
+        if generation.profile_id != *requested_profile {
             return Ok(());
         }
 
@@ -336,13 +338,13 @@ impl PluginHost {
             )));
         }
         admin_ui.insert(
-            requested_profile.to_string(),
+            requested_profile.clone(),
             ManagedAdminUiPlugin {
                 package: package.clone(),
-                profile_id: requested_profile.to_string(),
+                profile_id: requested_profile.clone(),
                 profile: Arc::new(HotSwappableAdminUiProfile::new(
                     package.plugin_id.clone(),
-                    requested_profile.to_string(),
+                    requested_profile.clone(),
                     generation,
                     Arc::clone(&self.failures),
                 )),
@@ -409,7 +411,7 @@ impl PluginHost {
     /// Panics if the storage plugin registry mutex is poisoned.
     pub(crate) fn activate_storage_profile(
         &self,
-        storage_profile: &str,
+        storage_profile: &StorageProfileId,
     ) -> Result<(), RuntimeError> {
         let allowlist = self
             .current_runtime_selection()
@@ -451,7 +453,7 @@ impl PluginHost {
     /// Panics if the auth plugin registry mutex is poisoned.
     pub(crate) fn activate_auth_profiles(
         &self,
-        auth_profiles: &[String],
+        auth_profiles: &[AuthProfileId],
     ) -> Result<(), RuntimeError> {
         let requested = Self::requested_auth_profiles(auth_profiles)?;
         let allowlist = self
@@ -525,7 +527,7 @@ impl PluginHost {
     /// Returns an error when the requested auth profile cannot be activated.
     #[cfg(any(test, feature = "in-process-testing"))]
     pub(crate) fn activate_auth_profile(&self, auth_profile: &str) -> Result<(), RuntimeError> {
-        self.activate_auth_profiles(&[auth_profile.to_string()])
+        self.activate_auth_profiles(&[AuthProfileId::new(auth_profile)])
     }
 
     /// Activates gameplay, storage, and auth profiles needed by the runtime.

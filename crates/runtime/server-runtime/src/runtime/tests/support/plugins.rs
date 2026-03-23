@@ -18,7 +18,7 @@ pub(crate) mod failing_storage_plugin {
     impl RustStoragePlugin for FailingStoragePlugin {
         fn descriptor(&self) -> StorageDescriptor {
             StorageDescriptor {
-                storage_profile: PROFILE_ID.to_string(),
+                storage_profile: PROFILE_ID.into(),
             }
         }
 
@@ -127,7 +127,7 @@ pub(crate) fn plugin_test_registries_from_dist_with_supporting_plugins(
         supporting_plugin_ids,
     ));
     if supporting_plugin_ids.contains(&ONLINE_STUB_AUTH_PLUGIN_ID) {
-        config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+        config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.into();
     }
     let bootstrap = plugin_host_bootstrap_test_config(&config);
     let runtime_selection = plugin_host_runtime_selection_test_config(&config);
@@ -256,7 +256,7 @@ pub(crate) fn in_process_online_auth_registries(
         .failure_matrix(PluginFailureMatrix::default())
         .build();
     let mut config = ServerConfig::default();
-    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.into();
     let runtime_selection = plugin_host_runtime_selection_test_config(&config);
     Ok(LoadedPluginTestEnvironment {
         loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
@@ -291,7 +291,7 @@ pub(crate) fn in_process_failing_storage_registries(
             api: offline_auth_entrypoints().api,
         })
         .bootstrap_config(mc_plugin_host::config::BootstrapConfig {
-            storage_profile: failing_storage_plugin::PROFILE_ID.to_string(),
+            storage_profile: failing_storage_plugin::PROFILE_ID.into(),
             ..mc_plugin_host::config::BootstrapConfig::default()
         })
         .abi_range(PluginAbiRange::default())
@@ -301,7 +301,7 @@ pub(crate) fn in_process_failing_storage_registries(
         })
         .build();
     let mut config = ServerConfig::default();
-    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.to_string();
+    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.into();
     let runtime_selection = plugin_host_runtime_selection_test_config(&config);
     Ok(LoadedPluginTestEnvironment {
         loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
@@ -309,9 +309,11 @@ pub(crate) fn in_process_failing_storage_registries(
     })
 }
 
-pub(crate) fn gameplay_profile_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
+pub(crate) fn gameplay_profile_map(
+    entries: &[(&str, &str)],
+) -> HashMap<mc_core::AdapterId, mc_core::GameplayProfileId> {
     entries
         .iter()
-        .map(|(adapter_id, profile_id)| ((*adapter_id).to_string(), (*profile_id).to_string()))
+        .map(|(adapter_id, profile_id)| ((*adapter_id).into(), (*profile_id).into()))
         .collect()
 }

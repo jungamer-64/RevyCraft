@@ -267,10 +267,16 @@ fn generation_status_snapshot(
             .map(|adapter| adapter.descriptor().adapter_id),
         enabled_adapter_ids: generation
             .protocol_registry
-            .adapter_ids_for_transport(TransportKind::Tcp),
+            .adapter_ids_for_transport(TransportKind::Tcp)
+            .into_iter()
+            .map(|adapter_id| adapter_id.to_string())
+            .collect(),
         enabled_bedrock_adapter_ids: generation
             .protocol_registry
-            .adapter_ids_for_transport(TransportKind::Udp),
+            .adapter_ids_for_transport(TransportKind::Udp)
+            .into_iter()
+            .map(|adapter_id| adapter_id.to_string())
+            .collect(),
         motd: generation.config.network.motd.clone(),
         max_players: generation.config.network.max_players,
     }

@@ -37,11 +37,7 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
     let mut initial = admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
     initial.admin.local_console_permissions = vec![
@@ -77,7 +73,7 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
     ));
 
     let mut updated = initial.clone();
-    updated.admin.ui_profile = "missing-ui".to_string();
+    updated.admin.ui_profile = "missing-ui".into();
     updated.admin.local_console_permissions = vec![crate::config::AdminPermission::Status];
     write_server_toml(&config_path, &updated)?;
 
@@ -134,11 +130,7 @@ async fn admin_control_plane_parse_reload_generation_uses_new_command_name()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
     let server = build_reloadable_test_server(
         admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
@@ -170,11 +162,7 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
     let mut initial = admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
     initial.admin.local_console_permissions = vec![
@@ -192,7 +180,7 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
     let control = server.admin_control_plane();
 
     let mut updated = initial.clone();
-    updated.admin.ui_profile = "missing-ui".to_string();
+    updated.admin.ui_profile = "missing-ui".into();
     updated.admin.local_console_permissions = vec![
         crate::config::AdminPermission::Status,
         crate::config::AdminPermission::ReloadConfig,
@@ -254,11 +242,7 @@ async fn admin_control_plane_reload_config_rejects_bootstrap_changes() -> Result
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
     let initial = admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
     write_server_toml(&config_path, &initial)?;
@@ -394,11 +378,7 @@ async fn admin_control_plane_reload_config_updates_remote_permissions_for_existi
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
     let token_path = temp_dir.path().join("admin").join("ops.token");
     write_remote_admin_token(&token_path, "ops-token")?;
@@ -474,11 +454,7 @@ async fn admin_control_plane_reload_config_invalidates_existing_subject_when_pri
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
     let token_path = temp_dir.path().join("admin").join("ops.token");
     write_remote_admin_token(&token_path, "shared-token")?;
@@ -554,11 +530,7 @@ async fn admin_control_plane_reload_config_rejects_admin_grpc_transport_changes(
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
     let token_path = temp_dir.path().join("admin").join("ops.token");
     write_remote_admin_token(&token_path, "ops-token")?;
@@ -611,11 +583,7 @@ async fn admin_control_plane_reload_config_rejects_admin_grpc_allow_non_loopback
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
     let token_path = temp_dir.path().join("admin").join("ops.token");
     write_remote_admin_token(&token_path, "ops-token")?;

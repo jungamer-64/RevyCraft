@@ -7,18 +7,18 @@ mod shared;
 mod storage;
 
 use super::{
-    AdminRequest, AdminResponse, AdminUiGeneration, Arc, AuthGeneration, AuthGenerationHandle,
-    AuthMode, BedrockAuthResult, BedrockListenerDescriptor, BytesMut, CapabilitySet,
-    ConnectionPhase, GameplayEffect, GameplayGeneration, GameplayJoinEffect,
-    GameplayPolicyResolver, GameplayProfileHandle, GameplayProfileId, GameplayQuery,
-    GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HandshakeIntent, HandshakeProbe,
-    LoginRequest, Path, PlayEncodingContext, PlayerId, PlayerSnapshot, PluginFailureAction,
-    PluginFailureDispatch, PluginGenerationId, PluginKind, PluginPackage, ProtocolAdapter,
-    ProtocolDescriptor, ProtocolError, ProtocolGeneration, ProtocolRequest, ProtocolResponse,
-    RuntimeError, RwLock, ServerListStatus, SessionCapabilitySet, StatusRequest, StorageAdapter,
-    StorageError, StorageGeneration, StorageProfileHandle, StorageRequest, StorageResponse,
-    SystemTime, TransportKind, WireCodec, WireFormatKind, WireFrameDecodeResult, WorldSnapshot,
-    with_gameplay_query,
+    AdminRequest, AdminResponse, AdminUiGeneration, AdminUiProfileId, Arc, AuthGeneration,
+    AuthGenerationHandle, AuthMode, AuthProfileId, BedrockAuthResult, BedrockListenerDescriptor,
+    BytesMut, CapabilitySet, ConnectionPhase, GameplayEffect, GameplayGeneration,
+    GameplayJoinEffect, GameplayPolicyResolver, GameplayProfileHandle, GameplayProfileId,
+    GameplayQuery, GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HandshakeIntent,
+    HandshakeProbe, LoginRequest, Path, PlayEncodingContext, PlayerId, PlayerSnapshot,
+    PluginFailureAction, PluginFailureDispatch, PluginGenerationId, PluginKind, PluginPackage,
+    ProtocolAdapter, ProtocolDescriptor, ProtocolError, ProtocolGeneration, ProtocolRequest,
+    ProtocolResponse, RuntimeError, RwLock, ServerListStatus, SessionCapabilitySet, StatusRequest,
+    StorageAdapter, StorageError, StorageGeneration, StorageProfileHandle, StorageProfileId,
+    StorageRequest, StorageResponse, SystemTime, TransportKind, WireCodec, WireFormatKind,
+    WireFrameDecodeResult, WorldSnapshot, with_gameplay_query,
 };
 use mc_proto_common::Edition;
 

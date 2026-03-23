@@ -6,9 +6,9 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.game_mode = 1;
     config.topology.enabled_adapters = Some(vec![
-        JE_5_ADAPTER_ID.to_string(),
-        JE_47_ADAPTER_ID.to_string(),
-        JE_340_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.into(),
+        JE_47_ADAPTER_ID.into(),
+        JE_340_ADAPTER_ID.into(),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
     let addr = listener_addr(&server);
@@ -156,11 +156,8 @@ async fn adapter_mapped_gameplay_profiles_can_run_concurrently() -> Result<(), R
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.game_mode = 1;
-    config.topology.enabled_adapters = Some(vec![
-        JE_5_ADAPTER_ID.to_string(),
-        JE_340_ADAPTER_ID.to_string(),
-    ]);
-    config.profiles.default_gameplay = "canonical".to_string();
+    config.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into(), JE_340_ADAPTER_ID.into()]);
+    config.profiles.default_gameplay = "canonical".into();
     config.profiles.gameplay_map = gameplay_profile_map(&[
         (JE_5_ADAPTER_ID, "readonly"),
         (JE_340_ADAPTER_ID, "canonical"),
@@ -254,10 +251,10 @@ async fn packaged_plugins_support_mixed_versions_and_bedrock_probe() -> Result<(
     config.topology.be_enabled = true;
     config.bootstrap.game_mode = 1;
     config.topology.enabled_adapters = Some(vec![
-        JE_5_ADAPTER_ID.to_string(),
-        JE_47_ADAPTER_ID.to_string(),
-        JE_340_ADAPTER_ID.to_string(),
-        BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.into(),
+        JE_47_ADAPTER_ID.into(),
+        JE_340_ADAPTER_ID.into(),
+        BE_PLACEHOLDER_ADAPTER_ID.into(),
     ]);
     let server = build_test_server(config, registries).await?;
 
@@ -380,17 +377,16 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.game_mode = 1;
     config.topology.enabled_adapters = Some(vec![
-        JE_5_ADAPTER_ID.to_string(),
-        JE_47_ADAPTER_ID.to_string(),
-        JE_340_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.into(),
+        JE_47_ADAPTER_ID.into(),
+        JE_340_ADAPTER_ID.into(),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
 
     let (mut legacy, mut legacy_buffer) =
-        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "legacy-craft")
-            .await?;
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "legacy-craft").await?;
     let (mut modern, mut modern_buffer) =
         connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je340, "modern-craft")
             .await?;

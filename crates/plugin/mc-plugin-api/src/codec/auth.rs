@@ -7,7 +7,7 @@ use crate::codec::__internal::binary::{
     Decoder, Encoder, EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope,
     encode_envelope,
 };
-use mc_core::{CapabilitySet, PlayerId};
+use mc_core::{AuthProfileId, CapabilitySet, PlayerId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,7 +47,7 @@ pub enum AuthMode {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthDescriptor {
-    pub auth_profile: String,
+    pub auth_profile: AuthProfileId,
     pub mode: AuthMode,
 }
 
@@ -220,7 +220,7 @@ mod tests {
     fn auth_descriptor_roundtrip_preserves_mode() {
         let request = AuthRequest::Describe;
         let response = AuthResponse::Descriptor(AuthDescriptor {
-            auth_profile: "bedrock-xbl-v1".to_string(),
+            auth_profile: "bedrock-xbl-v1".into(),
             mode: AuthMode::BedrockXbl,
         });
         let bytes = encode_auth_response(&request, &response).expect("descriptor should encode");

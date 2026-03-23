@@ -3,13 +3,9 @@ use super::*;
 fn online_auth_server_config(world_dir: PathBuf, enabled_adapters: &[&str]) -> ServerConfig {
     let mut config = loopback_server_config(world_dir);
     config.bootstrap.online_mode = true;
-    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
-    config.topology.enabled_adapters = Some(
-        enabled_adapters
-            .iter()
-            .map(|id| (*id).to_string())
-            .collect(),
-    );
+    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.into();
+    config.topology.enabled_adapters =
+        Some(enabled_adapters.iter().map(|id| (*id).into()).collect());
     config
 }
 
@@ -47,7 +43,7 @@ async fn online_mode_requires_online_auth_profile() -> Result<(), RuntimeError> 
 async fn offline_mode_rejects_online_auth_profile() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = ServerConfig::default();
-    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.into();
     config.bootstrap.world_dir = temp_dir.path().join("world");
     assert_spawn_fails_with_message(
         config,
@@ -60,11 +56,7 @@ async fn offline_mode_rejects_online_auth_profile() -> Result<(), RuntimeError> 
 #[tokio::test]
 async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let enabled_adapters = [
-        JE_5_ADAPTER_ID,
-        JE_47_ADAPTER_ID,
-        JE_340_ADAPTER_ID,
-    ];
+    let enabled_adapters = [JE_5_ADAPTER_ID, JE_47_ADAPTER_ID, JE_340_ADAPTER_ID];
     let server = build_test_server(
         online_auth_server_config(temp_dir.path().join("world"), &enabled_adapters),
         in_process_online_auth_registries(&enabled_adapters)?,

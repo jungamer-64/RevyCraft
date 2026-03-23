@@ -1,14 +1,14 @@
 use super::{
-    AdminRequest, AdminResponse, AdminUiInput, AdminUiOutput, AdminUiPluginInvokeV1Fn, Arc,
-    AuthGenerationHandle, AuthMode, AuthRequest, AuthResponse, BedrockAuthResult,
-    BedrockListenerDescriptor, ByteSlice, CapabilitySet, GameplayPluginInvokeV2Fn,
-    GameplayProfileId, GameplayRequest, GameplayResponse, Library, Mutex, OwnedBuffer, PlayerId,
-    PluginErrorCode, PluginFreeBufferFn, PluginGenerationId, PluginInvokeFn, ProtocolDescriptor,
-    ProtocolError, ProtocolRequest, ProtocolResponse, RuntimeError, StorageError, StorageRequest,
-    StorageResponse, admin_ui_host_api, decode_admin_ui_output, decode_auth_response,
-    decode_gameplay_response, decode_protocol_response, decode_storage_response,
-    encode_admin_ui_input, encode_auth_request, encode_gameplay_request, encode_protocol_request,
-    encode_storage_request,
+    AdminRequest, AdminResponse, AdminUiInput, AdminUiOutput, AdminUiPluginInvokeV1Fn,
+    AdminUiProfileId, Arc, AuthGenerationHandle, AuthMode, AuthProfileId, AuthRequest,
+    AuthResponse, BedrockAuthResult, BedrockListenerDescriptor, ByteSlice, CapabilitySet,
+    GameplayPluginInvokeV2Fn, GameplayProfileId, GameplayRequest, GameplayResponse, Library, Mutex,
+    OwnedBuffer, PlayerId, PluginErrorCode, PluginFreeBufferFn, PluginGenerationId, PluginInvokeFn,
+    ProtocolDescriptor, ProtocolError, ProtocolRequest, ProtocolResponse, RuntimeError,
+    StorageError, StorageProfileId, StorageRequest, StorageResponse, admin_ui_host_api,
+    decode_admin_ui_output, decode_auth_response, decode_gameplay_response,
+    decode_protocol_response, decode_storage_response, encode_admin_ui_input, encode_auth_request,
+    encode_gameplay_request, encode_protocol_request, encode_storage_request,
 };
 
 #[derive(Default)]
@@ -157,7 +157,7 @@ impl GameplayGeneration {
 pub(crate) struct StorageGeneration {
     pub(crate) generation_id: PluginGenerationId,
     pub(crate) plugin_id: String,
-    pub(crate) profile_id: String,
+    pub(crate) profile_id: StorageProfileId,
     pub(crate) capabilities: CapabilitySet,
     pub(crate) invoke: PluginInvokeFn,
     pub(crate) free_buffer: PluginFreeBufferFn,
@@ -201,7 +201,7 @@ impl StorageGeneration {
 pub(crate) struct AuthGeneration {
     pub(crate) generation_id: PluginGenerationId,
     pub(crate) plugin_id: String,
-    pub(crate) profile_id: String,
+    pub(crate) profile_id: AuthProfileId,
     pub(crate) mode: AuthMode,
     pub(crate) capabilities: CapabilitySet,
     pub(crate) invoke: PluginInvokeFn,
@@ -213,7 +213,7 @@ pub(crate) struct AuthGeneration {
 pub(crate) struct AdminUiGeneration {
     pub(crate) generation_id: PluginGenerationId,
     pub(crate) plugin_id: String,
-    pub(crate) profile_id: String,
+    pub(crate) profile_id: AdminUiProfileId,
     pub(crate) capabilities: CapabilitySet,
     pub(crate) invoke: AdminUiPluginInvokeV1Fn,
     pub(crate) free_buffer: PluginFreeBufferFn,

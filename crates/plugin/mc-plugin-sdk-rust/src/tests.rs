@@ -498,7 +498,7 @@ mod console_admin_ui_plugin {
     impl admin_ui::RustAdminUiPlugin for ConsoleAdminUiPlugin {
         fn descriptor(&self) -> AdminUiDescriptor {
             AdminUiDescriptor {
-                ui_profile: "console-v1".to_string(),
+                ui_profile: "console-v1".into(),
             }
         }
 

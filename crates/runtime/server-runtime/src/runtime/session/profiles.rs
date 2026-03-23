@@ -1,6 +1,6 @@
 use crate::RuntimeError;
 use crate::runtime::{RuntimeServer, SessionState};
-use mc_core::{ConnectionId, SessionCapabilitySet};
+use mc_core::{AdapterId, ConnectionId, GameplayProfileId, SessionCapabilitySet};
 use mc_plugin_host::runtime::{AuthProfileHandle, GameplayProfileHandle};
 use std::sync::Arc;
 
@@ -24,13 +24,13 @@ impl RuntimeServer {
         });
     }
 
-    async fn gameplay_profile_for_adapter(&self, adapter_id: &str) -> String {
+    async fn gameplay_profile_for_adapter(&self, adapter_id: &str) -> GameplayProfileId {
         let selection_state = self.selection_state.read().await;
         selection_state
             .config
             .profiles
             .gameplay_map
-            .get(adapter_id)
+            .get(&AdapterId::new(adapter_id))
             .cloned()
             .unwrap_or_else(|| selection_state.config.profiles.default_gameplay.clone())
     }
@@ -47,7 +47,8 @@ impl RuntimeServer {
             .resolve_gameplay_profile(profile_id.as_str())
             .ok_or_else(|| {
                 RuntimeError::Config(format!(
-                    "gameplay profile `{profile_id}` for adapter `{adapter_id}` is not active"
+                    "gameplay profile `{}` for adapter `{adapter_id}` is not active",
+                    profile_id.as_str()
                 ))
             })
     }

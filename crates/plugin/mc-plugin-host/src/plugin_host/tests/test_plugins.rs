@@ -428,7 +428,7 @@ pub(super) mod failing_auth_plugin {
     impl RustAuthPlugin for FailingAuthPlugin {
         fn descriptor(&self) -> AuthDescriptor {
             AuthDescriptor {
-                auth_profile: PROFILE_ID.to_string(),
+                auth_profile: PROFILE_ID.into(),
                 mode: AuthMode::Offline,
             }
         }

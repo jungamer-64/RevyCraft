@@ -7,10 +7,6 @@ declare_protocol_plugin!(
     Je340Adapter,
     "je-340",
     "JE 1.12.2 (Protocol 340) Plugin",
-    &[
-        "protocol.je",
-        "protocol.je.340",
-        "runtime.reload.protocol"
-    ],
+    &["protocol.je", "protocol.je.340", "runtime.reload.protocol"],
     &["runtime.reload.protocol"],
 );

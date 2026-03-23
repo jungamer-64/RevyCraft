@@ -125,13 +125,10 @@ auth = "offline-v1"
     assert_eq!(config.bootstrap.level_type, LevelType::Flat);
     assert!(config.topology.be_enabled);
     assert_eq!(config.topology.default_adapter, JE_5_ADAPTER_ID);
-    assert_eq!(
-        config.topology.default_bedrock_adapter,
-        BE_924_ADAPTER_ID.to_string()
-    );
+    assert_eq!(config.topology.default_bedrock_adapter, BE_924_ADAPTER_ID);
     assert_eq!(
         config.bootstrap.storage_profile,
-        JE_1_7_10_STORAGE_PROFILE_ID.to_string()
+        JE_1_7_10_STORAGE_PROFILE_ID
     );
     assert_eq!(config.profiles.auth, OFFLINE_AUTH_PROFILE_ID);
     assert_eq!(
@@ -190,9 +187,9 @@ fn server_toml_parse_enabled_adapters() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = ServerConfig::default();
     config.topology.enabled_adapters = Some(vec![
-        JE_5_ADAPTER_ID.to_string(),
-        JE_47_ADAPTER_ID.to_string(),
-        JE_340_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.into(),
+        JE_47_ADAPTER_ID.into(),
+        JE_340_ADAPTER_ID.into(),
     ]);
     let path = temp_dir.path().join("server.toml");
     write_server_toml(&path, &config)?;
@@ -210,26 +207,23 @@ fn server_toml_parse_bedrock_adapter_and_auth_profile() -> Result<(), RuntimeErr
     let temp_dir = tempdir()?;
     let mut config = ServerConfig::default();
     config.topology.be_enabled = true;
-    config.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.to_string();
+    config.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.into();
     config.topology.enabled_bedrock_adapters = Some(vec![
-        BE_924_ADAPTER_ID.to_string(),
-        BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+        BE_924_ADAPTER_ID.into(),
+        BE_PLACEHOLDER_ADAPTER_ID.into(),
     ]);
-    config.profiles.bedrock_auth = "bedrock-xbl-v1".to_string();
+    config.profiles.bedrock_auth = "bedrock-xbl-v1".into();
     let path = temp_dir.path().join("server.toml");
     write_server_toml(&path, &config)?;
 
     let parsed = ServerConfig::from_toml(&path)?;
     assert!(parsed.topology.be_enabled);
-    assert_eq!(
-        parsed.topology.default_bedrock_adapter,
-        BE_924_ADAPTER_ID.to_string()
-    );
+    assert_eq!(parsed.topology.default_bedrock_adapter, BE_924_ADAPTER_ID);
     assert_eq!(
         parsed.topology.enabled_bedrock_adapters,
         Some(vec![
-            BE_924_ADAPTER_ID.to_string(),
-            BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+            BE_924_ADAPTER_ID.into(),
+            BE_PLACEHOLDER_ADAPTER_ID.into(),
         ])
     );
     assert_eq!(parsed.profiles.bedrock_auth, "bedrock-xbl-v1");
@@ -240,7 +234,7 @@ fn server_toml_parse_bedrock_adapter_and_auth_profile() -> Result<(), RuntimeErr
 fn server_toml_parse_gameplay_profile_configuration() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = ServerConfig::default();
-    config.profiles.default_gameplay = "canonical".to_string();
+    config.profiles.default_gameplay = "canonical".into();
     config.profiles.gameplay_map = gameplay_profile_map(&[
         (JE_5_ADAPTER_ID, "readonly"),
         (JE_340_ADAPTER_ID, "canonical"),
@@ -264,7 +258,7 @@ fn server_toml_parse_gameplay_profile_configuration() -> Result<(), RuntimeError
 fn server_toml_parse_auth_profile() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = ServerConfig::default();
-    config.profiles.auth = OFFLINE_AUTH_PROFILE_ID.to_string();
+    config.profiles.auth = OFFLINE_AUTH_PROFILE_ID.into();
     let path = temp_dir.path().join("server.toml");
     write_server_toml(&path, &config)?;
 
@@ -611,10 +605,10 @@ fn admin_subject_debug_redacts_remote_credentials() {
 fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
     let mut config = ServerConfig::default();
     config.topology.be_enabled = true;
-    config.bootstrap.storage_profile = "custom-storage".to_string();
-    config.profiles.auth = "custom-auth".to_string();
-    config.profiles.bedrock_auth = "custom-bedrock-auth".to_string();
-    config.profiles.default_gameplay = "readonly".to_string();
+    config.bootstrap.storage_profile = "custom-storage".into();
+    config.profiles.auth = "custom-auth".into();
+    config.profiles.bedrock_auth = "custom-bedrock-auth".into();
+    config.profiles.default_gameplay = "readonly".into();
     config.profiles.gameplay_map = gameplay_profile_map(&[
         (JE_5_ADAPTER_ID, "readonly"),
         (BE_924_ADAPTER_ID, "canonical"),
@@ -630,7 +624,7 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     config.plugins.failure_policy.auth = PluginFailureAction::FailFast;
     config.plugins.failure_policy.admin_ui = PluginFailureAction::Quarantine;
-    config.admin.ui_profile = "console-v2".to_string();
+    config.admin.ui_profile = "console-v2".into();
     config.admin.local_console_permissions = vec![
         crate::config::AdminPermission::Status,
         crate::config::AdminPermission::ReloadPlugins,
@@ -695,8 +689,8 @@ fn server_config_splits_static_and_live_views() {
     config.network.max_players = 32;
     config.topology.reload_watch = true;
     config.plugins.reload_watch = true;
-    config.profiles.default_gameplay = "readonly".to_string();
-    config.admin.ui_profile = "console-v2".to_string();
+    config.profiles.default_gameplay = "readonly".into();
+    config.admin.ui_profile = "console-v2".into();
     config.admin.grpc.enabled = true;
     config.admin.grpc.bind_addr = "127.0.0.1:50052".parse().expect("socket addr should parse");
     config.admin.grpc.allow_non_loopback = true;
@@ -850,7 +844,7 @@ fn be_enabled_requires_udp_adapter() {
 async fn enabled_adapters_must_include_default_adapter() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.topology.enabled_adapters = Some(vec![JE_47_ADAPTER_ID.to_string()]);
+    config.topology.enabled_adapters = Some(vec![JE_47_ADAPTER_ID.into()]);
     assert_spawn_fails_with_message(config, "default-adapter").await
 }
 
@@ -858,10 +852,7 @@ async fn enabled_adapters_must_include_default_adapter() -> Result<(), RuntimeEr
 async fn duplicate_enabled_adapters_fail_fast() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
-    config.topology.enabled_adapters = Some(vec![
-        JE_5_ADAPTER_ID.to_string(),
-        JE_5_ADAPTER_ID.to_string(),
-    ]);
+    config.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into(), JE_5_ADAPTER_ID.into()]);
     assert_spawn_fails_with_message(config, "duplicate adapter").await
 }
 

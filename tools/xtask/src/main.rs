@@ -1027,8 +1027,7 @@ mod tests {
     #[test]
     fn plugin_spec_maps_protocol_packages_to_adapter_ids() {
         assert_eq!(
-            plugin_spec_from_package_name("mc-plugin-proto-je-340")
-                .expect("valid protocol plugin"),
+            plugin_spec_from_package_name("mc-plugin-proto-je-340").expect("valid protocol plugin"),
             PluginSpec {
                 cargo_package: "mc-plugin-proto-je-340".to_string(),
                 plugin_id: "je-340".to_string(),
@@ -1331,9 +1330,7 @@ mod tests {
             &["je-5".to_string(), "je-47".to_string()]
                 .into_iter()
                 .collect::<BTreeSet<_>>(),
-            &["je-5".to_string()]
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
+            &["je-5".to_string()].into_iter().collect::<BTreeSet<_>>(),
         )
         .expect("reconcile should succeed");
 
@@ -1447,11 +1444,8 @@ mod tests {
         let runtime_dir = workspace_root.join("runtime");
         fs::create_dir_all(&runtime_dir).expect("runtime dir should exist");
         let config_path = runtime_dir.join("server.toml.example");
-        fs::write(
-            &config_path,
-            "[live.plugins]\nallowlist = [\"je-5\"]\n",
-        )
-        .expect("config should be written");
+        fs::write(&config_path, "[live.plugins]\nallowlist = [\"je-5\"]\n")
+            .expect("config should be written");
 
         let target = BuildTarget::from_triple("x86_64-unknown-linux-gnu")
             .expect("linux target should parse");

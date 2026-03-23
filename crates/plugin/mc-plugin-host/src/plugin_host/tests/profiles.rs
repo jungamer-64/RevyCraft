@@ -62,9 +62,8 @@ fn gameplay_profiles_activate_and_resolve() {
         PluginFailureMatrix::default(),
     );
     host.activate_gameplay_profiles(&RuntimeSelectionConfig {
-        default_gameplay_profile: "canonical".to_string(),
-        gameplay_profile_map: std::iter::once(("je-5".to_string(), "readonly".to_string()))
-            .collect(),
+        default_gameplay_profile: "canonical".into(),
+        gameplay_profile_map: std::iter::once(("je-5".into(), "readonly".into())).collect(),
         ..runtime_selection_config()
     })
     .expect("known gameplay profiles should activate");
@@ -108,12 +107,7 @@ fn load_plugin_set_activates_runtime_profiles() {
         .load_plugin_set(&runtime_selection_config())
         .expect("load_plugin_set should initialize runtime profiles");
 
-    assert!(
-        registries
-            .protocols()
-            .resolve_adapter("je-5")
-            .is_some()
-    );
+    assert!(registries.protocols().resolve_adapter("je-5").is_some());
     assert!(
         registries
             .resolve_storage_profile("je-anvil-1_7_10")
@@ -175,7 +169,7 @@ fn gameplay_command_snapshot_preserves_entity_id() {
         PluginFailureMatrix::default(),
     );
     host.activate_gameplay_profiles(&RuntimeSelectionConfig {
-        default_gameplay_profile: "entity-aware".to_string(),
+        default_gameplay_profile: "entity-aware".into(),
         ..runtime_selection_config()
     })
     .expect("entity-aware gameplay profile should activate");
@@ -220,7 +214,7 @@ fn unknown_gameplay_profile_fails_activation() {
     );
     let error = host
         .activate_gameplay_profiles(&RuntimeSelectionConfig {
-            default_gameplay_profile: "readonly".to_string(),
+            default_gameplay_profile: "readonly".into(),
             ..runtime_selection_config()
         })
         .expect_err("unknown gameplay profile should fail fast");

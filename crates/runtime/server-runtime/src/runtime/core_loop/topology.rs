@@ -31,10 +31,10 @@ fn protocol_topology_signature(protocols: &ProtocolRegistry) -> Vec<ProtocolTopo
     adapter_ids
         .into_iter()
         .filter_map(|adapter_id| {
-            let adapter = protocols.resolve_adapter(&adapter_id)?;
+            let adapter = protocols.resolve_adapter(adapter_id.as_str())?;
             let descriptor = adapter.descriptor();
             Some(ProtocolTopologyEntry {
-                adapter_id,
+                adapter_id: adapter_id.to_string(),
                 transport: descriptor.transport,
                 edition: descriptor.edition,
                 protocol_number: descriptor.protocol_number,

@@ -407,7 +407,11 @@ impl RuntimeServer {
                 .map(|binding| AdminListenerBindingView {
                     transport: binding.transport,
                     local_addr: binding.local_addr.to_string(),
-                    adapter_ids: binding.adapter_ids,
+                    adapter_ids: binding
+                        .adapter_ids
+                        .into_iter()
+                        .map(|adapter_id| adapter_id.to_string())
+                        .collect(),
                 })
                 .collect(),
             default_adapter_id: snapshot.active_generation.default_adapter_id,

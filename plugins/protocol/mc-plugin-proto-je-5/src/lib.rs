@@ -7,10 +7,6 @@ declare_protocol_plugin!(
     Je5Adapter,
     "je-5",
     "JE 1.7.10 (Protocol 5) Plugin",
-    &[
-        "protocol.je",
-        "protocol.je.5",
-        "runtime.reload.protocol"
-    ],
+    &["protocol.je", "protocol.je.5", "runtime.reload.protocol"],
     &["runtime.reload.protocol"],
 );

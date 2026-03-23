@@ -2,6 +2,7 @@ use crate::PluginHostError as RuntimeError;
 use crate::runtime::{
     AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
 };
+use mc_core::{AdapterId, AdminUiProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
 use mc_proto_common::{
     Edition, HandshakeIntent, HandshakeProbe, ProtocolAdapter, ProtocolError, TransportKind,
 };
@@ -14,12 +15,12 @@ use std::sync::Arc;
 pub struct ListenerBinding {
     pub transport: TransportKind,
     pub local_addr: SocketAddr,
-    pub adapter_ids: Vec<String>,
+    pub adapter_ids: Vec<AdapterId>,
 }
 
 #[derive(Clone)]
 pub struct ProtocolRegistry {
-    adapters_by_id: HashMap<String, Arc<dyn ProtocolAdapter>>,
+    adapters_by_id: HashMap<AdapterId, Arc<dyn ProtocolAdapter>>,
     adapters_by_route: HashMap<(TransportKind, Edition, i32), Arc<dyn ProtocolAdapter>>,
     probes: Vec<Arc<dyn HandshakeProbe>>,
 }
@@ -36,7 +37,7 @@ impl ProtocolRegistry {
 
     pub(crate) fn register_adapter(&mut self, adapter: Arc<dyn ProtocolAdapter>) -> &mut Self {
         let descriptor = adapter.descriptor();
-        let adapter_id = descriptor.adapter_id;
+        let adapter_id = AdapterId::new(descriptor.adapter_id.clone());
         self.adapters_by_route.insert(
             (
                 descriptor.transport,
@@ -75,7 +76,7 @@ impl ProtocolRegistry {
     ///
     /// Returns [`RuntimeError`] when `enabled_adapters` contains duplicates or
     /// unknown adapter identifiers.
-    pub fn filter_enabled(&self, enabled_adapters: &[String]) -> Result<Self, RuntimeError> {
+    pub fn filter_enabled(&self, enabled_adapters: &[AdapterId]) -> Result<Self, RuntimeError> {
         let mut filtered = Self::new();
         let mut seen = HashSet::new();
         for adapter_id in enabled_adapters {
@@ -84,7 +85,7 @@ impl ProtocolRegistry {
                     "enabled-adapters contains duplicate adapter `{adapter_id}`"
                 )));
             }
-            let Some(adapter) = self.resolve_adapter(adapter_id) else {
+            let Some(adapter) = self.resolve_adapter(adapter_id.as_str()) else {
                 return Err(RuntimeError::Config(format!(
                     "enabled-adapters contains unknown adapter `{adapter_id}`"
                 )));
@@ -96,7 +97,7 @@ impl ProtocolRegistry {
     }
 
     #[must_use]
-    pub fn adapter_ids_for_transport(&self, transport_kind: TransportKind) -> Vec<String> {
+    pub fn adapter_ids_for_transport(&self, transport_kind: TransportKind) -> Vec<AdapterId> {
         let mut adapter_ids = self
             .adapters_by_id
             .iter()
@@ -131,10 +132,10 @@ impl ProtocolRegistry {
 #[derive(Clone)]
 pub struct LoadedPluginSet {
     protocols: ProtocolRegistry,
-    gameplay_profiles: HashMap<String, Arc<dyn GameplayProfileHandle>>,
-    storage_profiles: HashMap<String, Arc<dyn StorageProfileHandle>>,
-    auth_profiles: HashMap<String, Arc<dyn AuthProfileHandle>>,
-    admin_ui_profiles: HashMap<String, Arc<dyn AdminUiProfileHandle>>,
+    gameplay_profiles: HashMap<GameplayProfileId, Arc<dyn GameplayProfileHandle>>,
+    storage_profiles: HashMap<StorageProfileId, Arc<dyn StorageProfileHandle>>,
+    auth_profiles: HashMap<AuthProfileId, Arc<dyn AuthProfileHandle>>,
+    admin_ui_profiles: HashMap<AdminUiProfileId, Arc<dyn AdminUiProfileHandle>>,
 }
 
 impl LoadedPluginSet {
@@ -151,37 +152,37 @@ impl LoadedPluginSet {
 
     pub(crate) fn register_gameplay_profile(
         &mut self,
-        profile_id: impl Into<String>,
+        profile_id: GameplayProfileId,
         profile: Arc<dyn GameplayProfileHandle>,
     ) -> &mut Self {
-        self.gameplay_profiles.insert(profile_id.into(), profile);
+        self.gameplay_profiles.insert(profile_id, profile);
         self
     }
 
     pub(crate) fn register_storage_profile(
         &mut self,
-        profile_id: impl Into<String>,
+        profile_id: StorageProfileId,
         profile: Arc<dyn StorageProfileHandle>,
     ) -> &mut Self {
-        self.storage_profiles.insert(profile_id.into(), profile);
+        self.storage_profiles.insert(profile_id, profile);
         self
     }
 
     pub(crate) fn register_auth_profile(
         &mut self,
-        profile_id: impl Into<String>,
+        profile_id: AuthProfileId,
         profile: Arc<dyn AuthProfileHandle>,
     ) -> &mut Self {
-        self.auth_profiles.insert(profile_id.into(), profile);
+        self.auth_profiles.insert(profile_id, profile);
         self
     }
 
     pub(crate) fn register_admin_ui_profile(
         &mut self,
-        profile_id: impl Into<String>,
+        profile_id: AdminUiProfileId,
         profile: Arc<dyn AdminUiProfileHandle>,
     ) -> &mut Self {
-        self.admin_ui_profiles.insert(profile_id.into(), profile);
+        self.admin_ui_profiles.insert(profile_id, profile);
         self
     }
 

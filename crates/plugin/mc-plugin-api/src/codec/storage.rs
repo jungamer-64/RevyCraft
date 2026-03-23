@@ -7,7 +7,7 @@ use crate::codec::__internal::storage_semantic::{
     decode_storage_request_payload, decode_storage_response_payload,
     encode_storage_request_payload, encode_storage_response_payload,
 };
-use mc_core::{CapabilitySet, WorldSnapshot};
+use mc_core::{CapabilitySet, StorageProfileId, WorldSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -38,7 +38,7 @@ impl TryFrom<u8> for StorageOpCode {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageDescriptor {
-    pub storage_profile: String,
+    pub storage_profile: StorageProfileId,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -239,7 +239,7 @@ mod tests {
     fn storage_descriptor_roundtrip() {
         let request = StorageRequest::Describe;
         let response = StorageResponse::Descriptor(StorageDescriptor {
-            storage_profile: "je-anvil-1_7_10".to_string(),
+            storage_profile: "je-anvil-1_7_10".into(),
         });
         let encoded = encode_storage_response(&request, &response).expect("response should encode");
         let decoded = decode_storage_response(&request, &encoded).expect("response should decode");

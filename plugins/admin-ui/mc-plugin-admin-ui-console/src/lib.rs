@@ -15,7 +15,7 @@ pub struct ConsoleAdminUiPlugin;
 impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
     fn descriptor(&self) -> AdminUiDescriptor {
         AdminUiDescriptor {
-            ui_profile: "console-v1".to_string(),
+            ui_profile: "console-v1".into(),
         }
     }
 

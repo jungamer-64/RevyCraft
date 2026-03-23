@@ -225,11 +225,7 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
     let target_dir = harness.scoped_target_dir("protocol-reload-watch");
-    seed_runtime_plugins(
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-    )?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
     harness
         .install_protocol_plugin(
             "mc-plugin-proto-je-5-reload-test",
@@ -313,11 +309,7 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
     let target_dir = harness.scoped_target_dir("auth-online-packaged");
     seed_runtime_plugins(
         &dist_dir,
-        &[
-            JE_5_ADAPTER_ID,
-            JE_47_ADAPTER_ID,
-            JE_340_ADAPTER_ID,
-        ],
+        &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID, JE_340_ADAPTER_ID],
         &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
     )?;
     harness
@@ -331,22 +323,18 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.online_mode = true;
-    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.to_string();
+    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.into();
     config.topology.enabled_adapters = Some(vec![
-        JE_5_ADAPTER_ID.to_string(),
-        JE_47_ADAPTER_ID.to_string(),
-        JE_340_ADAPTER_ID.to_string(),
+        JE_5_ADAPTER_ID.into(),
+        JE_47_ADAPTER_ID.into(),
+        JE_340_ADAPTER_ID.into(),
     ]);
     config.bootstrap.plugins_dir = dist_dir.clone();
     let server = build_reloadable_test_server(
         config,
         plugin_test_registries_from_dist_with_supporting_plugins(
             dist_dir,
-            &[
-                JE_5_ADAPTER_ID,
-                JE_47_ADAPTER_ID,
-                JE_340_ADAPTER_ID,
-            ],
+            &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID, JE_340_ADAPTER_ID],
             &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
         )?,
     )

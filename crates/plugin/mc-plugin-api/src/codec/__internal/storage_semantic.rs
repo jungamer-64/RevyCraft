@@ -4,6 +4,7 @@ use crate::codec::__internal::shared::{
     encode_option, encode_world_snapshot,
 };
 use crate::codec::storage::{StorageDescriptor, StorageOpCode, StorageRequest, StorageResponse};
+use mc_core::StorageProfileId;
 
 pub(crate) fn encode_storage_request_payload(
     encoder: &mut Encoder,
@@ -58,7 +59,7 @@ pub(crate) fn encode_storage_response_payload(
 ) -> Result<(), ProtocolCodecError> {
     match (op_code, response) {
         (StorageOpCode::Describe, StorageResponse::Descriptor(descriptor)) => {
-            encoder.write_string(&descriptor.storage_profile)
+            encoder.write_string(descriptor.storage_profile.as_str())
         }
         (StorageOpCode::CapabilitySet, StorageResponse::CapabilitySet(capabilities)) => {
             encode_capability_set(encoder, capabilities)
@@ -83,7 +84,7 @@ pub(crate) fn decode_storage_response_payload(
 ) -> Result<StorageResponse, ProtocolCodecError> {
     match op_code {
         StorageOpCode::Describe => Ok(StorageResponse::Descriptor(StorageDescriptor {
-            storage_profile: decoder.read_string()?,
+            storage_profile: StorageProfileId::new(decoder.read_string()?),
         })),
         StorageOpCode::CapabilitySet => Ok(StorageResponse::CapabilitySet(decode_capability_set(
             decoder,

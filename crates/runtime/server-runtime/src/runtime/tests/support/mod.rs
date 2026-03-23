@@ -71,16 +71,16 @@ pub(crate) async fn loaded_plugins_snapshot(server: &RunningServer) -> LoadedPlu
     server.runtime.selection_state().await.loaded_plugins
 }
 
-fn toml_string(value: &str) -> String {
-    format!("{value:?}")
+fn toml_string(value: impl AsRef<str>) -> String {
+    format!("{:?}", value.as_ref())
 }
 
-fn toml_array(values: &[String]) -> String {
+fn toml_array<T: AsRef<str>>(values: &[T]) -> String {
     format!(
         "[{}]",
         values
             .iter()
-            .map(|value| toml_string(value))
+            .map(toml_string)
             .collect::<Vec<_>>()
             .join(", ")
     )

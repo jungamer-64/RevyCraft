@@ -1,11 +1,12 @@
 use crate::host::{PluginFailureAction, PluginFailureMatrix};
+use mc_core::{AdapterId, AdminUiProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootstrapConfig {
-    pub storage_profile: String,
+    pub storage_profile: StorageProfileId,
     pub plugins_dir: PathBuf,
     pub plugin_abi_min: PluginAbiVersion,
     pub plugin_abi_max: PluginAbiVersion,
@@ -14,7 +15,7 @@ pub struct BootstrapConfig {
 impl Default for BootstrapConfig {
     fn default() -> Self {
         Self {
-            storage_profile: "je-anvil-1_7_10".to_string(),
+            storage_profile: StorageProfileId::new("je-anvil-1_7_10"),
             plugins_dir: PathBuf::from("runtime").join("plugins"),
             plugin_abi_min: CURRENT_PLUGIN_ABI,
             plugin_abi_max: CURRENT_PLUGIN_ABI,
@@ -25,11 +26,11 @@ impl Default for BootstrapConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeSelectionConfig {
     pub be_enabled: bool,
-    pub auth_profile: String,
-    pub bedrock_auth_profile: String,
-    pub default_gameplay_profile: String,
-    pub gameplay_profile_map: HashMap<String, String>,
-    pub admin_ui_profile: String,
+    pub auth_profile: AuthProfileId,
+    pub bedrock_auth_profile: AuthProfileId,
+    pub default_gameplay_profile: GameplayProfileId,
+    pub gameplay_profile_map: HashMap<AdapterId, GameplayProfileId>,
+    pub admin_ui_profile: AdminUiProfileId,
     pub plugin_allowlist: Option<Vec<String>>,
     pub plugin_failure_policy_protocol: PluginFailureAction,
     pub plugin_failure_policy_gameplay: PluginFailureAction,
@@ -43,11 +44,11 @@ impl Default for RuntimeSelectionConfig {
         let failure_matrix = PluginFailureMatrix::default();
         Self {
             be_enabled: false,
-            auth_profile: "offline-v1".to_string(),
-            bedrock_auth_profile: "bedrock-offline-v1".to_string(),
-            default_gameplay_profile: "canonical".to_string(),
+            auth_profile: AuthProfileId::new("offline-v1"),
+            bedrock_auth_profile: AuthProfileId::new("bedrock-offline-v1"),
+            default_gameplay_profile: GameplayProfileId::new("canonical"),
             gameplay_profile_map: HashMap::new(),
-            admin_ui_profile: "console-v1".to_string(),
+            admin_ui_profile: AdminUiProfileId::new("console-v1"),
             plugin_allowlist: None,
             plugin_failure_policy_protocol: failure_matrix.protocol,
             plugin_failure_policy_gameplay: failure_matrix.gameplay,

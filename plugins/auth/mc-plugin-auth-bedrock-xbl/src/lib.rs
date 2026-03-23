@@ -24,7 +24,7 @@ pub struct BedrockXblAuthPlugin;
 impl RustAuthPlugin for BedrockXblAuthPlugin {
     fn descriptor(&self) -> AuthDescriptor {
         AuthDescriptor {
-            auth_profile: BEDROCK_XBL_AUTH_PROFILE_ID.to_string(),
+            auth_profile: BEDROCK_XBL_AUTH_PROFILE_ID.into(),
             mode: AuthMode::BedrockXbl,
         }
     }

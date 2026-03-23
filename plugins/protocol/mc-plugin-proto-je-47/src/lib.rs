@@ -7,10 +7,6 @@ declare_protocol_plugin!(
     Je47Adapter,
     "je-47",
     "JE 1.8.x (Protocol 47) Plugin",
-    &[
-        "protocol.je",
-        "protocol.je.47",
-        "runtime.reload.protocol"
-    ],
+    &["protocol.je", "protocol.je.47", "runtime.reload.protocol"],
     &["runtime.reload.protocol"],
 );

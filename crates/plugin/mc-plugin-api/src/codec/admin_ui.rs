@@ -2,7 +2,7 @@ use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
 use crate::codec::__internal::binary::{
     EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope, encode_envelope,
 };
-use mc_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
+use mc_core::{AdminUiProfileId, ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use mc_proto_common::{ConnectionPhase, TransportKind};
 use serde::{Deserialize, Serialize};
 
@@ -69,7 +69,7 @@ impl TryFrom<u8> for AdminUiOpCode {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminUiDescriptor {
-    pub ui_profile: String,
+    pub ui_profile: AdminUiProfileId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

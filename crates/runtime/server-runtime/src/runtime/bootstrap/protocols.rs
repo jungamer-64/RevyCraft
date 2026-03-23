@@ -15,7 +15,7 @@ pub(in crate::runtime) fn activate_protocols(
     protocols: &ProtocolRegistry,
 ) -> Result<ActiveProtocols, RuntimeError> {
     if protocols
-        .resolve_adapter(&config.topology.default_adapter)
+        .resolve_adapter(config.topology.default_adapter.as_str())
         .is_none()
     {
         return Err(RuntimeError::Config(format!(
@@ -25,7 +25,7 @@ pub(in crate::runtime) fn activate_protocols(
     }
     if config.topology.be_enabled
         && protocols
-            .resolve_adapter(&config.topology.default_bedrock_adapter)
+            .resolve_adapter(config.topology.default_bedrock_adapter.as_str())
             .is_none()
     {
         return Err(RuntimeError::Config(format!(
@@ -72,7 +72,7 @@ pub(in crate::runtime) fn activate_protocols(
     }
 
     let default_adapter = active_protocols
-        .resolve_adapter(&config.topology.default_adapter)
+        .resolve_adapter(config.topology.default_adapter.as_str())
         .ok_or_else(|| {
             RuntimeError::Config(format!(
                 "default-adapter `{}` is not active",
@@ -88,7 +88,7 @@ pub(in crate::runtime) fn activate_protocols(
 
     let default_bedrock_adapter = if config.topology.be_enabled {
         let adapter = active_protocols
-            .resolve_adapter(&config.topology.default_bedrock_adapter)
+            .resolve_adapter(config.topology.default_bedrock_adapter.as_str())
             .ok_or_else(|| {
                 RuntimeError::Config(format!(
                     "default-bedrock-adapter `{}` is not active",

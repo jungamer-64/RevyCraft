@@ -3059,6 +3059,7 @@ dependencies = [
 name = "server-config"
 version = "0.1.0"
 dependencies = [
+ "mc-core",
  "mc-plugin-api",
  "mc-plugin-host",
  "serde",

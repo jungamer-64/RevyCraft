@@ -32,10 +32,7 @@ fn seed_legacy_gameplay_artifact_without_v2_symbol(dist_dir: &Path) -> Result<()
 fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    seed_packaged_plugins(
-        &dist_dir,
-        &["je-5", "je-47", "je-340", "be-placeholder"],
-    )?;
+    seed_packaged_plugins(&dist_dir, &["je-5", "je-47", "je-340", "be-placeholder"])?;
 
     let bootstrap = bootstrap_config_with_plugins_dir(dist_dir);
     let host =
