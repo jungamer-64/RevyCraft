@@ -7,14 +7,22 @@ fn player_id(name: &str) -> PlayerId {
 fn click_slot(
     core: &mut ServerCore,
     player_id: PlayerId,
+    window_id: u8,
+    action_number: i16,
     slot: InventorySlot,
     button: InventoryClickButton,
+    clicked_item: Option<ItemStack>,
 ) -> Vec<TargetedEvent> {
     core.apply_command(
         CoreCommand::InventoryClick {
             player_id,
+            transaction: InventoryTransactionContext {
+                window_id,
+                action_number,
+            },
             target: InventoryClickTarget::Slot(slot),
             button,
+            clicked_item,
         },
         0,
     )
@@ -587,9 +595,26 @@ fn window_zero_clicks_move_items_between_storage_and_crafting_slots() {
     let pickup_events = click_slot(
         &mut core,
         player,
+        0,
+        1,
         InventorySlot::Hotbar(0),
         InventoryClickButton::Left,
+        None,
     );
+    assert!(pickup_events.iter().any(|event| matches!(
+        event,
+        TargetedEvent {
+            target: EventTarget::Player(id),
+            event: CoreEvent::InventoryTransactionProcessed {
+                transaction,
+                accepted: true,
+            },
+        } if *id == player
+            && *transaction == InventoryTransactionContext {
+                window_id: 0,
+                action_number: 1,
+            }
+    )));
     assert!(pickup_events.iter().any(|event| matches!(
         event,
         TargetedEvent {
@@ -603,9 +628,26 @@ fn window_zero_clicks_move_items_between_storage_and_crafting_slots() {
     let place_events = click_slot(
         &mut core,
         player,
+        0,
+        2,
         InventorySlot::crafting_input(0).expect("craft input should exist"),
         InventoryClickButton::Right,
+        Some(ItemStack::new("minecraft:oak_log", 1, 0)),
     );
+    assert!(place_events.iter().any(|event| matches!(
+        event,
+        TargetedEvent {
+            target: EventTarget::Player(id),
+            event: CoreEvent::InventoryTransactionProcessed {
+                transaction,
+                accepted: true,
+            },
+        } if *id == player
+            && *transaction == InventoryTransactionContext {
+                window_id: 0,
+                action_number: 2,
+            }
+    )));
     assert!(place_events.iter().any(|event| matches!(
         event,
         TargetedEvent {
@@ -654,8 +696,11 @@ fn window_zero_clicks_move_items_between_storage_and_crafting_slots() {
     let _ = click_slot(
         &mut core,
         player,
+        0,
+        3,
         InventorySlot::Offhand,
         InventoryClickButton::Left,
+        Some(ItemStack::new("minecraft:oak_log", 3, 0)),
     );
     let online = core
         .online_players
@@ -688,15 +733,21 @@ fn window_zero_recipe_preview_updates_with_inputs() {
     let _ = click_slot(
         &mut core,
         player,
+        0,
+        1,
         InventorySlot::Hotbar(0),
         InventoryClickButton::Left,
+        None,
     );
     for index in 0_u8..4 {
         let _ = click_slot(
             &mut core,
             player,
+            0,
+            i16::from(index) + 2,
             InventorySlot::crafting_input(index).expect("craft input should exist"),
             InventoryClickButton::Right,
+            Some(ItemStack::new("minecraft:sand", 1, 0)),
         );
     }
 
@@ -730,28 +781,54 @@ fn taking_crafting_result_consumes_inputs_and_recomputes_output() {
     let _ = click_slot(
         &mut core,
         player,
+        0,
+        1,
         InventorySlot::Hotbar(0),
         InventoryClickButton::Left,
+        None,
     );
     let _ = click_slot(
         &mut core,
         player,
+        0,
+        2,
         InventorySlot::crafting_input(0).expect("craft input should exist"),
         InventoryClickButton::Right,
+        Some(ItemStack::new("minecraft:oak_planks", 1, 0)),
     );
     let _ = click_slot(
         &mut core,
         player,
+        0,
+        3,
         InventorySlot::crafting_input(2).expect("craft input should exist"),
         InventoryClickButton::Right,
+        Some(ItemStack::new("minecraft:oak_planks", 1, 0)),
     );
 
     let result_events = click_slot(
         &mut core,
         player,
+        0,
+        4,
         InventorySlot::crafting_result(),
         InventoryClickButton::Left,
+        None,
     );
+    assert!(result_events.iter().any(|event| matches!(
+        event,
+        TargetedEvent {
+            target: EventTarget::Player(id),
+            event: CoreEvent::InventoryTransactionProcessed {
+                transaction,
+                accepted: true,
+            },
+        } if *id == player
+            && *transaction == InventoryTransactionContext {
+                window_id: 0,
+                action_number: 4,
+            }
+    )));
     assert!(result_events.iter().any(|event| matches!(
         event,
         TargetedEvent {
@@ -790,20 +867,29 @@ fn disconnect_folds_window_zero_state_back_into_persistent_inventory() {
     let _ = click_slot(
         &mut core,
         player,
+        0,
+        1,
         InventorySlot::Hotbar(0),
         InventoryClickButton::Left,
+        None,
     );
     let _ = click_slot(
         &mut core,
         player,
+        0,
+        2,
         InventorySlot::crafting_input(0).expect("craft input should exist"),
         InventoryClickButton::Left,
+        Some(ItemStack::new("minecraft:oak_log", 1, 0)),
     );
     let _ = click_slot(
         &mut core,
         player,
+        0,
+        3,
         InventorySlot::crafting_result(),
         InventoryClickButton::Left,
+        None,
     );
 
     let _ = core.apply_command(CoreCommand::Disconnect { player_id: player }, 0);
@@ -827,5 +913,261 @@ fn disconnect_folds_window_zero_state_back_into_persistent_inventory() {
             .flatten()
             .any(|stack| stack.key.as_str() == "minecraft:oak_planks"),
         "crafted planks should be merged back into persistent inventory"
+    );
+}
+
+#[test]
+fn matching_clicked_item_accepts_window_zero_click() {
+    let (mut core, player) = logged_in_creative_core("accept-click");
+    let _ = core.apply_command(
+        CoreCommand::CreativeInventorySet {
+            player_id: player,
+            slot: InventorySlot::Hotbar(0),
+            stack: Some(ItemStack::new("minecraft:oak_log", 1, 0)),
+        },
+        0,
+    );
+
+    let events = click_slot(
+        &mut core,
+        player,
+        0,
+        7,
+        InventorySlot::Hotbar(0),
+        InventoryClickButton::Left,
+        None,
+    );
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TargetedEvent {
+            target: EventTarget::Player(id),
+            event: CoreEvent::InventoryTransactionProcessed {
+                transaction,
+                accepted: true,
+            },
+        } if *id == player
+            && *transaction == InventoryTransactionContext {
+                window_id: 0,
+                action_number: 7,
+            }
+    )));
+}
+
+#[test]
+fn clicked_item_mismatch_rejects_but_keeps_authoritative_mutation() {
+    let (mut core, player) = logged_in_creative_core("reject-click");
+    let _ = core.apply_command(
+        CoreCommand::CreativeInventorySet {
+            player_id: player,
+            slot: InventorySlot::Hotbar(0),
+            stack: Some(ItemStack::new("minecraft:oak_log", 1, 0)),
+        },
+        0,
+    );
+
+    let events = click_slot(
+        &mut core,
+        player,
+        0,
+        8,
+        InventorySlot::Hotbar(0),
+        InventoryClickButton::Left,
+        Some(ItemStack::new("minecraft:oak_log", 1, 0)),
+    );
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TargetedEvent {
+            target: EventTarget::Player(id),
+            event: CoreEvent::InventoryTransactionProcessed {
+                transaction,
+                accepted: false,
+            },
+        } if *id == player
+            && *transaction == InventoryTransactionContext {
+                window_id: 0,
+                action_number: 8,
+            }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TargetedEvent {
+            target: EventTarget::Player(id),
+            event: CoreEvent::InventoryContents {
+                container: InventoryContainer::Player,
+                ..
+            },
+        } if *id == player
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TargetedEvent {
+            target: EventTarget::Player(id),
+            event: CoreEvent::CursorChanged {
+                stack: Some(stack),
+            },
+        } if *id == player && stack.key.as_str() == "minecraft:oak_log" && stack.count == 1
+    )));
+
+    let online = core
+        .online_players
+        .get(&player)
+        .expect("player should still be online");
+    assert!(
+        online
+            .snapshot
+            .inventory
+            .get_slot(InventorySlot::Hotbar(0))
+            .is_none()
+    );
+    assert_eq!(
+        online
+            .cursor
+            .as_ref()
+            .map(|stack| (stack.key.as_str(), stack.count)),
+        Some(("minecraft:oak_log", 1))
+    );
+}
+
+#[test]
+fn non_zero_window_click_rejects_without_mutation_or_resync() {
+    let (mut core, player) = logged_in_creative_core("reject-window-id");
+    let _ = core.apply_command(
+        CoreCommand::CreativeInventorySet {
+            player_id: player,
+            slot: InventorySlot::Hotbar(0),
+            stack: Some(ItemStack::new("minecraft:oak_log", 1, 0)),
+        },
+        0,
+    );
+    let before = core
+        .online_players
+        .get(&player)
+        .expect("player should still be online")
+        .snapshot
+        .clone();
+
+    let events = click_slot(
+        &mut core,
+        player,
+        2,
+        9,
+        InventorySlot::Hotbar(0),
+        InventoryClickButton::Left,
+        None,
+    );
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0],
+        TargetedEvent {
+            target: EventTarget::Player(id),
+            event: CoreEvent::InventoryTransactionProcessed {
+                transaction,
+                accepted: false,
+            },
+        } if *id == player
+            && *transaction == InventoryTransactionContext {
+                window_id: 2,
+                action_number: 9,
+            }
+    ));
+    let after = &core
+        .online_players
+        .get(&player)
+        .expect("player should still be online")
+        .snapshot;
+    assert_eq!(after.inventory, before.inventory);
+}
+
+#[test]
+fn rejected_crafting_result_click_still_consumes_inputs_authoritatively() {
+    let (mut core, player) = logged_in_creative_core("reject-result");
+    let _ = core.apply_command(
+        CoreCommand::CreativeInventorySet {
+            player_id: player,
+            slot: InventorySlot::Hotbar(0),
+            stack: Some(ItemStack::new("minecraft:oak_planks", 2, 0)),
+        },
+        0,
+    );
+
+    let _ = click_slot(
+        &mut core,
+        player,
+        0,
+        1,
+        InventorySlot::Hotbar(0),
+        InventoryClickButton::Left,
+        None,
+    );
+    let _ = click_slot(
+        &mut core,
+        player,
+        0,
+        2,
+        InventorySlot::crafting_input(0).expect("craft input should exist"),
+        InventoryClickButton::Right,
+        Some(ItemStack::new("minecraft:oak_planks", 1, 0)),
+    );
+    let _ = click_slot(
+        &mut core,
+        player,
+        0,
+        3,
+        InventorySlot::crafting_input(2).expect("craft input should exist"),
+        InventoryClickButton::Right,
+        Some(ItemStack::new("minecraft:oak_planks", 1, 0)),
+    );
+
+    let events = click_slot(
+        &mut core,
+        player,
+        0,
+        4,
+        InventorySlot::crafting_result(),
+        InventoryClickButton::Left,
+        Some(ItemStack::new("minecraft:stick", 4, 0)),
+    );
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TargetedEvent {
+            target: EventTarget::Player(id),
+            event: CoreEvent::InventoryTransactionProcessed {
+                transaction,
+                accepted: false,
+            },
+        } if *id == player
+            && *transaction == InventoryTransactionContext {
+                window_id: 0,
+                action_number: 4,
+            }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        TargetedEvent {
+            target: EventTarget::Player(id),
+            event: CoreEvent::InventoryContents {
+                container: InventoryContainer::Player,
+                ..
+            },
+        } if *id == player
+    )));
+
+    let online = core
+        .online_players
+        .get(&player)
+        .expect("player should still be online");
+    assert!(online.snapshot.inventory.crafting_result().is_none());
+    assert!(online.snapshot.inventory.crafting_input(0).is_none());
+    assert!(online.snapshot.inventory.crafting_input(2).is_none());
+    assert_eq!(
+        online
+            .cursor
+            .as_ref()
+            .map(|stack| (stack.key.as_str(), stack.count)),
+        Some(("minecraft:stick", 4))
     );
 }

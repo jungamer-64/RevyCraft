@@ -79,15 +79,50 @@ pub(crate) fn creative_inventory_action(
     writer.into_inner()
 }
 
-pub(crate) fn click_window(slot: i16, button: i8) -> Vec<u8> {
+fn write_test_slot(writer: &mut PacketWriter, stack: Option<(i16, u8, i16)>) {
+    if let Some((item_id, count, damage)) = stack {
+        writer.write_i16(item_id);
+        writer.write_u8(count);
+        writer.write_i16(damage);
+        writer.write_i16(-1);
+    } else {
+        writer.write_i16(-1);
+    }
+}
+
+pub(crate) fn click_window(
+    slot: i16,
+    button: i8,
+    action_number: i16,
+    clicked_item: Option<(i16, u8, i16)>,
+) -> Vec<u8> {
+    click_window_in_window(0, slot, button, action_number, clicked_item)
+}
+
+pub(crate) fn click_window_in_window(
+    window_id: i8,
+    slot: i16,
+    button: i8,
+    action_number: i16,
+    clicked_item: Option<(i16, u8, i16)>,
+) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(0x0e);
-    writer.write_i8(0);
+    writer.write_i8(window_id);
     writer.write_i16(slot);
     writer.write_i8(button);
-    writer.write_i16(1);
+    writer.write_i16(action_number);
     writer.write_i8(0);
-    writer.write_i16(-1);
+    write_test_slot(&mut writer, clicked_item);
+    writer.into_inner()
+}
+
+pub(crate) fn confirm_transaction(window_id: u8, action_number: i16, accepted: bool) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x0f);
+    writer.write_u8(window_id);
+    writer.write_i16(action_number);
+    writer.write_bool(accepted);
     writer.into_inner()
 }
 
@@ -167,15 +202,43 @@ pub(crate) fn creative_inventory_action_1_12(
     writer.into_inner()
 }
 
-pub(crate) fn click_window_1_12(slot: i16, button: i8) -> Vec<u8> {
+pub(crate) fn click_window_1_12(
+    slot: i16,
+    button: i8,
+    action_number: i16,
+    clicked_item: Option<(i16, u8, i16)>,
+) -> Vec<u8> {
+    click_window_1_12_in_window(0, slot, button, action_number, clicked_item)
+}
+
+pub(crate) fn click_window_1_12_in_window(
+    window_id: i8,
+    slot: i16,
+    button: i8,
+    action_number: i16,
+    clicked_item: Option<(i16, u8, i16)>,
+) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(0x07);
-    writer.write_i8(0);
+    writer.write_i8(window_id);
     writer.write_i16(slot);
     writer.write_i8(button);
-    writer.write_i16(1);
+    writer.write_i16(action_number);
     writer.write_varint(0);
-    writer.write_i16(-1);
+    write_test_slot(&mut writer, clicked_item);
+    writer.into_inner()
+}
+
+pub(crate) fn confirm_transaction_1_12(
+    window_id: u8,
+    action_number: i16,
+    accepted: bool,
+) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x05);
+    writer.write_u8(window_id);
+    writer.write_i16(action_number);
+    writer.write_bool(accepted);
     writer.into_inner()
 }
 
@@ -288,6 +351,22 @@ pub(crate) fn decode_set_slot(
     let slot = reader.read_i16()?;
     let stack = read_slot(&mut reader)?;
     Ok((window_id, slot, stack))
+}
+
+pub(crate) fn decode_confirm_transaction(
+    packet: &[u8],
+    expected_packet_id: i32,
+) -> Result<(u8, i16, bool), RuntimeError> {
+    let mut reader = PacketReader::new(packet);
+    if reader.read_varint()? != expected_packet_id {
+        return Err(RuntimeError::Config(
+            "expected confirm transaction packet".to_string(),
+        ));
+    }
+    let window_id = reader.read_u8()?;
+    let action_number = reader.read_i16()?;
+    let accepted = reader.read_bool()?;
+    Ok((window_id, action_number, accepted))
 }
 
 pub(crate) fn held_item_from_packet(packet: &[u8]) -> Result<i8, RuntimeError> {

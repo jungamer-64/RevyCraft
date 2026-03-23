@@ -15,8 +15,8 @@ use uuid::Uuid;
 
 pub use self::core::{ClientView, CoreConfig, ServerCore};
 pub use self::events::{
-    CoreCommand, CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget, PlayerSummary,
-    TargetedEvent,
+    CoreCommand, CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget,
+    InventoryTransactionContext, PlayerSummary, TargetedEvent,
 };
 pub use self::gameplay::{
     CanonicalGameplayPolicy, GameplayEffect, GameplayJoinEffect, GameplayMutation,

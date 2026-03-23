@@ -1,7 +1,8 @@
 use super::{OnlinePlayer, ServerCore};
 use crate::PlayerId;
 use crate::events::{
-    CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget, TargetedEvent,
+    CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget,
+    InventoryTransactionContext, TargetedEvent,
 };
 use crate::player::{
     InventoryContainer, InventorySlot, ItemStack, PlayerInventory, PlayerSnapshot,
@@ -19,24 +20,29 @@ impl ServerCore {
     pub(super) fn apply_inventory_click(
         &mut self,
         player_id: PlayerId,
+        transaction: InventoryTransactionContext,
         target: InventoryClickTarget,
         button: InventoryClickButton,
+        clicked_item: Option<ItemStack>,
     ) -> Vec<TargetedEvent> {
         let Some(before_player) = self.online_players.get(&player_id) else {
             return Vec::new();
         };
-        let before_inventory = before_player.snapshot.inventory.clone();
+        let before_snapshot = before_player.snapshot.clone();
         let before_cursor = before_player.cursor.clone();
-        let selected_hotbar_slot = before_player.snapshot.selected_hotbar_slot;
 
         let (applied, after_inventory, after_cursor, snapshot) = {
             let player = self
                 .online_players
                 .get_mut(&player_id)
                 .expect("online player should still exist");
-            let applied = match target {
-                InventoryClickTarget::Slot(slot) => apply_slot_click(player, slot, button),
-                InventoryClickTarget::Outside | InventoryClickTarget::Unsupported => false,
+            let applied = if transaction.window_id == 0 {
+                match target {
+                    InventoryClickTarget::Slot(slot) => apply_slot_click(player, slot, button),
+                    InventoryClickTarget::Outside | InventoryClickTarget::Unsupported => false,
+                }
+            } else {
+                false
             };
             (
                 applied,
@@ -48,16 +54,41 @@ impl ServerCore {
 
         self.saved_players.insert(player_id, snapshot);
 
-        if !applied {
-            return Self::window_zero_resync_events(
-                player_id,
-                &before_inventory,
-                selected_hotbar_slot,
-                before_cursor.as_ref(),
-            );
+        let clicked_slot_stack = match target {
+            InventoryClickTarget::Slot(slot) => after_inventory.get_slot(slot).cloned(),
+            InventoryClickTarget::Outside | InventoryClickTarget::Unsupported => None,
+        };
+        let accepted = transaction.window_id == 0
+            && applied
+            && matches!(target, InventoryClickTarget::Slot(_))
+            && clicked_item == clicked_slot_stack;
+
+        let mut events = vec![TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::InventoryTransactionProcessed {
+                transaction,
+                accepted,
+            },
+        }];
+
+        if !accepted {
+            if transaction.window_id == 0 {
+                events.extend(Self::window_zero_resync_events(
+                    player_id,
+                    &after_inventory,
+                    before_snapshot.selected_hotbar_slot,
+                    after_cursor.as_ref(),
+                    slot_target(target),
+                ));
+            }
+            return events;
         }
 
-        let mut events = inventory_diff_events(player_id, &before_inventory, &after_inventory);
+        events.extend(inventory_diff_events(
+            player_id,
+            &before_snapshot.inventory,
+            &after_inventory,
+        ));
         if before_cursor != after_cursor {
             events.push(TargetedEvent {
                 target: EventTarget::Player(player_id),
@@ -82,15 +113,28 @@ impl ServerCore {
         inventory: &PlayerInventory,
         selected_hotbar_slot: u8,
         cursor: Option<&ItemStack>,
+        slot: Option<InventorySlot>,
     ) -> Vec<TargetedEvent> {
-        vec![
-            TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::InventoryContents {
-                    container: InventoryContainer::Player,
-                    inventory: inventory.clone(),
-                },
+        let mut events = vec![TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::InventoryContents {
+                container: InventoryContainer::Player,
+                inventory: inventory.clone(),
             },
+        }];
+
+        if let Some(slot) = slot {
+            events.push(TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::InventorySlotChanged {
+                    container: InventoryContainer::Player,
+                    slot,
+                    stack: inventory.get_slot(slot).cloned(),
+                },
+            });
+        }
+
+        events.extend([
             TargetedEvent {
                 target: EventTarget::Player(player_id),
                 event: CoreEvent::SelectedHotbarSlotChanged {
@@ -103,7 +147,15 @@ impl ServerCore {
                     stack: cursor.cloned(),
                 },
             },
-        ]
+        ]);
+        events
+    }
+}
+
+fn slot_target(target: InventoryClickTarget) -> Option<InventorySlot> {
+    match target {
+        InventoryClickTarget::Slot(slot) => Some(slot),
+        InventoryClickTarget::Outside | InventoryClickTarget::Unsupported => None,
     }
 }
 

@@ -19,8 +19,8 @@ pub use crate::{
     PluginHostStatusSnapshot,
 };
 use mc_core::{
-    ConnectionId, CoreEvent, EntityId, GameplayProfileId, PlayerId, ServerCore,
-    SessionCapabilitySet,
+    ConnectionId, CoreEvent, EntityId, GameplayProfileId, InventoryTransactionContext, PlayerId,
+    ServerCore, SessionCapabilitySet,
 };
 use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_host::runtime::{
@@ -316,6 +316,7 @@ pub(crate) struct SessionState {
     pub(crate) player_id: Option<PlayerId>,
     pub(crate) entity_id: Option<EntityId>,
     pub(crate) session_capabilities: Option<SessionCapabilitySet>,
+    pub(crate) pending_rejected_inventory_transaction: Option<InventoryTransactionContext>,
 }
 
 pub(crate) struct RuntimeState {

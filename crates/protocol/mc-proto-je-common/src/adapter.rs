@@ -3,7 +3,8 @@ use crate::login::{encode_login_success_packet, read_login_byte_array, write_log
 use crate::status::{encode_status_pong_packet, encode_status_response_packet};
 use mc_core::{
     BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, EntityId, InventoryContainer,
-    InventorySlot, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, WorldMeta,
+    InventorySlot, InventoryTransactionContext, ItemStack, PlayerId, PlayerInventory,
+    PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
@@ -45,6 +46,11 @@ pub trait JavaEditionProfile: Default + Send + Sync {
         slot: InventorySlot,
         stack: Option<&ItemStack>,
     ) -> Result<Option<Vec<u8>>, ProtocolError>;
+    fn encode_inventory_transaction_processed(
+        &self,
+        transaction: InventoryTransactionContext,
+        accepted: bool,
+    ) -> Result<Vec<u8>, ProtocolError>;
     fn encode_cursor_changed(&self, stack: Option<&ItemStack>) -> Result<Vec<u8>, ProtocolError>;
     fn encode_selected_hotbar_slot_changed(&self, slot: u8) -> Result<Vec<u8>, ProtocolError>;
     fn encode_block_changed(
@@ -222,6 +228,13 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
                 .encode_inventory_slot_changed(*container, *slot, stack.as_ref())?
                 .into_iter()
                 .collect()),
+            CoreEvent::InventoryTransactionProcessed {
+                transaction,
+                accepted,
+            } => Ok(vec![self.profile.encode_inventory_transaction_processed(
+                *transaction,
+                *accepted,
+            )?]),
             CoreEvent::CursorChanged { stack } => {
                 Ok(vec![self.profile.encode_cursor_changed(stack.as_ref())?])
             }

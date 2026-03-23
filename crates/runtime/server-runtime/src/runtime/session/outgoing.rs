@@ -51,6 +51,15 @@ impl RuntimeServer {
                     write_payload(transport_io, current.wire_codec(), &packet).await?;
                 }
 
+                if let CoreEvent::InventoryTransactionProcessed {
+                    transaction,
+                    accepted,
+                } = event
+                    && !accepted
+                {
+                    session.pending_rejected_inventory_transaction = Some(*transaction);
+                }
+
                 match event {
                     CoreEvent::LoginAccepted {
                         player_id: accepted_player_id,

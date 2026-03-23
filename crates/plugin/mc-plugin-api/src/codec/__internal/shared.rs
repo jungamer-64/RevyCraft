@@ -2,8 +2,9 @@ use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use mc_core::{
     BlockFace, BlockPos, BlockState, CapabilitySet, ChunkColumn, ChunkSection, ConnectionId,
     CoreCommand, CoreEvent, DimensionId, EntityId, InteractionHand, InventoryClickButton,
-    InventoryClickTarget, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
-    PlayerSnapshot, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
+    InventoryClickTarget, InventoryContainer, InventorySlot, InventoryTransactionContext,
+    ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3, WorldMeta, WorldSnapshot,
+    expand_block_index,
 };
 use mc_proto_common::ConnectionPhase;
 use std::collections::BTreeMap;
@@ -208,6 +209,23 @@ pub(crate) fn decode_inventory_click_target(
             "invalid inventory click target",
         )),
     }
+}
+
+pub(crate) fn encode_inventory_transaction_context(
+    encoder: &mut Encoder,
+    transaction: InventoryTransactionContext,
+) {
+    encoder.write_u8(transaction.window_id);
+    encoder.write_i16(transaction.action_number);
+}
+
+pub(crate) fn decode_inventory_transaction_context(
+    decoder: &mut Decoder<'_>,
+) -> Result<InventoryTransactionContext, ProtocolCodecError> {
+    Ok(InventoryTransactionContext {
+        window_id: decoder.read_u8()?,
+        action_number: decoder.read_i16()?,
+    })
 }
 
 pub(crate) fn encode_player_id(encoder: &mut Encoder, player_id: PlayerId) {
@@ -611,13 +629,27 @@ pub(crate) fn encode_core_command(
         }
         CoreCommand::InventoryClick {
             player_id,
+            transaction,
             target,
             button,
+            clicked_item,
         } => {
             encoder.write_u8(11);
             encode_player_id(encoder, *player_id);
+            encode_inventory_transaction_context(encoder, *transaction);
             encode_inventory_click_target(encoder, *target);
             encode_inventory_click_button(encoder, *button);
+            encode_option(encoder, clicked_item.as_ref(), encode_item_stack)?;
+        }
+        CoreCommand::InventoryTransactionAck {
+            player_id,
+            transaction,
+            accepted,
+        } => {
+            encoder.write_u8(12);
+            encode_player_id(encoder, *player_id);
+            encode_inventory_transaction_context(encoder, *transaction);
+            encoder.write_bool(*accepted);
         }
         CoreCommand::DigBlock {
             player_id,
@@ -698,8 +730,15 @@ pub(crate) fn decode_core_command(
         }),
         11 => Ok(CoreCommand::InventoryClick {
             player_id: decode_player_id(decoder)?,
+            transaction: decode_inventory_transaction_context(decoder)?,
             target: decode_inventory_click_target(decoder)?,
             button: decode_inventory_click_button(decoder)?,
+            clicked_item: decode_option(decoder, decode_item_stack)?,
+        }),
+        12 => Ok(CoreCommand::InventoryTransactionAck {
+            player_id: decode_player_id(decoder)?,
+            transaction: decode_inventory_transaction_context(decoder)?,
+            accepted: decoder.read_bool()?,
         }),
         8 => Ok(CoreCommand::DigBlock {
             player_id: decode_player_id(decoder)?,
@@ -790,6 +829,14 @@ pub(crate) fn encode_core_event(
             encode_inventory_slot(encoder, *slot);
             encode_option(encoder, stack.as_ref(), encode_item_stack)?;
         }
+        CoreEvent::InventoryTransactionProcessed {
+            transaction,
+            accepted,
+        } => {
+            encoder.write_u8(14);
+            encode_inventory_transaction_context(encoder, *transaction);
+            encoder.write_bool(*accepted);
+        }
         CoreEvent::CursorChanged { stack } => {
             encoder.write_u8(13);
             encode_option(encoder, stack.as_ref(), encode_item_stack)?;
@@ -862,6 +909,10 @@ pub(crate) fn decode_core_event(
             container: decode_inventory_container(decoder)?,
             slot: decode_inventory_slot(decoder)?,
             stack: decode_option(decoder, decode_item_stack)?,
+        }),
+        14 => Ok(CoreEvent::InventoryTransactionProcessed {
+            transaction: decode_inventory_transaction_context(decoder)?,
+            accepted: decoder.read_bool()?,
         }),
         13 => Ok(CoreEvent::CursorChanged {
             stack: decode_option(decoder, decode_item_stack)?,

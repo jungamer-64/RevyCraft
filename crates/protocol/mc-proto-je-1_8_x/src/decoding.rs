@@ -1,12 +1,12 @@
 use crate::{
-    PACKET_SB_CLICK_WINDOW, PACKET_SB_CLIENT_COMMAND, PACKET_SB_CREATIVE_INVENTORY_ACTION,
-    PACKET_SB_FLYING, PACKET_SB_HELD_ITEM_CHANGE, PACKET_SB_KEEP_ALIVE, PACKET_SB_LOOK,
-    PACKET_SB_PLAYER_BLOCK_PLACEMENT, PACKET_SB_PLAYER_DIGGING, PACKET_SB_POSITION,
-    PACKET_SB_POSITION_LOOK, PACKET_SB_SETTINGS,
+    PACKET_SB_CLICK_WINDOW, PACKET_SB_CLIENT_COMMAND, PACKET_SB_CONFIRM_TRANSACTION,
+    PACKET_SB_CREATIVE_INVENTORY_ACTION, PACKET_SB_FLYING, PACKET_SB_HELD_ITEM_CHANGE,
+    PACKET_SB_KEEP_ALIVE, PACKET_SB_LOOK, PACKET_SB_PLAYER_BLOCK_PLACEMENT,
+    PACKET_SB_PLAYER_DIGGING, PACKET_SB_POSITION, PACKET_SB_POSITION_LOOK, PACKET_SB_SETTINGS,
 };
 use mc_core::{
-    BlockFace, CoreCommand, InteractionHand, InventoryClickButton, InventoryClickTarget, PlayerId,
-    Vec3,
+    BlockFace, CoreCommand, InteractionHand, InventoryClickButton, InventoryClickTarget,
+    InventoryTransactionContext, PlayerId, Vec3,
 };
 use mc_proto_common::{PacketReader, ProtocolError};
 use mc_proto_je_common::__version_support::{
@@ -47,6 +47,10 @@ pub(crate) fn decode_play_packet(
             player_id,
             slot: reader.read_i16()?,
         })),
+        PACKET_SB_CONFIRM_TRANSACTION => Ok(Some(decode_confirm_transaction_packet(
+            player_id,
+            &mut reader,
+        )?)),
         PACKET_SB_CLICK_WINDOW => Ok(Some(decode_click_window_packet(player_id, &mut reader)?)),
         PACKET_SB_CREATIVE_INVENTORY_ACTION => {
             let slot = reader.read_i16()?;
@@ -169,18 +173,18 @@ fn decode_click_window_packet(
     player_id: PlayerId,
     reader: &mut PacketReader<'_>,
 ) -> Result<CoreCommand, ProtocolError> {
-    let window_id = reader.read_i8()?;
+    let window_id = reader.read_u8()?;
     let raw_slot = reader.read_i16()?;
     let raw_button = reader.read_i8()?;
-    let _action_number = reader.read_i16()?;
+    let action_number = reader.read_i16()?;
     let mode = reader.read_i8()?;
-    let _clicked_item = read_legacy_slot(reader)?;
+    let clicked_item = read_legacy_slot(reader)?;
 
     let button = match raw_button {
         1 => InventoryClickButton::Right,
         _ => InventoryClickButton::Left,
     };
-    let target = if window_id != 0 || mode != 0 || !matches!(raw_button, 0 | 1) {
+    let target = if mode != 0 || !matches!(raw_button, 0 | 1) {
         InventoryClickTarget::Unsupported
     } else if raw_slot == -999 {
         InventoryClickTarget::Outside
@@ -192,7 +196,26 @@ fn decode_click_window_packet(
 
     Ok(CoreCommand::InventoryClick {
         player_id,
+        transaction: InventoryTransactionContext {
+            window_id,
+            action_number,
+        },
         target,
         button,
+        clicked_item,
+    })
+}
+
+fn decode_confirm_transaction_packet(
+    player_id: PlayerId,
+    reader: &mut PacketReader<'_>,
+) -> Result<CoreCommand, ProtocolError> {
+    Ok(CoreCommand::InventoryTransactionAck {
+        player_id,
+        transaction: InventoryTransactionContext {
+            window_id: reader.read_u8()?,
+            action_number: reader.read_i16()?,
+        },
+        accepted: reader.read_bool()?,
     })
 }

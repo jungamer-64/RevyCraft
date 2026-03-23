@@ -53,9 +53,18 @@ impl ServerCore {
             } => Ok(Vec::new()),
             CoreCommand::InventoryClick {
                 player_id,
+                transaction,
                 target,
                 button,
-            } => Ok(self.apply_inventory_click(player_id, target, button)),
+                clicked_item,
+            } => Ok(self.apply_inventory_click(
+                player_id,
+                transaction,
+                target,
+                button,
+                clicked_item,
+            )),
+            CoreCommand::InventoryTransactionAck { .. } => Ok(Vec::new()),
             CoreCommand::MoveIntent { .. }
             | CoreCommand::SetHeldSlot { .. }
             | CoreCommand::CreativeInventorySet { .. }

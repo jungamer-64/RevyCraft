@@ -1,10 +1,11 @@
 use crate::RuntimeError;
 use crate::runtime::{RuntimeServer, SessionState};
+use mc_core::CoreCommand;
 
 impl RuntimeServer {
     pub(in crate::runtime::session) async fn handle_play_frame(
         &self,
-        session: &SessionState,
+        session: &mut SessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
         let current = session
@@ -14,8 +15,27 @@ impl RuntimeServer {
         let Some(current_player_id) = session.player_id else {
             return Ok(true);
         };
-        if let Some(command) = current.decode_play(current_player_id, frame)? {
-            self.apply_command(command, Some(session)).await?;
+        let Some(command) = current.decode_play(current_player_id, frame)? else {
+            return Ok(false);
+        };
+        match command {
+            CoreCommand::InventoryClick { .. }
+                if session.pending_rejected_inventory_transaction.is_some() =>
+            {
+                return Ok(false);
+            }
+            CoreCommand::InventoryTransactionAck {
+                transaction,
+                accepted,
+                ..
+            } => {
+                if session.pending_rejected_inventory_transaction == Some(transaction) && !accepted
+                {
+                    session.pending_rejected_inventory_transaction = None;
+                }
+                self.apply_command(command, Some(session)).await?;
+            }
+            _ => self.apply_command(command, Some(session)).await?,
         }
         Ok(false)
     }

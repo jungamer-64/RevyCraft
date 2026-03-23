@@ -225,20 +225,59 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
     )
     .await?;
     let _ = read_until_set_slot(&mut modern, &codec, &mut modern_buffer, 0x16, 0, 36, 16).await?;
-    write_packet(&mut modern, &codec, &click_window_1_12(36, 0)).await?;
+    write_packet(
+        &mut modern,
+        &codec,
+        &click_window_1_12(36, 0, 1, Some((17, 1, 0))),
+    )
+    .await?;
+    let reject_ack =
+        read_until_confirm_transaction(&mut modern, &codec, &mut modern_buffer, 0x11, 0, 1, 16)
+            .await?;
+    assert_eq!(
+        decode_confirm_transaction(&reject_ack, 0x11)?,
+        (0, 1, false)
+    );
+    let modern_resync =
+        read_until_packet_id(&mut modern, &codec, &mut modern_buffer, 0x14, 16).await?;
+    assert_eq!(
+        window_items_slot_with_packet_id(&modern_resync, 0x14, 36)?,
+        None
+    );
     let _ = read_until_set_slot(&mut modern, &codec, &mut modern_buffer, 0x16, 0, 36, 16).await?;
     let _ = read_until_set_slot(&mut modern, &codec, &mut modern_buffer, 0x16, -1, -1, 16).await?;
-    write_packet(&mut modern, &codec, &click_window_1_12(1, 0)).await?;
-    let result_preview =
-        read_until_set_slot(&mut modern, &codec, &mut modern_buffer, 0x16, 0, 0, 16).await?;
+
+    write_packet(
+        &mut modern,
+        &codec,
+        &click_window_1_12(1, 0, 2, Some((17, 1, 0))),
+    )
+    .await?;
+    assert_no_packet_id(&mut modern, &codec, &mut modern_buffer, 0x11).await?;
+
+    let result_preview = {
+        write_packet(&mut legacy, &codec, &held_item_change(4)).await?;
+        let held_item =
+            read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x09, 8).await?;
+        assert_eq!(held_item_from_packet(&held_item)?, 4);
+
+        write_packet(&mut modern, &codec, &confirm_transaction_1_12(0, 1, false)).await?;
+        write_packet(
+            &mut modern,
+            &codec,
+            &click_window_1_12(1, 0, 3, Some((17, 1, 0))),
+        )
+        .await?;
+        let accept_ack =
+            read_until_confirm_transaction(&mut modern, &codec, &mut modern_buffer, 0x11, 0, 3, 16)
+                .await?;
+        assert_eq!(decode_confirm_transaction(&accept_ack, 0x11)?, (0, 3, true));
+        read_until_set_slot(&mut modern, &codec, &mut modern_buffer, 0x16, 0, 0, 16).await?
+    };
     assert_eq!(
         decode_set_slot(&result_preview, 0x16)?,
         (0, 0, Some((5, 4, 0)))
     );
-
-    write_packet(&mut legacy, &codec, &held_item_change(4)).await?;
-    let held_item = read_until_packet_id(&mut legacy, &codec, &mut legacy_buffer, 0x09, 8).await?;
-    assert_eq!(held_item_from_packet(&held_item)?, 4);
 
     server.shutdown().await
 }

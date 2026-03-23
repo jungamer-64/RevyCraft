@@ -6,6 +6,12 @@ use crate::{ConnectionId, EntityId, PlayerId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InventoryTransactionContext {
+    pub window_id: u8,
+    pub action_number: i16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InventoryClickButton {
     Left,
     Right,
@@ -55,8 +61,15 @@ pub enum CoreCommand {
     },
     InventoryClick {
         player_id: PlayerId,
+        transaction: InventoryTransactionContext,
         target: InventoryClickTarget,
         button: InventoryClickButton,
+        clicked_item: Option<ItemStack>,
+    },
+    InventoryTransactionAck {
+        player_id: PlayerId,
+        transaction: InventoryTransactionContext,
+        accepted: bool,
     },
     DigBlock {
         player_id: PlayerId,
@@ -88,6 +101,7 @@ impl CoreCommand {
             | Self::SetHeldSlot { player_id, .. }
             | Self::CreativeInventorySet { player_id, .. }
             | Self::InventoryClick { player_id, .. }
+            | Self::InventoryTransactionAck { player_id, .. }
             | Self::DigBlock { player_id, .. }
             | Self::PlaceBlock { player_id, .. }
             | Self::Disconnect { player_id, .. } => Some(*player_id),
@@ -130,6 +144,10 @@ pub enum CoreEvent {
         container: InventoryContainer,
         slot: InventorySlot,
         stack: Option<ItemStack>,
+    },
+    InventoryTransactionProcessed {
+        transaction: InventoryTransactionContext,
+        accepted: bool,
     },
     CursorChanged {
         stack: Option<ItemStack>,

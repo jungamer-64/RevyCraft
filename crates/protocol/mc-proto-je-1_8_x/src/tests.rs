@@ -1,8 +1,8 @@
 use crate::{JE_1_8_X_ADAPTER_ID, Je18xAdapter, PROTOCOL_VERSION_1_8_X, VERSION_NAME_1_8_X};
 use mc_core::{
     ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DimensionId, InventoryClickButton,
-    InventoryClickTarget, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
-    PlayerSnapshot, Vec3,
+    InventoryClickTarget, InventoryContainer, InventorySlot, InventoryTransactionContext,
+    ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3,
 };
 use mc_proto_common::{
     Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter, PlayEncodingContext,
@@ -207,6 +207,9 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     writer.write_i8(1);
     writer.write_i16(3);
     writer.write_i8(0);
+    writer.write_i16(5);
+    writer.write_u8(4);
+    writer.write_i16(0);
     writer.write_i16(-1);
     let command = adapter
         .decode_play(player_id, &writer.into_inner())
@@ -215,11 +218,58 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     assert!(matches!(
         command,
         CoreCommand::InventoryClick {
+            transaction: InventoryTransactionContext {
+                window_id: 0,
+                action_number: 3,
+            },
             target: InventoryClickTarget::Slot(InventorySlot::Auxiliary(1)),
             button: InventoryClickButton::Right,
+            clicked_item: Some(ref stack),
+            ..
+        } if stack.key.as_str() == "minecraft:oak_planks" && stack.count == 4
+    ));
+
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x0f);
+    writer.write_u8(0);
+    writer.write_i16(3);
+    writer.write_bool(false);
+    let command = adapter
+        .decode_play(player_id, &writer.into_inner())
+        .expect("confirm transaction should decode")
+        .expect("confirm transaction should produce a command");
+    assert!(matches!(
+        command,
+        CoreCommand::InventoryTransactionAck {
+            transaction: InventoryTransactionContext {
+                window_id: 0,
+                action_number: 3,
+            },
+            accepted: false,
             ..
         }
     ));
+
+    let packet = adapter
+        .encode_play_event(
+            &CoreEvent::InventoryTransactionProcessed {
+                transaction: InventoryTransactionContext {
+                    window_id: 0,
+                    action_number: 3,
+                },
+                accepted: true,
+            },
+            &PlayEncodingContext {
+                player_id,
+                entity_id: mc_core::EntityId(1),
+            },
+        )
+        .expect("confirm transaction should encode");
+    let mut reader = PacketReader::new(&packet[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x32);
+    assert_eq!(reader.read_u8().expect("window id should decode"), 0);
+    assert_eq!(reader.read_i16().expect("action number should decode"), 3);
+    assert!(reader.read_bool().expect("accepted should decode"));
 
     let packet = adapter
         .encode_play_event(

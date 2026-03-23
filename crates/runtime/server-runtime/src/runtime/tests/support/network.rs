@@ -127,6 +127,40 @@ pub(crate) async fn read_until_set_slot(
     )))
 }
 
+pub(crate) async fn read_until_confirm_transaction(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    expected_packet_id: i32,
+    wanted_window_id: u8,
+    wanted_action_number: i16,
+    max_attempts: usize,
+) -> Result<Vec<u8>, RuntimeError> {
+    let max_attempts = max_attempts.max(64);
+    for _ in 0..max_attempts {
+        let packet = tokio::time::timeout(
+            Duration::from_millis(250),
+            read_packet(stream, codec, buffer),
+        )
+        .await
+        .map_err(|_| {
+            RuntimeError::Config(format!(
+                "timed out waiting for confirm transaction window {wanted_window_id} action {wanted_action_number}"
+            ))
+        })??;
+        if let Ok((window_id, action_number, _)) =
+            decode_confirm_transaction(&packet, expected_packet_id)
+            && window_id == wanted_window_id
+            && action_number == wanted_action_number
+        {
+            return Ok(packet);
+        }
+    }
+    Err(RuntimeError::Config(format!(
+        "did not receive confirm transaction window {wanted_window_id} action {wanted_action_number}"
+    )))
+}
+
 pub(crate) async fn assert_no_packet_id(
     stream: &mut tokio::net::TcpStream,
     codec: &MinecraftWireCodec,

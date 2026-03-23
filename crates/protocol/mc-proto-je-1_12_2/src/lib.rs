@@ -7,14 +7,15 @@ mod tests;
 
 use decoding::decode_play_packet;
 use encoding::{
-    encode_block_change, encode_chunk, encode_destroy_entities, encode_entity_head_rotation,
-    encode_entity_teleport, encode_held_item_change, encode_join_game, encode_keep_alive,
-    encode_named_entity_spawn, encode_player_abilities, encode_position_and_look, encode_set_slot,
-    encode_spawn_position, encode_time_update, encode_update_health, encode_window_items,
+    encode_block_change, encode_chunk, encode_confirm_transaction, encode_destroy_entities,
+    encode_entity_head_rotation, encode_entity_teleport, encode_held_item_change, encode_join_game,
+    encode_keep_alive, encode_named_entity_spawn, encode_player_abilities,
+    encode_position_and_look, encode_set_slot, encode_spawn_position, encode_time_update,
+    encode_update_health, encode_window_items,
 };
 use mc_core::{
     BlockPos, BlockState, ChunkColumn, CoreCommand, EntityId, InventoryContainer, InventorySlot,
-    ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, WorldMeta,
+    InventoryTransactionContext, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
 use mc_proto_je_common::{
@@ -32,6 +33,7 @@ pub const JE_1_12_2_ADAPTER_ID: &str = "je-1_12_2";
 
 const PACKET_CB_NAMED_ENTITY_SPAWN: i32 = 0x05;
 const PACKET_CB_BLOCK_CHANGE: i32 = 0x0b;
+const PACKET_CB_TRANSACTION: i32 = 0x11;
 const PACKET_CB_WINDOW_ITEMS: i32 = 0x14;
 const PACKET_CB_SET_SLOT: i32 = 0x16;
 const PACKET_CB_PLAY_DISCONNECT: i32 = 0x1a;
@@ -60,6 +62,7 @@ const PACKET_SB_PLAYER_BLOCK_PLACEMENT: i32 = 0x1f;
 const PACKET_SB_USE_ITEM: i32 = 0x20;
 const PACKET_SB_CLIENT_COMMAND: i32 = 0x03;
 const PACKET_SB_SETTINGS: i32 = 0x04;
+const PACKET_SB_CONFIRM_TRANSACTION: i32 = 0x05;
 const PACKET_SB_CLICK_WINDOW: i32 = 0x07;
 
 #[derive(Default)]
@@ -164,6 +167,18 @@ impl JavaEditionProfile for Je1122Profile {
             protocol_slot,
             stack,
         )?))
+    }
+
+    fn encode_inventory_transaction_processed(
+        &self,
+        transaction: InventoryTransactionContext,
+        accepted: bool,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        Ok(encode_confirm_transaction(
+            transaction.window_id,
+            transaction.action_number,
+            accepted,
+        ))
     }
 
     fn encode_cursor_changed(&self, stack: Option<&ItemStack>) -> Result<Vec<u8>, ProtocolError> {

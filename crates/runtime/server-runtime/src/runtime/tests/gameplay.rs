@@ -79,7 +79,9 @@ async fn craft_log_into_planks_legacy(
         (0, 36, Some((17, 1, 0)))
     );
 
-    write_packet(stream, codec, &click_window(36, 0)).await?;
+    write_packet(stream, codec, &click_window(36, 0, 1, None)).await?;
+    let pickup_ack = read_until_confirm_transaction(stream, codec, buffer, 0x32, 0, 1, 16).await?;
+    assert_eq!(decode_confirm_transaction(&pickup_ack, 0x32)?, (0, 1, true));
     let hotbar_pickup = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 36, 16).await?;
     assert_eq!(decode_set_slot(&hotbar_pickup, 0x2f)?, (0, 36, None));
     let cursor_pickup = read_until_set_slot(stream, codec, buffer, 0x2f, -1, -1, 16).await?;
@@ -88,7 +90,9 @@ async fn craft_log_into_planks_legacy(
         (-1, -1, Some((17, 1, 0)))
     );
 
-    write_packet(stream, codec, &click_window(1, 0)).await?;
+    write_packet(stream, codec, &click_window(1, 0, 2, Some((17, 1, 0)))).await?;
+    let place_ack = read_until_confirm_transaction(stream, codec, buffer, 0x32, 0, 2, 16).await?;
+    assert_eq!(decode_confirm_transaction(&place_ack, 0x32)?, (0, 2, true));
     let result_preview = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 0, 16).await?;
     assert_eq!(
         decode_set_slot(&result_preview, 0x2f)?,
@@ -102,7 +106,9 @@ async fn craft_log_into_planks_legacy(
     let cursor_cleared = read_until_set_slot(stream, codec, buffer, 0x2f, -1, -1, 16).await?;
     assert_eq!(decode_set_slot(&cursor_cleared, 0x2f)?, (-1, -1, None));
 
-    write_packet(stream, codec, &click_window(0, 0)).await?;
+    write_packet(stream, codec, &click_window(0, 0, 3, None)).await?;
+    let result_ack = read_until_confirm_transaction(stream, codec, buffer, 0x32, 0, 3, 16).await?;
+    assert_eq!(decode_confirm_transaction(&result_ack, 0x32)?, (0, 3, true));
     let result_taken = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 0, 16).await?;
     assert_eq!(decode_set_slot(&result_taken, 0x2f)?, (0, 0, None));
     let input_consumed = read_until_set_slot(stream, codec, buffer, 0x2f, 0, 1, 16).await?;
@@ -127,7 +133,9 @@ async fn craft_log_into_planks_1_12(
         (0, 36, Some((17, 1, 0)))
     );
 
-    write_packet(stream, codec, &click_window_1_12(36, 0)).await?;
+    write_packet(stream, codec, &click_window_1_12(36, 0, 1, None)).await?;
+    let pickup_ack = read_until_confirm_transaction(stream, codec, buffer, 0x11, 0, 1, 16).await?;
+    assert_eq!(decode_confirm_transaction(&pickup_ack, 0x11)?, (0, 1, true));
     let hotbar_pickup = read_until_set_slot(stream, codec, buffer, 0x16, 0, 36, 16).await?;
     assert_eq!(decode_set_slot(&hotbar_pickup, 0x16)?, (0, 36, None));
     let cursor_pickup = read_until_set_slot(stream, codec, buffer, 0x16, -1, -1, 16).await?;
@@ -136,7 +144,9 @@ async fn craft_log_into_planks_1_12(
         (-1, -1, Some((17, 1, 0)))
     );
 
-    write_packet(stream, codec, &click_window_1_12(1, 0)).await?;
+    write_packet(stream, codec, &click_window_1_12(1, 0, 2, Some((17, 1, 0)))).await?;
+    let place_ack = read_until_confirm_transaction(stream, codec, buffer, 0x11, 0, 2, 16).await?;
+    assert_eq!(decode_confirm_transaction(&place_ack, 0x11)?, (0, 2, true));
     let result_preview = read_until_set_slot(stream, codec, buffer, 0x16, 0, 0, 16).await?;
     assert_eq!(
         decode_set_slot(&result_preview, 0x16)?,
@@ -150,7 +160,9 @@ async fn craft_log_into_planks_1_12(
     let cursor_cleared = read_until_set_slot(stream, codec, buffer, 0x16, -1, -1, 16).await?;
     assert_eq!(decode_set_slot(&cursor_cleared, 0x16)?, (-1, -1, None));
 
-    write_packet(stream, codec, &click_window_1_12(0, 0)).await?;
+    write_packet(stream, codec, &click_window_1_12(0, 0, 3, None)).await?;
+    let result_ack = read_until_confirm_transaction(stream, codec, buffer, 0x11, 0, 3, 16).await?;
+    assert_eq!(decode_confirm_transaction(&result_ack, 0x11)?, (0, 3, true));
     let result_taken = read_until_set_slot(stream, codec, buffer, 0x16, 0, 0, 16).await?;
     assert_eq!(decode_set_slot(&result_taken, 0x16)?, (0, 0, None));
     let input_consumed = read_until_set_slot(stream, codec, buffer, 0x16, 0, 1, 16).await?;
@@ -440,6 +452,82 @@ async fn modern_1_12_window_zero_crafting_round_trips_authoritative_slot_updates
 
     let (mut stream, mut buffer, _) = login_modern_1_12(addr, "craft-1122").await?;
     craft_log_into_planks_1_12(&mut stream, &mut buffer, &codec).await?;
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        creative_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut stream, mut buffer, _) = login_legacy(addr, "reject-legacy").await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &creative_inventory_action(36, 17, 1, 0),
+    )
+    .await?;
+    let _ = read_until_set_slot(&mut stream, &codec, &mut buffer, 0x2f, 0, 36, 16).await?;
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window(36, 0, 1, Some((17, 1, 0))),
+    )
+    .await?;
+    let reject_ack =
+        read_until_confirm_transaction(&mut stream, &codec, &mut buffer, 0x32, 0, 1, 16).await?;
+    assert_eq!(
+        decode_confirm_transaction(&reject_ack, 0x32)?,
+        (0, 1, false)
+    );
+    let window_items = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x30, 16).await?;
+    assert_eq!(window_items_slot(&window_items, 36)?, None);
+    let slot_resync =
+        read_until_set_slot(&mut stream, &codec, &mut buffer, 0x2f, 0, 36, 16).await?;
+    assert_eq!(decode_set_slot(&slot_resync, 0x2f)?, (0, 36, None));
+    let held_slot = read_until_packet_id(&mut stream, &codec, &mut buffer, 0x09, 16).await?;
+    assert_eq!(held_item_from_packet(&held_slot)?, 0);
+    let cursor_resync =
+        read_until_set_slot(&mut stream, &codec, &mut buffer, 0x2f, -1, -1, 16).await?;
+    assert_eq!(
+        decode_set_slot(&cursor_resync, 0x2f)?,
+        (-1, -1, Some((17, 1, 0)))
+    );
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window(1, 0, 2, Some((17, 1, 0))),
+    )
+    .await?;
+    assert_no_packet_id(&mut stream, &codec, &mut buffer, 0x32).await?;
+
+    write_packet(&mut stream, &codec, &confirm_transaction(0, 1, false)).await?;
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window(1, 0, 3, Some((17, 1, 0))),
+    )
+    .await?;
+    let accept_ack =
+        read_until_confirm_transaction(&mut stream, &codec, &mut buffer, 0x32, 0, 3, 16).await?;
+    assert_eq!(decode_confirm_transaction(&accept_ack, 0x32)?, (0, 3, true));
+    let result_preview =
+        read_until_set_slot(&mut stream, &codec, &mut buffer, 0x2f, 0, 0, 16).await?;
+    assert_eq!(
+        decode_set_slot(&result_preview, 0x2f)?,
+        (0, 0, Some((5, 4, 0)))
+    );
 
     server.shutdown().await
 }
