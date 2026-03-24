@@ -10,7 +10,6 @@ categories.workspace = true
 description = "Bedrock placeholder protocol probe for shared-port UDP listener support."
 
 [dependencies]
-bytes.workspace = true
 mc-core = { path = "../../core/mc-core" }
 mc-proto-common = { path = "../mc-proto-common" }
 

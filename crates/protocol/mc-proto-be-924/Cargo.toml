@@ -12,15 +12,10 @@ description = "Bedrock 26.3 baseline protocol adapter for the RevyCraft workspac
 [dependencies]
 base64.workspace = true
 bedrockrs_proto.workspace = true
-bedrockrs_proto_core.workspace = true
-bedrockrs_shared.workspace = true
-bytes.workspace = true
 mc-core = { path = "../../core/mc-core" }
 mc-proto-be-common = { path = "../mc-proto-be-common" }
 mc-proto-common = { path = "../mc-proto-common" }
-nbtx = "2.0"
 serde_json.workspace = true
-thiserror.workspace = true
 uuid.workspace = true
 vek.workspace = true
 

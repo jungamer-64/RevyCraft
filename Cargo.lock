@@ -1696,7 +1696,6 @@ dependencies = [
  "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
- "md-5",
  "sha2",
  "uuid",
 ]
@@ -1708,12 +1707,10 @@ dependencies = [
  "base64",
  "bedrock-jwt",
  "bedrockrs_proto",
- "jsonwebtoken",
  "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "p384",
- "serde",
  "serde_json",
  "uuid",
 ]
@@ -1916,15 +1913,10 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bedrockrs_proto",
- "bedrockrs_proto_core",
- "bedrockrs_shared",
- "bytes",
  "mc-core",
  "mc-proto-be-common",
  "mc-proto-common",
- "nbtx",
  "serde_json",
- "thiserror 2.0.18",
  "uuid",
  "vek",
 ]
@@ -1935,7 +1927,6 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bedrockrs_proto",
- "bedrockrs_proto_core",
  "mc-core",
  "mc-proto-common",
  "num-traits",
@@ -1949,7 +1940,6 @@ dependencies = [
 name = "mc-proto-be-placeholder"
 version = "0.1.0"
 dependencies = [
- "bytes",
  "mc-core",
  "mc-proto-common",
 ]
@@ -1962,7 +1952,6 @@ dependencies = [
  "mc-core",
  "serde",
  "thiserror 2.0.18",
- "uuid",
 ]
 
 [[package]]
@@ -1995,10 +1984,7 @@ dependencies = [
  "mc-core",
  "mc-proto-common",
  "mc-proto-je-common",
- "num-traits",
- "serde_json",
  "tempfile",
- "thiserror 2.0.18",
  "uuid",
 ]
 
@@ -2011,7 +1997,6 @@ dependencies = [
  "mc-proto-common",
  "num-traits",
  "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -3285,9 +3270,7 @@ dependencies = [
  "mc-proto-je-5",
  "mc-proto-je-common",
  "mc-proto-test-support",
- "md-5",
  "num-bigint",
- "rand 0.10.0",
  "rsa",
  "serde",
  "server-config",
@@ -3298,7 +3281,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
- "uuid",
 ]
 
 [[package]]
