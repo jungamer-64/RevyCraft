@@ -5,6 +5,13 @@ use crate::gameplay::{
     CanonicalGameplayPolicy, GameplayPolicyResolver, canonical_session_capabilities,
 };
 
+fn required_session<'a>(
+    session: Option<&'a SessionCapabilitySet>,
+    error: &'static str,
+) -> Result<&'a SessionCapabilitySet, String> {
+    session.ok_or_else(|| error.to_string())
+}
+
 impl ServerCore {
     /// Applies a command using the built-in canonical gameplay policy.
     ///
@@ -31,18 +38,9 @@ impl ServerCore {
         resolver: &R,
     ) -> Result<Vec<TargetedEvent>, String> {
         match command {
-            CoreCommand::LoginStart {
-                connection_id,
-                username,
-                player_id,
-            } => self.login_player_with_policy(
-                connection_id,
-                username,
-                player_id,
-                now_ms,
-                session.ok_or_else(|| "login requires session capabilities".to_string())?,
-                resolver,
-            ),
+            command @ CoreCommand::LoginStart { .. } => {
+                self.apply_login_command_with_policy(command, now_ms, session, resolver)
+            }
             CoreCommand::UpdateClientView {
                 player_id,
                 view_distance,
@@ -65,16 +63,12 @@ impl ServerCore {
                 button,
                 clicked_item.as_ref(),
             )),
-            CoreCommand::MoveIntent { .. }
+            command @ (CoreCommand::MoveIntent { .. }
             | CoreCommand::SetHeldSlot { .. }
             | CoreCommand::CreativeInventorySet { .. }
             | CoreCommand::DigBlock { .. }
-            | CoreCommand::PlaceBlock { .. } => {
-                let session = session.ok_or_else(|| {
-                    "gameplay-owned command requires session capabilities".to_string()
-                })?;
-                let effect = resolver.handle_command(self, session, &command)?;
-                Ok(self.apply_gameplay_effect(effect))
+            | CoreCommand::PlaceBlock { .. }) => {
+                self.apply_gameplay_command(&command, session, resolver)
             }
             CoreCommand::KeepAliveResponse {
                 player_id,
@@ -85,5 +79,45 @@ impl ServerCore {
             }
             CoreCommand::Disconnect { player_id } => Ok(self.disconnect_player(player_id)),
         }
+    }
+
+    fn apply_login_command_with_policy<R: GameplayPolicyResolver + ?Sized>(
+        &mut self,
+        command: CoreCommand,
+        now_ms: u64,
+        session: Option<&SessionCapabilitySet>,
+        resolver: &R,
+    ) -> Result<Vec<TargetedEvent>, String> {
+        let CoreCommand::LoginStart {
+            connection_id,
+            username,
+            player_id,
+        } = command
+        else {
+            unreachable!("login helper only accepts login commands");
+        };
+        let session = required_session(session, "login requires session capabilities")?;
+        self.login_player_with_policy(
+            connection_id,
+            username,
+            player_id,
+            now_ms,
+            session,
+            resolver,
+        )
+    }
+
+    fn apply_gameplay_command<R: GameplayPolicyResolver + ?Sized>(
+        &mut self,
+        command: &CoreCommand,
+        session: Option<&SessionCapabilitySet>,
+        resolver: &R,
+    ) -> Result<Vec<TargetedEvent>, String> {
+        let session = required_session(
+            session,
+            "gameplay-owned command requires session capabilities",
+        )?;
+        let effect = resolver.handle_command(self, session, command)?;
+        Ok(self.apply_gameplay_effect(effect))
     }
 }
