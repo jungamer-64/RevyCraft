@@ -23,9 +23,8 @@ use mc_proto_je_common::{
         CURSOR_SLOT_ID, CURSOR_WINDOW_ID, InventoryProtocolSpec, JE_1_8_X_INVENTORY_SPEC,
         player_window_id, player_window_id_signed, protocol_slot,
     },
-    JavaEditionAdapter, JavaEditionProfile,
+    JavaEditionAdapter, JavaEditionProfile, format_text_component,
 };
-use serde_json::json;
 
 const PROTOCOL_VERSION_1_8_X: i32 = 47;
 const VERSION_NAME_1_8_X: &str = "1.8.x";
@@ -92,7 +91,7 @@ impl JavaEditionProfile for Je47Profile {
     }
 
     fn format_disconnect_reason(&self, reason: &str) -> String {
-        json!({ "text": reason }).to_string()
+        format_text_component(reason)
     }
 
     fn encode_play_bootstrap(

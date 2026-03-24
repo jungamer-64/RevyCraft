@@ -1,6 +1,11 @@
 use mc_proto_common::{PacketWriter, ProtocolError, ServerListStatus};
 use serde_json::json;
 
+#[must_use]
+pub fn format_text_component(text: &str) -> String {
+    json!({ "text": text }).to_string()
+}
+
 pub(crate) fn encode_status_response_packet(
     status: &ServerListStatus,
 ) -> Result<Vec<u8>, ProtocolError> {

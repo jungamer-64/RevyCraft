@@ -16,7 +16,6 @@ revy-admin-grpc = { path = "../../crates/runtime/revy-admin-grpc" }
 server-config = { path = "../../crates/config/server-config" }
 server-runtime = { path = "../../crates/runtime/server-runtime" }
 tokio.workspace = true
-tokio-stream.workspace = true
 tonic.workspace = true
 
 [dev-dependencies]

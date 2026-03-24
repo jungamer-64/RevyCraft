@@ -13,8 +13,8 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tokio_stream::wrappers::TcpListenerStream;
 use tonic::metadata::MetadataMap;
+use tonic::transport::server::TcpIncoming;
 use tonic::{Request, Response, Status};
 
 #[derive(Debug)]
@@ -158,7 +158,7 @@ pub(crate) async fn spawn_admin_grpc_server(
         tonic::transport::Server::builder()
             .add_service(AdminControlPlaneServer::new(service))
             .serve_with_incoming_shutdown(
-                TcpListenerStream::new(listener),
+                TcpIncoming::from(listener),
                 wait_for_shutdown_signal(shutdown_rx),
             )
             .await

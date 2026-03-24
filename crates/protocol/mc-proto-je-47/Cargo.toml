@@ -13,7 +13,8 @@ description = "Minecraft Java Edition 1.8.x protocol codecs."
 mc-core = { path = "../../core/mc-core" }
 mc-proto-common = { path = "../mc-proto-common" }
 mc-proto-je-common = { path = "../mc-proto-je-common" }
-serde_json.workspace = true
+
+[dev-dependencies]
 uuid.workspace = true
 
 [lints]

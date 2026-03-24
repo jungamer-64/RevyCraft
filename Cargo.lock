@@ -1961,7 +1961,6 @@ dependencies = [
  "mc-core",
  "mc-proto-common",
  "mc-proto-je-common",
- "serde_json",
  "uuid",
 ]
 
@@ -1972,7 +1971,6 @@ dependencies = [
  "mc-core",
  "mc-proto-common",
  "mc-proto-je-common",
- "serde_json",
  "uuid",
 ]
 
@@ -3218,7 +3216,6 @@ dependencies = [
  "server-runtime",
  "tempfile",
  "tokio",
- "tokio-stream",
  "tonic",
 ]
 
