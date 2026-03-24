@@ -84,7 +84,9 @@ mod topology;
 
 #[cfg(test)]
 pub(crate) use self::callbacks::with_current_gameplay_query;
+#[cfg(test)]
 pub(crate) use self::callbacks::with_gameplay_query;
+pub(crate) use self::callbacks::with_gameplay_query_and_limits;
 use self::callbacks::{admin_ui_host_api, gameplay_host_api};
 pub(crate) use self::catalog::PluginCatalog;
 #[cfg(test)]
@@ -125,7 +127,7 @@ use self::support::{
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
     import_storage_runtime_state, invoke_admin_ui, invoke_auth, invoke_gameplay, invoke_protocol,
     invoke_storage, migrate_gameplay_sessions, migrate_protocol_sessions,
-    protocol_reload_compatible,
+    protocol_reload_compatible, read_byte_slice, take_owned_buffer,
 };
 pub(crate) use self::topology::PreparedProtocolTopology;
 
@@ -341,10 +343,11 @@ impl PluginHost {
         })?;
         managed.package.source = PluginSource::InProcessProtocol(plugin);
         let generation_id = self.generations.next_generation_id();
-        let generation = Arc::new(
-            self.loader
-                .load_protocol_generation(&managed.package, generation_id)?,
-        );
+        let generation = Arc::new(self.loader.load_protocol_generation(
+            &managed.package,
+            generation_id,
+            self.current_runtime_selection().buffer_limits,
+        )?);
         managed.adapter.swap_generation(generation);
         self.failures.clear_plugin_state(&plugin_id);
         managed.loaded_at = managed.package.modified_at()?;
@@ -377,6 +380,13 @@ impl PluginHost {
             .collect::<Vec<_>>();
         ids.sort();
         ids
+    }
+
+    #[cfg(any(test, feature = "in-process-testing"))]
+    pub(crate) fn artifact_quarantine_reason(&self, plugin_id: &str) -> Option<String> {
+        self.failures
+            .artifact_record(plugin_id)
+            .and_then(|record| record.reason.into())
     }
 }
 

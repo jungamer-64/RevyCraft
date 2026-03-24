@@ -1,7 +1,7 @@
 use mc_core::{AdapterId, AdminUiProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use mc_plugin_host::config::{
-    BootstrapConfig as PluginHostBootstrapConfig,
+    BootstrapConfig as PluginHostBootstrapConfig, PluginBufferLimits as PluginHostBufferLimits,
     RuntimeSelectionConfig as PluginHostRuntimeSelectionConfig,
 };
 use mc_plugin_host::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
@@ -175,6 +175,7 @@ impl Default for TopologyConfig {
 pub struct PluginsConfig {
     pub allowlist: Option<Vec<String>>,
     pub reload_watch: bool,
+    pub buffer_limits: PluginHostBufferLimits,
     pub failure_policy: PluginFailureMatrix,
 }
 
@@ -183,6 +184,7 @@ impl Default for PluginsConfig {
         Self {
             allowlist: None,
             reload_watch: false,
+            buffer_limits: PluginHostBufferLimits::default(),
             failure_policy: PluginFailureMatrix::default(),
         }
     }
@@ -431,6 +433,7 @@ impl ServerConfig {
             plugins: PluginsConfig {
                 allowlist: normalize_optional_vec(document.live.plugins.allowlist),
                 reload_watch: document.live.plugins.reload_watch.unwrap_or(false),
+                buffer_limits: parse_plugin_buffer_limits(document.live.plugins.buffer_limits),
                 failure_policy: PluginFailureMatrix {
                     protocol: parse_failure_policy(
                         document.live.plugins.failure_policy.protocol.as_deref(),
@@ -575,6 +578,7 @@ impl ServerConfig {
             gameplay_profile_map: self.profiles.gameplay_map.clone(),
             admin_ui_profile: self.admin.ui_profile.clone(),
             plugin_allowlist: self.plugins.allowlist.clone(),
+            buffer_limits: self.plugins.buffer_limits,
             plugin_failure_policy_protocol: self.plugins.failure_policy.protocol,
             plugin_failure_policy_gameplay: self.plugins.failure_policy.gameplay,
             plugin_failure_policy_storage: self.plugins.failure_policy.storage,
@@ -670,7 +674,20 @@ struct TopologyDocument {
 struct PluginsDocument {
     allowlist: Option<Vec<String>>,
     reload_watch: Option<bool>,
+    buffer_limits: PluginBufferLimitsDocument,
     failure_policy: FailurePolicyDocument,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct PluginBufferLimitsDocument {
+    protocol_response_bytes: Option<usize>,
+    gameplay_response_bytes: Option<usize>,
+    storage_response_bytes: Option<usize>,
+    auth_response_bytes: Option<usize>,
+    admin_ui_response_bytes: Option<usize>,
+    callback_payload_bytes: Option<usize>,
+    metadata_bytes: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -781,6 +798,31 @@ fn normalize_optional_vec<T>(values: Option<Vec<T>>) -> Option<Vec<T>> {
     match values {
         Some(values) if values.is_empty() => None,
         other => other,
+    }
+}
+
+fn parse_plugin_buffer_limits(document: PluginBufferLimitsDocument) -> PluginHostBufferLimits {
+    let defaults = PluginHostBufferLimits::default();
+    PluginHostBufferLimits {
+        protocol_response_bytes: document
+            .protocol_response_bytes
+            .unwrap_or(defaults.protocol_response_bytes),
+        gameplay_response_bytes: document
+            .gameplay_response_bytes
+            .unwrap_or(defaults.gameplay_response_bytes),
+        storage_response_bytes: document
+            .storage_response_bytes
+            .unwrap_or(defaults.storage_response_bytes),
+        auth_response_bytes: document
+            .auth_response_bytes
+            .unwrap_or(defaults.auth_response_bytes),
+        admin_ui_response_bytes: document
+            .admin_ui_response_bytes
+            .unwrap_or(defaults.admin_ui_response_bytes),
+        callback_payload_bytes: document
+            .callback_payload_bytes
+            .unwrap_or(defaults.callback_payload_bytes),
+        metadata_bytes: document.metadata_bytes.unwrap_or(defaults.metadata_bytes),
     }
 }
 

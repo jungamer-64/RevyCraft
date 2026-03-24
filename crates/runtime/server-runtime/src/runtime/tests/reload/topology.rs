@@ -142,6 +142,7 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
         topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
     initial.topology.default_adapter = JE_5_ADAPTER_ID.into();
     initial.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into(), JE_47_ADAPTER_ID.into()]);
+    initial.plugins.buffer_limits.protocol_response_bytes = 4096;
     write_server_toml(&config_path, &initial)?;
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
@@ -160,6 +161,7 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
     updated.topology.be_enabled = true;
     updated.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.into();
     updated.topology.enabled_bedrock_adapters = Some(vec![BE_924_ADAPTER_ID.into()]);
+    updated.plugins.buffer_limits.protocol_response_bytes = 8192;
     write_server_toml(&config_path, &updated)?;
 
     let result = server.reload_generation().await?;
@@ -180,6 +182,127 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
             .descriptor()
             .adapter_id,
         JE_47_ADAPTER_ID
+    );
+    assert_eq!(
+        server
+            .runtime
+            .selection_state()
+            .await
+            .config
+            .plugins
+            .buffer_limits
+            .protocol_response_bytes,
+        4096
+    );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn config_reload_rotates_generation_for_protocol_buffer_limit_changes()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let config_path = temp_dir.path().join("server.toml");
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
+    let mut initial =
+        topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
+    initial.topology.default_adapter = JE_5_ADAPTER_ID.into();
+    initial.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into()]);
+    initial.plugins.buffer_limits.protocol_response_bytes = 4096;
+    write_server_toml(&config_path, &initial)?;
+    let server = build_reloadable_test_server_from_source(
+        ServerConfigSource::Toml(config_path.clone()),
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
+    )
+    .await?;
+    let before_generation = server.runtime.active_generation().generation_id;
+    let before_bindings = server.listener_bindings();
+
+    std::thread::sleep(Duration::from_secs(1));
+    let mut updated = initial.clone();
+    updated.plugins.buffer_limits.protocol_response_bytes = 8192;
+    write_server_toml(&config_path, &updated)?;
+
+    let result = server.reload_config().await?;
+    assert_ne!(result.generation.activated_generation_id, before_generation);
+    assert!(!result.generation.applied_config_change);
+    assert_eq!(server.listener_bindings(), before_bindings);
+    assert_eq!(
+        server
+            .runtime
+            .active_generation()
+            .config
+            .plugins
+            .buffer_limits
+            .protocol_response_bytes,
+        8192
+    );
+    assert_eq!(
+        server
+            .runtime
+            .selection_state()
+            .await
+            .config
+            .plugins
+            .buffer_limits
+            .protocol_response_bytes,
+        8192
+    );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn generation_reload_ignores_pending_protocol_buffer_limit_changes()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let config_path = temp_dir.path().join("server.toml");
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
+    let mut initial =
+        topology_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
+    initial.topology.default_adapter = JE_5_ADAPTER_ID.into();
+    initial.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into()]);
+    initial.plugins.buffer_limits.protocol_response_bytes = 4096;
+    write_server_toml(&config_path, &initial)?;
+    let server = build_reloadable_test_server_from_source(
+        ServerConfigSource::Toml(config_path.clone()),
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
+    )
+    .await?;
+    let before_generation = server.runtime.active_generation().generation_id;
+    let before_bindings = server.listener_bindings();
+
+    std::thread::sleep(Duration::from_secs(1));
+    let mut updated = initial.clone();
+    updated.plugins.buffer_limits.protocol_response_bytes = 8192;
+    write_server_toml(&config_path, &updated)?;
+
+    let result = server.reload_generation().await?;
+    assert_eq!(result.activated_generation_id, before_generation);
+    assert!(!result.changed(before_generation));
+    assert_eq!(server.listener_bindings(), before_bindings);
+    assert_eq!(
+        server
+            .runtime
+            .active_generation()
+            .config
+            .plugins
+            .buffer_limits
+            .protocol_response_bytes,
+        4096
+    );
+    assert_eq!(
+        server
+            .runtime
+            .selection_state()
+            .await
+            .config
+            .plugins
+            .buffer_limits
+            .protocol_response_bytes,
+        4096
     );
 
     server.shutdown().await

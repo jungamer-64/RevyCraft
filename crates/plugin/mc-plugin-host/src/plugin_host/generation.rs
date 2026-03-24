@@ -10,8 +10,9 @@ use super::{
     StorageResponse, admin_ui_host_api, decode_admin_ui_output, decode_auth_response,
     decode_gameplay_response, decode_protocol_response, decode_storage_response,
     encode_admin_ui_input, encode_auth_request, encode_gameplay_request, encode_protocol_request,
-    encode_storage_request,
+    encode_storage_request, take_owned_buffer,
 };
+use crate::config::PluginBufferLimits;
 
 #[derive(Default)]
 pub(crate) struct GenerationManager {
@@ -37,6 +38,7 @@ pub(crate) struct ProtocolGeneration {
     pub(crate) descriptor: ProtocolDescriptor,
     pub(crate) bedrock_listener_descriptor: Option<BedrockListenerDescriptor>,
     pub(crate) capabilities: ProtocolCapabilitySet,
+    pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
     pub(crate) invoke: PluginInvokeFn,
     pub(crate) free_buffer: PluginFreeBufferFn,
@@ -48,14 +50,17 @@ pub(crate) fn decode_plugin_error(
     status: PluginErrorCode,
     free_buffer: PluginFreeBufferFn,
     error: OwnedBuffer,
+    max_bytes: usize,
 ) -> String {
     if error.ptr.is_null() {
         format!("plugin `{plugin_id}` returned {status:?}")
     } else {
-        let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
-        unsafe {
-            (free_buffer)(error);
-        }
+        let bytes = match take_owned_buffer(free_buffer, error, max_bytes, "plugin error buffer") {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return format!("plugin `{plugin_id}` returned invalid error buffer: {error}");
+            }
+        };
         String::from_utf8(bytes)
             .unwrap_or_else(|_| format!("plugin `{plugin_id}` returned invalid utf-8"))
     }
@@ -100,13 +105,17 @@ impl ProtocolGeneration {
                 status,
                 self.free_buffer,
                 error,
+                self.buffer_limits.metadata_bytes,
             )));
         }
 
-        let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
-        unsafe {
-            (self.free_buffer)(output);
-        }
+        let response_bytes = take_owned_buffer(
+            self.free_buffer,
+            output,
+            self.buffer_limits.protocol_response_bytes,
+            "protocol response buffer",
+        )
+        .map_err(ProtocolError::Plugin)?;
         decode_protocol_response(request, &response_bytes)
             .map_err(|error| ProtocolError::Plugin(error.to_string()))
     }
@@ -118,6 +127,7 @@ pub(crate) struct GameplayGeneration {
     pub(crate) plugin_id: String,
     pub(crate) profile_id: GameplayProfileId,
     pub(crate) capabilities: GameplayCapabilitySet,
+    pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
     pub(crate) invoke: GameplayPluginInvokeV2Fn,
     pub(crate) free_buffer: PluginFreeBufferFn,
@@ -147,12 +157,15 @@ impl GameplayGeneration {
                 status,
                 self.free_buffer,
                 error,
+                self.buffer_limits.metadata_bytes,
             ));
         }
-        let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
-        unsafe {
-            (self.free_buffer)(output);
-        }
+        let response_bytes = take_owned_buffer(
+            self.free_buffer,
+            output,
+            self.buffer_limits.gameplay_response_bytes,
+            "gameplay response buffer",
+        )?;
         decode_gameplay_response(request, &response_bytes).map_err(|error| error.to_string())
     }
 }
@@ -163,6 +176,7 @@ pub(crate) struct StorageGeneration {
     pub(crate) plugin_id: String,
     pub(crate) profile_id: StorageProfileId,
     pub(crate) capabilities: StorageCapabilitySet,
+    pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
     pub(crate) invoke: PluginInvokeFn,
     pub(crate) free_buffer: PluginFreeBufferFn,
@@ -191,12 +205,16 @@ impl StorageGeneration {
                 status,
                 self.free_buffer,
                 error,
+                self.buffer_limits.metadata_bytes,
             )));
         }
-        let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
-        unsafe {
-            (self.free_buffer)(output);
-        }
+        let response_bytes = take_owned_buffer(
+            self.free_buffer,
+            output,
+            self.buffer_limits.storage_response_bytes,
+            "storage response buffer",
+        )
+        .map_err(StorageError::Plugin)?;
         decode_storage_response(request, &response_bytes)
             .map_err(|error| StorageError::Plugin(error.to_string()))
     }
@@ -209,6 +227,7 @@ pub(crate) struct AuthGeneration {
     pub(crate) profile_id: AuthProfileId,
     pub(crate) mode: AuthMode,
     pub(crate) capabilities: AuthCapabilitySet,
+    pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
     pub(crate) invoke: PluginInvokeFn,
     pub(crate) free_buffer: PluginFreeBufferFn,
@@ -221,6 +240,7 @@ pub(crate) struct AdminUiGeneration {
     pub(crate) plugin_id: String,
     pub(crate) profile_id: AdminUiProfileId,
     pub(crate) capabilities: AdminUiCapabilitySet,
+    pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
     pub(crate) invoke: AdminUiPluginInvokeV1Fn,
     pub(crate) free_buffer: PluginFreeBufferFn,
@@ -248,12 +268,15 @@ impl AuthGeneration {
                 status,
                 self.free_buffer,
                 error,
+                self.buffer_limits.metadata_bytes,
             ));
         }
-        let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
-        unsafe {
-            (self.free_buffer)(output);
-        }
+        let response_bytes = take_owned_buffer(
+            self.free_buffer,
+            output,
+            self.buffer_limits.auth_response_bytes,
+            "auth response buffer",
+        )?;
         decode_auth_response(request, &response_bytes).map_err(|error| error.to_string())
     }
 
@@ -354,13 +377,16 @@ impl AdminUiGeneration {
                 status,
                 self.free_buffer,
                 error,
+                self.buffer_limits.metadata_bytes,
             ));
         }
 
-        let response_bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
-        unsafe {
-            (self.free_buffer)(output);
-        }
+        let response_bytes = take_owned_buffer(
+            self.free_buffer,
+            output,
+            self.buffer_limits.admin_ui_response_bytes,
+            "admin-ui response buffer",
+        )?;
         decode_admin_ui_output(request, &response_bytes).map_err(|error| error.to_string())
     }
 

@@ -14,6 +14,7 @@ use super::{
     expect_storage_descriptor, invoke_admin_ui, invoke_auth, invoke_gameplay, invoke_protocol,
     invoke_storage,
 };
+use crate::config::PluginBufferLimits;
 
 type LibraryGuard = Option<Arc<Mutex<Library>>>;
 type LoadedProtocolApi = (LibraryGuard, DecodedManifest, ProtocolPluginApiV1);
@@ -34,15 +35,20 @@ impl PluginLoader {
 }
 
 impl PluginLoader {
-    fn load_protocol_api(package: &PluginPackage) -> Result<LoadedProtocolApi, RuntimeError> {
+    fn load_protocol_api(
+        package: &PluginPackage,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<LoadedProtocolApi, RuntimeError> {
         match &package.source {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                Self::load_dynamic_protocol(library_path)
+                Self::load_dynamic_protocol(library_path, buffer_limits)
             },
             #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessProtocol(plugin) => {
-                Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
-            }
+            PluginSource::InProcessProtocol(plugin) => Ok((
+                None,
+                decode_manifest(plugin.manifest, buffer_limits)?,
+                *plugin.api,
+            )),
             #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessStorage(_)
@@ -54,15 +60,20 @@ impl PluginLoader {
         }
     }
 
-    fn load_gameplay_api(package: &PluginPackage) -> Result<LoadedGameplayApi, RuntimeError> {
+    fn load_gameplay_api(
+        package: &PluginPackage,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<LoadedGameplayApi, RuntimeError> {
         match &package.source {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                Self::load_dynamic_gameplay(library_path)
+                Self::load_dynamic_gameplay(library_path, buffer_limits)
             },
             #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessGameplay(plugin) => {
-                Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
-            }
+            PluginSource::InProcessGameplay(plugin) => Ok((
+                None,
+                decode_manifest(plugin.manifest, buffer_limits)?,
+                *plugin.api,
+            )),
             #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessStorage(_)
@@ -74,15 +85,20 @@ impl PluginLoader {
         }
     }
 
-    fn load_storage_api(package: &PluginPackage) -> Result<LoadedStorageApi, RuntimeError> {
+    fn load_storage_api(
+        package: &PluginPackage,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<LoadedStorageApi, RuntimeError> {
         match &package.source {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                Self::load_dynamic_storage(library_path)
+                Self::load_dynamic_storage(library_path, buffer_limits)
             },
             #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessStorage(plugin) => {
-                Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
-            }
+            PluginSource::InProcessStorage(plugin) => Ok((
+                None,
+                decode_manifest(plugin.manifest, buffer_limits)?,
+                *plugin.api,
+            )),
             #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessGameplay(_)
@@ -94,15 +110,20 @@ impl PluginLoader {
         }
     }
 
-    fn load_auth_api(package: &PluginPackage) -> Result<LoadedAuthApi, RuntimeError> {
+    fn load_auth_api(
+        package: &PluginPackage,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<LoadedAuthApi, RuntimeError> {
         match &package.source {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                Self::load_dynamic_auth(library_path)
+                Self::load_dynamic_auth(library_path, buffer_limits)
             },
             #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessAuth(plugin) => {
-                Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
-            }
+            PluginSource::InProcessAuth(plugin) => Ok((
+                None,
+                decode_manifest(plugin.manifest, buffer_limits)?,
+                *plugin.api,
+            )),
             #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessGameplay(_)
@@ -114,15 +135,20 @@ impl PluginLoader {
         }
     }
 
-    fn load_admin_ui_api(package: &PluginPackage) -> Result<LoadedAdminUiApi, RuntimeError> {
+    fn load_admin_ui_api(
+        package: &PluginPackage,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<LoadedAdminUiApi, RuntimeError> {
         match &package.source {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                Self::load_dynamic_admin_ui(library_path)
+                Self::load_dynamic_admin_ui(library_path, buffer_limits)
             },
             #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessAdminUi(plugin) => {
-                Ok((None, decode_manifest(plugin.manifest)?, *plugin.api))
-            }
+            PluginSource::InProcessAdminUi(plugin) => Ok((
+                None,
+                decode_manifest(plugin.manifest, buffer_limits)?,
+                *plugin.api,
+            )),
             #[cfg(any(test, feature = "in-process-testing"))]
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessGameplay(_)
@@ -138,12 +164,13 @@ impl PluginLoader {
         &self,
         package: &PluginPackage,
         generation_id: PluginGenerationId,
+        buffer_limits: PluginBufferLimits,
     ) -> Result<ProtocolGeneration, RuntimeError> {
-        let (guard, manifest, api) = Self::load_protocol_api(package)?;
+        let (guard, manifest, api) = Self::load_protocol_api(package, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
         let descriptor = expect_protocol_descriptor(
             &package.plugin_id,
-            invoke_protocol(&api, &ProtocolRequest::Describe)?,
+            invoke_protocol(&api, &ProtocolRequest::Describe, buffer_limits)?,
         )?;
         if descriptor.adapter_id != package.plugin_id {
             return Err(RuntimeError::Config(format!(
@@ -153,11 +180,15 @@ impl PluginLoader {
         }
         let bedrock_listener_descriptor = expect_protocol_bedrock_listener_descriptor(
             &package.plugin_id,
-            invoke_protocol(&api, &ProtocolRequest::DescribeBedrockListener)?,
+            invoke_protocol(
+                &api,
+                &ProtocolRequest::DescribeBedrockListener,
+                buffer_limits,
+            )?,
         )?;
         let capabilities = expect_protocol_capabilities(
             &package.plugin_id,
-            invoke_protocol(&api, &ProtocolRequest::CapabilitySet)?,
+            invoke_protocol(&api, &ProtocolRequest::CapabilitySet, buffer_limits)?,
         )?;
         if !capabilities.contains(ProtocolCapability::RuntimeReload) {
             return Err(RuntimeError::Config(format!(
@@ -172,6 +203,7 @@ impl PluginLoader {
             descriptor,
             bedrock_listener_descriptor,
             capabilities: capabilities.capabilities,
+            buffer_limits,
             build_tag: capabilities.build_tag,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
@@ -183,8 +215,9 @@ impl PluginLoader {
         &self,
         package: &PluginPackage,
         generation_id: PluginGenerationId,
+        buffer_limits: PluginBufferLimits,
     ) -> Result<GameplayGeneration, RuntimeError> {
-        let (guard, manifest, api) = Self::load_gameplay_api(package)?;
+        let (guard, manifest, api) = Self::load_gameplay_api(package, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
         let ManifestCapabilities::Gameplay(manifest_capabilities) = &manifest.capabilities else {
             return Err(RuntimeError::Config(format!(
@@ -195,7 +228,12 @@ impl PluginLoader {
         let profile_id = manifest_capabilities.profile_id.clone();
         let descriptor = expect_gameplay_descriptor(
             &package.plugin_id,
-            invoke_gameplay(&package.plugin_id, &api, &GameplayRequest::Describe)?,
+            invoke_gameplay(
+                &package.plugin_id,
+                &api,
+                &GameplayRequest::Describe,
+                buffer_limits,
+            )?,
         )?;
         if descriptor.profile != profile_id {
             return Err(RuntimeError::Config(format!(
@@ -207,7 +245,12 @@ impl PluginLoader {
         }
         let capabilities = expect_gameplay_capabilities(
             &package.plugin_id,
-            invoke_gameplay(&package.plugin_id, &api, &GameplayRequest::CapabilitySet)?,
+            invoke_gameplay(
+                &package.plugin_id,
+                &api,
+                &GameplayRequest::CapabilitySet,
+                buffer_limits,
+            )?,
         )?;
         if !capabilities.contains(GameplayCapability::RuntimeReload) {
             return Err(RuntimeError::Config(format!(
@@ -221,6 +264,7 @@ impl PluginLoader {
             plugin_id: package.plugin_id.clone(),
             profile_id,
             capabilities: capabilities.capabilities,
+            buffer_limits,
             build_tag: capabilities.build_tag,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
@@ -232,8 +276,9 @@ impl PluginLoader {
         &self,
         package: &PluginPackage,
         generation_id: PluginGenerationId,
+        buffer_limits: PluginBufferLimits,
     ) -> Result<StorageGeneration, RuntimeError> {
-        let (guard, manifest, api) = Self::load_storage_api(package)?;
+        let (guard, manifest, api) = Self::load_storage_api(package, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
         let ManifestCapabilities::Storage(manifest_capabilities) = &manifest.capabilities else {
             return Err(RuntimeError::Config(format!(
@@ -244,7 +289,12 @@ impl PluginLoader {
         let profile_id = manifest_capabilities.profile_id.clone();
         let descriptor = expect_storage_descriptor(
             &package.plugin_id,
-            invoke_storage(&package.plugin_id, &api, &StorageRequest::Describe)?,
+            invoke_storage(
+                &package.plugin_id,
+                &api,
+                &StorageRequest::Describe,
+                buffer_limits,
+            )?,
         )?;
         if descriptor.storage_profile != profile_id {
             return Err(RuntimeError::Config(format!(
@@ -254,7 +304,12 @@ impl PluginLoader {
         }
         let capabilities = expect_storage_capabilities(
             &package.plugin_id,
-            invoke_storage(&package.plugin_id, &api, &StorageRequest::CapabilitySet)?,
+            invoke_storage(
+                &package.plugin_id,
+                &api,
+                &StorageRequest::CapabilitySet,
+                buffer_limits,
+            )?,
         )?;
         if !capabilities.contains(StorageCapability::RuntimeReload) {
             return Err(RuntimeError::Config(format!(
@@ -268,6 +323,7 @@ impl PluginLoader {
             plugin_id: package.plugin_id.clone(),
             profile_id,
             capabilities: capabilities.capabilities,
+            buffer_limits,
             build_tag: capabilities.build_tag,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
@@ -279,8 +335,9 @@ impl PluginLoader {
         &self,
         package: &PluginPackage,
         generation_id: PluginGenerationId,
+        buffer_limits: PluginBufferLimits,
     ) -> Result<AuthGeneration, RuntimeError> {
-        let (guard, manifest, api) = Self::load_auth_api(package)?;
+        let (guard, manifest, api) = Self::load_auth_api(package, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
         let ManifestCapabilities::Auth(manifest_capabilities) = &manifest.capabilities else {
             return Err(RuntimeError::Config(format!(
@@ -291,7 +348,12 @@ impl PluginLoader {
         let profile_id = manifest_capabilities.profile_id.clone();
         let descriptor = expect_auth_descriptor(
             &package.plugin_id,
-            invoke_auth(&package.plugin_id, &api, &AuthRequest::Describe)?,
+            invoke_auth(
+                &package.plugin_id,
+                &api,
+                &AuthRequest::Describe,
+                buffer_limits,
+            )?,
         )?;
         if descriptor.auth_profile != profile_id {
             return Err(RuntimeError::Config(format!(
@@ -301,7 +363,12 @@ impl PluginLoader {
         }
         let capabilities = expect_auth_capabilities(
             &package.plugin_id,
-            invoke_auth(&package.plugin_id, &api, &AuthRequest::CapabilitySet)?,
+            invoke_auth(
+                &package.plugin_id,
+                &api,
+                &AuthRequest::CapabilitySet,
+                buffer_limits,
+            )?,
         )?;
         if !capabilities.contains(AuthCapability::RuntimeReload) {
             return Err(RuntimeError::Config(format!(
@@ -316,6 +383,7 @@ impl PluginLoader {
             profile_id,
             mode: descriptor.mode,
             capabilities: capabilities.capabilities,
+            buffer_limits,
             build_tag: capabilities.build_tag,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
@@ -327,8 +395,9 @@ impl PluginLoader {
         &self,
         package: &PluginPackage,
         generation_id: PluginGenerationId,
+        buffer_limits: PluginBufferLimits,
     ) -> Result<AdminUiGeneration, RuntimeError> {
-        let (guard, manifest, api) = Self::load_admin_ui_api(package)?;
+        let (guard, manifest, api) = Self::load_admin_ui_api(package, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
         let ManifestCapabilities::AdminUi(manifest_capabilities) = &manifest.capabilities else {
             return Err(RuntimeError::Config(format!(
@@ -339,7 +408,12 @@ impl PluginLoader {
         let profile_id = manifest_capabilities.profile_id.clone();
         let descriptor = expect_admin_ui_descriptor(
             &package.plugin_id,
-            invoke_admin_ui(&package.plugin_id, &api, &AdminUiInput::Describe)?,
+            invoke_admin_ui(
+                &package.plugin_id,
+                &api,
+                &AdminUiInput::Describe,
+                buffer_limits,
+            )?,
         )?;
         if descriptor.ui_profile != profile_id {
             return Err(RuntimeError::Config(format!(
@@ -349,7 +423,12 @@ impl PluginLoader {
         }
         let capabilities = expect_admin_ui_capabilities(
             &package.plugin_id,
-            invoke_admin_ui(&package.plugin_id, &api, &AdminUiInput::CapabilitySet)?,
+            invoke_admin_ui(
+                &package.plugin_id,
+                &api,
+                &AdminUiInput::CapabilitySet,
+                buffer_limits,
+            )?,
         )?;
         if !capabilities.contains(AdminUiCapability::RuntimeReload) {
             return Err(RuntimeError::Config(format!(
@@ -363,6 +442,7 @@ impl PluginLoader {
             plugin_id: package.plugin_id.clone(),
             profile_id,
             capabilities: capabilities.capabilities,
+            buffer_limits,
             build_tag: capabilities.build_tag,
             invoke: api.invoke,
             free_buffer: api.free_buffer,
@@ -372,6 +452,7 @@ impl PluginLoader {
 
     unsafe fn load_dynamic_protocol(
         library_path: &Path,
+        buffer_limits: PluginBufferLimits,
     ) -> Result<LoadedProtocolApi, RuntimeError> {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
@@ -400,11 +481,16 @@ impl PluginLoader {
                 })?;
             unsafe { *api_fn() }
         };
-        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+        Ok((
+            Some(library),
+            decode_manifest(manifest_ptr, buffer_limits)?,
+            api,
+        ))
     }
 
     unsafe fn load_dynamic_gameplay(
         library_path: &Path,
+        buffer_limits: PluginBufferLimits,
     ) -> Result<LoadedGameplayApi, RuntimeError> {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
@@ -433,10 +519,17 @@ impl PluginLoader {
                 })?;
             unsafe { *api_fn() }
         };
-        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+        Ok((
+            Some(library),
+            decode_manifest(manifest_ptr, buffer_limits)?,
+            api,
+        ))
     }
 
-    unsafe fn load_dynamic_storage(library_path: &Path) -> Result<LoadedStorageApi, RuntimeError> {
+    unsafe fn load_dynamic_storage(
+        library_path: &Path,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<LoadedStorageApi, RuntimeError> {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
             let library = library
@@ -464,10 +557,17 @@ impl PluginLoader {
                 })?;
             unsafe { *api_fn() }
         };
-        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+        Ok((
+            Some(library),
+            decode_manifest(manifest_ptr, buffer_limits)?,
+            api,
+        ))
     }
 
-    unsafe fn load_dynamic_auth(library_path: &Path) -> Result<LoadedAuthApi, RuntimeError> {
+    unsafe fn load_dynamic_auth(
+        library_path: &Path,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<LoadedAuthApi, RuntimeError> {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
             let library = library
@@ -495,10 +595,17 @@ impl PluginLoader {
                 })?;
             unsafe { *api_fn() }
         };
-        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+        Ok((
+            Some(library),
+            decode_manifest(manifest_ptr, buffer_limits)?,
+            api,
+        ))
     }
 
-    unsafe fn load_dynamic_admin_ui(library_path: &Path) -> Result<LoadedAdminUiApi, RuntimeError> {
+    unsafe fn load_dynamic_admin_ui(
+        library_path: &Path,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<LoadedAdminUiApi, RuntimeError> {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
             let library = library
@@ -526,7 +633,11 @@ impl PluginLoader {
                 })?;
             unsafe { *api_fn() }
         };
-        Ok((Some(library), decode_manifest(manifest_ptr)?, api))
+        Ok((
+            Some(library),
+            decode_manifest(manifest_ptr, buffer_limits)?,
+            api,
+        ))
     }
 
     fn validate_manifest(

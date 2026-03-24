@@ -433,4 +433,28 @@ impl PluginFailureDispatch {
             }
         }
     }
+
+    pub(crate) fn quarantine_candidate_artifact(
+        &self,
+        kind: PluginKind,
+        stage: PluginFailureStage,
+        plugin_id: &str,
+        identity: ArtifactIdentity,
+        reason: &str,
+    ) {
+        let modified_at_ms = system_time_ms(identity.modified_at);
+        let source = identity.source.clone();
+        if self
+            .artifact_quarantine
+            .quarantine(plugin_id, identity, reason.to_string())
+        {
+            eprintln!(
+                "{} plugin `{plugin_id}` artifact quarantined during {}: source={} modified_at_ms={} reason={reason}",
+                Self::kind_label(kind),
+                stage.as_str(),
+                source,
+                modified_at_ms,
+            );
+        }
+    }
 }

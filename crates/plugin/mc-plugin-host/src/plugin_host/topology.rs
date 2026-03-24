@@ -48,10 +48,11 @@ impl PluginHost {
                 }
                 continue;
             }
-            let generation = match self
-                .loader
-                .load_protocol_generation(package, self.generations.next_generation_id())
-            {
+            let generation = match self.loader.load_protocol_generation(
+                package,
+                self.generations.next_generation_id(),
+                config.buffer_limits,
+            ) {
                 Ok(generation) => Arc::new(generation),
                 Err(error) => {
                     let reason = error.to_string();
@@ -75,7 +76,22 @@ impl PluginHost {
                 generation,
                 Arc::clone(&self.failures),
             ));
-            registry.register_adapter(adapter.clone());
+            if let Err(error) = registry.register_adapter(adapter.clone()) {
+                let reason = error.to_string();
+                eprintln!(
+                    "protocol {} route rejected for `{}`: {reason}",
+                    stage.as_str(),
+                    package.plugin_id
+                );
+                self.failures.quarantine_candidate_artifact(
+                    PluginKind::Protocol,
+                    stage,
+                    &package.plugin_id,
+                    identity,
+                    &reason,
+                );
+                continue;
+            }
             registry.register_probe(adapter.clone());
             adapter_ids.push(package.plugin_id.clone());
             managed.insert(

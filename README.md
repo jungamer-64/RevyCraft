@@ -22,6 +22,8 @@ cargo run -p server-bootstrap
 
 `server-bootstrap` は `runtime/server.toml` を読みます。設定ファイルが無い場合は default config で起動し、plugin は `runtime/plugins/<plugin-id>/plugin.toml` から解決します。runtime は `target/` の build artifact を直接読みません。
 
+別の config path を使うときは `REVY_SERVER_CONFIG=/path/to/server.toml cargo run -p server-bootstrap` を使います。指定 path が見つからない場合は warning を出し、そのまま default config fallback で起動を試みます。
+
 optional plugin を含めて workspace 管理下の plugin を全量 package したいときだけ、次を使います。
 
 ```bash

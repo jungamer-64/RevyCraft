@@ -19,7 +19,7 @@ use super::{
     RuntimeError, RwLock, ServerListStatus, SessionCapabilitySet, StatusRequest, StorageAdapter,
     StorageCapabilitySet, StorageError, StorageGeneration, StorageProfileHandle, StorageProfileId,
     StorageRequest, StorageResponse, SystemTime, TransportKind, WireCodec, WireFormatKind,
-    WireFrameDecodeResult, WorldSnapshot, with_gameplay_query,
+    WireFrameDecodeResult, WorldSnapshot, with_gameplay_query_and_limits,
 };
 use mc_proto_common::Edition;
 

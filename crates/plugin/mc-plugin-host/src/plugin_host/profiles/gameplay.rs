@@ -3,7 +3,7 @@ use super::{
     GameplayPolicyResolver, GameplayProfileHandle, GameplayProfileId, GameplayQuery,
     GameplayRequest, GameplayResponse, GameplaySessionSnapshot, PlayerId, PlayerSnapshot,
     PluginFailureAction, PluginFailureDispatch, PluginGenerationId, PluginKind,
-    ReloadableGenerationSlot, RuntimeError, SessionCapabilitySet, with_gameplay_query,
+    ReloadableGenerationSlot, RuntimeError, SessionCapabilitySet, with_gameplay_query_and_limits,
 };
 
 pub(crate) struct HotSwappableGameplayProfile {
@@ -97,14 +97,16 @@ impl HotSwappableGameplayProfile {
             if self.failures.is_active_quarantined(&self.plugin_id) {
                 return Ok(T::default());
             }
-            with_gameplay_query(query, || match generation.invoke(&request) {
-                Ok(response) => match map_response(response) {
-                    Ok(value) => Ok(value),
-                    Err(other) => {
-                        self.handle_runtime_failure(format!("{unexpected_payload}: {other:?}"))
-                    }
-                },
-                Err(error) => self.handle_runtime_failure(error),
+            with_gameplay_query_and_limits(query, generation.buffer_limits, || {
+                match generation.invoke(&request) {
+                    Ok(response) => match map_response(response) {
+                        Ok(value) => Ok(value),
+                        Err(other) => {
+                            self.handle_runtime_failure(format!("{unexpected_payload}: {other:?}"))
+                        }
+                    },
+                    Err(error) => self.handle_runtime_failure(error),
+                }
             })
         })
     }

@@ -4,6 +4,33 @@ use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PluginBufferLimits {
+    pub protocol_response_bytes: usize,
+    pub gameplay_response_bytes: usize,
+    pub storage_response_bytes: usize,
+    pub auth_response_bytes: usize,
+    pub admin_ui_response_bytes: usize,
+    pub callback_payload_bytes: usize,
+    pub metadata_bytes: usize,
+}
+
+impl Default for PluginBufferLimits {
+    fn default() -> Self {
+        const KIB: usize = 1024;
+        const MIB: usize = 1024 * KIB;
+        Self {
+            protocol_response_bytes: 4 * MIB,
+            gameplay_response_bytes: 1 * MIB,
+            storage_response_bytes: 32 * MIB,
+            auth_response_bytes: 256 * KIB,
+            admin_ui_response_bytes: 1 * MIB,
+            callback_payload_bytes: 1 * MIB,
+            metadata_bytes: 64 * KIB,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BootstrapConfig {
     pub storage_profile: StorageProfileId,
@@ -32,6 +59,7 @@ pub struct RuntimeSelectionConfig {
     pub gameplay_profile_map: HashMap<AdapterId, GameplayProfileId>,
     pub admin_ui_profile: AdminUiProfileId,
     pub plugin_allowlist: Option<Vec<String>>,
+    pub buffer_limits: PluginBufferLimits,
     pub plugin_failure_policy_protocol: PluginFailureAction,
     pub plugin_failure_policy_gameplay: PluginFailureAction,
     pub plugin_failure_policy_storage: PluginFailureAction,
@@ -50,6 +78,7 @@ impl Default for RuntimeSelectionConfig {
             gameplay_profile_map: HashMap::new(),
             admin_ui_profile: AdminUiProfileId::new("console-v1"),
             plugin_allowlist: None,
+            buffer_limits: PluginBufferLimits::default(),
             plugin_failure_policy_protocol: failure_matrix.protocol,
             plugin_failure_policy_gameplay: failure_matrix.gameplay,
             plugin_failure_policy_storage: failure_matrix.storage,

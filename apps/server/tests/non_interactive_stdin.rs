@@ -33,11 +33,35 @@ fn write_server_toml(
     admin_grpc_port: u16,
     motd: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let runtime_dir = temp_dir.join("runtime");
+    write_server_toml_at(
+        temp_dir,
+        &temp_dir.join("runtime").join("server.toml"),
+        repo_root,
+        world_dir,
+        admin_grpc_enabled,
+        server_port,
+        admin_grpc_port,
+        motd,
+    )
+}
+
+fn write_server_toml_at(
+    temp_root: &Path,
+    config_path: &Path,
+    repo_root: &Path,
+    world_dir: &Path,
+    admin_grpc_enabled: bool,
+    server_port: u16,
+    admin_grpc_port: u16,
+    motd: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime_dir = config_path
+        .parent()
+        .ok_or("config path should have a parent directory")?;
     let plugins_dir = repo_root.join("runtime").join("plugins");
     fs::create_dir_all(&runtime_dir)?;
     let (principal_block, admin_bind_addr) = if admin_grpc_enabled {
-        let token_path = temp_dir.join("admin").join("ops.token");
+        let token_path = temp_root.join("admin").join("ops.token");
         fs::create_dir_all(token_path.parent().expect("token parent should exist"))?;
         fs::write(&token_path, "ops-token\n")?;
         (
@@ -52,7 +76,7 @@ fn write_server_toml(
     };
 
     fs::write(
-        runtime_dir.join("server.toml"),
+        config_path,
         format!(
             "\
 [static.bootstrap]
@@ -126,12 +150,26 @@ fn spawn_server(
     stdout: Stdio,
     stderr: Stdio,
 ) -> Result<Child, Box<dyn std::error::Error>> {
-    Ok(Command::new(env!("CARGO_BIN_EXE_server-bootstrap"))
+    spawn_server_with_config_path(temp_dir, stdin, stdout, stderr, None)
+}
+
+fn spawn_server_with_config_path(
+    temp_dir: &Path,
+    stdin: Stdio,
+    stdout: Stdio,
+    stderr: Stdio,
+    config_path: Option<&Path>,
+) -> Result<Child, Box<dyn std::error::Error>> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_server-bootstrap"));
+    command
         .current_dir(temp_dir)
         .stdin(stdin)
         .stdout(stdout)
-        .stderr(stderr)
-        .spawn()?)
+        .stderr(stderr);
+    if let Some(config_path) = config_path {
+        command.env("REVY_SERVER_CONFIG", config_path);
+    }
+    Ok(command.spawn()?)
 }
 
 fn wait_for_exit(
@@ -372,5 +410,64 @@ fn runtime_failure_exits_even_when_admin_grpc_is_available()
 
     assert!(!status.success());
     assert!(stderr.contains("storage") || stderr.contains("runtime failure"));
+    Ok(())
+}
+
+#[test]
+fn revy_server_config_override_boots_from_custom_path() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let repo_root = repo_root()?;
+    let grpc_port = reserve_port()?;
+    let world_dir = temp_dir.path().join("world");
+    let custom_config_path = temp_dir.path().join("config").join("server.toml");
+    fs::create_dir_all(&world_dir)?;
+    write_server_toml_at(
+        temp_dir.path(),
+        &custom_config_path,
+        &repo_root,
+        &world_dir,
+        true,
+        0,
+        grpc_port,
+        "env-override-admin",
+    )?;
+
+    let mut child = spawn_server_with_config_path(
+        temp_dir.path(),
+        Stdio::null(),
+        Stdio::null(),
+        Stdio::piped(),
+        Some(&custom_config_path),
+    )?;
+
+    thread::sleep(Duration::from_millis(500));
+    if let Some(status) = child.try_wait()? {
+        let (_stdout, stderr) = read_child_output(&mut child)?;
+        return Err(format!("server exited early with status {status}; stderr={stderr}").into());
+    }
+
+    child.kill()?;
+    let _ = child.wait()?;
+    Ok(())
+}
+
+#[test]
+fn missing_revy_server_config_emits_warning() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let missing_config_path = temp_dir.path().join("missing-server.toml");
+
+    let mut child = spawn_server_with_config_path(
+        temp_dir.path(),
+        Stdio::null(),
+        Stdio::null(),
+        Stdio::piped(),
+        Some(&missing_config_path),
+    )?;
+    let _ = wait_for_exit(&mut child, Duration::from_secs(5))?;
+    let (_stdout, stderr) = read_child_output(&mut child)?;
+
+    assert!(stderr.contains("server config path"));
+    assert!(stderr.contains("booting with default config"));
+    assert!(stderr.contains("missing-server.toml"));
     Ok(())
 }

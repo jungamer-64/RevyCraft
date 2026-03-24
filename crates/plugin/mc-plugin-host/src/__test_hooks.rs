@@ -208,6 +208,11 @@ pub fn reload_modified_with_context(
 }
 
 #[must_use]
+pub fn artifact_quarantine_reason(host: &BuiltTestHost, plugin_id: &str) -> Option<String> {
+    host.inner.artifact_quarantine_reason(plugin_id)
+}
+
+#[must_use]
 pub fn take_pending_fatal_error(host: &BuiltTestHost) -> Option<PluginHostError> {
     host.inner.take_pending_fatal_error()
 }

@@ -50,6 +50,15 @@ allowlist = [
 ]
 reload_watch = false
 
+[live.plugins.buffer_limits]
+protocol_response_bytes = 4194304
+gameplay_response_bytes = 1048576
+storage_response_bytes = 33554432
+auth_response_bytes = 262144
+admin_ui_response_bytes = 1048576
+callback_payload_bytes = 1048576
+metadata_bytes = 65536
+
 [live.plugins.failure_policy]
 protocol = "quarantine"
 gameplay = "quarantine"

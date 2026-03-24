@@ -456,3 +456,275 @@ pub(super) mod failing_auth_plugin {
 
     export_plugin!(auth, FailingAuthPlugin, MANIFEST);
 }
+
+pub(super) mod route_collision_protocol_plugin {
+    use mc_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
+    use mc_plugin_api::abi::{
+        ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
+        PluginKind, Utf8Slice,
+    };
+    use mc_plugin_api::codec::protocol::{
+        ProtocolRequest, ProtocolResponse, decode_protocol_request, encode_protocol_response,
+    };
+    use mc_plugin_api::host_api::ProtocolPluginApiV1;
+    use mc_plugin_api::manifest::PluginManifestV1;
+    use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
+    use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use std::sync::OnceLock;
+
+    const PLUGIN_ID: &str = "je-5-collision";
+
+    fn descriptor() -> ProtocolDescriptor {
+        ProtocolDescriptor {
+            adapter_id: PLUGIN_ID.to_string(),
+            transport: TransportKind::Tcp,
+            wire_format: WireFormatKind::MinecraftFramed,
+            edition: Edition::Je,
+            version_name: "je-5-collision".to_string(),
+            protocol_number: 5,
+        }
+    }
+
+    fn write_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
+        if output.is_null() {
+            return;
+        }
+        unsafe {
+            *output = OwnedBuffer {
+                ptr: bytes.as_mut_ptr(),
+                len: bytes.len(),
+                cap: bytes.capacity(),
+            };
+        }
+        std::mem::forget(bytes);
+    }
+
+    fn write_error(error_out: *mut OwnedBuffer, message: String) {
+        write_buffer(error_out, message.into_bytes());
+    }
+
+    fn handle_request(request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+        match request {
+            ProtocolRequest::Describe => Ok(ProtocolResponse::Descriptor(descriptor())),
+            ProtocolRequest::DescribeBedrockListener => {
+                Ok(ProtocolResponse::BedrockListenerDescriptor(None))
+            }
+            ProtocolRequest::CapabilitySet => {
+                let mut capabilities = ProtocolCapabilitySet::new();
+                let _ = capabilities.insert(ProtocolCapability::RuntimeReload);
+                Ok(ProtocolResponse::CapabilitySet(
+                    CapabilityAnnouncement::new(capabilities),
+                ))
+            }
+            other => Err(format!(
+                "unsupported protocol request in test plugin: {other:?}"
+            )),
+        }
+    }
+
+    unsafe extern "C" fn invoke(
+        request: ByteSlice,
+        output: *mut OwnedBuffer,
+        error_out: *mut OwnedBuffer,
+    ) -> PluginErrorCode {
+        let request_bytes = unsafe { std::slice::from_raw_parts(request.ptr, request.len) };
+        let request = match decode_protocol_request(request_bytes) {
+            Ok(request) => request,
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                return PluginErrorCode::InvalidInput;
+            }
+        };
+        let response = match handle_request(request.clone()) {
+            Ok(response) => response,
+            Err(message) => {
+                write_error(error_out, message);
+                return PluginErrorCode::Internal;
+            }
+        };
+        match encode_protocol_response(&request, &response) {
+            Ok(bytes) => {
+                write_buffer(output, bytes);
+                PluginErrorCode::Ok
+            }
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                PluginErrorCode::Internal
+            }
+        }
+    }
+
+    unsafe extern "C" fn free_buffer(buffer: OwnedBuffer) {
+        if buffer.ptr.is_null() {
+            return;
+        }
+        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
+    }
+
+    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV1> {
+        static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+        static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
+        static API: OnceLock<ProtocolPluginApiV1> = OnceLock::new();
+        InProcessPluginEntrypoints::new(
+            MANIFEST.get_or_init(|| PluginManifestV1 {
+                plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
+                display_name: Utf8Slice::from_static_str("Route Collision Protocol Plugin"),
+                plugin_kind: PluginKind::Protocol,
+                plugin_abi: CURRENT_PLUGIN_ABI,
+                min_host_abi: CURRENT_PLUGIN_ABI,
+                max_host_abi: CURRENT_PLUGIN_ABI,
+                capabilities: CAPABILITIES
+                    .get_or_init(|| {
+                        Box::leak(
+                            vec![CapabilityDescriptorV1 {
+                                name: Utf8Slice::from_static_str("runtime.reload.protocol"),
+                            }]
+                            .into_boxed_slice(),
+                        )
+                    })
+                    .as_ptr(),
+                capabilities_len: 1,
+            }),
+            API.get_or_init(|| ProtocolPluginApiV1 {
+                invoke,
+                free_buffer,
+            }),
+        )
+    }
+}
+
+pub(super) mod oversized_protocol_response_plugin {
+    use mc_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
+    use mc_plugin_api::abi::{
+        ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
+        PluginKind, Utf8Slice,
+    };
+    use mc_plugin_api::codec::protocol::{
+        ProtocolRequest, ProtocolResponse, decode_protocol_request, encode_protocol_response,
+    };
+    use mc_plugin_api::host_api::ProtocolPluginApiV1;
+    use mc_plugin_api::manifest::PluginManifestV1;
+    use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
+    use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use std::sync::OnceLock;
+
+    const PLUGIN_ID: &str = "protocol-oversized-response";
+
+    fn descriptor() -> ProtocolDescriptor {
+        ProtocolDescriptor {
+            adapter_id: PLUGIN_ID.to_string(),
+            transport: TransportKind::Tcp,
+            wire_format: WireFormatKind::MinecraftFramed,
+            edition: Edition::Je,
+            version_name: "x".repeat(512),
+            protocol_number: 9123,
+        }
+    }
+
+    fn write_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
+        if output.is_null() {
+            return;
+        }
+        unsafe {
+            *output = OwnedBuffer {
+                ptr: bytes.as_mut_ptr(),
+                len: bytes.len(),
+                cap: bytes.capacity(),
+            };
+        }
+        std::mem::forget(bytes);
+    }
+
+    fn write_error(error_out: *mut OwnedBuffer, message: String) {
+        write_buffer(error_out, message.into_bytes());
+    }
+
+    fn handle_request(request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+        match request {
+            ProtocolRequest::Describe => Ok(ProtocolResponse::Descriptor(descriptor())),
+            ProtocolRequest::DescribeBedrockListener => {
+                Ok(ProtocolResponse::BedrockListenerDescriptor(None))
+            }
+            ProtocolRequest::CapabilitySet => {
+                let mut capabilities = ProtocolCapabilitySet::new();
+                let _ = capabilities.insert(ProtocolCapability::RuntimeReload);
+                Ok(ProtocolResponse::CapabilitySet(
+                    CapabilityAnnouncement::new(capabilities),
+                ))
+            }
+            other => Err(format!(
+                "unsupported protocol request in test plugin: {other:?}"
+            )),
+        }
+    }
+
+    unsafe extern "C" fn invoke(
+        request: ByteSlice,
+        output: *mut OwnedBuffer,
+        error_out: *mut OwnedBuffer,
+    ) -> PluginErrorCode {
+        let request_bytes = unsafe { std::slice::from_raw_parts(request.ptr, request.len) };
+        let request = match decode_protocol_request(request_bytes) {
+            Ok(request) => request,
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                return PluginErrorCode::InvalidInput;
+            }
+        };
+        let response = match handle_request(request.clone()) {
+            Ok(response) => response,
+            Err(message) => {
+                write_error(error_out, message);
+                return PluginErrorCode::Internal;
+            }
+        };
+        match encode_protocol_response(&request, &response) {
+            Ok(bytes) => {
+                write_buffer(output, bytes);
+                PluginErrorCode::Ok
+            }
+            Err(error) => {
+                write_error(error_out, error.to_string());
+                PluginErrorCode::Internal
+            }
+        }
+    }
+
+    unsafe extern "C" fn free_buffer(buffer: OwnedBuffer) {
+        if buffer.ptr.is_null() {
+            return;
+        }
+        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
+    }
+
+    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV1> {
+        static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+        static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
+        static API: OnceLock<ProtocolPluginApiV1> = OnceLock::new();
+        InProcessPluginEntrypoints::new(
+            MANIFEST.get_or_init(|| PluginManifestV1 {
+                plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
+                display_name: Utf8Slice::from_static_str("Oversized Protocol Response Plugin"),
+                plugin_kind: PluginKind::Protocol,
+                plugin_abi: CURRENT_PLUGIN_ABI,
+                min_host_abi: CURRENT_PLUGIN_ABI,
+                max_host_abi: CURRENT_PLUGIN_ABI,
+                capabilities: CAPABILITIES
+                    .get_or_init(|| {
+                        Box::leak(
+                            vec![CapabilityDescriptorV1 {
+                                name: Utf8Slice::from_static_str("runtime.reload.protocol"),
+                            }]
+                            .into_boxed_slice(),
+                        )
+                    })
+                    .as_ptr(),
+                capabilities_len: 1,
+            }),
+            API.get_or_init(|| ProtocolPluginApiV1 {
+                invoke,
+                free_buffer,
+            }),
+        )
+    }
+}

@@ -231,6 +231,103 @@ fn protocol_plugins_can_override_host_wire_codec_framing() {
 }
 
 #[test]
+fn colliding_protocol_routes_keep_one_adapter_and_quarantine_the_other() {
+    let primary = in_process_protocol_entrypoints();
+    let collision = route_collision_protocol_plugin::in_process_plugin_entrypoints();
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new()
+            .protocol_raw(InProcessProtocolPlugin {
+                plugin_id: "je-5".to_string(),
+                manifest: primary.manifest,
+                api: primary.api,
+            })
+            .protocol_raw(InProcessProtocolPlugin {
+                plugin_id: "je-5-collision".to_string(),
+                manifest: collision.manifest,
+                api: collision.api,
+            }),
+        PluginAbiRange::default(),
+        PluginFailureMatrix::default(),
+    );
+
+    let registries = host
+        .load_protocol_plugin_set()
+        .expect("one colliding protocol adapter should still load");
+    let present = ["je-5", "je-5-collision"]
+        .into_iter()
+        .find(|adapter_id| registries.protocols().resolve_adapter(adapter_id).is_some())
+        .expect("one colliding adapter should remain active");
+    let quarantined = if present == "je-5" {
+        "je-5-collision"
+    } else {
+        "je-5"
+    };
+
+    let route = registries
+        .protocols()
+        .resolve_route(TransportKind::Tcp, Edition::Je, 5)
+        .expect("the shared route should still resolve");
+    assert_eq!(route.descriptor().adapter_id, present);
+    assert!(host.artifact_quarantine_reason(present).is_none());
+    assert!(
+        host.artifact_quarantine_reason(quarantined)
+            .is_some_and(|reason| reason.contains("protocol route collision"))
+    );
+
+    let status = host.status();
+    assert_eq!(status.protocols.len(), 1);
+    assert_eq!(status.protocols[0].plugin_id, present);
+}
+
+#[test]
+fn oversized_protocol_describe_response_respects_buffer_limits() {
+    let protocol = oversized_protocol_response_plugin::in_process_plugin_entrypoints();
+    let gameplay = canonical_gameplay_entrypoints();
+    let storage = storage_entrypoints();
+    let auth = offline_auth_entrypoints();
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new()
+            .protocol_raw(InProcessProtocolPlugin {
+                plugin_id: "protocol-oversized-response".to_string(),
+                manifest: protocol.manifest,
+                api: protocol.api,
+            })
+            .gameplay_raw(InProcessGameplayPlugin {
+                plugin_id: "gameplay-canonical".to_string(),
+                manifest: gameplay.manifest,
+                api: gameplay.api,
+            })
+            .storage_raw(InProcessStoragePlugin {
+                plugin_id: "storage-je-anvil-1_7_10".to_string(),
+                manifest: storage.manifest,
+                api: storage.api,
+            })
+            .auth_raw(InProcessAuthPlugin {
+                plugin_id: "auth-offline".to_string(),
+                manifest: auth.manifest,
+                api: auth.api,
+            }),
+        PluginAbiRange::default(),
+        PluginFailureMatrix {
+            protocol: PluginFailureAction::FailFast,
+            ..PluginFailureMatrix::default()
+        },
+    );
+    let mut config = runtime_selection_config();
+    config.buffer_limits.protocol_response_bytes = 64;
+    config.plugin_failure_policy_protocol = PluginFailureAction::FailFast;
+
+    let error = match host.load_plugin_set(&config) {
+        Ok(_) => panic!("oversized protocol describe response should fail to load"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        RuntimeError::PluginFatal(message) if message.contains("protocol response buffer")
+    ));
+}
+
+#[test]
 fn abi_mismatch_is_rejected_before_registration() {
     let entrypoints = in_process_protocol_entrypoints();
     let host = build_test_plugin_host(

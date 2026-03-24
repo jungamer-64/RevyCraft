@@ -77,6 +77,13 @@ fn reconfigured_adapter_ids(
         .collect()
 }
 
+fn protocol_buffer_limit_signature(config: &crate::config::ServerConfig) -> (usize, usize) {
+    (
+        config.plugins.buffer_limits.protocol_response_bytes,
+        config.plugins.buffer_limits.metadata_bytes,
+    )
+}
+
 fn listener_binding_for_transport(
     bindings: &[ListenerBinding],
     transport: TransportKind,
@@ -234,6 +241,8 @@ impl RuntimeServer {
             activate_protocols(&candidate_config, prepared.registry())?;
         let candidate_signature =
             protocol_topology_signature(&candidate_active_protocols.protocols);
+        let protocol_buffer_limits_changed = protocol_buffer_limit_signature(&active.config)
+            != protocol_buffer_limit_signature(&candidate_config);
         let current_managed_ids = reload_host.managed_protocol_ids();
         let reconfigured_adapter_ids = reconfigured_adapter_ids(
             &current_signature,
@@ -241,7 +250,11 @@ impl RuntimeServer {
             &current_managed_ids,
             prepared.managed_protocol_ids(),
         );
-        if !force_generation && !applied_config_change && current_signature == candidate_signature {
+        if !force_generation
+            && !applied_config_change
+            && !protocol_buffer_limits_changed
+            && current_signature == candidate_signature
+        {
             if current_managed_ids != prepared.managed_protocol_ids() {
                 reload_host.activate_protocol_topology(prepared);
                 return Ok(GenerationReloadResult {

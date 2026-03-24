@@ -200,6 +200,17 @@ pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<()
     if let Some(allowlist) = &config.plugins.allowlist {
         contents.push_str(&format!("allowlist = {}\n", toml_array(allowlist)));
     }
+    contents.push_str("\n[live.plugins.buffer_limits]\n");
+    contents.push_str(&format!(
+        "protocol_response_bytes = {}\ngameplay_response_bytes = {}\nstorage_response_bytes = {}\nauth_response_bytes = {}\nadmin_ui_response_bytes = {}\ncallback_payload_bytes = {}\nmetadata_bytes = {}\n",
+        config.plugins.buffer_limits.protocol_response_bytes,
+        config.plugins.buffer_limits.gameplay_response_bytes,
+        config.plugins.buffer_limits.storage_response_bytes,
+        config.plugins.buffer_limits.auth_response_bytes,
+        config.plugins.buffer_limits.admin_ui_response_bytes,
+        config.plugins.buffer_limits.callback_payload_bytes,
+        config.plugins.buffer_limits.metadata_bytes,
+    ));
     contents.push_str("\n[live.plugins.failure_policy]\n");
     contents.push_str(&format!(
         "protocol = {}\ngameplay = {}\nstorage = {}\nauth = {}\nadmin_ui = {}\n\n",

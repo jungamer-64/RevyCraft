@@ -44,6 +44,7 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
         crate::config::AdminPermission::Status,
         crate::config::AdminPermission::ReloadConfig,
     ];
+    initial.plugins.buffer_limits.protocol_response_bytes = 4096;
     write_server_toml(&config_path, &initial)?;
 
     let server = build_reloadable_test_server_from_source(
@@ -75,6 +76,7 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
     let mut updated = initial.clone();
     updated.admin.ui_profile = "missing-ui".into();
     updated.admin.local_console_permissions = vec![crate::config::AdminPermission::Status];
+    updated.plugins.buffer_limits.protocol_response_bytes = 8192;
     write_server_toml(&config_path, &updated)?;
 
     let response = control
@@ -121,6 +123,17 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
             .await,
         crate::runtime::AdminResponse::Status(_)
     ));
+    assert_eq!(
+        server
+            .runtime
+            .selection_state()
+            .await
+            .config
+            .plugins
+            .buffer_limits
+            .protocol_response_bytes,
+        8192
+    );
 
     server.shutdown().await
 }
@@ -170,6 +183,7 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
         crate::config::AdminPermission::ReloadConfig,
         crate::config::AdminPermission::ReloadPlugins,
     ];
+    initial.plugins.buffer_limits.protocol_response_bytes = 4096;
     write_server_toml(&config_path, &initial)?;
 
     let server = build_reloadable_test_server_from_source(
@@ -185,6 +199,7 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
         crate::config::AdminPermission::Status,
         crate::config::AdminPermission::ReloadConfig,
     ];
+    updated.plugins.buffer_limits.protocol_response_bytes = 8192;
     write_server_toml(&config_path, &updated)?;
 
     assert!(matches!(
@@ -196,6 +211,17 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
             .await,
         crate::runtime::AdminResponse::ReloadPlugins(_)
     ));
+    assert_eq!(
+        server
+            .runtime
+            .selection_state()
+            .await
+            .config
+            .plugins
+            .buffer_limits
+            .protocol_response_bytes,
+        4096
+    );
     assert_eq!(
         control
             .render_local_response(&crate::runtime::AdminResponse::ShutdownScheduled)
@@ -220,6 +246,17 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
             .await
             .map_err(RuntimeError::Config)?,
         "shutdown: scheduled"
+    );
+    assert_eq!(
+        server
+            .runtime
+            .selection_state()
+            .await
+            .config
+            .plugins
+            .buffer_limits
+            .protocol_response_bytes,
+        8192
     );
     assert!(matches!(
         control

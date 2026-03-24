@@ -619,6 +619,13 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
         "auth-mojang-online".to_string(),
         "auth-bedrock-xbl".to_string(),
     ]);
+    config.plugins.buffer_limits.protocol_response_bytes = 1234;
+    config.plugins.buffer_limits.gameplay_response_bytes = 2345;
+    config.plugins.buffer_limits.storage_response_bytes = 3456;
+    config.plugins.buffer_limits.auth_response_bytes = 4567;
+    config.plugins.buffer_limits.admin_ui_response_bytes = 5678;
+    config.plugins.buffer_limits.callback_payload_bytes = 6789;
+    config.plugins.buffer_limits.metadata_bytes = 7890;
     config.plugins.failure_policy.protocol = PluginFailureAction::Skip;
     config.plugins.failure_policy.gameplay = PluginFailureAction::FailFast;
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
@@ -656,6 +663,10 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
     );
     assert_eq!(runtime_selection.admin_ui_profile, config.admin.ui_profile);
     assert_eq!(runtime_selection.plugin_allowlist, config.plugins.allowlist);
+    assert_eq!(
+        runtime_selection.buffer_limits,
+        config.plugins.buffer_limits
+    );
     assert_eq!(
         runtime_selection.plugin_failure_policy_protocol,
         config.plugins.failure_policy.protocol
@@ -760,12 +771,35 @@ fn server_toml_parse_per_kind_failure_policies() -> Result<(), RuntimeError> {
 }
 
 #[test]
+fn server_toml_parse_plugin_buffer_limits() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let mut config = ServerConfig::default();
+    config.plugins.buffer_limits.protocol_response_bytes = 11;
+    config.plugins.buffer_limits.gameplay_response_bytes = 22;
+    config.plugins.buffer_limits.storage_response_bytes = 33;
+    config.plugins.buffer_limits.auth_response_bytes = 44;
+    config.plugins.buffer_limits.admin_ui_response_bytes = 55;
+    config.plugins.buffer_limits.callback_payload_bytes = 66;
+    config.plugins.buffer_limits.metadata_bytes = 77;
+    let path = temp_dir.path().join("server.toml");
+    write_server_toml(&path, &config)?;
+
+    let parsed = ServerConfig::from_toml(&path)?;
+    assert_eq!(parsed.plugins.buffer_limits, config.plugins.buffer_limits);
+    Ok(())
+}
+
+#[test]
 fn server_toml_use_balanced_failure_policy_defaults() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let path = temp_dir.path().join("server.toml");
     write_server_toml(&path, &ServerConfig::default())?;
 
     let config = ServerConfig::from_toml(&path)?;
+    assert_eq!(
+        config.plugins.buffer_limits,
+        ServerConfig::default().plugins.buffer_limits
+    );
     assert_eq!(
         config.plugins.failure_policy.protocol,
         PluginFailureAction::Quarantine

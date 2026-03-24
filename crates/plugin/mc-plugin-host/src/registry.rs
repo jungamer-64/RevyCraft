@@ -35,9 +35,27 @@ impl ProtocolRegistry {
         }
     }
 
-    pub(crate) fn register_adapter(&mut self, adapter: Arc<dyn ProtocolAdapter>) -> &mut Self {
+    pub(crate) fn register_adapter(
+        &mut self,
+        adapter: Arc<dyn ProtocolAdapter>,
+    ) -> Result<&mut Self, RuntimeError> {
         let descriptor = adapter.descriptor();
         let adapter_id = AdapterId::new(descriptor.adapter_id.clone());
+        if let Some(existing) = self.adapters_by_route.get(&(
+            descriptor.transport,
+            descriptor.edition,
+            descriptor.protocol_number,
+        )) {
+            let existing_descriptor = existing.descriptor();
+            return Err(RuntimeError::Config(format!(
+                "protocol route collision: existing adapter `{}` conflicts with candidate `{}` for {:?}/{:?}/{}",
+                existing_descriptor.adapter_id,
+                descriptor.adapter_id,
+                descriptor.transport,
+                descriptor.edition,
+                descriptor.protocol_number,
+            )));
+        }
         self.adapters_by_route.insert(
             (
                 descriptor.transport,
@@ -47,7 +65,7 @@ impl ProtocolRegistry {
             Arc::clone(&adapter),
         );
         self.adapters_by_id.insert(adapter_id, adapter);
-        self
+        Ok(self)
     }
 
     pub(crate) fn register_probe(&mut self, probe: Arc<dyn HandshakeProbe>) -> &mut Self {
@@ -90,7 +108,7 @@ impl ProtocolRegistry {
                     "enabled-adapters contains unknown adapter `{adapter_id}`"
                 )));
             };
-            filtered.register_adapter(adapter);
+            filtered.register_adapter(adapter)?;
         }
         filtered.probes.clone_from(&self.probes);
         Ok(filtered)

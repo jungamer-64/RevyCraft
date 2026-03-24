@@ -408,6 +408,64 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
 }
 
 #[tokio::test]
+async fn config_reload_updates_storage_generation_for_buffer_limit_changes()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let config_path = temp_dir.path().join("server.toml");
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
+    let mut initial =
+        packaged_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
+    initial.plugins.buffer_limits.storage_response_bytes = 4096;
+    write_server_toml(&config_path, &initial)?;
+    let server = build_reloadable_test_server_from_source(
+        ServerConfigSource::Toml(config_path.clone()),
+        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
+    )
+    .await?;
+    let before_protocol_generation = server.runtime.active_generation().generation_id;
+    let storage_before = loaded_plugins_snapshot(&server)
+        .await
+        .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
+        .expect("storage profile should resolve");
+    let before_storage_generation = storage_before
+        .plugin_generation_id()
+        .expect("storage profile should report generation");
+
+    std::thread::sleep(Duration::from_secs(1));
+    let mut updated = initial.clone();
+    updated.plugins.buffer_limits.storage_response_bytes = 8192;
+    write_server_toml(&config_path, &updated)?;
+
+    let result = server.reload_config().await?;
+    assert_eq!(
+        result.generation.activated_generation_id,
+        before_protocol_generation
+    );
+    let storage_after = loaded_plugins_snapshot(&server)
+        .await
+        .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)
+        .expect("storage profile should still resolve");
+    assert_ne!(
+        storage_after.plugin_generation_id(),
+        Some(before_storage_generation)
+    );
+    assert_eq!(
+        server
+            .runtime
+            .selection_state()
+            .await
+            .config
+            .plugins
+            .buffer_limits
+            .storage_response_bytes,
+        8192
+    );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
 async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");

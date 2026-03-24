@@ -42,10 +42,11 @@ impl PluginHost {
             return Ok(None);
         }
 
-        let generation = match self
-            .loader
-            .load_protocol_generation(&managed.package, self.generations.next_generation_id())
-        {
+        let generation = match self.loader.load_protocol_generation(
+            &managed.package,
+            self.generations.next_generation_id(),
+            self.current_runtime_selection().buffer_limits,
+        ) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -166,10 +167,11 @@ impl PluginHost {
             return Ok(None);
         }
 
-        let generation = match self
-            .loader
-            .load_gameplay_generation(&managed.package, self.generations.next_generation_id())
-        {
+        let generation = match self.loader.load_gameplay_generation(
+            &managed.package,
+            self.generations.next_generation_id(),
+            self.current_runtime_selection().buffer_limits,
+        ) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -292,10 +294,11 @@ impl PluginHost {
             return Ok(None);
         }
 
-        let generation = match self
-            .loader
-            .load_storage_generation(&managed.package, self.generations.next_generation_id())
-        {
+        let generation = match self.loader.load_storage_generation(
+            &managed.package,
+            self.generations.next_generation_id(),
+            self.current_runtime_selection().buffer_limits,
+        ) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -422,10 +425,11 @@ impl PluginHost {
             return Ok(None);
         }
 
-        let generation = match self
-            .loader
-            .load_auth_generation(&managed.package, self.generations.next_generation_id())
-        {
+        let generation = match self.loader.load_auth_generation(
+            &managed.package,
+            self.generations.next_generation_id(),
+            self.current_runtime_selection().buffer_limits,
+        ) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -526,10 +530,11 @@ impl PluginHost {
             return Ok(None);
         }
 
-        let generation = match self
-            .loader
-            .load_admin_ui_generation(&managed.package, self.generations.next_generation_id())
-        {
+        let generation = match self.loader.load_admin_ui_generation(
+            &managed.package,
+            self.generations.next_generation_id(),
+            self.current_runtime_selection().buffer_limits,
+        ) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -653,6 +658,7 @@ impl PluginHost {
                 *runtime_selection = config.clone();
             }
             self.activate_gameplay_profiles(config)?;
+            self.activate_storage_profile(&self.bootstrap_config.storage_profile)?;
             self.activate_auth_profiles(&Self::runtime_auth_profiles(config))?;
             self.activate_admin_ui_profile(config)?;
             Vec::new()

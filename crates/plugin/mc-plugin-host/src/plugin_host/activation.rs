@@ -5,6 +5,7 @@ use super::{
     ManagedStoragePlugin, PluginFailureStage, PluginHost, PluginKind, PluginPackage, RuntimeError,
     RuntimeSelectionConfig, StorageProfileId, ensure_known_profiles, ensure_profile_known,
 };
+use crate::config::PluginBufferLimits;
 use crate::registry::LoadedPluginSet;
 
 impl PluginHost {
@@ -107,6 +108,7 @@ impl PluginHost {
         gameplay: &mut HashMap<GameplayProfileId, ManagedGameplayPlugin>,
         package: &PluginPackage,
         required_profiles: &HashSet<GameplayProfileId>,
+        config: &RuntimeSelectionConfig,
     ) -> Result<(), RuntimeError> {
         let modified_at = package.modified_at()?;
         let identity = package.artifact_identity(modified_at);
@@ -116,10 +118,11 @@ impl PluginHost {
         {
             return Ok(());
         }
-        let generation = match self
-            .loader
-            .load_gameplay_generation(package, self.generations.next_generation_id())
-        {
+        let generation = match self.loader.load_gameplay_generation(
+            package,
+            self.generations.next_generation_id(),
+            config.buffer_limits,
+        ) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -172,6 +175,7 @@ impl PluginHost {
         storage: &mut HashMap<StorageProfileId, ManagedStoragePlugin>,
         package: &PluginPackage,
         storage_profile: &StorageProfileId,
+        buffer_limits: PluginBufferLimits,
     ) -> Result<(), RuntimeError> {
         let modified_at = package.modified_at()?;
         let identity = package.artifact_identity(modified_at);
@@ -181,10 +185,11 @@ impl PluginHost {
         {
             return Ok(());
         }
-        let generation = match self
-            .loader
-            .load_storage_generation(package, self.generations.next_generation_id())
-        {
+        let generation = match self.loader.load_storage_generation(
+            package,
+            self.generations.next_generation_id(),
+            buffer_limits,
+        ) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -232,6 +237,7 @@ impl PluginHost {
         auth: &mut HashMap<AuthProfileId, ManagedAuthPlugin>,
         package: &PluginPackage,
         requested_profiles: &HashSet<AuthProfileId>,
+        buffer_limits: PluginBufferLimits,
     ) -> Result<(), RuntimeError> {
         let modified_at = package.modified_at()?;
         let identity = package.artifact_identity(modified_at);
@@ -241,10 +247,11 @@ impl PluginHost {
         {
             return Ok(());
         }
-        let generation = match self
-            .loader
-            .load_auth_generation(package, self.generations.next_generation_id())
-        {
+        let generation = match self.loader.load_auth_generation(
+            package,
+            self.generations.next_generation_id(),
+            buffer_limits,
+        ) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -295,6 +302,7 @@ impl PluginHost {
         admin_ui: &mut HashMap<AdminUiProfileId, ManagedAdminUiPlugin>,
         package: &PluginPackage,
         requested_profile: Option<&AdminUiProfileId>,
+        config: &RuntimeSelectionConfig,
     ) -> Result<(), RuntimeError> {
         let Some(requested_profile) = requested_profile else {
             return Ok(());
@@ -307,10 +315,11 @@ impl PluginHost {
         {
             return Ok(());
         }
-        let generation = match self
-            .loader
-            .load_admin_ui_generation(package, self.generations.next_generation_id())
-        {
+        let generation = match self.loader.load_admin_ui_generation(
+            package,
+            self.generations.next_generation_id(),
+            config.buffer_limits,
+        ) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -391,7 +400,12 @@ impl PluginHost {
             {
                 continue;
             }
-            self.load_requested_gameplay_plugin(&mut gameplay, package, &required_profiles)?;
+            self.load_requested_gameplay_plugin(
+                &mut gameplay,
+                package,
+                &required_profiles,
+                config,
+            )?;
         }
 
         let result = ensure_known_profiles(&gameplay, &required_profiles, "gameplay");
@@ -417,6 +431,7 @@ impl PluginHost {
             .current_runtime_selection()
             .plugin_allowlist
             .map(|entries| entries.into_iter().collect::<HashSet<_>>());
+        let buffer_limits = self.current_runtime_selection().buffer_limits;
         let catalog = self.protocol_catalog()?;
         let mut storage = self
             .storage
@@ -433,7 +448,12 @@ impl PluginHost {
             {
                 continue;
             }
-            self.load_requested_storage_plugin(&mut storage, package, storage_profile)?;
+            self.load_requested_storage_plugin(
+                &mut storage,
+                package,
+                storage_profile,
+                buffer_limits,
+            )?;
         }
 
         let result = ensure_profile_known(&storage, storage_profile, "storage");
@@ -460,6 +480,7 @@ impl PluginHost {
             .current_runtime_selection()
             .plugin_allowlist
             .map(|entries| entries.into_iter().collect::<HashSet<_>>());
+        let buffer_limits = self.current_runtime_selection().buffer_limits;
         let catalog = self.protocol_catalog()?;
         let mut auth = self
             .auth
@@ -476,7 +497,7 @@ impl PluginHost {
             {
                 continue;
             }
-            self.load_requested_auth_plugin(&mut auth, package, &requested)?;
+            self.load_requested_auth_plugin(&mut auth, package, &requested, buffer_limits)?;
         }
 
         let result = ensure_known_profiles(&auth, &requested, "auth");
@@ -514,7 +535,7 @@ impl PluginHost {
             {
                 continue;
             }
-            self.load_requested_admin_ui_plugin(&mut admin_ui, package, requested_profile)?;
+            self.load_requested_admin_ui_plugin(&mut admin_ui, package, requested_profile, config)?;
         }
 
         Ok(())

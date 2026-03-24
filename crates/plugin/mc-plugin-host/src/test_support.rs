@@ -132,6 +132,11 @@ impl TestPluginHost {
     }
 
     #[must_use]
+    pub fn artifact_quarantine_reason(&self, plugin_id: &str) -> Option<String> {
+        hooks::artifact_quarantine_reason(&self.inner, plugin_id)
+    }
+
+    #[must_use]
     pub fn take_pending_fatal_error(&self) -> Option<PluginHostError> {
         hooks::take_pending_fatal_error(&self.inner)
     }

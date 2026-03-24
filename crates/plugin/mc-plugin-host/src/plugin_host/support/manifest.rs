@@ -1,8 +1,10 @@
 use super::{
     AdminUiProfileId, GameplayProfileId, PluginAbiVersion, PluginKind, PluginManifestV1,
-    RuntimeError, Utf8Slice,
+    RuntimeError, Utf8Slice, decode_utf8_slice_with_limit, read_checked_slice,
 };
+use crate::config::PluginBufferLimits;
 use mc_core::{AuthProfileId, StorageProfileId};
+use mc_plugin_api::abi::CapabilityDescriptorV1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProtocolManifestCapabilities {
@@ -36,21 +38,26 @@ pub(crate) struct DecodedManifest {
 
 pub(crate) fn decode_manifest(
     manifest: *const PluginManifestV1,
+    limits: PluginBufferLimits,
 ) -> Result<DecodedManifest, RuntimeError> {
     let manifest = unsafe {
         manifest
             .as_ref()
             .ok_or_else(|| RuntimeError::Config("plugin manifest pointer was null".to_string()))?
     };
-    let plugin_id = decode_utf8_slice(manifest.plugin_id)?;
+    let plugin_id = decode_utf8_slice(manifest.plugin_id, limits.metadata_bytes)?;
     let raw_capabilities = if manifest.capabilities.is_null() || manifest.capabilities_len == 0 {
         Vec::new()
     } else {
-        let descriptors =
-            unsafe { std::slice::from_raw_parts(manifest.capabilities, manifest.capabilities_len) };
+        let descriptors = read_checked_slice::<CapabilityDescriptorV1>(
+            manifest.capabilities,
+            manifest.capabilities_len,
+            limits.metadata_bytes,
+            "plugin manifest capabilities",
+        )?;
         let mut capabilities = Vec::with_capacity(descriptors.len());
         for descriptor in descriptors {
-            capabilities.push(decode_utf8_slice(descriptor.name)?);
+            capabilities.push(decode_utf8_slice(descriptor.name, limits.metadata_bytes)?);
         }
         capabilities
     };
@@ -66,14 +73,11 @@ pub(crate) fn decode_manifest(
     })
 }
 
-pub(crate) fn decode_utf8_slice(slice: Utf8Slice) -> Result<String, RuntimeError> {
-    if slice.ptr.is_null() {
-        return Err(RuntimeError::Config(
-            "plugin utf8 slice was null".to_string(),
-        ));
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(slice.ptr, slice.len) };
-    String::from_utf8(bytes.to_vec()).map_err(|error| RuntimeError::Config(error.to_string()))
+pub(crate) fn decode_utf8_slice(
+    slice: Utf8Slice,
+    max_bytes: usize,
+) -> Result<String, RuntimeError> {
+    decode_utf8_slice_with_limit(slice, max_bytes, "plugin utf8 slice")
 }
 
 fn decode_manifest_capabilities(
