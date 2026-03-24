@@ -1,4 +1,4 @@
-use super::*;
+use super::support::*;
 
 fn block_change_count<F>(events: &[TargetedEvent], position: BlockPos, predicate: F) -> usize
 where
@@ -297,6 +297,267 @@ fn creative_place_and_break_emit_authoritative_corrections() {
         0,
     );
     assert!(block_change_count(&break_events, corrected_block, BlockState::is_air) >= 2);
+}
+
+#[test]
+fn use_block_places_opens_closes_and_roundtrips_world_backed_chest() {
+    let (mut core, first) = logged_in_creative_core("world-chest-open");
+    let chest_pos = BlockPos::new(2, 4, 0);
+
+    let _ = creative_inventory_set(
+        &mut core,
+        first,
+        InventorySlot::Hotbar(0),
+        Some(item("minecraft:chest", 1)),
+    );
+    let place_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: BlockPos::new(2, 3, 0),
+            face: Some(BlockFace::Top),
+            held_item: Some(item("minecraft:chest", 1)),
+        },
+        0,
+    );
+    assert!(
+        block_change_count(&place_events, chest_pos, |block| {
+            block.key.as_str() == "minecraft:chest"
+        }) >= 1
+    );
+    assert_eq!(
+        core.snapshot()
+            .block_entities
+            .get(&chest_pos)
+            .and_then(BlockEntityState::chest_slots)
+            .map(<[_]>::len),
+        Some(27)
+    );
+
+    let open_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: chest_pos,
+            face: Some(BlockFace::Top),
+            held_item: None,
+        },
+        0,
+    );
+    assert_container_opened(&open_events, first, 1, InventoryContainer::Chest);
+    assert_player_window_contents(&open_events, first, 1, InventoryContainer::Chest);
+
+    let close_events = core.apply_command(
+        CoreCommand::CloseContainer {
+            player_id: first,
+            window_id: 1,
+        },
+        0,
+    );
+    assert_container_closed(&close_events, first, 1);
+
+    let reopen_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: chest_pos,
+            face: Some(BlockFace::Top),
+            held_item: None,
+        },
+        0,
+    );
+    assert_container_opened(&reopen_events, first, 2, InventoryContainer::Chest);
+
+    let snapshot = core.snapshot();
+    let restored = ServerCore::from_snapshot(
+        CoreConfig {
+            game_mode: 1,
+            ..CoreConfig::default()
+        },
+        snapshot.clone(),
+    );
+    assert_eq!(restored.snapshot().block_entities, snapshot.block_entities);
+}
+
+#[test]
+fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
+    let mut core = ServerCore::new(CoreConfig {
+        game_mode: 1,
+        ..CoreConfig::default()
+    });
+    let (first, _) = login_player(&mut core, 1, "chest-owner");
+    let (second, _) = login_player(&mut core, 2, "chest-viewer");
+    let chest_pos = BlockPos::new(2, 4, 0);
+
+    let _ = creative_inventory_set(
+        &mut core,
+        first,
+        InventorySlot::Hotbar(0),
+        Some(item("minecraft:chest", 1)),
+    );
+    let place_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: BlockPos::new(2, 3, 0),
+            face: Some(BlockFace::Top),
+            held_item: Some(item("minecraft:chest", 1)),
+        },
+        0,
+    );
+    assert!(
+        block_change_count(&place_events, chest_pos, |block| {
+            block.key.as_str() == "minecraft:chest"
+        }) >= 1
+    );
+    assert_eq!(
+        core.snapshot()
+            .chunks
+            .get(&chest_pos.chunk_pos())
+            .expect("chest chunk should exist")
+            .get_block(
+                u8::try_from(chest_pos.x.rem_euclid(CHUNK_WIDTH))
+                    .expect("local x should fit into u8"),
+                chest_pos.y,
+                u8::try_from(chest_pos.z.rem_euclid(CHUNK_WIDTH))
+                    .expect("local z should fit into u8"),
+            )
+            .key
+            .as_str(),
+        "minecraft:chest"
+    );
+    let _ = creative_inventory_set(
+        &mut core,
+        first,
+        InventorySlot::Hotbar(0),
+        Some(item("minecraft:stone", 2)),
+    );
+
+    let first_open = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: chest_pos,
+            face: Some(BlockFace::Top),
+            held_item: None,
+        },
+        0,
+    );
+    let second_open = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: second,
+            hand: InteractionHand::Main,
+            position: chest_pos,
+            face: Some(BlockFace::Top),
+            held_item: None,
+        },
+        0,
+    );
+    assert_container_opened(&first_open, first, 1, InventoryContainer::Chest);
+    assert_container_opened(&second_open, second, 1, InventoryContainer::Chest);
+
+    let pickup_events = click_slot(
+        &mut core,
+        first,
+        0,
+        1,
+        InventorySlot::Hotbar(0),
+        InventoryClickButton::Left,
+        None,
+    );
+    assert_transaction_processed(&pickup_events, first, 0, 1, true);
+
+    let place_events = click_slot(
+        &mut core,
+        first,
+        1,
+        2,
+        InventorySlot::Container(0),
+        InventoryClickButton::Left,
+        Some(item("minecraft:stone", 2)),
+    );
+    assert_transaction_processed(&place_events, first, 1, 2, true);
+    assert_inventory_slot_changed_in_window_to(
+        &place_events,
+        first,
+        1,
+        InventorySlot::Container(0),
+        Some(("minecraft:stone", 2)),
+    );
+    assert_inventory_slot_changed_in_window_to(
+        &place_events,
+        second,
+        1,
+        InventorySlot::Container(0),
+        Some(("minecraft:stone", 2)),
+    );
+
+    let reject_break = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: first,
+            position: chest_pos,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    assert_eq!(
+        block_change_count(&reject_break, chest_pos, BlockState::is_air),
+        0
+    );
+    assert_eq!(
+        core.snapshot()
+            .block_entities
+            .get(&chest_pos)
+            .and_then(BlockEntityState::chest_slots)
+            .and_then(|slots: &[Option<ItemStack>]| slots.first())
+            .and_then(Option::as_ref)
+            .map(stack_summary),
+        Some(("minecraft:stone", 2))
+    );
+
+    let take_back_events = click_slot(
+        &mut core,
+        first,
+        1,
+        3,
+        InventorySlot::Container(0),
+        InventoryClickButton::Left,
+        None,
+    );
+    assert_transaction_processed(&take_back_events, first, 1, 3, true);
+    assert_inventory_slot_changed_in_window_to(
+        &take_back_events,
+        second,
+        1,
+        InventorySlot::Container(0),
+        None,
+    );
+
+    let return_hotbar_events = click_slot(
+        &mut core,
+        first,
+        1,
+        4,
+        InventorySlot::Hotbar(0),
+        InventoryClickButton::Left,
+        Some(item("minecraft:stone", 2)),
+    );
+    assert_transaction_processed(&return_hotbar_events, first, 1, 4, true);
+
+    let break_events = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: first,
+            position: chest_pos,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    assert!(block_change_count(&break_events, chest_pos, BlockState::is_air) >= 2);
+    assert_container_closed(&break_events, first, 1);
+    assert_container_closed(&break_events, second, 1);
+    assert!(!core.snapshot().block_entities.contains_key(&chest_pos));
 }
 
 #[test]

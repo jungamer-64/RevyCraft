@@ -1,6 +1,6 @@
 use super::chunk_nbt::{chunk_from_nbt, chunk_to_nbt, region_chunk_index};
 use super::nbt::{decompress_gzip, decompress_zlib, read_nbt, zlib_compress_nbt};
-use mc_core::{ChunkColumn, ChunkPos};
+use mc_core::{BlockEntityState, BlockPos, ChunkColumn, ChunkPos};
 use mc_proto_common::StorageError;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -14,6 +14,7 @@ const CHUNK_COMPRESSION_ZLIB: u8 = 2;
 pub(super) fn write_regions(
     region_dir: &Path,
     chunks: &BTreeMap<ChunkPos, ChunkColumn>,
+    block_entities: &BTreeMap<BlockPos, BlockEntityState>,
 ) -> Result<(), StorageError> {
     fs::create_dir_all(region_dir)?;
     let mut grouped = BTreeMap::<(i32, i32), Vec<&ChunkColumn>>::new();
@@ -26,17 +27,24 @@ pub(super) fn write_regions(
 
     for ((region_x, region_z), region_chunks) in grouped {
         let path = region_dir.join(format!("r.{region_x}.{region_z}.mca"));
-        write_region_file(&path, &region_chunks)?;
+        write_region_file(&path, &region_chunks, block_entities)?;
     }
     Ok(())
 }
 
 pub(super) fn read_regions(
     region_dir: &Path,
-) -> Result<BTreeMap<ChunkPos, ChunkColumn>, StorageError> {
+) -> Result<
+    (
+        BTreeMap<ChunkPos, ChunkColumn>,
+        BTreeMap<BlockPos, BlockEntityState>,
+    ),
+    StorageError,
+> {
     let mut chunks = BTreeMap::new();
+    let mut block_entities = BTreeMap::new();
     if !region_dir.exists() {
-        return Ok(chunks);
+        return Ok((chunks, block_entities));
     }
     for entry in fs::read_dir(region_dir)? {
         let entry = entry?;
@@ -44,14 +52,20 @@ pub(super) fn read_regions(
         if path.extension().and_then(std::ffi::OsStr::to_str) != Some("mca") {
             continue;
         }
-        for chunk in read_region_file(&path)? {
+        let (region_chunks, region_block_entities) = read_region_file(&path)?;
+        for chunk in region_chunks {
             chunks.insert(chunk.pos, chunk);
         }
+        block_entities.extend(region_block_entities);
     }
-    Ok(chunks)
+    Ok((chunks, block_entities))
 }
 
-fn write_region_file(path: &Path, chunks: &[&ChunkColumn]) -> Result<(), StorageError> {
+fn write_region_file(
+    path: &Path,
+    chunks: &[&ChunkColumn],
+    block_entities: &BTreeMap<BlockPos, BlockEntityState>,
+) -> Result<(), StorageError> {
     let mut locations = vec![0_u8; ANVIL_SECTOR_BYTES];
     let mut timestamps = vec![0_u8; ANVIL_SECTOR_BYTES];
     let mut body = Vec::new();
@@ -59,7 +73,7 @@ fn write_region_file(path: &Path, chunks: &[&ChunkColumn]) -> Result<(), Storage
 
     for chunk in chunks {
         let index = region_chunk_index(chunk.pos);
-        let chunk_nbt = chunk_to_nbt(chunk);
+        let chunk_nbt = chunk_to_nbt(chunk, block_entities);
         let compressed = zlib_compress_nbt("", &chunk_nbt)?;
         let length = u32::try_from(compressed.len() + 1)
             .map_err(|_| StorageError::InvalidData("compressed chunk too large".to_string()))?;
@@ -86,7 +100,9 @@ fn write_region_file(path: &Path, chunks: &[&ChunkColumn]) -> Result<(), Storage
     Ok(())
 }
 
-fn read_region_file(path: &Path) -> Result<Vec<ChunkColumn>, StorageError> {
+fn read_region_file(
+    path: &Path,
+) -> Result<(Vec<ChunkColumn>, BTreeMap<BlockPos, BlockEntityState>), StorageError> {
     let bytes = fs::read(path)?;
     if bytes.len() < ANVIL_HEADER_BYTES {
         return Err(StorageError::InvalidData(
@@ -94,6 +110,7 @@ fn read_region_file(path: &Path) -> Result<Vec<ChunkColumn>, StorageError> {
         ));
     }
     let mut chunks = Vec::new();
+    let mut block_entities = BTreeMap::new();
     for index in 0..1024 {
         let location = u32::from_be_bytes(
             bytes[index * 4..index * 4 + 4]
@@ -132,7 +149,9 @@ fn read_region_file(path: &Path) -> Result<Vec<ChunkColumn>, StorageError> {
                 ));
             }
         };
-        chunks.push(chunk_from_nbt(&read_nbt(&decompressed)?)?);
+        let (chunk, chunk_block_entities) = chunk_from_nbt(&read_nbt(&decompressed)?)?;
+        chunks.push(chunk);
+        block_entities.extend(chunk_block_entities);
     }
-    Ok(chunks)
+    Ok((chunks, block_entities))
 }

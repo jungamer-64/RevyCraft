@@ -50,6 +50,7 @@ impl RuntimeServer {
                 player_id: None,
                 entity_id: None,
                 session_capabilities: None,
+                active_non_player_window: None,
                 pending_rejected_inventory_transaction: None,
             },
             TransportKind::Udp => {
@@ -81,6 +82,7 @@ impl RuntimeServer {
                     player_id: None,
                     entity_id: None,
                     session_capabilities: None,
+                    active_non_player_window: None,
                     pending_rejected_inventory_transaction: None,
                 };
                 Self::refresh_session_capabilities(&mut session);

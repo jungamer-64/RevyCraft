@@ -116,6 +116,10 @@ impl GameplayQuery for StubGameplayQuery {
         BlockState::air()
     }
 
+    fn block_entity(&self, _position: BlockPos) -> Option<mc_core::BlockEntityState> {
+        None
+    }
+
     fn can_edit_block(&self, _player_id: PlayerId, _position: BlockPos) -> bool {
         false
     }

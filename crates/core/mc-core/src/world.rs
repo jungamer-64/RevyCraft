@@ -1,3 +1,4 @@
+use crate::inventory::ItemStack;
 use crate::player::PlayerSnapshot;
 use crate::{CHUNK_WIDTH, PlayerId, SECTION_HEIGHT};
 use num_traits::ToPrimitive;
@@ -90,8 +91,41 @@ impl BlockState {
     }
 
     #[must_use]
+    pub fn chest() -> Self {
+        Self::new("minecraft:chest")
+    }
+
+    #[must_use]
     pub fn is_air(&self) -> bool {
         self.key.as_str() == "minecraft:air"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BlockEntityState {
+    Chest { slots: Vec<Option<ItemStack>> },
+}
+
+impl BlockEntityState {
+    #[must_use]
+    pub fn chest(local_slot_count: usize) -> Self {
+        Self::Chest {
+            slots: vec![None; local_slot_count],
+        }
+    }
+
+    #[must_use]
+    pub fn chest_slots(&self) -> Option<&[Option<ItemStack>]> {
+        match self {
+            Self::Chest { slots } => Some(slots),
+        }
+    }
+
+    #[must_use]
+    pub fn chest_slots_mut(&mut self) -> Option<&mut Vec<Option<ItemStack>>> {
+        match self {
+            Self::Chest { slots } => Some(slots),
+        }
     }
 }
 
@@ -404,6 +438,8 @@ pub struct ChunkDelta {
 pub struct WorldSnapshot {
     pub meta: WorldMeta,
     pub chunks: BTreeMap<ChunkPos, ChunkColumn>,
+    #[serde(default)]
+    pub block_entities: BTreeMap<BlockPos, BlockEntityState>,
     pub players: BTreeMap<PlayerId, PlayerSnapshot>,
 }
 

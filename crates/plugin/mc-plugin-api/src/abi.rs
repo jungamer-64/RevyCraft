@@ -1,7 +1,7 @@
 use crate::codec::protocol::ProtocolCodecError;
 use std::fmt;
 
-pub const CURRENT_PLUGIN_ABI: PluginAbiVersion = PluginAbiVersion { major: 3, minor: 0 };
+pub const CURRENT_PLUGIN_ABI: PluginAbiVersion = PluginAbiVersion { major: 3, minor: 4 };
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

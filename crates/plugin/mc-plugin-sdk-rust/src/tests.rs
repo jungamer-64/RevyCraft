@@ -77,6 +77,7 @@ fn host_api_for(context: &TestHostContext) -> HostApiTableV1 {
         read_player_snapshot: None,
         read_world_meta: Some(host_read_world_meta),
         read_block_state: None,
+        read_block_entity: None,
         can_edit_block: None,
     }
 }
@@ -875,7 +876,7 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
-        "gameplay host api ABI 2.0 did not match plugin ABI 3.0"
+        "gameplay host api ABI 2.0 did not match plugin ABI 3.4"
     );
 }
 
@@ -985,7 +986,7 @@ fn exported_admin_ui_plugins_reject_mismatched_host_api_abi() {
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
-        "admin-ui host api ABI 2.0 did not match plugin ABI 3.0"
+        "admin-ui host api ABI 2.0 did not match plugin ABI 3.4"
     );
 }
 

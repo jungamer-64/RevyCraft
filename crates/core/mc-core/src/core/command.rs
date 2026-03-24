@@ -62,12 +62,18 @@ impl ServerCore {
                 target,
                 button,
                 clicked_item.as_ref(),
+                session,
             )),
+            CoreCommand::CloseContainer {
+                player_id,
+                window_id,
+            } => Ok(self.close_inventory_window(player_id, window_id)),
             command @ (CoreCommand::MoveIntent { .. }
             | CoreCommand::SetHeldSlot { .. }
             | CoreCommand::CreativeInventorySet { .. }
             | CoreCommand::DigBlock { .. }
-            | CoreCommand::PlaceBlock { .. }) => {
+            | CoreCommand::PlaceBlock { .. }
+            | CoreCommand::UseBlock { .. }) => {
                 self.apply_gameplay_command(&command, session, resolver)
             }
             CoreCommand::KeepAliveResponse {

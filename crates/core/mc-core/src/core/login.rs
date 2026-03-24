@@ -1,7 +1,8 @@
 use super::{ClientView, OnlinePlayer, ServerCore};
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
 use crate::gameplay::{GameplayJoinEffect, GameplayPolicyResolver};
-use crate::player::{InventoryContainer, PlayerInventory, PlayerSnapshot};
+use crate::inventory::{InventoryContainer, InventoryWindowContents, PlayerInventory};
+use crate::player::PlayerSnapshot;
 use crate::world::{BlockPos, ChunkColumn, DimensionId, Vec3};
 use crate::{ConnectionId, EntityId, PlayerId, SessionCapabilitySet};
 
@@ -58,6 +59,8 @@ impl ServerCore {
                 entity_id,
                 snapshot: player.clone(),
                 cursor: None,
+                active_container: None,
+                next_non_player_window_id: 1,
                 view,
                 pending_keep_alive_id: None,
                 last_keep_alive_sent_at: None,
@@ -140,8 +143,9 @@ impl ServerCore {
             TargetedEvent {
                 target: EventTarget::Connection(connection_id),
                 event: CoreEvent::InventoryContents {
+                    window_id: 0,
                     container: InventoryContainer::Player,
-                    inventory: player.inventory.clone(),
+                    contents: InventoryWindowContents::player(player.inventory.clone()),
                 },
             },
             TargetedEvent {

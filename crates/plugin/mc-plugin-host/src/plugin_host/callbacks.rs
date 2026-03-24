@@ -3,8 +3,8 @@ use crate::plugin_host::write_owned_buffer;
 use mc_core::GameplayQuery;
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode, Utf8Slice};
 use mc_plugin_api::codec::gameplay::host_blob::{
-    decode_block_pos, decode_can_edit_block_key, decode_player_id, encode_block_state,
-    encode_player_snapshot, encode_world_meta,
+    decode_block_pos, decode_can_edit_block_key, decode_player_id, encode_block_entity,
+    encode_block_state, encode_player_snapshot, encode_world_meta,
 };
 use mc_plugin_api::host_api::HostApiTableV1;
 use std::cell::Cell;
@@ -192,6 +192,33 @@ unsafe extern "C" fn gameplay_host_can_edit_block(
     }
 }
 
+unsafe extern "C" fn gameplay_host_read_block_entity(
+    _context: *mut std::ffi::c_void,
+    payload: ByteSlice,
+    output: *mut OwnedBuffer,
+    error_out: *mut OwnedBuffer,
+) -> PluginErrorCode {
+    let result = with_current_gameplay_context(|scope| {
+        let payload = super::read_byte_slice(
+            payload,
+            scope.buffer_limits.callback_payload_bytes,
+            "gameplay host callback payload",
+        )?;
+        let position = decode_block_pos(payload).map_err(|error| error.to_string())?;
+        let bytes = encode_block_entity(scope.query.block_entity(position).as_ref())
+            .map_err(|error| error.to_string())?;
+        write_owned_buffer(output, bytes);
+        Ok(())
+    });
+    match result {
+        Ok(()) => PluginErrorCode::Ok,
+        Err(error) => {
+            write_error_buffer(error_out, error);
+            PluginErrorCode::Internal
+        }
+    }
+}
+
 pub(crate) fn gameplay_host_api() -> HostApiTableV1 {
     HostApiTableV1 {
         abi: CURRENT_PLUGIN_ABI,
@@ -200,6 +227,7 @@ pub(crate) fn gameplay_host_api() -> HostApiTableV1 {
         read_player_snapshot: Some(gameplay_host_read_player_snapshot),
         read_world_meta: Some(gameplay_host_read_world_meta),
         read_block_state: Some(gameplay_host_read_block_state),
+        read_block_entity: Some(gameplay_host_read_block_entity),
         can_edit_block: Some(gameplay_host_can_edit_block),
     }
 }
@@ -212,6 +240,7 @@ pub(crate) fn admin_ui_host_api() -> HostApiTableV1 {
         read_player_snapshot: None,
         read_world_meta: None,
         read_block_state: None,
+        read_block_entity: None,
         can_edit_block: None,
     }
 }

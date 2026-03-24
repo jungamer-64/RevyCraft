@@ -669,6 +669,7 @@ mod tests {
     #[test]
     fn samples_cover_inventory_and_event_variants() {
         let event = CoreEvent::InventorySlotChanged {
+            window_id: 0,
             container: InventoryContainer::Player,
             slot: InventorySlot::Offhand,
             stack: Some(ItemStack::new("minecraft:shield", 1, 0)),

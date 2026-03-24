@@ -1,20 +1,21 @@
 use crate::{
-    PACKET_CB_BLOCK_CHANGE, PACKET_CB_DESTROY_ENTITIES, PACKET_CB_ENTITY_HEAD_ROTATION,
-    PACKET_CB_ENTITY_TELEPORT, PACKET_CB_HELD_ITEM_CHANGE, PACKET_CB_JOIN_GAME,
-    PACKET_CB_KEEP_ALIVE, PACKET_CB_MAP_CHUNK, PACKET_CB_NAMED_ENTITY_SPAWN,
-    PACKET_CB_PLAYER_ABILITIES, PACKET_CB_PLAYER_INFO, PACKET_CB_PLAYER_POSITION_AND_LOOK,
-    PACKET_CB_SET_SLOT, PACKET_CB_SPAWN_POSITION, PACKET_CB_TIME_UPDATE, PACKET_CB_TRANSACTION,
-    PACKET_CB_UPDATE_HEALTH, PACKET_CB_WINDOW_ITEMS,
+    PACKET_CB_BLOCK_CHANGE, PACKET_CB_CLOSE_WINDOW, PACKET_CB_DESTROY_ENTITIES,
+    PACKET_CB_ENTITY_HEAD_ROTATION, PACKET_CB_ENTITY_TELEPORT, PACKET_CB_HELD_ITEM_CHANGE,
+    PACKET_CB_JOIN_GAME, PACKET_CB_KEEP_ALIVE, PACKET_CB_MAP_CHUNK, PACKET_CB_NAMED_ENTITY_SPAWN,
+    PACKET_CB_OPEN_WINDOW, PACKET_CB_PLAYER_ABILITIES, PACKET_CB_PLAYER_INFO,
+    PACKET_CB_PLAYER_POSITION_AND_LOOK, PACKET_CB_SET_SLOT, PACKET_CB_SPAWN_POSITION,
+    PACKET_CB_TIME_UPDATE, PACKET_CB_TRANSACTION, PACKET_CB_UPDATE_HEALTH, PACKET_CB_WINDOW_ITEMS,
+    PACKET_CB_WINDOW_PROPERTY,
 };
 use mc_core::{
-    BlockPos, ChunkColumn, DimensionId, EntityId, ItemStack, PlayerInventory, PlayerSnapshot,
-    WorldMeta,
+    BlockPos, ChunkColumn, DimensionId, EntityId, InventoryContainer, InventoryWindowContents,
+    ItemStack, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{PacketWriter, ProtocolError};
 use mc_proto_je_common::__version_support::{
     blocks::legacy_block_state_id,
     chunks::build_chunk_data_1_12,
-    inventory::{window_items, write_slot},
+    inventory::{unique_slot_count, window_items, window_type, write_slot},
     metadata::write_empty_metadata_1_12,
     players::encode_player_info_add as encode_shared_player_info_add,
     positions::{pack_block_position, to_angle_byte},
@@ -172,6 +173,27 @@ pub fn encode_set_slot(
     Ok(writer.into_inner())
 }
 
+pub fn encode_open_window(
+    window_id: u8,
+    container: InventoryContainer,
+    title: &str,
+) -> Result<Vec<u8>, ProtocolError> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(PACKET_CB_OPEN_WINDOW);
+    writer.write_u8(window_id);
+    writer.write_string(window_type(container))?;
+    writer.write_string(&mc_proto_je_common::format_text_component(title))?;
+    writer.write_u8(unique_slot_count(container));
+    Ok(writer.into_inner())
+}
+
+pub fn encode_close_window(window_id: u8) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(PACKET_CB_CLOSE_WINDOW);
+    writer.write_u8(window_id);
+    writer.into_inner()
+}
+
 pub fn encode_confirm_transaction(window_id: u8, action_number: i16, accepted: bool) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_TRANSACTION);
@@ -181,11 +203,21 @@ pub fn encode_confirm_transaction(window_id: u8, action_number: i16, accepted: b
     writer.into_inner()
 }
 
+pub fn encode_window_property(window_id: u8, property_id: u8, value: i16) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(PACKET_CB_WINDOW_PROPERTY);
+    writer.write_u8(window_id);
+    writer.write_i16(i16::from(property_id));
+    writer.write_i16(value);
+    writer.into_inner()
+}
+
 pub fn encode_window_items(
     window_id: u8,
-    inventory: &PlayerInventory,
+    container: InventoryContainer,
+    contents: &InventoryWindowContents,
 ) -> Result<Vec<u8>, ProtocolError> {
-    let items = window_items(crate::INVENTORY_SPEC.layout, inventory);
+    let items = window_items(container, crate::INVENTORY_SPEC.layout, contents);
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_WINDOW_ITEMS);
     writer.write_u8(window_id);

@@ -1,0 +1,389 @@
+use super::*;
+
+#[tokio::test]
+async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        multi_version_creative_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_all()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut stream, mut buffer, _) = login_modern_1_12(addr, "alpha").await?;
+    let player_id = server
+        .session_status()
+        .await
+        .into_iter()
+        .find_map(|session| session.player_id)
+        .expect("logged-in player should have a player id");
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &creative_inventory_action(TestJavaProtocol::Je340, 36, 12, 1, 0),
+    )
+    .await?;
+    let _ = read_until_set_slot(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        0,
+        36,
+        16,
+    )
+    .await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &creative_inventory_action(TestJavaProtocol::Je340, 37, 5, 1, 0),
+    )
+    .await?;
+    let _ = read_until_set_slot(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        0,
+        37,
+        16,
+    )
+    .await?;
+
+    open_test_furnace(&server, player_id, 3, "Furnace").await?;
+
+    let open_window = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::OpenWindow,
+    )
+    .await?;
+    assert_eq!(
+        decode_open_window(TestJavaProtocol::Je340, &open_window)?,
+        (
+            3,
+            "minecraft:furnace".to_string(),
+            "{\"text\":\"Furnace\"}".to_string(),
+            3,
+            None,
+        )
+    );
+
+    let open_contents = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::WindowItems,
+    )
+    .await?;
+    assert_eq!(
+        window_items_slot(TestJavaProtocol::Je340, &open_contents, 30)?,
+        Some((12, 1, 0))
+    );
+    assert_eq!(
+        window_items_slot(TestJavaProtocol::Je340, &open_contents, 31)?,
+        Some((5, 1, 0))
+    );
+
+    for (property_id, value) in [(0, 0), (1, 0), (2, 0), (3, 200)] {
+        assert_eq!(
+            decode_window_property(
+                TestJavaProtocol::Je340,
+                &read_until_window_property(
+                    &mut stream,
+                    &codec,
+                    &mut buffer,
+                    TestJavaProtocol::Je340,
+                    3,
+                    property_id,
+                    16,
+                )
+                .await?,
+            )?,
+            (3, property_id, value)
+        );
+    }
+
+    for (slot, action, clicked) in [
+        (30, 1, None),
+        (0, 2, Some((12, 1, 0))),
+        (31, 3, None),
+        (1, 4, Some((5, 1, 0))),
+    ] {
+        write_packet(
+            &mut stream,
+            &codec,
+            &click_window_in_window(TestJavaProtocol::Je340, 3, slot, 0, action, clicked),
+        )
+        .await?;
+        let _ = read_until_confirm_transaction(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            3,
+            action,
+            16,
+        )
+        .await?;
+    }
+
+    server.runtime.tick().await?;
+
+    assert_eq!(
+        decode_window_property(
+            TestJavaProtocol::Je340,
+            &read_until_window_property(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                TestJavaProtocol::Je340,
+                3,
+                0,
+                16,
+            )
+            .await?,
+        )?,
+        (3, 0, 300)
+    );
+    assert_eq!(
+        decode_window_property(
+            TestJavaProtocol::Je340,
+            &read_until_window_property(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                TestJavaProtocol::Je340,
+                3,
+                1,
+                16,
+            )
+            .await?,
+        )?,
+        (3, 1, 300)
+    );
+    assert_eq!(
+        decode_window_property(
+            TestJavaProtocol::Je340,
+            &read_until_window_property(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                TestJavaProtocol::Je340,
+                3,
+                2,
+                16,
+            )
+            .await?,
+        )?,
+        (3, 2, 1)
+    );
+
+    for _ in 2..200 {
+        server.runtime.tick().await?;
+        let _ = read_until_window_property(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            3,
+            0,
+            16,
+        )
+        .await?;
+        let _ = read_until_window_property(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            3,
+            2,
+            16,
+        )
+        .await?;
+    }
+
+    server.runtime.tick().await?;
+
+    assert_eq!(
+        decode_set_slot(
+            TestJavaProtocol::Je340,
+            &read_until_set_slot(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                TestJavaProtocol::Je340,
+                3,
+                0,
+                16,
+            )
+            .await?,
+        )?,
+        (3, 0, None)
+    );
+    assert_eq!(
+        decode_set_slot(
+            TestJavaProtocol::Je340,
+            &read_until_set_slot(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                TestJavaProtocol::Je340,
+                3,
+                2,
+                16,
+            )
+            .await?,
+        )?,
+        (3, 2, Some((20, 1, 0)))
+    );
+
+    close_test_container(&server, player_id, 3).await?;
+    let close_window = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::CloseWindow,
+    )
+    .await?;
+    assert_eq!(
+        decode_close_window(TestJavaProtocol::Je340, &close_window)?,
+        3
+    );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn furnace_output_persists_across_restart_via_fold_back() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let world_dir = temp_dir.path().join("world");
+    let server = build_test_server(
+        multi_version_creative_server_config(world_dir.clone()),
+        plugin_test_registries_all()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut stream, mut buffer, _) = login_modern_1_12(addr, "alpha").await?;
+    let player_id = server
+        .session_status()
+        .await
+        .into_iter()
+        .find_map(|session| session.player_id)
+        .expect("logged-in player should have a player id");
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &creative_inventory_action(TestJavaProtocol::Je340, 36, 12, 1, 0),
+    )
+    .await?;
+    let _ = read_until_set_slot(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        0,
+        36,
+        16,
+    )
+    .await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &creative_inventory_action(TestJavaProtocol::Je340, 37, 5, 1, 0),
+    )
+    .await?;
+    let _ = read_until_set_slot(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        0,
+        37,
+        16,
+    )
+    .await?;
+
+    open_test_furnace(&server, player_id, 3, "Furnace").await?;
+    let _ = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::OpenWindow,
+    )
+    .await?;
+    let _ = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::WindowItems,
+    )
+    .await?;
+    for property_id in 0..=3 {
+        let _ = read_until_window_property(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            3,
+            property_id,
+            16,
+        )
+        .await?;
+    }
+
+    for (slot, action, clicked) in [
+        (30, 1, None),
+        (0, 2, Some((12, 1, 0))),
+        (31, 3, None),
+        (1, 4, Some((5, 1, 0))),
+    ] {
+        write_packet(
+            &mut stream,
+            &codec,
+            &click_window_in_window(TestJavaProtocol::Je340, 3, slot, 0, action, clicked),
+        )
+        .await?;
+        let _ = read_until_confirm_transaction(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            3,
+            action,
+            16,
+        )
+        .await?;
+    }
+
+    for _ in 0..200 {
+        server.runtime.tick().await?;
+    }
+
+    server.shutdown().await?;
+
+    let restarted = build_test_server(
+        multi_version_creative_server_config(world_dir),
+        plugin_test_registries_all()?,
+    )
+    .await?;
+    let addr = listener_addr(&restarted);
+    let (_, _, window_items) = login_modern_1_12(addr, "alpha").await?;
+    assert_eq!(
+        window_items_slot(TestJavaProtocol::Je340, &window_items, 9)?,
+        Some((20, 1, 0))
+    );
+
+    restarted.shutdown().await
+}

@@ -1,11 +1,15 @@
-use super::ServerCore;
+use super::{
+    ServerCore,
+    inventory::{OpenInventoryWindowState, world_chest_position},
+};
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
 use crate::gameplay::GameplayPolicyResolver;
+use crate::world::BlockEntityState;
 use crate::{PlayerId, SessionCapabilitySet};
 
 impl ServerCore {
     pub fn tick(&mut self, now_ms: u64) -> Vec<TargetedEvent> {
-        let mut events = Vec::new();
+        let mut events = self.tick_active_containers();
         let player_ids = self.online_players.keys().copied().collect::<Vec<_>>();
         for player_id in player_ids {
             let Some(player) = self.online_players.get_mut(&player_id) else {
@@ -62,6 +66,19 @@ impl ServerCore {
         let Some(player) = self.online_players.remove(&player_id) else {
             return Vec::new();
         };
+        if let Some(window) = player.active_container.as_ref() {
+            if let Some(position) = world_chest_position(window) {
+                if let OpenInventoryWindowState::Chest(chest) = &window.state {
+                    self.block_entities.insert(
+                        position,
+                        BlockEntityState::Chest {
+                            slots: chest.slots.clone(),
+                        },
+                    );
+                }
+                self.unregister_world_chest_viewer(position, player_id);
+            }
+        }
         self.saved_players
             .insert(player_id, Self::persisted_online_player_snapshot(&player));
         vec![TargetedEvent {

@@ -195,6 +195,39 @@ pub(crate) async fn read_until_confirm_transaction(
     )))
 }
 
+pub(crate) async fn read_until_window_property(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    wanted_window_id: u8,
+    wanted_property_id: i16,
+    max_attempts: usize,
+) -> Result<Vec<u8>, RuntimeError> {
+    let max_attempts = max_attempts.max(64);
+    for _ in 0..max_attempts {
+        let packet = tokio::time::timeout(
+            Duration::from_millis(250),
+            read_packet(stream, codec, buffer),
+        )
+        .await
+        .map_err(|_| {
+            RuntimeError::Config(format!(
+                "timed out waiting for window property window {wanted_window_id} property {wanted_property_id}"
+            ))
+        })??;
+        if let Ok((window_id, property_id, _)) = decode_window_property(protocol, &packet)
+            && window_id == wanted_window_id
+            && property_id == wanted_property_id
+        {
+            return Ok(packet);
+        }
+    }
+    Err(RuntimeError::Config(format!(
+        "did not receive window property window {wanted_window_id} property {wanted_property_id}"
+    )))
+}
+
 pub(crate) async fn assert_no_java_packet(
     stream: &mut tokio::net::TcpStream,
     codec: &MinecraftWireCodec,

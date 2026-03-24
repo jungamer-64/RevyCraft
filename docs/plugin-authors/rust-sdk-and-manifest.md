@@ -78,7 +78,7 @@ manifest が持つ主な情報は次です。
 - `max_host_abi`
 - `capabilities`
 
-ABI は通常 `CURRENT_PLUGIN_ABI` に揃えます。
+ABI は通常 `CURRENT_PLUGIN_ABI` に揃えます。現行 host ABI は `3.4` です。`mc-plugin-api` の codec surface には `CoreCommand::UseBlock`、`WorldSnapshot::block_entities`、`BlockEntityState`、`GameplayMutation::OpenChest`、gameplay host の block-entity query が追加されています。workspace plugin は rebuild / repackage 前提で扱ってください。
 
 ## kind ごとの export パターン
 
@@ -145,6 +145,7 @@ gameplay plugin だけは host callback を受けられます。通常の Rust a
 - world meta
 - player snapshot
 - block state
+- block entity
 - can_edit_block
 - log
 

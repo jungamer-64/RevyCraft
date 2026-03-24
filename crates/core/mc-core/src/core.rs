@@ -7,11 +7,18 @@ mod tick;
 mod world;
 
 use crate::events::PlayerSummary;
+use crate::inventory::ItemStack;
 use crate::player::PlayerSnapshot;
-use crate::world::{BlockPos, ChunkColumn, ChunkPos, DimensionId, WorldMeta, required_chunks};
+use crate::world::{
+    BlockEntityState, BlockPos, ChunkColumn, ChunkPos, DimensionId, WorldMeta, required_chunks,
+};
 use crate::{DEFAULT_KEEPALIVE_INTERVAL_MS, DEFAULT_KEEPALIVE_TIMEOUT_MS, EntityId, PlayerId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+use self::inventory::OpenInventoryWindow;
+#[cfg(test)]
+pub(crate) use self::inventory::OpenInventoryWindowState;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientView {
@@ -80,6 +87,8 @@ pub struct ServerCore {
     pub(super) config: CoreConfig,
     pub(super) world_meta: WorldMeta,
     pub(super) chunks: BTreeMap<ChunkPos, ChunkColumn>,
+    pub(super) block_entities: BTreeMap<BlockPos, BlockEntityState>,
+    pub(super) chest_viewers: BTreeMap<BlockPos, BTreeMap<PlayerId, u8>>,
     pub(super) saved_players: BTreeMap<PlayerId, PlayerSnapshot>,
     pub(super) online_players: BTreeMap<PlayerId, OnlinePlayer>,
     pub(super) next_entity_id: i32,
@@ -92,7 +101,9 @@ pub struct ServerCore {
 pub struct OnlinePlayer {
     pub(super) entity_id: EntityId,
     pub(super) snapshot: PlayerSnapshot,
-    pub(super) cursor: Option<crate::ItemStack>,
+    pub(super) cursor: Option<ItemStack>,
+    pub(super) active_container: Option<OpenInventoryWindow>,
+    pub(super) next_non_player_window_id: u8,
     pub(super) view: ClientView,
     pub(super) pending_keep_alive_id: Option<i32>,
     pub(super) last_keep_alive_sent_at: Option<u64>,
@@ -118,6 +129,8 @@ impl ServerCore {
             config,
             world_meta,
             chunks: BTreeMap::new(),
+            block_entities: BTreeMap::new(),
+            chest_viewers: BTreeMap::new(),
             saved_players: BTreeMap::new(),
             online_players: BTreeMap::new(),
             next_entity_id: 1,
@@ -132,6 +145,7 @@ impl ServerCore {
         let mut core = Self::new(config);
         core.world_meta = snapshot.meta;
         core.chunks = snapshot.chunks;
+        core.block_entities = snapshot.block_entities;
         core.saved_players = snapshot.players;
         core
     }
@@ -145,6 +159,7 @@ impl ServerCore {
         crate::WorldSnapshot {
             meta: self.world_meta.clone(),
             chunks: self.chunks.clone(),
+            block_entities: self.block_entities.clone(),
             players,
         }
     }

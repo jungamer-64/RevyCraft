@@ -152,6 +152,10 @@ fn gameplay_command_snapshot_preserves_entity_id() {
             BlockState::air()
         }
 
+        fn block_entity(&self, _position: BlockPos) -> Option<mc_core::BlockEntityState> {
+            None
+        }
+
         fn can_edit_block(&self, _player_id: PlayerId, _position: BlockPos) -> bool {
             true
         }

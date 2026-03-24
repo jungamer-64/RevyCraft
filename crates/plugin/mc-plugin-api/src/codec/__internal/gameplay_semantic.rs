@@ -1,11 +1,15 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
+use crate::codec::__internal::inventory::{
+    decode_inventory_slot, decode_item_stack, decode_player_inventory, encode_inventory_slot,
+    encode_item_stack, encode_player_inventory,
+};
 use crate::codec::__internal::shared::{
     decode_block_pos, decode_block_state, decode_capability_announcement, decode_connection_phase,
-    decode_core_command, decode_core_event, decode_entity_id, decode_f32_value,
-    decode_inventory_slot, decode_option, decode_player_id, decode_player_snapshot,
-    decode_u8_value, encode_block_pos, encode_block_state, encode_capability_announcement,
-    encode_connection_phase, encode_core_command, encode_core_event, encode_entity_id,
-    encode_inventory_slot, encode_option, encode_player_id, encode_player_snapshot,
+    decode_core_command, decode_core_event, decode_entity_id, decode_f32_value, decode_option,
+    decode_player_id, decode_player_snapshot, decode_u8_value, encode_block_pos,
+    encode_block_state, encode_capability_announcement, encode_connection_phase,
+    encode_core_command, encode_core_event, encode_entity_id, encode_option, encode_player_id,
+    encode_player_snapshot,
 };
 use crate::codec::gameplay::{
     GameplayDescriptor, GameplayOpCode, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
@@ -283,16 +287,21 @@ fn encode_gameplay_mutation(
             encoder.write_u8(3);
             encode_player_id(encoder, *player_id);
             encode_inventory_slot(encoder, *slot);
-            encode_option(
-                encoder,
-                stack.as_ref(),
-                crate::codec::__internal::shared::encode_item_stack,
-            )
+            encode_option(encoder, stack.as_ref(), encode_item_stack)
         }
         GameplayMutation::Block { position, block } => {
             encoder.write_u8(4);
             encode_block_pos(encoder, *position);
             encode_block_state(encoder, block)
+        }
+        GameplayMutation::OpenChest {
+            player_id,
+            position,
+        } => {
+            encoder.write_u8(5);
+            encode_player_id(encoder, *player_id);
+            encode_block_pos(encoder, *position);
+            Ok(())
         }
     }
 }
@@ -321,11 +330,15 @@ fn decode_gameplay_mutation(
         3 => Ok(GameplayMutation::InventorySlot {
             player_id: decode_player_id(decoder)?,
             slot: decode_inventory_slot(decoder)?,
-            stack: decode_option(decoder, crate::codec::__internal::shared::decode_item_stack)?,
+            stack: decode_option(decoder, decode_item_stack)?,
         }),
         4 => Ok(GameplayMutation::Block {
             position: decode_block_pos(decoder)?,
             block: decode_block_state(decoder)?,
+        }),
+        5 => Ok(GameplayMutation::OpenChest {
+            player_id: decode_player_id(decoder)?,
+            position: decode_block_pos(decoder)?,
         }),
         _ => Err(ProtocolCodecError::InvalidValue(
             "invalid gameplay mutation tag",
@@ -397,34 +410,11 @@ pub(crate) fn encode_player_inventory_blob_inner(
     encoder: &mut Encoder,
     inventory: &PlayerInventory,
 ) -> Result<(), ProtocolCodecError> {
-    encoder.write_len(inventory.slots.len())?;
-    for stack in &inventory.slots {
-        encode_option(
-            encoder,
-            stack.as_ref(),
-            crate::codec::__internal::shared::encode_item_stack,
-        )?;
-    }
-    encode_option(
-        encoder,
-        inventory.offhand.as_ref(),
-        crate::codec::__internal::shared::encode_item_stack,
-    )
+    encode_player_inventory(encoder, inventory)
 }
 
 pub(crate) fn decode_player_inventory_blob_inner(
     decoder: &mut Decoder<'_>,
 ) -> Result<PlayerInventory, ProtocolCodecError> {
-    let len = decoder.read_len()?;
-    let mut slots = Vec::with_capacity(len);
-    for _ in 0..len {
-        slots.push(decode_option(
-            decoder,
-            crate::codec::__internal::shared::decode_item_stack,
-        )?);
-    }
-    Ok(PlayerInventory {
-        slots,
-        offhand: decode_option(decoder, crate::codec::__internal::shared::decode_item_stack)?,
-    })
+    decode_player_inventory(decoder)
 }

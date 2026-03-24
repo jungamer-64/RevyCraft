@@ -1,10 +1,9 @@
 use crate::catalog;
 use crate::core::ServerCore;
 use crate::events::{CoreCommand, CoreEvent, EventTarget, TargetedEvent};
-use crate::player::{
-    InteractionHand, InventoryContainer, InventorySlot, ItemStack, PlayerInventory, PlayerSnapshot,
-};
-use crate::world::{BlockFace, BlockPos, BlockState, Vec3, WorldMeta};
+use crate::inventory::{InventoryContainer, InventorySlot, ItemStack, PlayerInventory};
+use crate::player::{InteractionHand, PlayerSnapshot};
+use crate::world::{BlockEntityState, BlockFace, BlockPos, BlockState, Vec3, WorldMeta};
 use crate::{
     GameplayCapabilitySet, GameplayProfileId, HOTBAR_SLOT_COUNT, PlayerId, ProtocolCapabilitySet,
     SessionCapabilitySet,
@@ -41,6 +40,10 @@ pub enum GameplayMutation {
         slot: InventorySlot,
         stack: Option<ItemStack>,
     },
+    OpenChest {
+        player_id: PlayerId,
+        position: BlockPos,
+    },
     Block {
         position: BlockPos,
         block: BlockState,
@@ -51,6 +54,7 @@ pub trait GameplayQuery {
     fn world_meta(&self) -> WorldMeta;
     fn player_snapshot(&self, player_id: PlayerId) -> Option<PlayerSnapshot>;
     fn block_state(&self, position: BlockPos) -> BlockState;
+    fn block_entity(&self, position: BlockPos) -> Option<BlockEntityState>;
     fn can_edit_block(&self, player_id: PlayerId, position: BlockPos) -> bool;
 }
 
@@ -191,6 +195,14 @@ impl CanonicalGameplayPolicy {
         if current.is_air() || current.key.as_str() == "minecraft:bedrock" {
             return Self::block_changed_effect(player_id, position, current);
         }
+        if current.key.as_str() == catalog::CHEST
+            && query
+                .block_entity(position)
+                .and_then(|entity| entity.chest_slots().map(|slots| slots.to_vec()))
+                .is_some_and(|slots| slots.iter().any(Option::is_some))
+        {
+            return Self::block_changed_effect(player_id, position, current);
+        }
         GameplayEffect {
             mutations: vec![GameplayMutation::Block {
                 position,
@@ -243,6 +255,30 @@ impl CanonicalGameplayPolicy {
             }],
             emitted_events: Vec::new(),
         }
+    }
+
+    fn use_block_effect(
+        query: &dyn GameplayQuery,
+        player_id: PlayerId,
+        hand: InteractionHand,
+        position: BlockPos,
+        face: Option<BlockFace>,
+        held_item: Option<&ItemStack>,
+    ) -> GameplayEffect {
+        let target_block = query.block_state(position);
+        if target_block.key.as_str() == catalog::CHEST {
+            if !query.can_edit_block(player_id, position) {
+                return Self::block_changed_effect(player_id, position, target_block);
+            }
+            return GameplayEffect {
+                mutations: vec![GameplayMutation::OpenChest {
+                    player_id,
+                    position,
+                }],
+                emitted_events: Vec::new(),
+            };
+        }
+        Self::place_block_effect(query, player_id, hand, position, face, held_item)
     }
 
     fn rejected_held_slot_effect(player_id: PlayerId, slot: u8) -> GameplayEffect {
@@ -346,6 +382,20 @@ impl GameplayPolicyResolver for CanonicalGameplayPolicy {
                 *face,
                 held_item.as_ref(),
             )),
+            CoreCommand::UseBlock {
+                player_id,
+                hand,
+                position,
+                face,
+                held_item,
+            } => Ok(Self::use_block_effect(
+                query,
+                *player_id,
+                *hand,
+                *position,
+                *face,
+                held_item.as_ref(),
+            )),
             _ => Ok(GameplayEffect::default()),
         }
     }
@@ -416,6 +466,7 @@ fn reject_inventory_slot_events_snapshot(
         TargetedEvent {
             target: EventTarget::Player(player_id),
             event: CoreEvent::InventorySlotChanged {
+                window_id: 0,
                 container: InventoryContainer::Player,
                 slot,
                 stack: player.inventory.get_slot(slot).cloned(),

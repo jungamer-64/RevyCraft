@@ -1,7 +1,7 @@
 use crate::RuntimeError;
 use crate::runtime::{RuntimeServer, SessionMessage, SessionState};
 use crate::transport::{TransportSessionIo, write_payload};
-use mc_core::CoreEvent;
+use mc_core::{CoreEvent, InventoryContainer};
 use mc_proto_common::{ConnectionPhase, PlayEncodingContext};
 
 impl RuntimeServer {
@@ -71,6 +71,29 @@ impl RuntimeServer {
                         session.phase = ConnectionPhase::Play;
                         Self::refresh_session_capabilities(session);
                         self.sync_session_handle(connection_id, session).await;
+                    }
+                    CoreEvent::ContainerOpened {
+                        window_id,
+                        container,
+                        ..
+                    } => {
+                        if *container != InventoryContainer::Player {
+                            session.active_non_player_window = Some((*window_id, *container));
+                        }
+                    }
+                    CoreEvent::ContainerClosed { window_id } => {
+                        if session
+                            .active_non_player_window
+                            .is_some_and(|(active_window_id, _)| active_window_id == *window_id)
+                        {
+                            session.active_non_player_window = None;
+                        }
+                        if session
+                            .pending_rejected_inventory_transaction
+                            .is_some_and(|transaction| transaction.window_id == *window_id)
+                        {
+                            session.pending_rejected_inventory_transaction = None;
+                        }
                     }
                     CoreEvent::Disconnect { .. } => return Ok(true),
                     _ => {}

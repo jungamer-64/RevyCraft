@@ -1,9 +1,10 @@
-use super::*;
+use super::support::*;
 
 struct WindowZeroSession {
     core: ServerCore,
     player: PlayerId,
     next_action_number: i16,
+    now_ms: u64,
 }
 
 impl WindowZeroSession {
@@ -17,16 +18,21 @@ impl WindowZeroSession {
             core,
             player,
             next_action_number,
+            now_ms: 0,
         }
     }
 
-    fn seed_hotbar0(&mut self, key: &str, count: u8) {
+    fn seed_hotbar(&mut self, slot: u8, key: &str, count: u8) {
         let _ = creative_inventory_set(
             &mut self.core,
             self.player,
-            InventorySlot::Hotbar(0),
+            InventorySlot::Hotbar(slot),
             Some(item(key, count)),
         );
+    }
+
+    fn seed_hotbar0(&mut self, key: &str, count: u8) {
+        self.seed_hotbar(0, key, count);
     }
 
     fn pickup_hotbar0(&mut self) -> (i16, Vec<TargetedEvent>) {
@@ -36,6 +42,10 @@ impl WindowZeroSession {
             InventoryClickButton::Left,
             None,
         )
+    }
+
+    fn pickup_hotbar0_in_window(&mut self, window_id: u8) -> (i16, Vec<TargetedEvent>) {
+        self.click_window_raw_slot(window_id, 37, InventoryClickButton::Left, None)
     }
 
     fn click_hotbar0(&mut self, clicked_item: Option<ItemStack>) -> (i16, Vec<TargetedEvent>) {
@@ -108,6 +118,29 @@ impl WindowZeroSession {
         online_player(&self.core, self.player)
     }
 
+    fn open_crafting_table(&mut self, window_id: u8) -> Vec<TargetedEvent> {
+        self.core
+            .open_crafting_table(self.player, window_id, "Crafting")
+    }
+
+    fn open_chest(&mut self, window_id: u8) -> Vec<TargetedEvent> {
+        self.core.open_chest(self.player, window_id, "Chest")
+    }
+
+    fn open_furnace(&mut self, window_id: u8) -> Vec<TargetedEvent> {
+        self.core.open_furnace(self.player, window_id, "Furnace")
+    }
+
+    fn close_window(&mut self, window_id: u8) -> Vec<TargetedEvent> {
+        self.core.apply_command(
+            CoreCommand::CloseContainer {
+                player_id: self.player,
+                window_id,
+            },
+            0,
+        )
+    }
+
     fn click_window_slot(
         &mut self,
         window_id: u8,
@@ -127,6 +160,36 @@ impl WindowZeroSession {
             clicked_item,
         );
         (action_number, events)
+    }
+
+    fn click_window_raw_slot(
+        &mut self,
+        window_id: u8,
+        raw_slot: i16,
+        button: InventoryClickButton,
+        clicked_item: Option<ItemStack>,
+    ) -> (i16, Vec<TargetedEvent>) {
+        let action_number = self.next_action_number;
+        self.next_action_number += 1;
+        let events = self.core.apply_command(
+            CoreCommand::InventoryClick {
+                player_id: self.player,
+                transaction: InventoryTransactionContext {
+                    window_id,
+                    action_number,
+                },
+                target: InventoryClickTarget::WindowSlot(raw_slot),
+                button,
+                clicked_item,
+            },
+            0,
+        );
+        (action_number, events)
+    }
+
+    fn tick(&mut self) -> Vec<TargetedEvent> {
+        self.now_ms = self.now_ms.saturating_add(50);
+        self.core.tick(self.now_ms)
     }
 }
 
@@ -320,5 +383,648 @@ fn rejected_crafting_result_click_still_consumes_inputs_authoritatively() {
     assert_eq!(
         online.cursor.as_ref().map(stack_summary),
         Some(("minecraft:stick", 4))
+    );
+}
+
+#[test]
+fn opening_crafting_table_window_emits_open_and_contents_events() {
+    let mut session = WindowZeroSession::new("ct-open");
+
+    let events = session.open_crafting_table(2);
+
+    assert_container_opened(
+        &events,
+        session.player,
+        2,
+        InventoryContainer::CraftingTable,
+    );
+    assert_player_window_contents(
+        &events,
+        session.player,
+        2,
+        InventoryContainer::CraftingTable,
+    );
+    let window = session
+        .online()
+        .active_container
+        .as_ref()
+        .expect("crafting table should stay open");
+    assert_eq!(window.window_id, 2);
+    assert_eq!(window.container, InventoryContainer::CraftingTable);
+}
+
+#[test]
+fn crafting_table_window_clicks_use_window_local_slots_and_cursor_sync() {
+    let mut session = WindowZeroSession::new("ct-clicks");
+    session.seed_hotbar0("minecraft:oak_log", 1);
+    let _ = session.open_crafting_table(2);
+
+    let (pickup_action, pickup_events) = session.pickup_hotbar0_in_window(2);
+    assert_transaction_processed(&pickup_events, session.player, 2, pickup_action, true);
+    assert_inventory_slot_changed_in_window_to(
+        &pickup_events,
+        session.player,
+        2,
+        InventorySlot::Hotbar(0),
+        None,
+    );
+    assert_cursor_changed_to(&pickup_events, session.player, "minecraft:oak_log", 1);
+
+    let (place_action, place_events) = session.click_window_raw_slot(
+        2,
+        1,
+        InventoryClickButton::Left,
+        Some(item("minecraft:oak_log", 1)),
+    );
+    assert_transaction_processed(&place_events, session.player, 2, place_action, true);
+    assert_inventory_slot_changed_in_window_to(
+        &place_events,
+        session.player,
+        2,
+        InventorySlot::Container(1),
+        Some(("minecraft:oak_log", 1)),
+    );
+    assert_inventory_slot_changed_in_window_to(
+        &place_events,
+        session.player,
+        2,
+        InventorySlot::Container(0),
+        Some(("minecraft:oak_planks", 4)),
+    );
+
+    let (result_action, result_events) =
+        session.click_window_raw_slot(2, 0, InventoryClickButton::Left, None);
+    assert_transaction_processed(&result_events, session.player, 2, result_action, true);
+    assert_inventory_slot_changed_in_window(
+        &result_events,
+        session.player,
+        2,
+        InventorySlot::Container(0),
+    );
+    assert_inventory_slot_changed_in_window_to(
+        &result_events,
+        session.player,
+        2,
+        InventorySlot::Container(1),
+        None,
+    );
+    assert_cursor_changed_to(&result_events, session.player, "minecraft:oak_planks", 4);
+
+    let online = session.online();
+    let window = online
+        .active_container
+        .as_ref()
+        .expect("crafting table should stay open");
+    match &window.state {
+        crate::core::OpenInventoryWindowState::CraftingTable { slots } => {
+            assert!(slots[0].is_none());
+        }
+        crate::core::OpenInventoryWindowState::Chest(_) => {
+            panic!("crafting table test should not open a chest")
+        }
+        crate::core::OpenInventoryWindowState::Furnace(_) => {
+            panic!("crafting table test should not open a furnace")
+        }
+    }
+    assert_eq!(
+        online.cursor.as_ref().map(stack_summary),
+        Some(("minecraft:oak_planks", 4))
+    );
+}
+
+#[test]
+fn closing_crafting_table_window_folds_inputs_back_into_player_inventory() {
+    let mut session = WindowZeroSession::new("ct-close");
+    session.seed_hotbar0("minecraft:oak_log", 1);
+    let _ = session.open_crafting_table(2);
+    let _ = session.pickup_hotbar0_in_window(2);
+    let _ = session.click_window_raw_slot(
+        2,
+        1,
+        InventoryClickButton::Left,
+        Some(item("minecraft:oak_log", 1)),
+    );
+
+    let events = session.close_window(2);
+
+    assert_container_closed(&events, session.player, 2);
+    assert_player_window_contents(&events, session.player, 0, InventoryContainer::Player);
+    assert!(session.online().active_container.is_none());
+    assert!(
+        session
+            .online()
+            .snapshot
+            .inventory
+            .slots
+            .iter()
+            .flatten()
+            .any(|stack| stack.key.as_str() == "minecraft:oak_log" && stack.count == 1),
+        "closing the crafting table should merge its inputs back into the player inventory"
+    );
+}
+
+#[test]
+fn stale_clicks_are_rejected_after_crafting_table_closes() {
+    let mut session = WindowZeroSession::new("ct-stale");
+    session.seed_hotbar0("minecraft:oak_log", 1);
+    let _ = session.open_crafting_table(2);
+    let _ = session.close_window(2);
+    let before = session.online().snapshot.clone();
+
+    let (action_number, events) =
+        session.click_window_raw_slot(2, 1, InventoryClickButton::Left, None);
+
+    assert_eq!(events.len(), 1);
+    assert_transaction_processed(&events, session.player, 2, action_number, false);
+    assert_eq!(session.online().snapshot, before);
+}
+
+#[test]
+fn disconnect_folds_open_crafting_table_back_into_persistent_inventory() {
+    let mut session = WindowZeroSession::new("ct-disc");
+    session.seed_hotbar0("minecraft:oak_log", 1);
+    let _ = session.open_crafting_table(2);
+    let _ = session.pickup_hotbar0_in_window(2);
+    let _ = session.click_window_raw_slot(
+        2,
+        1,
+        InventoryClickButton::Left,
+        Some(item("minecraft:oak_log", 1)),
+    );
+    let _ = session.core.apply_command(
+        CoreCommand::Disconnect {
+            player_id: session.player,
+        },
+        0,
+    );
+
+    let snapshot = session.core.snapshot();
+    let persisted = snapshot
+        .players
+        .get(&session.player)
+        .expect("player should persist after disconnect");
+    assert!(
+        persisted
+            .inventory
+            .slots
+            .iter()
+            .flatten()
+            .any(|stack| stack.key.as_str() == "minecraft:oak_log" && stack.count == 1),
+        "disconnect should fold active crafting table inputs back into persisted inventory"
+    );
+}
+
+#[test]
+fn opening_chest_window_emits_open_and_contents_events() {
+    let mut session = WindowZeroSession::new("ch-open");
+
+    let events = session.open_chest(4);
+
+    assert_container_opened(&events, session.player, 4, InventoryContainer::Chest);
+    assert_player_window_contents(&events, session.player, 4, InventoryContainer::Chest);
+    let window = session
+        .online()
+        .active_container
+        .as_ref()
+        .expect("chest should stay open");
+    assert_eq!(window.window_id, 4);
+    assert_eq!(window.container, InventoryContainer::Chest);
+}
+
+#[test]
+fn chest_window_clicks_use_window_local_slots_and_cursor_sync() {
+    let mut session = WindowZeroSession::new("ch-click");
+    session.seed_hotbar0("minecraft:stone", 2);
+    let _ = session.open_chest(4);
+
+    let (pickup_action, pickup_events) =
+        session.click_window_raw_slot(4, 54, InventoryClickButton::Left, None);
+    assert_transaction_processed(&pickup_events, session.player, 4, pickup_action, true);
+    assert_inventory_slot_changed_in_window_to(
+        &pickup_events,
+        session.player,
+        4,
+        InventorySlot::Hotbar(0),
+        None,
+    );
+    assert_cursor_changed_to(&pickup_events, session.player, "minecraft:stone", 2);
+
+    let (place_action, place_events) = session.click_window_raw_slot(
+        4,
+        0,
+        InventoryClickButton::Left,
+        Some(item("minecraft:stone", 2)),
+    );
+    assert_transaction_processed(&place_events, session.player, 4, place_action, true);
+    assert_inventory_slot_changed_in_window_to(
+        &place_events,
+        session.player,
+        4,
+        InventorySlot::Container(0),
+        Some(("minecraft:stone", 2)),
+    );
+    assert_player_event(
+        &place_events,
+        session.player,
+        |event| matches!(event, CoreEvent::CursorChanged { stack } if stack.is_none()),
+    );
+
+    let window = session
+        .online()
+        .active_container
+        .as_ref()
+        .expect("chest should stay open");
+    let crate::core::OpenInventoryWindowState::Chest(chest) = &window.state else {
+        panic!("expected chest state");
+    };
+    assert_eq!(
+        chest.slots[0].as_ref().map(stack_summary),
+        Some(("minecraft:stone", 2))
+    );
+    assert!(session.online().cursor.is_none());
+}
+
+#[test]
+fn closing_chest_window_folds_contents_back_into_player_inventory() {
+    let mut session = WindowZeroSession::new("ch-close");
+    let _ = session.open_chest(4);
+    {
+        let window = session
+            .core
+            .online_players
+            .get_mut(&session.player)
+            .expect("player should stay online")
+            .active_container
+            .as_mut()
+            .expect("chest should stay open");
+        let crate::core::OpenInventoryWindowState::Chest(chest) = &mut window.state else {
+            panic!("expected chest state");
+        };
+        chest.slots[0] = Some(item("minecraft:oak_log", 1));
+    }
+
+    let events = session.close_window(4);
+
+    assert_container_closed(&events, session.player, 4);
+    assert_player_window_contents(&events, session.player, 0, InventoryContainer::Player);
+    assert!(session.online().active_container.is_none());
+    assert!(
+        session
+            .online()
+            .snapshot
+            .inventory
+            .slots
+            .iter()
+            .flatten()
+            .any(|stack| stack.key.as_str() == "minecraft:oak_log" && stack.count == 1),
+        "closing the chest should merge its contents back into the player inventory"
+    );
+}
+
+#[test]
+fn stale_clicks_are_rejected_after_chest_closes() {
+    let mut session = WindowZeroSession::new("ch-stale");
+    let _ = session.open_chest(4);
+    let _ = session.close_window(4);
+    let before = session.online().snapshot.clone();
+
+    let (action_number, events) =
+        session.click_window_raw_slot(4, 0, InventoryClickButton::Left, None);
+
+    assert_eq!(events.len(), 1);
+    assert_transaction_processed(&events, session.player, 4, action_number, false);
+    assert_eq!(session.online().snapshot, before);
+}
+
+#[test]
+fn disconnect_folds_open_chest_back_into_persistent_inventory() {
+    let mut session = WindowZeroSession::new("ch-disc");
+    let _ = session.open_chest(4);
+    {
+        let window = session
+            .core
+            .online_players
+            .get_mut(&session.player)
+            .expect("player should stay online")
+            .active_container
+            .as_mut()
+            .expect("chest should stay open");
+        let crate::core::OpenInventoryWindowState::Chest(chest) = &mut window.state else {
+            panic!("expected chest state");
+        };
+        chest.slots[0] = Some(item("minecraft:stone", 8));
+    }
+    let _ = session.core.apply_command(
+        CoreCommand::Disconnect {
+            player_id: session.player,
+        },
+        0,
+    );
+
+    let snapshot = session.core.snapshot();
+    let persisted = snapshot
+        .players
+        .get(&session.player)
+        .expect("player should persist after disconnect");
+    assert!(
+        persisted
+            .inventory
+            .slots
+            .iter()
+            .flatten()
+            .any(|stack| stack.key.as_str() == "minecraft:stone" && stack.count == 8),
+        "disconnect should fold active chest contents back into persisted inventory"
+    );
+}
+
+#[test]
+fn opening_furnace_window_emits_open_contents_and_initial_properties() {
+    let mut session = WindowZeroSession::new("furnace-open");
+
+    let events = session.open_furnace(3);
+
+    assert_container_opened(&events, session.player, 3, InventoryContainer::Furnace);
+    assert_player_window_contents(&events, session.player, 3, InventoryContainer::Furnace);
+    assert_container_property_changed(&events, session.player, 3, 0, 0);
+    assert_container_property_changed(&events, session.player, 3, 1, 0);
+    assert_container_property_changed(&events, session.player, 3, 2, 0);
+    assert_container_property_changed(&events, session.player, 3, 3, 200);
+}
+
+#[test]
+fn furnace_window_smelts_sand_into_glass_and_emits_property_updates() {
+    let mut session = WindowZeroSession::new("furnace-smelt");
+    session.seed_hotbar(0, "minecraft:sand", 1);
+    session.seed_hotbar(1, "minecraft:oak_planks", 1);
+    let _ = session.open_furnace(3);
+
+    let (pickup_input_action, pickup_input_events) =
+        session.click_window_raw_slot(3, 30, InventoryClickButton::Left, None);
+    assert_transaction_processed(
+        &pickup_input_events,
+        session.player,
+        3,
+        pickup_input_action,
+        true,
+    );
+    let (place_input_action, place_input_events) = session.click_window_raw_slot(
+        3,
+        0,
+        InventoryClickButton::Left,
+        Some(item("minecraft:sand", 1)),
+    );
+    assert_transaction_processed(
+        &place_input_events,
+        session.player,
+        3,
+        place_input_action,
+        true,
+    );
+
+    let (pickup_fuel_action, pickup_fuel_events) =
+        session.click_window_raw_slot(3, 31, InventoryClickButton::Left, None);
+    assert_transaction_processed(
+        &pickup_fuel_events,
+        session.player,
+        3,
+        pickup_fuel_action,
+        true,
+    );
+    let (place_fuel_action, place_fuel_events) = session.click_window_raw_slot(
+        3,
+        1,
+        InventoryClickButton::Left,
+        Some(item("minecraft:oak_planks", 1)),
+    );
+    assert_transaction_processed(
+        &place_fuel_events,
+        session.player,
+        3,
+        place_fuel_action,
+        true,
+    );
+
+    let first_tick = session.tick();
+    assert_container_property_changed(&first_tick, session.player, 3, 0, 300);
+    assert_container_property_changed(&first_tick, session.player, 3, 1, 300);
+    assert_container_property_changed(&first_tick, session.player, 3, 2, 1);
+    assert_inventory_slot_changed_in_window_to(
+        &first_tick,
+        session.player,
+        3,
+        InventorySlot::Container(1),
+        None,
+    );
+
+    let mut final_tick = Vec::new();
+    for _ in 1..200 {
+        final_tick = session.tick();
+    }
+
+    assert_inventory_slot_changed_in_window_to(
+        &final_tick,
+        session.player,
+        3,
+        InventorySlot::Container(0),
+        None,
+    );
+    assert_inventory_slot_changed_in_window_to(
+        &final_tick,
+        session.player,
+        3,
+        InventorySlot::Container(2),
+        Some(("minecraft:glass", 1)),
+    );
+    assert_container_property_changed(&final_tick, session.player, 3, 2, 0);
+}
+
+#[test]
+fn invalid_fuel_does_not_start_furnace_progress() {
+    let mut session = WindowZeroSession::new("fur-badfuel");
+    let _ = session.open_furnace(3);
+    {
+        let window = session
+            .core
+            .online_players
+            .get_mut(&session.player)
+            .expect("player should stay online")
+            .active_container
+            .as_mut()
+            .expect("furnace should stay open");
+        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
+            panic!("expected furnace state");
+        };
+        furnace.input = Some(item("minecraft:sand", 1));
+        furnace.fuel = Some(item("minecraft:glass", 1));
+    }
+
+    let events = session.tick();
+    assert!(events.is_empty());
+    let window = session
+        .online()
+        .active_container
+        .as_ref()
+        .expect("furnace should stay open");
+    let crate::core::OpenInventoryWindowState::Furnace(furnace) = &window.state else {
+        panic!("expected furnace state");
+    };
+    assert_eq!(furnace.burn_left, 0);
+    assert_eq!(furnace.cook_progress, 0);
+    assert_eq!(furnace.output.as_ref().map(stack_summary), None);
+}
+
+#[test]
+fn furnace_output_slot_rejects_placement_attempts() {
+    let mut session = WindowZeroSession::new("fur-outrej");
+    session.seed_hotbar0("minecraft:stone", 1);
+    let _ = session.open_furnace(3);
+    let _ = session.click_window_raw_slot(3, 30, InventoryClickButton::Left, None);
+
+    let (action_number, events) = session.click_window_raw_slot(
+        3,
+        2,
+        InventoryClickButton::Left,
+        Some(item("minecraft:stone", 1)),
+    );
+
+    assert_transaction_processed(&events, session.player, 3, action_number, false);
+    assert_player_window_contents(&events, session.player, 3, InventoryContainer::Furnace);
+    assert_cursor_changed_to(&events, session.player, "minecraft:stone", 1);
+}
+
+#[test]
+fn furnace_output_stacks_existing_matching_items() {
+    let mut session = WindowZeroSession::new("fur-stack");
+    let _ = session.open_furnace(3);
+    {
+        let window = session
+            .core
+            .online_players
+            .get_mut(&session.player)
+            .expect("player should stay online")
+            .active_container
+            .as_mut()
+            .expect("furnace should stay open");
+        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
+            panic!("expected furnace state");
+        };
+        furnace.input = Some(item("minecraft:sand", 1));
+        furnace.fuel = Some(item("minecraft:oak_planks", 1));
+        furnace.output = Some(item("minecraft:glass", 1));
+    }
+
+    for _ in 0..200 {
+        let _ = session.tick();
+    }
+
+    let window = session
+        .online()
+        .active_container
+        .as_ref()
+        .expect("furnace should stay open");
+    let crate::core::OpenInventoryWindowState::Furnace(furnace) = &window.state else {
+        panic!("expected furnace state");
+    };
+    assert_eq!(
+        furnace.output.as_ref().map(stack_summary),
+        Some(("minecraft:glass", 2))
+    );
+}
+
+#[test]
+fn closing_furnace_window_folds_contents_back_into_player_inventory() {
+    let mut session = WindowZeroSession::new("furnace-close");
+    let _ = session.open_furnace(3);
+    {
+        let window = session
+            .core
+            .online_players
+            .get_mut(&session.player)
+            .expect("player should stay online")
+            .active_container
+            .as_mut()
+            .expect("furnace should stay open");
+        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
+            panic!("expected furnace state");
+        };
+        furnace.input = Some(item("minecraft:sand", 1));
+        furnace.fuel = Some(item("minecraft:oak_planks", 1));
+        furnace.output = Some(item("minecraft:glass", 1));
+    }
+
+    let events = session.close_window(3);
+
+    assert_container_closed(&events, session.player, 3);
+    assert!(session.online().active_container.is_none());
+    let inventory = &session.online().snapshot.inventory;
+    assert!(
+        inventory
+            .slots
+            .iter()
+            .flatten()
+            .any(|stack| stack.key.as_str() == "minecraft:sand")
+    );
+    assert!(
+        inventory
+            .slots
+            .iter()
+            .flatten()
+            .any(|stack| stack.key.as_str() == "minecraft:glass")
+    );
+}
+
+#[test]
+fn stale_clicks_are_rejected_after_furnace_closes() {
+    let mut session = WindowZeroSession::new("furnace-stale");
+    let _ = session.open_furnace(3);
+    let _ = session.close_window(3);
+    let before = session.online().snapshot.clone();
+
+    let (action_number, events) =
+        session.click_window_raw_slot(3, 0, InventoryClickButton::Left, None);
+
+    assert_eq!(events.len(), 1);
+    assert_transaction_processed(&events, session.player, 3, action_number, false);
+    assert_eq!(session.online().snapshot, before);
+}
+
+#[test]
+fn disconnect_folds_open_furnace_back_into_persistent_inventory() {
+    let mut session = WindowZeroSession::new("furnace-disc");
+    let _ = session.open_furnace(3);
+    {
+        let window = session
+            .core
+            .online_players
+            .get_mut(&session.player)
+            .expect("player should stay online")
+            .active_container
+            .as_mut()
+            .expect("furnace should stay open");
+        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
+            panic!("expected furnace state");
+        };
+        furnace.input = Some(item("minecraft:sand", 1));
+        furnace.output = Some(item("minecraft:glass", 1));
+    }
+    let _ = session.core.apply_command(
+        CoreCommand::Disconnect {
+            player_id: session.player,
+        },
+        0,
+    );
+
+    let snapshot = session.core.snapshot();
+    let persisted = snapshot
+        .players
+        .get(&session.player)
+        .expect("player should persist after disconnect");
+    assert!(
+        persisted
+            .inventory
+            .slots
+            .iter()
+            .flatten()
+            .any(|stack| stack.key.as_str() == "minecraft:glass")
     );
 }

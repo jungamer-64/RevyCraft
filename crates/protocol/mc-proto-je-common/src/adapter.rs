@@ -3,7 +3,7 @@ use crate::login::{encode_login_success_packet, read_login_byte_array, write_log
 use crate::status::{encode_status_pong_packet, encode_status_response_packet};
 use mc_core::{
     BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, EntityId, InventoryContainer,
-    InventorySlot, InventoryTransactionContext, ItemStack, PlayerId, PlayerInventory,
+    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId,
     PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{
@@ -35,13 +35,28 @@ pub trait JavaEditionProfile: Default + Send + Sync {
         player: &PlayerSnapshot,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
     fn encode_entity_despawn(&self, entity_ids: &[EntityId]) -> Result<Vec<u8>, ProtocolError>;
+    fn encode_container_opened(
+        &self,
+        window_id: u8,
+        container: InventoryContainer,
+        title: &str,
+    ) -> Result<Vec<u8>, ProtocolError>;
+    fn encode_container_closed(&self, window_id: u8) -> Result<Vec<u8>, ProtocolError>;
     fn encode_inventory_contents(
         &self,
+        window_id: u8,
         container: InventoryContainer,
-        inventory: &PlayerInventory,
+        contents: &InventoryWindowContents,
+    ) -> Result<Vec<u8>, ProtocolError>;
+    fn encode_container_property_changed(
+        &self,
+        window_id: u8,
+        property_id: u8,
+        value: i16,
     ) -> Result<Vec<u8>, ProtocolError>;
     fn encode_inventory_slot_changed(
         &self,
+        window_id: u8,
         container: InventoryContainer,
         slot: InventorySlot,
         stack: Option<&ItemStack>,
@@ -213,19 +228,42 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
                 Ok(vec![self.profile.encode_entity_despawn(entity_ids)?])
             }
             CoreEvent::InventoryContents {
+                window_id,
                 container,
-                inventory,
+                contents,
+            } => {
+                Ok(vec![self.profile.encode_inventory_contents(
+                    *window_id, *container, contents,
+                )?])
+            }
+            CoreEvent::ContainerOpened {
+                window_id,
+                container,
+                title,
             } => Ok(vec![
                 self.profile
-                    .encode_inventory_contents(*container, inventory)?,
+                    .encode_container_opened(*window_id, *container, title)?,
             ]),
+            CoreEvent::ContainerClosed { window_id } => {
+                Ok(vec![self.profile.encode_container_closed(*window_id)?])
+            }
+            CoreEvent::ContainerPropertyChanged {
+                window_id,
+                property_id,
+                value,
+            } => Ok(vec![self.profile.encode_container_property_changed(
+                *window_id,
+                *property_id,
+                *value,
+            )?]),
             CoreEvent::InventorySlotChanged {
+                window_id,
                 container,
                 slot,
                 stack,
             } => Ok(self
                 .profile
-                .encode_inventory_slot_changed(*container, *slot, stack.as_ref())?
+                .encode_inventory_slot_changed(*window_id, *container, *slot, stack.as_ref())?
                 .into_iter()
                 .collect()),
             CoreEvent::InventoryTransactionProcessed {

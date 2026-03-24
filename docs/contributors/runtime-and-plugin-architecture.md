@@ -272,7 +272,7 @@ gameplay plugin だけは host callback を持ちます。plugin 側は `Gamepla
 - can_edit_block
 - log
 
-ABI `3.0` では gameplay invoke ごとに `HostApiTableV1` が plugin へ明示的に渡されます。以前の global slot 前提ではなく、同じ gameplay plugin artifact を複数 host / runtime から使っても host 文脈が混線しない設計です。
+ABI `3.4` でも gameplay invoke ごとに `HostApiTableV1` が plugin へ明示的に渡される前提は維持します。そのうえで protocol / core codec は `UseBlock`、semantic container/window event、`ContainerPropertyChanged`、`WorldSnapshot::block_entities`、`BlockEntityState` を扱え、JE-first の generic container 基盤として `window_id + container kind + contents + property diff + world-backed chest binding` を流せます。現時点の non-player container は session-local な `CraftingTable`、`Chest`、`Furnace` と、gameplay から開く world-backed single chest です。world-backed chest は persistence、same-chest multi-view sync、non-empty break reject を持ちます。world-backed furnace、double chest、operator / gameplay trigger、Bedrock container/property handling はまだこの層に入りません。
 
 ## concrete plugin の見方
 

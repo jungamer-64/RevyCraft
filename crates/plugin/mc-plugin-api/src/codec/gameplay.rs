@@ -224,6 +224,7 @@ pub fn decode_gameplay_response(
 
 pub mod host_blob {
     use super::*;
+    use crate::codec::__internal::shared::{decode_block_entity_state, encode_block_entity_state};
 
     #[must_use]
     pub fn encode_player_id(player_id: PlayerId) -> Vec<u8> {
@@ -360,6 +361,33 @@ pub mod host_blob {
         decoder.finish()?;
         Ok(block)
     }
+
+    /// Encodes an optional block entity state for host-side gameplay queries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the block entity cannot be serialized.
+    pub fn encode_block_entity(
+        block_entity: Option<&mc_core::BlockEntityState>,
+    ) -> Result<Vec<u8>, ProtocolCodecError> {
+        let mut encoder = Encoder::default();
+        encode_option(&mut encoder, block_entity, encode_block_entity_state)?;
+        Ok(encoder.into_inner())
+    }
+
+    /// Decodes an optional block entity returned by the gameplay host API.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
+    pub fn decode_block_entity(
+        bytes: &[u8],
+    ) -> Result<Option<mc_core::BlockEntityState>, ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let block_entity = decode_option(&mut decoder, decode_block_entity_state)?;
+        decoder.finish()?;
+        Ok(block_entity)
+    }
 }
 
 #[cfg(test)]
@@ -369,16 +397,17 @@ mod tests {
         decode_gameplay_request, decode_gameplay_response, encode_gameplay_request,
         encode_gameplay_response,
         host_blob::{
-            decode_block_state, decode_can_edit_block_key, decode_player_id,
-            decode_player_snapshot, decode_world_meta, encode_block_pos, encode_block_state,
-            encode_can_edit_block_key, encode_player_id, encode_player_snapshot, encode_world_meta,
+            decode_block_entity, decode_block_state, decode_can_edit_block_key, decode_player_id,
+            decode_player_snapshot, decode_world_meta, encode_block_entity, encode_block_pos,
+            encode_block_state, encode_can_edit_block_key, encode_player_id,
+            encode_player_snapshot, encode_world_meta,
         },
     };
     use mc_core::{
-        BlockPos, BlockState, CapabilityAnnouncement, CoreCommand, CoreEvent, GameplayCapability,
-        GameplayCapabilitySet, GameplayEffect, GameplayJoinEffect, GameplayMutation,
-        GameplayProfileId, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerInventory,
-        PlayerSnapshot, TargetedEvent, Vec3, WorldMeta,
+        BlockEntityState, BlockPos, BlockState, CapabilityAnnouncement, CoreCommand, CoreEvent,
+        GameplayCapability, GameplayCapabilitySet, GameplayEffect, GameplayJoinEffect,
+        GameplayMutation, GameplayProfileId, InventoryContainer, InventorySlot, ItemStack,
+        PlayerId, PlayerInventory, PlayerSnapshot, TargetedEvent, Vec3, WorldMeta,
     };
     use mc_proto_common::ConnectionPhase;
     use uuid::Uuid;
@@ -462,7 +491,7 @@ mod tests {
             (
                 GameplayRequest::HandleCommand {
                     session: sample_session(),
-                    command: CoreCommand::PlaceBlock {
+                    command: CoreCommand::UseBlock {
                         player_id: sample_player_id(),
                         hand: mc_core::InteractionHand::Main,
                         position: BlockPos::new(0, 64, 0),
@@ -471,13 +500,20 @@ mod tests {
                     },
                 },
                 GameplayResponse::Effect(GameplayEffect {
-                    mutations: vec![GameplayMutation::Block {
-                        position: BlockPos::new(0, 65, 0),
-                        block: BlockState::stone(),
-                    }],
+                    mutations: vec![
+                        GameplayMutation::OpenChest {
+                            player_id: sample_player_id(),
+                            position: BlockPos::new(0, 65, 0),
+                        },
+                        GameplayMutation::Block {
+                            position: BlockPos::new(0, 65, 0),
+                            block: BlockState::stone(),
+                        },
+                    ],
                     emitted_events: vec![TargetedEvent {
                         target: mc_core::EventTarget::Player(sample_player_id()),
                         event: CoreEvent::InventorySlotChanged {
+                            window_id: 0,
                             container: InventoryContainer::Player,
                             slot: InventorySlot::Hotbar(0),
                             stack: Some(ItemStack::new("minecraft:stone", 63, 0)),
@@ -551,6 +587,17 @@ mod tests {
         assert_eq!(
             decode_block_state(&block_blob).expect("block state decodes"),
             BlockState::stone()
+        );
+
+        let block_entity_blob = encode_block_entity(Some(&BlockEntityState::Chest {
+            slots: vec![Some(ItemStack::new("minecraft:glass", 1, 0)), None],
+        }))
+        .expect("block entity encodes");
+        assert_eq!(
+            decode_block_entity(&block_entity_blob).expect("block entity decodes"),
+            Some(BlockEntityState::Chest {
+                slots: vec![Some(ItemStack::new("minecraft:glass", 1, 0)), None],
+            })
         );
 
         let key = encode_can_edit_block_key(sample_player_id(), BlockPos::new(1, 2, 3));

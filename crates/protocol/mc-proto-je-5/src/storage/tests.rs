@@ -1,5 +1,8 @@
 use super::Je1710StorageAdapter;
-use mc_core::{ChunkColumn, ChunkPos, CoreConfig, InventorySlot, ItemStack, PlayerId, ServerCore};
+use mc_core::{
+    BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, CoreConfig, InventorySlot,
+    ItemStack, PlayerId, ServerCore,
+};
 use mc_proto_common::StorageAdapter;
 use std::fs;
 use std::path::PathBuf;
@@ -22,6 +25,46 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
     let mut custom_chunk = ChunkColumn::new(ChunkPos::new(4, 5));
     custom_chunk.set_block(0, 0, 0, mc_core::BlockState::bedrock());
     snapshot.chunks.insert(custom_chunk.pos, custom_chunk);
+    let chest_pos = BlockPos::new(64, 4, 80);
+    snapshot
+        .chunks
+        .entry(chest_pos.chunk_pos())
+        .or_insert_with(|| ChunkColumn::new(chest_pos.chunk_pos()))
+        .set_block(0, 4, 0, BlockState::chest());
+    snapshot.block_entities.insert(
+        chest_pos,
+        BlockEntityState::Chest {
+            slots: vec![
+                Some(ItemStack::new("minecraft:glass", 3, 0)),
+                Some(ItemStack::new("minecraft:chest", 1, 0)),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+        },
+    );
     snapshot
         .players
         .get_mut(&player_id)
@@ -63,6 +106,10 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
             .key
             .as_str(),
         "minecraft:bedrock"
+    );
+    assert_eq!(
+        loaded.block_entities.get(&chest_pos),
+        snapshot.block_entities.get(&chest_pos)
     );
 }
 

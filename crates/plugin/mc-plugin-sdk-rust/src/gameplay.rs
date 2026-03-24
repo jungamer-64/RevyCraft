@@ -27,6 +27,12 @@ impl GameplayQuery for HostQuery<'_> {
             .expect("gameplay host should provide block states")
     }
 
+    fn block_entity(&self, position: mc_core::BlockPos) -> Option<mc_core::BlockEntityState> {
+        self.host
+            .read_block_entity(position)
+            .expect("gameplay host should provide block entities")
+    }
+
     fn can_edit_block(&self, player_id: PlayerId, position: mc_core::BlockPos) -> bool {
         self.host
             .can_edit_block(player_id, position)
@@ -76,6 +82,16 @@ pub trait GameplayHost {
     ///
     /// Returns an error when the host query fails.
     fn read_block_state(&self, position: mc_core::BlockPos) -> Result<mc_core::BlockState, String>;
+
+    /// Reads the current block entity state at the given position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the host query fails.
+    fn read_block_entity(
+        &self,
+        position: mc_core::BlockPos,
+    ) -> Result<Option<mc_core::BlockEntityState>, String>;
 
     /// Checks whether the given player is allowed to edit the given block.
     ///

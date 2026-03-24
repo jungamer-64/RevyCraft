@@ -2,7 +2,7 @@ use super::ServerCore;
 use crate::PlayerId;
 use crate::gameplay::GameplayQuery;
 use crate::player::PlayerSnapshot;
-use crate::world::{BlockPos, BlockState, WorldMeta};
+use crate::world::{BlockEntityState, BlockPos, BlockState, WorldMeta};
 
 impl GameplayQuery for ServerCore {
     fn world_meta(&self) -> WorldMeta {
@@ -17,6 +17,10 @@ impl GameplayQuery for ServerCore {
 
     fn block_state(&self, position: BlockPos) -> BlockState {
         self.block_at(position)
+    }
+
+    fn block_entity(&self, position: BlockPos) -> Option<BlockEntityState> {
+        self.block_entity_at(position)
     }
 
     fn can_edit_block(&self, player_id: PlayerId, position: BlockPos) -> bool {

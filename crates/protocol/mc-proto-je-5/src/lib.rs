@@ -8,21 +8,23 @@ mod tests;
 
 use decoding::decode_play_packet;
 use encoding::{
-    encode_block_change, encode_chunk, encode_chunk_bulk, encode_confirm_transaction,
-    encode_destroy_entities, encode_entity_head_rotation, encode_entity_teleport,
-    encode_held_item_change, encode_join_game, encode_keep_alive, encode_named_entity_spawn,
-    encode_player_abilities, encode_position_and_look, encode_set_slot, encode_spawn_position,
-    encode_time_update, encode_update_health, encode_window_items,
+    encode_block_change, encode_chunk, encode_chunk_bulk, encode_close_window,
+    encode_confirm_transaction, encode_destroy_entities, encode_entity_head_rotation,
+    encode_entity_teleport, encode_held_item_change, encode_join_game, encode_keep_alive,
+    encode_named_entity_spawn, encode_open_window, encode_player_abilities,
+    encode_position_and_look, encode_set_slot, encode_spawn_position, encode_time_update,
+    encode_update_health, encode_window_items, encode_window_property,
 };
 use mc_core::{
     BlockPos, BlockState, ChunkColumn, CoreCommand, EntityId, InventoryContainer, InventorySlot,
-    InventoryTransactionContext, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, WorldMeta,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerSnapshot,
+    WorldMeta,
 };
 use mc_proto_common::{Edition, ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
 use mc_proto_je_common::{
     __version_support::inventory::{
         CURSOR_SLOT_ID, CURSOR_WINDOW_ID, InventoryProtocolSpec, JE_1_7_10_INVENTORY_SPEC,
-        player_window_id, player_window_id_signed, protocol_slot,
+        protocol_slot, signed_window_id,
     },
     JavaEditionAdapter, JavaEditionProfile,
 };
@@ -49,8 +51,11 @@ const PACKET_CB_ENTITY_HEAD_ROTATION: i32 = 0x19;
 const PACKET_CB_MAP_CHUNK: i32 = 0x21;
 const PACKET_CB_BLOCK_CHANGE: i32 = 0x23;
 const PACKET_CB_MAP_CHUNK_BULK: i32 = 0x26;
+const PACKET_CB_OPEN_WINDOW: i32 = 0x2d;
+const PACKET_CB_CLOSE_WINDOW: i32 = 0x2e;
 const PACKET_CB_SET_SLOT: i32 = 0x2f;
 const PACKET_CB_WINDOW_ITEMS: i32 = 0x30;
+const PACKET_CB_WINDOW_PROPERTY: i32 = 0x31;
 const PACKET_CB_TRANSACTION: i32 = 0x32;
 const PACKET_CB_PLAYER_ABILITIES: i32 = 0x39;
 const PACKET_CB_PLAY_DISCONNECT: i32 = 0x40;
@@ -63,6 +68,7 @@ const PACKET_SB_POSITION_LOOK: i32 = 0x06;
 const PACKET_SB_PLAYER_DIGGING: i32 = 0x07;
 const PACKET_SB_PLAYER_BLOCK_PLACEMENT: i32 = 0x08;
 const PACKET_SB_HELD_ITEM_CHANGE: i32 = 0x09;
+const PACKET_SB_CLOSE_WINDOW: i32 = 0x0d;
 const PACKET_SB_CLICK_WINDOW: i32 = 0x0e;
 const PACKET_SB_CONFIRM_TRANSACTION: i32 = 0x0f;
 const PACKET_SB_CREATIVE_INVENTORY_ACTION: i32 = 0x10;
@@ -148,25 +154,49 @@ impl JavaEditionProfile for Je5Profile {
         encode_destroy_entities(entity_ids)
     }
 
+    fn encode_container_opened(
+        &self,
+        window_id: u8,
+        container: InventoryContainer,
+        title: &str,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        encode_open_window(window_id, container, title)
+    }
+
+    fn encode_container_closed(&self, window_id: u8) -> Result<Vec<u8>, ProtocolError> {
+        Ok(encode_close_window(window_id))
+    }
+
     fn encode_inventory_contents(
         &self,
+        window_id: u8,
         container: InventoryContainer,
-        inventory: &PlayerInventory,
+        contents: &InventoryWindowContents,
     ) -> Result<Vec<u8>, ProtocolError> {
-        encode_window_items(player_window_id(container), inventory)
+        encode_window_items(window_id, container, contents)
+    }
+
+    fn encode_container_property_changed(
+        &self,
+        window_id: u8,
+        property_id: u8,
+        value: i16,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        Ok(encode_window_property(window_id, property_id, value))
     }
 
     fn encode_inventory_slot_changed(
         &self,
+        window_id: u8,
         container: InventoryContainer,
         slot: InventorySlot,
         stack: Option<&ItemStack>,
     ) -> Result<Option<Vec<u8>>, ProtocolError> {
-        let Some(protocol_slot) = protocol_slot(INVENTORY_SPEC.layout, slot) else {
+        let Some(protocol_slot) = protocol_slot(container, INVENTORY_SPEC.layout, slot) else {
             return Ok(None);
         };
         Ok(Some(encode_set_slot(
-            player_window_id_signed(container),
+            signed_window_id(window_id),
             protocol_slot,
             stack,
         )?))

@@ -21,8 +21,11 @@ pub enum TestJavaPacket {
     PlayerInfoAdd,
     EntityTeleport,
     BlockChange,
+    OpenWindow,
+    CloseWindow,
     SetSlot,
     WindowItems,
+    WindowProperty,
     ConfirmTransaction,
     HeldItemChange,
     PlayerAbilities,
@@ -112,8 +115,17 @@ impl TestJavaProtocol {
             (Self::Je5, TestJavaPacket::BlockChange) => Some(0x23),
             (Self::Je47, TestJavaPacket::BlockChange) => Some(0x23),
             (Self::Je340, TestJavaPacket::BlockChange) => Some(0x0b),
+            (Self::Je5, TestJavaPacket::OpenWindow) => Some(0x2d),
+            (Self::Je47, TestJavaPacket::OpenWindow) => Some(0x2d),
+            (Self::Je340, TestJavaPacket::OpenWindow) => Some(0x13),
+            (Self::Je5, TestJavaPacket::CloseWindow) => Some(0x2e),
+            (Self::Je47, TestJavaPacket::CloseWindow) => Some(0x2e),
+            (Self::Je340, TestJavaPacket::CloseWindow) => Some(0x12),
             (_, TestJavaPacket::SetSlot) => Some(self.set_slot_packet_id()),
             (_, TestJavaPacket::WindowItems) => Some(self.window_items_packet_id()),
+            (Self::Je5, TestJavaPacket::WindowProperty) => Some(0x31),
+            (Self::Je47, TestJavaPacket::WindowProperty) => Some(0x31),
+            (Self::Je340, TestJavaPacket::WindowProperty) => Some(0x15),
             (_, TestJavaPacket::ConfirmTransaction) => Some(self.confirm_transaction_packet_id()),
             (Self::Je5, TestJavaPacket::HeldItemChange) => Some(0x09),
             (Self::Je47, TestJavaPacket::HeldItemChange) => Some(0x09),
@@ -204,6 +216,17 @@ impl TestJavaProtocol {
         writer.into_inner()
     }
 
+    #[must_use]
+    pub fn encode_close_window(self, window_id: u8) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(match self {
+            Self::Je5 | Self::Je47 => 0x0d,
+            Self::Je340 => 0x08,
+        });
+        writer.write_u8(window_id);
+        writer.into_inner()
+    }
+
     pub fn decode_set_slot(
         self,
         packet: &[u8],
@@ -232,6 +255,65 @@ impl TestJavaProtocol {
         let action_number = reader.read_i16()?;
         let accepted = reader.read_bool()?;
         Ok((window_id, action_number, accepted))
+    }
+
+    pub fn decode_open_window(
+        self,
+        packet: &[u8],
+    ) -> Result<(u8, String, String, u8, Option<bool>), TestJavaProtocolError> {
+        let mut reader = PacketReader::new(packet);
+        let expected_packet_id = self
+            .clientbound_packet_id(TestJavaPacket::OpenWindow)
+            .ok_or(TestJavaProtocolError::Message(
+                "expected open window packet id",
+            ))?;
+        if reader.read_varint()? != expected_packet_id {
+            return Err(TestJavaProtocolError::Message(
+                "expected open window packet",
+            ));
+        }
+        let window_id = reader.read_u8()?;
+        let window_type = reader.read_string(64)?;
+        let title = reader.read_string(256)?;
+        let slot_count = reader.read_u8()?;
+        let use_title = match self {
+            Self::Je5 | Self::Je47 => Some(reader.read_bool()?),
+            Self::Je340 => None,
+        };
+        Ok((window_id, window_type, title, slot_count, use_title))
+    }
+
+    pub fn decode_window_property(
+        self,
+        packet: &[u8],
+    ) -> Result<(u8, i16, i16), TestJavaProtocolError> {
+        let mut reader = PacketReader::new(packet);
+        let expected_packet_id = self
+            .clientbound_packet_id(TestJavaPacket::WindowProperty)
+            .ok_or(TestJavaProtocolError::Message(
+                "expected window property packet id",
+            ))?;
+        if reader.read_varint()? != expected_packet_id {
+            return Err(TestJavaProtocolError::Message(
+                "expected window property packet",
+            ));
+        }
+        Ok((reader.read_u8()?, reader.read_i16()?, reader.read_i16()?))
+    }
+
+    pub fn decode_close_window(self, packet: &[u8]) -> Result<u8, TestJavaProtocolError> {
+        let mut reader = PacketReader::new(packet);
+        let expected_packet_id = self
+            .clientbound_packet_id(TestJavaPacket::CloseWindow)
+            .ok_or(TestJavaProtocolError::Message(
+                "expected close window packet id",
+            ))?;
+        if reader.read_varint()? != expected_packet_id {
+            return Err(TestJavaProtocolError::Message(
+                "expected close window packet",
+            ));
+        }
+        reader.read_u8().map_err(TestJavaProtocolError::from)
     }
 
     pub fn window_items_slot(

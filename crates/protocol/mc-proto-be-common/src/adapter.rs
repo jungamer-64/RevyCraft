@@ -174,6 +174,9 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
             | CoreEvent::EntitySpawned { .. }
             | CoreEvent::EntityDespawned { .. }
             | CoreEvent::InventoryContents { .. }
+            | CoreEvent::ContainerOpened { .. }
+            | CoreEvent::ContainerClosed { .. }
+            | CoreEvent::ContainerPropertyChanged { .. }
             | CoreEvent::InventorySlotChanged { .. }
             | CoreEvent::InventoryTransactionProcessed { .. }
             | CoreEvent::CursorChanged { .. }

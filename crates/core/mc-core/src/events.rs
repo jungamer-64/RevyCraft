@@ -1,6 +1,5 @@
-use crate::player::{
-    InteractionHand, InventoryContainer, InventorySlot, ItemStack, PlayerInventory, PlayerSnapshot,
-};
+use crate::inventory::{InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack};
+use crate::player::{InteractionHand, PlayerSnapshot};
 use crate::world::{BlockFace, BlockPos, BlockState, ChunkColumn, Vec3, WorldMeta};
 use crate::{ConnectionId, EntityId, PlayerId};
 use serde::{Deserialize, Serialize};
@@ -20,6 +19,7 @@ pub enum InventoryClickButton {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InventoryClickTarget {
     Slot(InventorySlot),
+    WindowSlot(i16),
     Outside,
     Unsupported,
 }
@@ -71,6 +71,10 @@ pub enum CoreCommand {
         transaction: InventoryTransactionContext,
         accepted: bool,
     },
+    CloseContainer {
+        player_id: PlayerId,
+        window_id: u8,
+    },
     DigBlock {
         player_id: PlayerId,
         position: BlockPos,
@@ -78,6 +82,13 @@ pub enum CoreCommand {
         face: Option<BlockFace>,
     },
     PlaceBlock {
+        player_id: PlayerId,
+        hand: InteractionHand,
+        position: BlockPos,
+        face: Option<BlockFace>,
+        held_item: Option<ItemStack>,
+    },
+    UseBlock {
         player_id: PlayerId,
         hand: InteractionHand,
         position: BlockPos,
@@ -102,8 +113,10 @@ impl CoreCommand {
             | Self::CreativeInventorySet { player_id, .. }
             | Self::InventoryClick { player_id, .. }
             | Self::InventoryTransactionAck { player_id, .. }
+            | Self::CloseContainer { player_id, .. }
             | Self::DigBlock { player_id, .. }
             | Self::PlaceBlock { player_id, .. }
+            | Self::UseBlock { player_id, .. }
             | Self::Disconnect { player_id, .. } => Some(*player_id),
         }
     }
@@ -137,10 +150,25 @@ pub enum CoreEvent {
         entity_ids: Vec<EntityId>,
     },
     InventoryContents {
+        window_id: u8,
         container: InventoryContainer,
-        inventory: PlayerInventory,
+        contents: InventoryWindowContents,
+    },
+    ContainerOpened {
+        window_id: u8,
+        container: InventoryContainer,
+        title: String,
+    },
+    ContainerClosed {
+        window_id: u8,
+    },
+    ContainerPropertyChanged {
+        window_id: u8,
+        property_id: u8,
+        value: i16,
     },
     InventorySlotChanged {
+        window_id: u8,
         container: InventoryContainer,
         slot: InventorySlot,
         stack: Option<ItemStack>,

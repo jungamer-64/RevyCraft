@@ -1,9 +1,9 @@
 use crate::gameplay::{GameplayHost, RustGameplayPlugin};
-use mc_core::{PlayerId, PlayerSnapshot, WorldMeta};
+use mc_core::{BlockEntityState, PlayerId, PlayerSnapshot, WorldMeta};
 use mc_plugin_api::abi::{ByteSlice, OwnedBuffer, PluginErrorCode, Utf8Slice};
 use mc_plugin_api::codec::gameplay::host_blob::{
-    decode_block_state, decode_player_snapshot, decode_world_meta, encode_block_pos,
-    encode_can_edit_block_key, encode_player_id,
+    decode_block_entity, decode_block_state, decode_player_snapshot, decode_world_meta,
+    encode_block_pos, encode_can_edit_block_key, encode_player_id,
 };
 use mc_plugin_api::codec::gameplay::{GameplayRequest, GameplayResponse};
 use mc_plugin_api::host_api::HostApiTableV1;
@@ -53,6 +53,18 @@ impl GameplayHost for SdkGameplayHost {
         let payload = encode_block_pos(position);
         let bytes = call_host_buffer(self.api.context, &payload, callback)?;
         decode_block_state(&bytes).map_err(|error| error.to_string())
+    }
+
+    fn read_block_entity(
+        &self,
+        position: mc_core::BlockPos,
+    ) -> Result<Option<BlockEntityState>, String> {
+        let Some(callback) = self.api.read_block_entity else {
+            return Err("gameplay host did not provide read_block_entity".to_string());
+        };
+        let payload = encode_block_pos(position);
+        let bytes = call_host_buffer(self.api.context, &payload, callback)?;
+        decode_block_entity(&bytes).map_err(|error| error.to_string())
     }
 
     fn can_edit_block(

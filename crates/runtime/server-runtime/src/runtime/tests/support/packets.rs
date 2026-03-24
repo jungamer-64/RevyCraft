@@ -83,6 +83,17 @@ pub(crate) fn click_window(
     protocol.encode_click_window(slot, button, action_number, clicked_item)
 }
 
+pub(crate) fn click_window_in_window(
+    protocol: TestJavaProtocol,
+    window_id: i8,
+    slot: i16,
+    button: i8,
+    action_number: i16,
+    clicked_item: Option<(i16, u8, i16)>,
+) -> Vec<u8> {
+    protocol.encode_click_window_in_window(window_id, slot, button, action_number, clicked_item)
+}
+
 pub(crate) fn confirm_transaction_ack(
     protocol: TestJavaProtocol,
     window_id: u8,
@@ -217,6 +228,27 @@ pub(crate) fn decode_confirm_transaction(
     packet: &[u8],
 ) -> Result<(u8, i16, bool), RuntimeError> {
     Ok(protocol.decode_confirm_transaction(packet)?)
+}
+
+pub(crate) fn decode_open_window(
+    protocol: TestJavaProtocol,
+    packet: &[u8],
+) -> Result<(u8, String, String, u8, Option<bool>), RuntimeError> {
+    Ok(protocol.decode_open_window(packet)?)
+}
+
+pub(crate) fn decode_window_property(
+    protocol: TestJavaProtocol,
+    packet: &[u8],
+) -> Result<(u8, i16, i16), RuntimeError> {
+    Ok(protocol.decode_window_property(packet)?)
+}
+
+pub(crate) fn decode_close_window(
+    protocol: TestJavaProtocol,
+    packet: &[u8],
+) -> Result<u8, RuntimeError> {
+    Ok(protocol.decode_close_window(packet)?)
 }
 
 pub(crate) fn held_item_from_packet(packet: &[u8]) -> Result<i8, RuntimeError> {

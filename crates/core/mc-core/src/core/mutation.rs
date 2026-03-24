@@ -1,9 +1,8 @@
 use super::ServerCore;
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
 use crate::gameplay::{GameplayEffect, GameplayMutation};
-use crate::player::{
-    InteractionHand, InventoryContainer, InventorySlot, ItemStack, PlayerSnapshot,
-};
+use crate::inventory::{InventoryContainer, InventorySlot, ItemStack};
+use crate::player::{InteractionHand, PlayerSnapshot};
 use crate::world::{BlockPos, BlockState, Vec3};
 use crate::{HOTBAR_SLOT_COUNT, PlayerId};
 
@@ -32,6 +31,12 @@ impl ServerCore {
                     stack,
                 } => {
                     events.extend(self.apply_inventory_slot_mutation(player_id, slot, stack));
+                }
+                GameplayMutation::OpenChest {
+                    player_id,
+                    position,
+                } => {
+                    events.extend(self.open_world_chest(player_id, position));
                 }
                 GameplayMutation::Block { position, block } => {
                     events.extend(self.apply_block_mutation(position, block));
@@ -134,6 +139,7 @@ impl ServerCore {
         let mut events = vec![TargetedEvent {
             target: EventTarget::Player(player_id),
             event: CoreEvent::InventorySlotChanged {
+                window_id: 0,
                 container: InventoryContainer::Player,
                 slot,
                 stack,
@@ -143,6 +149,7 @@ impl ServerCore {
             events.push(TargetedEvent {
                 target: EventTarget::Player(player_id),
                 event: CoreEvent::InventorySlotChanged {
+                    window_id: 0,
                     container: InventoryContainer::Player,
                     slot: InventorySlot::crafting_result(),
                     stack: after_result,
@@ -157,8 +164,15 @@ impl ServerCore {
         position: BlockPos,
         block: BlockState,
     ) -> Vec<TargetedEvent> {
-        self.set_block_at(position, block);
-        self.emit_block_change(position)
+        self.set_block_at(position, block.clone());
+        let mut events = self.close_world_chest_if_invalid(position, &block);
+        if block.key.as_str() == crate::catalog::CHEST {
+            self.block_entities
+                .entry(position)
+                .or_insert_with(|| crate::BlockEntityState::chest(27));
+        }
+        events.extend(self.emit_block_change(position));
+        events
     }
 
     pub(crate) fn place_inventory_correction(
@@ -174,6 +188,7 @@ impl ServerCore {
             TargetedEvent {
                 target: EventTarget::Player(player_id),
                 event: CoreEvent::InventorySlotChanged {
+                    window_id: 0,
                     container: InventoryContainer::Player,
                     slot: selected_slot,
                     stack: player.inventory.get_slot(selected_slot).cloned(),

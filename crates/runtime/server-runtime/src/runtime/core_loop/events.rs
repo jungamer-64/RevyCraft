@@ -25,8 +25,10 @@ impl RuntimeServer {
                 | CoreCommand::SetHeldSlot { .. }
                 | CoreCommand::CreativeInventorySet { .. }
                 | CoreCommand::InventoryClick { .. }
+                | CoreCommand::CloseContainer { .. }
                 | CoreCommand::DigBlock { .. }
                 | CoreCommand::PlaceBlock { .. }
+                | CoreCommand::UseBlock { .. }
                 | CoreCommand::Disconnect { .. }
         );
         let session_capabilities = session.and_then(|session| session.session_capabilities.clone());
@@ -66,6 +68,70 @@ impl RuntimeServer {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) async fn open_test_crafting_table(
+        &self,
+        player_id: mc_core::PlayerId,
+        window_id: u8,
+        title: &str,
+    ) -> Result<(), RuntimeError> {
+        let _consistency_guard = self.consistency_gate.read().await;
+        let events = {
+            let mut state = self.state.lock().await;
+            state.core.open_crafting_table(player_id, window_id, title)
+        };
+        self.dispatch_events(events).await;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn open_test_furnace(
+        &self,
+        player_id: mc_core::PlayerId,
+        window_id: u8,
+        title: &str,
+    ) -> Result<(), RuntimeError> {
+        let _consistency_guard = self.consistency_gate.read().await;
+        let events = {
+            let mut state = self.state.lock().await;
+            state.core.open_furnace(player_id, window_id, title)
+        };
+        self.dispatch_events(events).await;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn open_test_chest(
+        &self,
+        player_id: mc_core::PlayerId,
+        window_id: u8,
+        title: &str,
+    ) -> Result<(), RuntimeError> {
+        let _consistency_guard = self.consistency_gate.read().await;
+        let events = {
+            let mut state = self.state.lock().await;
+            state.core.open_chest(player_id, window_id, title)
+        };
+        self.dispatch_events(events).await;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn close_test_container(
+        &self,
+        player_id: mc_core::PlayerId,
+        window_id: u8,
+    ) -> Result<(), RuntimeError> {
+        self.apply_command(
+            CoreCommand::CloseContainer {
+                player_id,
+                window_id,
+            },
+            None,
+        )
+        .await
+    }
+
     pub(in crate::runtime) async fn tick(&self) -> Result<(), RuntimeError> {
         let _consistency_guard = self.consistency_gate.read().await;
         self.tick_guarded().await
@@ -101,6 +167,12 @@ impl RuntimeServer {
                         )
                         .map_err(RuntimeError::Config)?,
                 );
+            }
+            if events
+                .iter()
+                .any(|event| !matches!(event.event, CoreEvent::KeepAliveRequested { .. }))
+            {
+                state.dirty = true;
             }
             events
         };

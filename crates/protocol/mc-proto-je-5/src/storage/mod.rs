@@ -26,11 +26,12 @@ impl StorageAdapter for Je1710StorageAdapter {
             return Ok(None);
         }
         let meta = level::read_level_dat(&level_path)?;
-        let chunks = region::read_regions(&world_dir.join(REGION_DIR))?;
+        let (chunks, block_entities) = region::read_regions(&world_dir.join(REGION_DIR))?;
         let players = playerdata::read_playerdata(&world_dir.join(PLAYERDATA_DIR))?;
         Ok(Some(WorldSnapshot {
             meta,
             chunks,
+            block_entities,
             players,
         }))
     }
@@ -42,7 +43,11 @@ impl StorageAdapter for Je1710StorageAdapter {
     ) -> Result<(), StorageError> {
         fs::create_dir_all(world_dir)?;
         level::write_level_dat(&world_dir.join(LEVEL_DAT), &snapshot.meta)?;
-        region::write_regions(&world_dir.join(REGION_DIR), &snapshot.chunks)?;
+        region::write_regions(
+            &world_dir.join(REGION_DIR),
+            &snapshot.chunks,
+            &snapshot.block_entities,
+        )?;
         playerdata::write_playerdata(&world_dir.join(PLAYERDATA_DIR), &snapshot.players)?;
         Ok(())
     }

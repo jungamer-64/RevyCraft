@@ -16,6 +16,12 @@ pub type HostReadBlockStateFn = unsafe extern "C" fn(
     *mut OwnedBuffer,
     *mut OwnedBuffer,
 ) -> PluginErrorCode;
+pub type HostReadBlockEntityFn = unsafe extern "C" fn(
+    *mut c_void,
+    ByteSlice,
+    *mut OwnedBuffer,
+    *mut OwnedBuffer,
+) -> PluginErrorCode;
 pub type HostCanEditBlockFn =
     unsafe extern "C" fn(*mut c_void, ByteSlice, *mut bool, *mut OwnedBuffer) -> PluginErrorCode;
 
@@ -28,6 +34,7 @@ pub struct HostApiTableV1 {
     pub read_player_snapshot: Option<HostReadPlayerSnapshotFn>,
     pub read_world_meta: Option<HostReadWorldMetaFn>,
     pub read_block_state: Option<HostReadBlockStateFn>,
+    pub read_block_entity: Option<HostReadBlockEntityFn>,
     pub can_edit_block: Option<HostCanEditBlockFn>,
 }
 

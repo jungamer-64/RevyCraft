@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::RunningServer;
+use mc_core::PlayerId;
 
 #[derive(Clone)]
 pub(crate) struct LoadedPluginTestEnvironment {
@@ -82,4 +83,51 @@ pub(crate) async fn build_reloadable_test_server_from_source(
 
 pub(crate) fn active_protocol_registry(server: &RunningServer) -> ProtocolRegistry {
     server.runtime.active_generation().protocol_registry.clone()
+}
+
+pub(crate) async fn open_test_crafting_table(
+    server: &RunningServer,
+    player_id: PlayerId,
+    window_id: u8,
+    title: &str,
+) -> Result<(), RuntimeError> {
+    server
+        .runtime
+        .open_test_crafting_table(player_id, window_id, title)
+        .await
+}
+
+pub(crate) async fn close_test_container(
+    server: &RunningServer,
+    player_id: PlayerId,
+    window_id: u8,
+) -> Result<(), RuntimeError> {
+    server
+        .runtime
+        .close_test_container(player_id, window_id)
+        .await
+}
+
+pub(crate) async fn open_test_furnace(
+    server: &RunningServer,
+    player_id: PlayerId,
+    window_id: u8,
+    title: &str,
+) -> Result<(), RuntimeError> {
+    server
+        .runtime
+        .open_test_furnace(player_id, window_id, title)
+        .await
+}
+
+pub(crate) async fn open_test_chest(
+    server: &RunningServer,
+    player_id: PlayerId,
+    window_id: u8,
+    title: &str,
+) -> Result<(), RuntimeError> {
+    server
+        .runtime
+        .open_test_chest(player_id, window_id, title)
+        .await
 }

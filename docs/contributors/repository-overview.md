@@ -52,7 +52,7 @@
 | `crates/core/mc-core` | protocol 非依存の state machine。world/player state、command 適用、event 生成 |
 | `crates/runtime/server-runtime` | transport、listener/topology、session supervision、status snapshot、admin control plane |
 | `crates/plugin/mc-plugin-host` | packaged plugin discovery、activation、generation reload、quarantine、runtime selection |
-| `crates/plugin/mc-plugin-api` | ABI `3.0`、manifest、host API、typed codec |
+| `crates/plugin/mc-plugin-api` | ABI `3.4`、manifest、host API、typed codec |
 | `crates/plugin/mc-plugin-sdk-rust` | Rust plugin authoring SDK。manifest helper、traits、export macro |
 | `crates/protocol/mc-proto-*` | edition/version adapter と codec 実装 |
 | `plugins/*/*` | protocol / gameplay / storage / auth / admin-ui の concrete plugin 実装 |

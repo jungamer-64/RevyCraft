@@ -48,7 +48,8 @@ cargo run -p xtask -- build-release-bundles \
 - superflat overworld generation
 - initial chunk send
 - creative-style block break / place
-- inventory window `0` sync
+- authoritative inventory sync
+- JE non-player container/window foundation
 - multiple players
 - block change sync
 - `level.dat`, `playerdata/*.dat`, `region/*.mca` read/write
@@ -58,7 +59,7 @@ cargo run -p xtask -- build-release-bundles \
 
 具体的な対応 version / protocol number / adapter id は、active な plugin 構成と config に依存します。README では個別一覧を固定せず、実行時の構成を正として扱います。
 
-Bedrock は creative-style world interaction baseline までで、chat / containers / combat / mobs / Nether / End は未実装です。inventory は window `0` を中心にしていて、general container / crafting は未実装です。
+Bedrock は creative-style world interaction baseline までで、chat / containers / combat / mobs / Nether / End は未実装です。JE では generic container/window 基盤が入り、player inventory の `window 0` に加えて session-local な non-player `CraftingTable` / `Chest` / `Furnace` window と、gameplay から開ける world-backed な single chest を扱えます。world-backed chest は persistence、same-chest multi-view sync、non-empty break reject を持ちます。furnace は `sand -> glass`、`cobblestone -> stone` と `oak_log` / `oak_planks` / `stick` の starter subset を扱います。world-backed furnace、double chest、operator trigger、Bedrock container/property handling はまだ未実装です。
 
 ## リポジトリの入口
 

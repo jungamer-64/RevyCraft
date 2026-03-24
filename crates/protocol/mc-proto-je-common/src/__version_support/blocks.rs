@@ -1,6 +1,6 @@
 use mc_core::catalog::{
-    BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_LOG, OAK_PLANKS, SAND, SANDSTONE,
-    STICK, STONE,
+    BEDROCK, BRICKS, CHEST, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_LOG, OAK_PLANKS, SAND,
+    SANDSTONE, STICK, STONE,
 };
 use mc_core::{BlockState, ItemStack};
 
@@ -17,6 +17,7 @@ pub fn legacy_block(state: &BlockState) -> (u16, u8) {
         GLASS => (20, 0),
         SANDSTONE => (24, 0),
         BRICKS => (45, 0),
+        CHEST => (54, 0),
         _ => (0, 0),
     }
 }
@@ -40,6 +41,7 @@ pub fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
         20 => BlockState::glass(),
         24 if metadata == 0 => BlockState::sandstone(),
         45 => BlockState::bricks(),
+        54 => BlockState::chest(),
         _ => BlockState::air(),
     }
 }
@@ -58,6 +60,7 @@ pub fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
         GLASS => Some((20, damage)),
         SANDSTONE => Some((24, damage)),
         BRICKS => Some((45, damage)),
+        CHEST => Some((54, damage)),
         STICK => Some((280, damage)),
         _ => None,
     }
@@ -76,8 +79,24 @@ pub fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
         20 => GLASS,
         24 if damage == 0 => SANDSTONE,
         45 => BRICKS,
+        54 if damage == 0 => CHEST,
         280 if damage == 0 => STICK,
         _ => return ItemStack::unsupported(count, damage),
     };
     ItemStack::new(key, count, damage)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chest_block_and_item_round_trip_through_legacy_ids() {
+        assert_eq!(legacy_block(&BlockState::chest()), (54, 0));
+        assert_eq!(semantic_block(54, 0), BlockState::chest());
+
+        let chest_stack = ItemStack::new(CHEST, 3, 0);
+        assert_eq!(legacy_item(&chest_stack), Some((54, 0)));
+        assert_eq!(semantic_item(54, 0, 3), chest_stack);
+    }
 }

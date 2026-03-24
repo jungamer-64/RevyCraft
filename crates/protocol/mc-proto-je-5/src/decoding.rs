@@ -1,8 +1,9 @@
 use crate::{
-    PACKET_SB_CLICK_WINDOW, PACKET_SB_CLIENT_COMMAND, PACKET_SB_CONFIRM_TRANSACTION,
-    PACKET_SB_CREATIVE_INVENTORY_ACTION, PACKET_SB_FLYING, PACKET_SB_HELD_ITEM_CHANGE,
-    PACKET_SB_KEEP_ALIVE, PACKET_SB_LOOK, PACKET_SB_PLAYER_BLOCK_PLACEMENT,
-    PACKET_SB_PLAYER_DIGGING, PACKET_SB_POSITION, PACKET_SB_POSITION_LOOK, PACKET_SB_SETTINGS,
+    PACKET_SB_CLICK_WINDOW, PACKET_SB_CLIENT_COMMAND, PACKET_SB_CLOSE_WINDOW,
+    PACKET_SB_CONFIRM_TRANSACTION, PACKET_SB_CREATIVE_INVENTORY_ACTION, PACKET_SB_FLYING,
+    PACKET_SB_HELD_ITEM_CHANGE, PACKET_SB_KEEP_ALIVE, PACKET_SB_LOOK,
+    PACKET_SB_PLAYER_BLOCK_PLACEMENT, PACKET_SB_PLAYER_DIGGING, PACKET_SB_POSITION,
+    PACKET_SB_POSITION_LOOK, PACKET_SB_SETTINGS,
 };
 use mc_core::{
     BlockFace, BlockPos, CoreCommand, InteractionHand, InventoryClickButton, InventoryClickTarget,
@@ -48,19 +49,24 @@ pub(crate) fn decode_play_packet(
             player_id,
             &mut reader,
         )?)),
+        PACKET_SB_CLOSE_WINDOW => Ok(Some(CoreCommand::CloseContainer {
+            player_id,
+            window_id: reader.read_u8()?,
+        })),
         PACKET_SB_CLICK_WINDOW => Ok(Some(decode_click_window_packet(player_id, &mut reader)?)),
         PACKET_SB_CREATIVE_INVENTORY_ACTION => {
             let slot = reader.read_i16()?;
             let stack = read_slot(&mut reader, crate::INVENTORY_SPEC.slot_nbt)?;
-            Ok(
-                inventory_slot(crate::INVENTORY_SPEC.layout, slot).map(|slot| {
-                    CoreCommand::CreativeInventorySet {
-                        player_id,
-                        slot,
-                        stack,
-                    }
-                }),
+            Ok(inventory_slot(
+                mc_core::InventoryContainer::Player,
+                crate::INVENTORY_SPEC.layout,
+                slot,
             )
+            .map(|slot| CoreCommand::CreativeInventorySet {
+                player_id,
+                slot,
+                stack,
+            }))
         }
         PACKET_SB_SETTINGS => Ok(Some(decode_client_settings_packet(player_id, &mut reader)?)),
         PACKET_SB_CLIENT_COMMAND => Ok(Some(CoreCommand::ClientStatus {
@@ -142,7 +148,7 @@ fn decode_place_block_packet(
     if position.x == -1 && position.z == -1 && position.y == 255 && direction == 255 {
         return Ok(None);
     }
-    Ok(Some(CoreCommand::PlaceBlock {
+    Ok(Some(CoreCommand::UseBlock {
         player_id,
         hand: InteractionHand::Main,
         position,
@@ -194,10 +200,8 @@ fn decode_click_window_packet(
         InventoryClickTarget::Unsupported
     } else if raw_slot == -999 {
         InventoryClickTarget::Outside
-    } else if let Some(slot) = inventory_slot(crate::INVENTORY_SPEC.layout, raw_slot) {
-        InventoryClickTarget::Slot(slot)
     } else {
-        InventoryClickTarget::Unsupported
+        InventoryClickTarget::WindowSlot(raw_slot)
     };
 
     Ok(CoreCommand::InventoryClick {

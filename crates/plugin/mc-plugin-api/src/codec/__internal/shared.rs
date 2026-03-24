@@ -1,10 +1,17 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
+use crate::codec::__internal::inventory::{
+    decode_inventory_click_button, decode_inventory_click_target, decode_inventory_container,
+    decode_inventory_slot, decode_inventory_transaction_context, decode_inventory_window_contents,
+    decode_item_stack, decode_player_inventory, encode_inventory_click_button,
+    encode_inventory_click_target, encode_inventory_container, encode_inventory_slot,
+    encode_inventory_transaction_context, encode_inventory_window_contents, encode_item_stack,
+    encode_player_inventory,
+};
 use mc_core::{
-    BlockFace, BlockPos, BlockState, CapabilityAnnouncement, ChunkColumn, ChunkSection,
-    ClosedCapability, ClosedCapabilitySet, ConnectionId, CoreCommand, CoreEvent, DimensionId,
-    EntityId, InteractionHand, InventoryClickButton, InventoryClickTarget, InventoryContainer,
-    InventorySlot, InventoryTransactionContext, ItemStack, PlayerId, PlayerInventory,
-    PlayerSnapshot, PluginBuildTag, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
+    BlockEntityState, BlockFace, BlockPos, BlockState, CapabilityAnnouncement, ChunkColumn,
+    ChunkSection, ClosedCapability, ClosedCapabilitySet, ConnectionId, CoreCommand, CoreEvent,
+    DimensionId, EntityId, InteractionHand, PlayerId, PlayerSnapshot, PluginBuildTag, Vec3,
+    WorldMeta, WorldSnapshot, expand_block_index,
 };
 use mc_proto_common::ConnectionPhase;
 use std::collections::BTreeMap;
@@ -121,113 +128,6 @@ pub(crate) fn decode_block_face(
     }
 }
 
-pub(crate) fn encode_inventory_container(encoder: &mut Encoder, container: InventoryContainer) {
-    encoder.write_u8(match container {
-        InventoryContainer::Player => 1,
-    });
-}
-
-pub(crate) fn decode_inventory_container(
-    decoder: &mut Decoder<'_>,
-) -> Result<InventoryContainer, ProtocolCodecError> {
-    match decoder.read_u8()? {
-        1 => Ok(InventoryContainer::Player),
-        _ => Err(ProtocolCodecError::InvalidValue(
-            "invalid inventory container",
-        )),
-    }
-}
-
-pub(crate) fn encode_inventory_slot(encoder: &mut Encoder, slot: InventorySlot) {
-    match slot {
-        InventorySlot::Auxiliary(index) => {
-            encoder.write_u8(1);
-            encoder.write_u8(index);
-        }
-        InventorySlot::MainInventory(index) => {
-            encoder.write_u8(2);
-            encoder.write_u8(index);
-        }
-        InventorySlot::Hotbar(index) => {
-            encoder.write_u8(3);
-            encoder.write_u8(index);
-        }
-        InventorySlot::Offhand => encoder.write_u8(4),
-    }
-}
-
-pub(crate) fn decode_inventory_slot(
-    decoder: &mut Decoder<'_>,
-) -> Result<InventorySlot, ProtocolCodecError> {
-    match decoder.read_u8()? {
-        1 => Ok(InventorySlot::Auxiliary(decoder.read_u8()?)),
-        2 => Ok(InventorySlot::MainInventory(decoder.read_u8()?)),
-        3 => Ok(InventorySlot::Hotbar(decoder.read_u8()?)),
-        4 => Ok(InventorySlot::Offhand),
-        _ => Err(ProtocolCodecError::InvalidValue("invalid inventory slot")),
-    }
-}
-
-pub(crate) fn encode_inventory_click_button(encoder: &mut Encoder, button: InventoryClickButton) {
-    encoder.write_u8(match button {
-        InventoryClickButton::Left => 1,
-        InventoryClickButton::Right => 2,
-    });
-}
-
-pub(crate) fn decode_inventory_click_button(
-    decoder: &mut Decoder<'_>,
-) -> Result<InventoryClickButton, ProtocolCodecError> {
-    match decoder.read_u8()? {
-        1 => Ok(InventoryClickButton::Left),
-        2 => Ok(InventoryClickButton::Right),
-        _ => Err(ProtocolCodecError::InvalidValue(
-            "invalid inventory click button",
-        )),
-    }
-}
-
-pub(crate) fn encode_inventory_click_target(encoder: &mut Encoder, target: InventoryClickTarget) {
-    match target {
-        InventoryClickTarget::Slot(slot) => {
-            encoder.write_u8(1);
-            encode_inventory_slot(encoder, slot);
-        }
-        InventoryClickTarget::Outside => encoder.write_u8(2),
-        InventoryClickTarget::Unsupported => encoder.write_u8(3),
-    }
-}
-
-pub(crate) fn decode_inventory_click_target(
-    decoder: &mut Decoder<'_>,
-) -> Result<InventoryClickTarget, ProtocolCodecError> {
-    match decoder.read_u8()? {
-        1 => Ok(InventoryClickTarget::Slot(decode_inventory_slot(decoder)?)),
-        2 => Ok(InventoryClickTarget::Outside),
-        3 => Ok(InventoryClickTarget::Unsupported),
-        _ => Err(ProtocolCodecError::InvalidValue(
-            "invalid inventory click target",
-        )),
-    }
-}
-
-pub(crate) fn encode_inventory_transaction_context(
-    encoder: &mut Encoder,
-    transaction: InventoryTransactionContext,
-) {
-    encoder.write_u8(transaction.window_id);
-    encoder.write_i16(transaction.action_number);
-}
-
-pub(crate) fn decode_inventory_transaction_context(
-    decoder: &mut Decoder<'_>,
-) -> Result<InventoryTransactionContext, ProtocolCodecError> {
-    Ok(InventoryTransactionContext {
-        window_id: decoder.read_u8()?,
-        action_number: decoder.read_i16()?,
-    })
-}
-
 pub(crate) fn encode_player_id(encoder: &mut Encoder, player_id: PlayerId) {
     encoder.write_raw(player_id.0.as_bytes());
 }
@@ -313,51 +213,6 @@ where
     })
 }
 
-pub(crate) fn encode_item_stack(
-    encoder: &mut Encoder,
-    stack: &ItemStack,
-) -> Result<(), ProtocolCodecError> {
-    encoder.write_string(stack.key.as_str())?;
-    encoder.write_u8(stack.count);
-    encoder.write_u16(stack.damage);
-    Ok(())
-}
-
-pub(crate) fn decode_item_stack(
-    decoder: &mut Decoder<'_>,
-) -> Result<ItemStack, ProtocolCodecError> {
-    Ok(ItemStack::new(
-        decoder.read_string()?,
-        decoder.read_u8()?,
-        decoder.read_u16()?,
-    ))
-}
-
-pub(crate) fn encode_player_inventory(
-    encoder: &mut Encoder,
-    inventory: &PlayerInventory,
-) -> Result<(), ProtocolCodecError> {
-    encoder.write_len(inventory.slots.len())?;
-    for stack in &inventory.slots {
-        encode_option(encoder, stack.as_ref(), encode_item_stack)?;
-    }
-    encode_option(encoder, inventory.offhand.as_ref(), encode_item_stack)
-}
-
-pub(crate) fn decode_player_inventory(
-    decoder: &mut Decoder<'_>,
-) -> Result<PlayerInventory, ProtocolCodecError> {
-    let len = decoder.read_len()?;
-    let mut slots = Vec::with_capacity(len);
-    for _ in 0..len {
-        slots.push(decode_option(decoder, decode_item_stack)?);
-    }
-    Ok(PlayerInventory {
-        slots,
-        offhand: decode_option(decoder, decode_item_stack)?,
-    })
-}
-
 pub(crate) fn encode_block_pos(encoder: &mut Encoder, position: BlockPos) {
     encoder.write_i32(position.x);
     encoder.write_i32(position.y);
@@ -414,6 +269,40 @@ pub(crate) fn decode_block_state(
         key: mc_core::BlockKey::new(key),
         properties,
     })
+}
+
+pub(crate) fn encode_block_entity_state(
+    encoder: &mut Encoder,
+    block_entity: &BlockEntityState,
+) -> Result<(), ProtocolCodecError> {
+    match block_entity {
+        BlockEntityState::Chest { slots } => {
+            encoder.write_u8(1);
+            encoder.write_len(slots.len())?;
+            for slot in slots {
+                encode_option(encoder, slot.as_ref(), encode_item_stack)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn decode_block_entity_state(
+    decoder: &mut Decoder<'_>,
+) -> Result<BlockEntityState, ProtocolCodecError> {
+    match decoder.read_u8()? {
+        1 => {
+            let len = decoder.read_len()?;
+            let mut slots = Vec::with_capacity(len);
+            for _ in 0..len {
+                slots.push(decode_option(decoder, decode_item_stack)?);
+            }
+            Ok(BlockEntityState::Chest { slots })
+        }
+        _ => Err(ProtocolCodecError::InvalidValue(
+            "invalid block entity state",
+        )),
+    }
 }
 
 fn encode_chunk_section(
@@ -517,6 +406,11 @@ pub(crate) fn encode_world_snapshot(
     for chunk in snapshot.chunks.values() {
         encode_chunk_column(encoder, chunk)?;
     }
+    encoder.write_len(snapshot.block_entities.len())?;
+    for (position, block_entity) in &snapshot.block_entities {
+        encode_block_pos(encoder, *position);
+        encode_block_entity_state(encoder, block_entity)?;
+    }
     encoder.write_len(snapshot.players.len())?;
     for player in snapshot.players.values() {
         encode_player_snapshot(encoder, player)?;
@@ -534,6 +428,13 @@ pub(crate) fn decode_world_snapshot(
         let chunk = decode_chunk_column(decoder)?;
         chunks.insert(chunk.pos, chunk);
     }
+    let block_entity_len = decoder.read_len()?;
+    let mut block_entities = BTreeMap::new();
+    for _ in 0..block_entity_len {
+        let position = decode_block_pos(decoder)?;
+        let block_entity = decode_block_entity_state(decoder)?;
+        block_entities.insert(position, block_entity);
+    }
     let player_len = decoder.read_len()?;
     let mut players = BTreeMap::new();
     for _ in 0..player_len {
@@ -543,6 +444,7 @@ pub(crate) fn decode_world_snapshot(
     Ok(WorldSnapshot {
         meta,
         chunks,
+        block_entities,
         players,
     })
 }
@@ -686,6 +588,14 @@ pub(crate) fn encode_core_command(
             encode_inventory_transaction_context(encoder, *transaction);
             encoder.write_bool(*accepted);
         }
+        CoreCommand::CloseContainer {
+            player_id,
+            window_id,
+        } => {
+            encoder.write_u8(13);
+            encode_player_id(encoder, *player_id);
+            encoder.write_u8(*window_id);
+        }
         CoreCommand::DigBlock {
             player_id,
             position,
@@ -709,6 +619,23 @@ pub(crate) fn encode_core_command(
             held_item,
         } => {
             encoder.write_u8(9);
+            encode_player_id(encoder, *player_id);
+            encode_interaction_hand(encoder, *hand);
+            encode_block_pos(encoder, *position);
+            encode_option(encoder, face.as_ref(), |encoder, face| {
+                encode_block_face(encoder, *face);
+                Ok(())
+            })?;
+            encode_option(encoder, held_item.as_ref(), encode_item_stack)?;
+        }
+        CoreCommand::UseBlock {
+            player_id,
+            hand,
+            position,
+            face,
+            held_item,
+        } => {
+            encoder.write_u8(14);
             encode_player_id(encoder, *player_id);
             encode_interaction_hand(encoder, *hand);
             encode_block_pos(encoder, *position);
@@ -775,6 +702,10 @@ pub(crate) fn decode_core_command(
             transaction: decode_inventory_transaction_context(decoder)?,
             accepted: decoder.read_bool()?,
         }),
+        13 => Ok(CoreCommand::CloseContainer {
+            player_id: decode_player_id(decoder)?,
+            window_id: decoder.read_u8()?,
+        }),
         8 => Ok(CoreCommand::DigBlock {
             player_id: decode_player_id(decoder)?,
             position: decode_block_pos(decoder)?,
@@ -782,6 +713,13 @@ pub(crate) fn decode_core_command(
             face: decode_option(decoder, decode_block_face)?,
         }),
         9 => Ok(CoreCommand::PlaceBlock {
+            player_id: decode_player_id(decoder)?,
+            hand: decode_interaction_hand(decoder)?,
+            position: decode_block_pos(decoder)?,
+            face: decode_option(decoder, decode_block_face)?,
+            held_item: decode_option(decoder, decode_item_stack)?,
+        }),
+        14 => Ok(CoreCommand::UseBlock {
             player_id: decode_player_id(decoder)?,
             hand: decode_interaction_hand(decoder)?,
             position: decode_block_pos(decoder)?,
@@ -847,19 +785,47 @@ pub(crate) fn encode_core_event(
             }
         }
         CoreEvent::InventoryContents {
+            window_id,
             container,
-            inventory,
+            contents,
         } => {
             encoder.write_u8(7);
+            encoder.write_u8(*window_id);
             encode_inventory_container(encoder, *container);
-            encode_player_inventory(encoder, inventory)?;
+            encode_inventory_window_contents(encoder, contents)?;
+        }
+        CoreEvent::ContainerOpened {
+            window_id,
+            container,
+            title,
+        } => {
+            encoder.write_u8(15);
+            encoder.write_u8(*window_id);
+            encode_inventory_container(encoder, *container);
+            encoder.write_string(title)?;
+        }
+        CoreEvent::ContainerClosed { window_id } => {
+            encoder.write_u8(16);
+            encoder.write_u8(*window_id);
+        }
+        CoreEvent::ContainerPropertyChanged {
+            window_id,
+            property_id,
+            value,
+        } => {
+            encoder.write_u8(17);
+            encoder.write_u8(*window_id);
+            encoder.write_u8(*property_id);
+            encoder.write_i16(*value);
         }
         CoreEvent::InventorySlotChanged {
+            window_id,
             container,
             slot,
             stack,
         } => {
             encoder.write_u8(8);
+            encoder.write_u8(*window_id);
             encode_inventory_container(encoder, *container);
             encode_inventory_slot(encoder, *slot);
             encode_option(encoder, stack.as_ref(), encode_item_stack)?;
@@ -937,10 +903,25 @@ pub(crate) fn decode_core_event(
             Ok(CoreEvent::EntityDespawned { entity_ids })
         }
         7 => Ok(CoreEvent::InventoryContents {
+            window_id: decoder.read_u8()?,
             container: decode_inventory_container(decoder)?,
-            inventory: decode_player_inventory(decoder)?,
+            contents: decode_inventory_window_contents(decoder)?,
+        }),
+        15 => Ok(CoreEvent::ContainerOpened {
+            window_id: decoder.read_u8()?,
+            container: decode_inventory_container(decoder)?,
+            title: decoder.read_string()?,
+        }),
+        16 => Ok(CoreEvent::ContainerClosed {
+            window_id: decoder.read_u8()?,
+        }),
+        17 => Ok(CoreEvent::ContainerPropertyChanged {
+            window_id: decoder.read_u8()?,
+            property_id: decoder.read_u8()?,
+            value: decoder.read_i16()?,
         }),
         8 => Ok(CoreEvent::InventorySlotChanged {
+            window_id: decoder.read_u8()?,
             container: decode_inventory_container(decoder)?,
             slot: decode_inventory_slot(decoder)?,
             stack: decode_option(decoder, decode_item_stack)?,

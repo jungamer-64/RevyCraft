@@ -1,14 +1,16 @@
 use crate::{JE_47_ADAPTER_ID, Je47Adapter, PROTOCOL_VERSION_1_8_X, VERSION_NAME_1_8_X};
 use mc_core::{
-    ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DimensionId, InventoryClickButton,
-    InventoryClickTarget, InventoryContainer, InventorySlot, InventoryTransactionContext,
-    ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3,
+    ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DimensionId, InteractionHand,
+    InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerInventory,
+    PlayerSnapshot, Vec3,
 };
 use mc_proto_common::{
     Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter, PlayEncodingContext,
     PlaySyncAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter, StatusRequest,
     TransportKind, WireFormatKind,
 };
+use mc_proto_je_common::__version_support::positions::pack_block_position;
 use uuid::Uuid;
 
 fn player_snapshot(name: &str) -> PlayerSnapshot {
@@ -97,6 +99,7 @@ fn encodes_status_and_inventory_events() {
     let packet = adapter
         .encode_play_event(
             &CoreEvent::InventorySlotChanged {
+                window_id: 0,
                 container: InventoryContainer::Player,
                 slot: InventorySlot::Offhand,
                 stack: Some(ItemStack::new("minecraft:glass", 1, 0)),
@@ -134,6 +137,32 @@ fn decodes_play_packets_into_core_commands() {
             position: Some(_),
             ..
         }
+    ));
+
+    let mut placement = PacketWriter::default();
+    placement.write_varint(0x08);
+    placement.write_i64(pack_block_position(mc_core::BlockPos::new(2, 3, 4)));
+    placement.write_i8(1);
+    placement.write_i16(54);
+    placement.write_u8(1);
+    placement.write_i16(0);
+    placement.write_u8(0);
+    placement.write_i8(8);
+    placement.write_i8(8);
+    placement.write_i8(8);
+    let command = adapter
+        .decode_play(player_id, &placement.into_inner())
+        .expect("placement should decode")
+        .expect("placement should produce a command");
+    assert!(matches!(
+        command,
+        CoreCommand::UseBlock {
+            hand: InteractionHand::Main,
+            position: mc_core::BlockPos { x: 2, y: 3, z: 4 },
+            face: Some(mc_core::BlockFace::Top),
+            held_item: Some(ref stack),
+            ..
+        } if stack.key.as_str() == "minecraft:chest" && stack.count == 1
     ));
 }
 
@@ -254,7 +283,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
                 window_id: 0,
                 action_number: 3,
             },
-            target: InventoryClickTarget::Slot(InventorySlot::Auxiliary(1)),
+            target: InventoryClickTarget::WindowSlot(1),
             button: InventoryClickButton::Right,
             clicked_item: Some(ref stack),
             ..
@@ -322,8 +351,12 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
 
 #[test]
 fn encodes_legacy_slots_with_tag_end_marker() {
-    let packet = crate::encoding::encode_window_items(0, &PlayerInventory::creative_starter())
-        .expect("window items should encode");
+    let packet = crate::encoding::encode_window_items(
+        0,
+        InventoryContainer::Player,
+        &InventoryWindowContents::player(PlayerInventory::creative_starter()),
+    )
+    .expect("window items should encode");
     let mut reader = PacketReader::new(&packet);
     assert_eq!(reader.read_varint().expect("packet id should decode"), 0x30);
     assert_eq!(reader.read_u8().expect("window id should decode"), 0);
@@ -335,4 +368,216 @@ fn encodes_legacy_slots_with_tag_end_marker() {
     assert_eq!(reader.read_u8().expect("count should decode"), 64);
     let _ = reader.read_i16().expect("damage should decode");
     assert_eq!(reader.read_u8().expect("nbt tag should decode"), 0);
+}
+
+#[test]
+fn encodes_and_decodes_container_window_packets() {
+    let adapter = Je47Adapter::new();
+    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"window-open-18"));
+
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::ContainerOpened {
+                window_id: 2,
+                container: InventoryContainer::CraftingTable,
+                title: "Crafting".to_string(),
+            },
+            &PlayEncodingContext {
+                player_id,
+                entity_id: mc_core::EntityId(1),
+            },
+        )
+        .expect("open window should encode");
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2d);
+    assert_eq!(reader.read_u8().expect("window id should decode"), 2);
+    assert_eq!(
+        reader.read_string(32).expect("window type should decode"),
+        "minecraft:crafting_table"
+    );
+    assert_eq!(
+        reader.read_string(128).expect("title should decode"),
+        "{\"text\":\"Crafting\"}"
+    );
+    assert_eq!(reader.read_u8().expect("slot count should decode"), 0);
+    assert!(reader.read_bool().expect("use title should decode"));
+
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::ContainerClosed { window_id: 2 },
+            &PlayEncodingContext {
+                player_id,
+                entity_id: mc_core::EntityId(1),
+            },
+        )
+        .expect("close window should encode");
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2e);
+    assert_eq!(reader.read_u8().expect("window id should decode"), 2);
+
+    let mut close = PacketWriter::default();
+    close.write_varint(0x0d);
+    close.write_u8(2);
+    let command = adapter
+        .decode_play(player_id, &close.into_inner())
+        .expect("close window should decode")
+        .expect("close window should produce command");
+    assert_eq!(
+        command,
+        CoreCommand::CloseContainer {
+            player_id,
+            window_id: 2,
+        }
+    );
+}
+
+#[test]
+fn chest_packets_use_expected_window_type_and_slot_mapping() {
+    let adapter = Je47Adapter::new();
+    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"chest-18"));
+    let context = PlayEncodingContext {
+        player_id,
+        entity_id: mc_core::EntityId(1),
+    };
+
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::ContainerOpened {
+                window_id: 4,
+                container: InventoryContainer::Chest,
+                title: "Chest".to_string(),
+            },
+            &context,
+        )
+        .expect("chest open should encode");
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2d);
+    assert_eq!(reader.read_u8().expect("window id should decode"), 4);
+    assert_eq!(
+        reader.read_string(32).expect("window type should decode"),
+        "minecraft:chest"
+    );
+    assert_eq!(
+        reader.read_string(128).expect("title should decode"),
+        "{\"text\":\"Chest\"}"
+    );
+    assert_eq!(reader.read_u8().expect("slot count should decode"), 27);
+    assert!(reader.read_bool().expect("use title should decode"));
+
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::InventorySlotChanged {
+                window_id: 4,
+                container: InventoryContainer::Chest,
+                slot: InventorySlot::MainInventory(0),
+                stack: Some(ItemStack::new("minecraft:glass", 1, 0)),
+            },
+            &context,
+        )
+        .expect("main inventory remap should encode");
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2f);
+    assert_eq!(reader.read_i8().expect("window id should decode"), 4);
+    assert_eq!(reader.read_i16().expect("slot should decode"), 27);
+
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::InventorySlotChanged {
+                window_id: 4,
+                container: InventoryContainer::Chest,
+                slot: InventorySlot::Hotbar(0),
+                stack: Some(ItemStack::new("minecraft:glass", 1, 0)),
+            },
+            &context,
+        )
+        .expect("hotbar remap should encode");
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2f);
+    assert_eq!(reader.read_i8().expect("window id should decode"), 4);
+    assert_eq!(reader.read_i16().expect("slot should decode"), 54);
+}
+
+#[test]
+fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
+    let adapter = Je47Adapter::new();
+    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"furnace-18"));
+    let context = PlayEncodingContext {
+        player_id,
+        entity_id: mc_core::EntityId(1),
+    };
+
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::ContainerOpened {
+                window_id: 3,
+                container: InventoryContainer::Furnace,
+                title: "Furnace".to_string(),
+            },
+            &context,
+        )
+        .expect("furnace open should encode");
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2d);
+    assert_eq!(reader.read_u8().expect("window id should decode"), 3);
+    assert_eq!(
+        reader.read_string(32).expect("window type should decode"),
+        "minecraft:furnace"
+    );
+    assert_eq!(
+        reader.read_string(128).expect("title should decode"),
+        "{\"text\":\"Furnace\"}"
+    );
+    assert_eq!(reader.read_u8().expect("slot count should decode"), 3);
+    assert!(reader.read_bool().expect("use title should decode"));
+
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::InventorySlotChanged {
+                window_id: 3,
+                container: InventoryContainer::Furnace,
+                slot: InventorySlot::MainInventory(0),
+                stack: Some(ItemStack::new("minecraft:glass", 1, 0)),
+            },
+            &context,
+        )
+        .expect("main inventory remap should encode");
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2f);
+    assert_eq!(reader.read_i8().expect("window id should decode"), 3);
+    assert_eq!(reader.read_i16().expect("slot should decode"), 3);
+
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::InventorySlotChanged {
+                window_id: 3,
+                container: InventoryContainer::Furnace,
+                slot: InventorySlot::Hotbar(0),
+                stack: Some(ItemStack::new("minecraft:glass", 1, 0)),
+            },
+            &context,
+        )
+        .expect("hotbar remap should encode");
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2f);
+    assert_eq!(reader.read_i8().expect("window id should decode"), 3);
+    assert_eq!(reader.read_i16().expect("slot should decode"), 30);
+
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::ContainerPropertyChanged {
+                window_id: 3,
+                property_id: 1,
+                value: 300,
+            },
+            &context,
+        )
+        .expect("furnace property should encode");
+    let mut reader = PacketReader::new(&packets[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x31);
+    assert_eq!(reader.read_u8().expect("window id should decode"), 3);
+    assert_eq!(reader.read_i16().expect("property id should decode"), 1);
+    assert_eq!(
+        reader.read_i16().expect("property value should decode"),
+        300
+    );
 }

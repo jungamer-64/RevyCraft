@@ -2,7 +2,8 @@ use super::ServerCore;
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
 use crate::player::PlayerSnapshot;
 use crate::world::{
-    BlockPos, BlockState, ChunkColumn, ChunkPos, generate_superflat_chunk, required_chunks,
+    BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, generate_superflat_chunk,
+    required_chunks,
 };
 use crate::{BLOCK_EDIT_REACH, PLAYER_HEIGHT, PLAYER_WIDTH};
 
@@ -48,6 +49,10 @@ impl ServerCore {
             .entry(chunk_pos)
             .or_insert_with(|| generate_superflat_chunk(chunk_pos));
         chunk.set_block(local_x, position.y, local_z, state);
+    }
+
+    pub(super) fn block_entity_at(&self, position: BlockPos) -> Option<BlockEntityState> {
+        self.block_entities.get(&position).cloned()
     }
 
     pub(super) fn emit_block_change(&self, position: BlockPos) -> Vec<TargetedEvent> {

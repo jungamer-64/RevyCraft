@@ -1,5 +1,6 @@
 #![allow(clippy::multiple_crate_versions)]
 pub mod catalog;
+pub mod inventory;
 
 pub(crate) mod core;
 pub(crate) mod events;
@@ -22,13 +23,14 @@ pub use self::gameplay::{
     CanonicalGameplayPolicy, GameplayEffect, GameplayJoinEffect, GameplayMutation,
     GameplayPolicyResolver, GameplayQuery, ReadonlyGameplayPolicy,
 };
-pub use self::player::{
-    InteractionHand, InventoryContainer, InventorySlot, ItemKey, ItemStack, PlayerInventory,
-    PlayerSnapshot,
+pub use self::inventory::{
+    InventoryContainer, InventorySlot, InventoryWindowContents, ItemKey, ItemStack, PlayerInventory,
 };
+pub use self::player::{InteractionHand, PlayerSnapshot};
 pub use self::world::{
-    BlockFace, BlockKey, BlockPos, BlockState, ChunkColumn, ChunkDelta, ChunkPos, ChunkSection,
-    DimensionId, SectionBlockIndex, SectionPos, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
+    BlockEntityState, BlockFace, BlockKey, BlockPos, BlockState, ChunkColumn, ChunkDelta, ChunkPos,
+    ChunkSection, DimensionId, SectionBlockIndex, SectionPos, Vec3, WorldMeta, WorldSnapshot,
+    expand_block_index,
 };
 
 #[cfg(test)]

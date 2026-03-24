@@ -1,15 +1,19 @@
 use super::nbt::{
     NbtTag, as_compound, byte_array_field, byte_field, compound_field, int_field, list_field,
+    short_field, string_field,
 };
-use mc_core::{ChunkColumn, ChunkPos, expand_block_index};
+use mc_core::{BlockEntityState, BlockPos, ChunkColumn, ChunkPos, ItemStack, expand_block_index};
 use mc_proto_common::StorageError;
 use mc_proto_je_common::__version_support::{
-    blocks::{legacy_block, semantic_block},
+    blocks::{legacy_block, legacy_item, semantic_block, semantic_item},
     chunks::get_nibble,
 };
 use std::collections::BTreeMap;
 
-pub(super) fn chunk_to_nbt(chunk: &ChunkColumn) -> NbtTag {
+pub(super) fn chunk_to_nbt(
+    chunk: &ChunkColumn,
+    block_entities: &BTreeMap<BlockPos, BlockEntityState>,
+) -> NbtTag {
     let mut level = BTreeMap::new();
     level.insert("xPos".to_string(), NbtTag::Int(chunk.pos.x));
     level.insert("zPos".to_string(), NbtTag::Int(chunk.pos.z));
@@ -23,7 +27,17 @@ pub(super) fn chunk_to_nbt(chunk: &ChunkColumn) -> NbtTag {
     );
     level.insert("HeightMap".to_string(), NbtTag::IntArray(vec![4; 256]));
     level.insert("Entities".to_string(), NbtTag::List(10, Vec::new()));
-    level.insert("TileEntities".to_string(), NbtTag::List(10, Vec::new()));
+    level.insert(
+        "TileEntities".to_string(),
+        NbtTag::List(
+            10,
+            block_entities
+                .iter()
+                .filter(|(position, _)| position.chunk_pos() == chunk.pos)
+                .filter_map(|(position, block_entity)| encode_tile_entity(*position, block_entity))
+                .collect(),
+        ),
+    );
 
     let sections = chunk
         .sections
@@ -60,11 +74,14 @@ pub(super) fn chunk_to_nbt(chunk: &ChunkColumn) -> NbtTag {
     NbtTag::Compound(root)
 }
 
-pub(super) fn chunk_from_nbt(root: &NbtTag) -> Result<ChunkColumn, StorageError> {
+pub(super) fn chunk_from_nbt(
+    root: &NbtTag,
+) -> Result<(ChunkColumn, BTreeMap<BlockPos, BlockEntityState>), StorageError> {
     let root = as_compound(root)?;
     let level = compound_field(root, "Level")?;
     let pos = ChunkPos::new(int_field(level, "xPos")?, int_field(level, "zPos")?);
     let mut chunk = ChunkColumn::new(pos);
+    let mut block_entities = BTreeMap::new();
     chunk.biomes = byte_array_field(level, "Biomes").unwrap_or_else(|_| vec![1; 256]);
 
     for section in list_field(level, "Sections")? {
@@ -83,7 +100,17 @@ pub(super) fn chunk_from_nbt(root: &NbtTag) -> Result<ChunkColumn, StorageError>
             chunk.set_block(x, section_y * 16 + i32::from(y), z, state);
         }
     }
-    Ok(chunk)
+
+    if let Ok(tile_entities) = list_field(level, "TileEntities") {
+        for tile_entity in tile_entities {
+            let Some((position, block_entity)) = decode_tile_entity(tile_entity)? else {
+                continue;
+            };
+            block_entities.insert(position, block_entity);
+        }
+    }
+
+    Ok((chunk, block_entities))
 }
 
 pub(super) fn region_chunk_index(pos: ChunkPos) -> usize {
@@ -101,4 +128,82 @@ fn set_nibble(target: &mut [u8], index: usize, value: u8) {
     } else {
         target[byte_index] = (target[byte_index] & 0x0f) | ((value & 0x0f) << 4);
     }
+}
+
+fn encode_tile_entity(position: BlockPos, block_entity: &BlockEntityState) -> Option<NbtTag> {
+    match block_entity {
+        BlockEntityState::Chest { slots } => {
+            let mut compound = BTreeMap::new();
+            compound.insert("id".to_string(), NbtTag::String("Chest".to_string()));
+            compound.insert("x".to_string(), NbtTag::Int(position.x));
+            compound.insert("y".to_string(), NbtTag::Int(position.y));
+            compound.insert("z".to_string(), NbtTag::Int(position.z));
+            compound.insert(
+                "Items".to_string(),
+                NbtTag::List(
+                    10,
+                    slots
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, stack)| encode_item_slot(index, stack.as_ref()))
+                        .collect(),
+                ),
+            );
+            Some(NbtTag::Compound(compound))
+        }
+    }
+}
+
+fn encode_item_slot(index: usize, stack: Option<&ItemStack>) -> Option<NbtTag> {
+    let stack = stack?;
+    let (item_id, damage) = legacy_item(stack)?;
+    let mut compound = BTreeMap::new();
+    compound.insert(
+        "Slot".to_string(),
+        NbtTag::Byte(i8::try_from(index).expect("chest slot index should fit into i8")),
+    );
+    compound.insert("id".to_string(), NbtTag::Short(item_id));
+    compound.insert(
+        "Count".to_string(),
+        NbtTag::Byte(i8::try_from(stack.count).expect("stack count should fit into i8")),
+    );
+    compound.insert(
+        "Damage".to_string(),
+        NbtTag::Short(i16::try_from(damage).expect("item damage should fit into i16")),
+    );
+    Some(NbtTag::Compound(compound))
+}
+
+fn decode_tile_entity(
+    tile_entity: &NbtTag,
+) -> Result<Option<(BlockPos, BlockEntityState)>, StorageError> {
+    let compound = as_compound(tile_entity)?;
+    if string_field(compound, "id").ok().as_deref() != Some("Chest") {
+        return Ok(None);
+    }
+    let position = BlockPos::new(
+        int_field(compound, "x")?,
+        int_field(compound, "y")?,
+        int_field(compound, "z")?,
+    );
+    let mut slots = vec![None; 27];
+    if let Ok(items) = list_field(compound, "Items") {
+        for item in items {
+            let item_compound = as_compound(item)?;
+            let slot = usize::try_from(byte_field(item_compound, "Slot")?)
+                .map_err(|_| StorageError::InvalidData("negative chest slot index".to_string()))?;
+            if slot >= slots.len() {
+                continue;
+            }
+            let item_id = short_field(item_compound, "id")?;
+            let damage = u16::try_from(short_field(item_compound, "Damage")?).map_err(|_| {
+                StorageError::InvalidData("negative item damage not supported".to_string())
+            })?;
+            let count = u8::try_from(byte_field(item_compound, "Count")?).map_err(|_| {
+                StorageError::InvalidData("negative item count not supported".to_string())
+            })?;
+            slots[slot] = Some(semantic_item(item_id, damage, count));
+        }
+    }
+    Ok(Some((position, BlockEntityState::Chest { slots })))
 }

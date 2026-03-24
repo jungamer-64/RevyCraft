@@ -19,8 +19,10 @@ impl RuntimeServer {
             return Ok(false);
         };
         match command {
-            CoreCommand::InventoryClick { .. }
-                if session.pending_rejected_inventory_transaction.is_some() =>
+            CoreCommand::InventoryClick { transaction, .. }
+                if session
+                    .pending_rejected_inventory_transaction
+                    .is_some_and(|pending| pending.window_id == transaction.window_id) =>
             {
                 return Ok(false);
             }
