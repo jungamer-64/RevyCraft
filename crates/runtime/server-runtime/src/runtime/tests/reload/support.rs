@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::RunningServer;
+use rsa::rand_core::{OsRng, RngCore};
 
 fn plugin_host_status(server: &RunningServer) -> mc_plugin_host::host::PluginHostStatusSnapshot {
     server
@@ -177,14 +178,14 @@ pub(crate) fn encrypt_online_login_challenge_response(
     verify_token: &[u8],
 ) -> Result<EncryptedLoginChallenge, RuntimeError> {
     let mut shared_secret = [0_u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut shared_secret);
+    OsRng.fill_bytes(&mut shared_secret);
     let shared_secret_encrypted = public_key
-        .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
+        .encrypt(&mut OsRng, Pkcs1v15Encrypt, &shared_secret)
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
         })?;
     let verify_token_encrypted = public_key
-        .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, verify_token)
+        .encrypt(&mut OsRng, Pkcs1v15Encrypt, verify_token)
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
         })?;

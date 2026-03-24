@@ -4,6 +4,7 @@ use aes::Aes128;
 use aes::cipher::{BlockEncrypt, KeyInit};
 use bedrockrs_network::connection::Connection as BedrockConnection;
 use bedrockrs_network::listener::Listener as BedrockListener;
+use bedrockrs_proto::Unknown as BedrockUnknown;
 use bedrockrs_proto::compression::Compression as BedrockCompression;
 use bytes::BytesMut;
 use mc_core::AdapterId;
@@ -43,7 +44,7 @@ pub enum TransportSessionIo {
         encryption: Box<Option<TransportEncryptionState>>,
     },
     Bedrock {
-        connection: BedrockConnection,
+        connection: BedrockConnection<BedrockUnknown>,
         compression: Option<BedrockCompression>,
     },
 }

@@ -37,7 +37,6 @@ use mc_proto_je_5::{JE_1_7_10_STORAGE_PROFILE_ID, JE_5_ADAPTER_ID};
 use mc_proto_je_47::JE_47_ADAPTER_ID;
 use mc_proto_je_340::JE_340_ADAPTER_ID;
 use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol, TestJavaProtocolError};
-use rand::RngCore;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 use std::collections::HashMap;

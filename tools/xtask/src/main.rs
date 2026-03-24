@@ -927,7 +927,10 @@ fn compiled_artifact_dir(
 ) -> PathBuf {
     let build_profile = if release { "release" } else { "debug" };
     let base = target_dir(workspace_root);
-    target.map_or_else(|| base.join(build_profile), |target| base.join(&target.triple).join(build_profile))
+    target.map_or_else(
+        || base.join(build_profile),
+        |target| base.join(&target.triple).join(build_profile),
+    )
 }
 
 fn compiled_dynamic_library_path(

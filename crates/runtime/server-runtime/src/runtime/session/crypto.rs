@@ -1,14 +1,14 @@
 use crate::RuntimeError;
 use crate::runtime::{LOGIN_VERIFY_TOKEN_LEN, OnlineAuthKeys};
 use num_bigint::BigInt;
-use rand::RngCore;
 use rsa::pkcs8::EncodePublicKey;
+use rsa::rand_core::{OsRng, RngCore};
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use sha1::{Digest, Sha1};
 
 impl OnlineAuthKeys {
     pub(in crate::runtime) fn generate() -> Result<Self, RuntimeError> {
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = OsRng;
         let private_key = RsaPrivateKey::new(&mut rng, 1024).map_err(|error| {
             RuntimeError::Auth(format!("failed to generate RSA keypair: {error}"))
         })?;
@@ -28,7 +28,7 @@ impl OnlineAuthKeys {
 
 pub(super) fn random_verify_token() -> [u8; LOGIN_VERIFY_TOKEN_LEN] {
     let mut verify_token = [0_u8; LOGIN_VERIFY_TOKEN_LEN];
-    rand::rngs::OsRng.fill_bytes(&mut verify_token);
+    OsRng.fill_bytes(&mut verify_token);
     verify_token
 }
 

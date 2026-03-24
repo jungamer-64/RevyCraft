@@ -1,5 +1,6 @@
 use super::*;
 use crate::runtime::RunningServer;
+use rsa::rand_core::{OsRng, RngCore};
 
 pub(crate) async fn write_packet(
     stream: &mut tokio::net::TcpStream,
@@ -351,14 +352,14 @@ pub(crate) async fn perform_online_login(
     let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
         .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
     let mut shared_secret = [0_u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut shared_secret);
+    OsRng.fill_bytes(&mut shared_secret);
     let shared_secret_encrypted = public_key
-        .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
+        .encrypt(&mut OsRng, Pkcs1v15Encrypt, &shared_secret)
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
         })?;
     let verify_token_encrypted = public_key
-        .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &verify_token)
+        .encrypt(&mut OsRng, Pkcs1v15Encrypt, &verify_token)
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
         })?;

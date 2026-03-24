@@ -1,4 +1,5 @@
 use super::*;
+use rsa::rand_core::{OsRng, RngCore};
 
 fn online_auth_server_config(world_dir: PathBuf, enabled_adapters: &[&str]) -> ServerConfig {
     let mut config = loopback_server_config(world_dir);
@@ -180,14 +181,14 @@ async fn verify_token_mismatch_disconnects_in_online_mode() -> Result<(), Runtim
     let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
         .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
     let mut shared_secret = [0_u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut shared_secret);
+    OsRng.fill_bytes(&mut shared_secret);
     let shared_secret_encrypted = public_key
-        .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &shared_secret)
+        .encrypt(&mut OsRng, Pkcs1v15Encrypt, &shared_secret)
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
         })?;
     let verify_token_encrypted = public_key
-        .encrypt(&mut rand::rngs::OsRng, Pkcs1v15Encrypt, &[9, 9, 9, 9])
+        .encrypt(&mut OsRng, Pkcs1v15Encrypt, &[9, 9, 9, 9])
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
         })?;

@@ -169,7 +169,7 @@ pub(crate) fn encode_play_bootstrap_packets(
         multiplayer_correlation_id: player.id.0.to_string(),
         enable_item_stack_net_manager: false,
         server_version: V924::GAME_VERSION.to_string(),
-        player_property_data: nbtx::Value::Compound(HashMap::new()),
+        player_property_data: HashMap::new(),
         server_block_type_registry_checksum: 0,
         world_template_id: uuid::Uuid::nil(),
         server_enabled_client_side_generation: false,

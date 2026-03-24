@@ -50,7 +50,8 @@ impl ServerCore {
             CoreCommand::ClientStatus {
                 player_id: _,
                 action_id: _,
-            } | CoreCommand::InventoryTransactionAck { .. } => Ok(Vec::new()),
+            }
+            | CoreCommand::InventoryTransactionAck { .. } => Ok(Vec::new()),
             CoreCommand::InventoryClick {
                 player_id,
                 transaction,

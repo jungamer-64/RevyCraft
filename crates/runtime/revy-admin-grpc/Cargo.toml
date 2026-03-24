@@ -12,10 +12,11 @@ description = "Generated unary gRPC control-plane API for the RevyCraft runtime.
 [dependencies]
 prost.workspace = true
 tonic.workspace = true
+tonic-prost.workspace = true
 
 [build-dependencies]
 protoc-bin-vendored.workspace = true
-tonic-build.workspace = true
+tonic-prost-build.workspace = true
 
 [lints]
 workspace = true

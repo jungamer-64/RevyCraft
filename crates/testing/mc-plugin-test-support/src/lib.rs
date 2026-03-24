@@ -102,8 +102,7 @@ impl PackagedPluginHarness {
                     fs::remove_dir_all(&root_dir).map_err(|error| error.to_string())?;
                 }
                 fs::create_dir_all(&harness.dist).map_err(|error| error.to_string())?;
-                fs::create_dir_all(&harness.artifact_cache)
-                    .map_err(|error| error.to_string())?;
+                fs::create_dir_all(&harness.artifact_cache).map_err(|error| error.to_string())?;
                 fs::create_dir_all(&harness.cargo_target).map_err(|error| error.to_string())?;
                 packaged_plugin_test_run_xtask_package_all_plugins(
                     &harness.dist,

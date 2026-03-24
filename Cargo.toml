@@ -19,24 +19,23 @@ categories = ["game-development", "network-programming"]
 aes = "0.8"
 base64 = "0.22"
 bedrock-jwt = "0.1"
-bedrockrs_network = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_network", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
-bedrockrs_proto = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_proto", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
-bedrockrs_proto_core = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_proto_core", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
-bedrockrs_shared = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_shared", rev = "fffa7e3ddbcbeca1254d07eca6d2b04dc974c18e" }
+bedrockrs_network = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_network", rev = "b31e945b2cfa1ba76aa5aac492d0b6e0b4c0146d" }
+bedrockrs_proto = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_proto", rev = "b31e945b2cfa1ba76aa5aac492d0b6e0b4c0146d" }
+bedrockrs_proto_core = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_proto_core", rev = "b31e945b2cfa1ba76aa5aac492d0b6e0b4c0146d" }
+bedrockrs_shared = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_shared", rev = "b31e945b2cfa1ba76aa5aac492d0b6e0b4c0146d" }
 bytes = "1.10"
 flate2 = "1.1"
 jsonwebtoken = "10.1"
 md5 = { package = "md-5", version = "0.10" }
-nbtx = "2.0"
+nbtx = "3.0"
 num-bigint = "0.4"
 num-traits = "0.2"
 p384 = { version = "0.13", features = ["pkcs8"] }
-rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "query", "rustls"] }
 rsa = "0.9"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha1 = "0.10"
 sha2 = "0.10"
 socket2 = "0.6"
 tempfile = "3.20"
@@ -46,11 +45,12 @@ tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "syn
 uuid = { version = "1.18", features = ["v3", "serde"] }
 vek = "0.17"
 libloading = "0.9"
-prost = "0.13"
+prost = "0.14"
 protoc-bin-vendored = "3"
 tokio-stream = { version = "0.1", features = ["net"] }
-tonic = { version = "0.12", features = ["transport"] }
-tonic-build = "0.12"
+tonic = { version = "0.14", features = ["transport"] }
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
 
 [workspace.lints.rust]
 warnings = "deny"
