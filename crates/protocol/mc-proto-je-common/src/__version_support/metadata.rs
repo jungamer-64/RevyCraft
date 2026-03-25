@@ -29,7 +29,7 @@ pub fn write_item_stack_metadata_1_12(
     slot_nbt: SlotNbtEncoding,
 ) -> Result<(), ProtocolError> {
     writer.write_u8(index);
-    writer.write_varint(6);
+    writer.write_varint(5);
     write_slot(writer, Some(stack), slot_nbt)?;
     write_empty_metadata_1_12(writer);
     Ok(())

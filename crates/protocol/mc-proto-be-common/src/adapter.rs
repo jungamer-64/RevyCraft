@@ -63,6 +63,13 @@ pub trait BedrockProfile: Default + Send + Sync {
         position: BlockPos,
         block: &BlockState,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_block_breaking_progress_packets(
+        &self,
+        breaker_entity_id: EntityId,
+        position: BlockPos,
+        stage: Option<u8>,
+        duration_ms: u64,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError>;
     fn encode_inventory_contents_packets(
         &self,
         window_id: u8,
@@ -219,6 +226,17 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
             CoreEvent::BlockChanged { position, block } => {
                 self.profile.encode_block_changed_packets(*position, block)
             }
+            CoreEvent::BlockBreakingProgress {
+                breaker_entity_id,
+                position,
+                stage,
+                duration_ms,
+            } => self.profile.encode_block_breaking_progress_packets(
+                *breaker_entity_id,
+                *position,
+                *stage,
+                *duration_ms,
+            ),
             CoreEvent::InventoryContents {
                 window_id,
                 container,

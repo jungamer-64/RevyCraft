@@ -40,6 +40,14 @@ pub enum GameplayMutation {
         slot: InventorySlot,
         stack: Option<ItemStack>,
     },
+    ClearMining {
+        player_id: PlayerId,
+    },
+    BeginMining {
+        player_id: PlayerId,
+        position: BlockPos,
+        duration_ms: u64,
+    },
     OpenChest {
         player_id: PlayerId,
         position: BlockPos,
@@ -145,7 +153,10 @@ impl CanonicalGameplayPolicy {
             return Self::rejected_held_slot_effect(player_id, player.selected_hotbar_slot);
         }
         GameplayEffect {
-            mutations: vec![GameplayMutation::SelectedHotbarSlot { player_id, slot }],
+            mutations: vec![
+                GameplayMutation::ClearMining { player_id },
+                GameplayMutation::SelectedHotbarSlot { player_id, slot },
+            ],
             emitted_events: Vec::new(),
         }
     }
@@ -186,18 +197,24 @@ impl CanonicalGameplayPolicy {
         position: BlockPos,
         status: u8,
     ) -> GameplayEffect {
-        if !matches!(status, 0 | 2) {
+        if !matches!(status, 0..=2) {
             return GameplayEffect::default();
         }
-        if query.player_snapshot(player_id).is_none() {
+        let Some(player) = query.player_snapshot(player_id) else {
             return GameplayEffect::default();
+        };
+        if status == 1 {
+            return GameplayEffect {
+                mutations: vec![GameplayMutation::ClearMining { player_id }],
+                emitted_events: Vec::new(),
+            };
         }
         let current = query.block_state(position);
         if !query.can_edit_block(player_id, position) {
-            return Self::block_changed_effect(player_id, position, current);
+            return Self::dig_rejection_effect(player_id, position, current);
         }
-        if current.is_air() || current.key.as_str() == "minecraft:bedrock" {
-            return Self::block_changed_effect(player_id, position, current);
+        if current.is_air() || current.key.as_str() == catalog::BEDROCK {
+            return Self::dig_rejection_effect(player_id, position, current);
         }
         if current.key.as_str() == catalog::CHEST
             && query
@@ -205,26 +222,35 @@ impl CanonicalGameplayPolicy {
                 .and_then(|entity| entity.chest_slots().map(|slots| slots.to_vec()))
                 .is_some_and(|slots| slots.iter().any(Option::is_some))
         {
-            return Self::block_changed_effect(player_id, position, current);
+            return Self::dig_rejection_effect(player_id, position, current);
         }
-        let mut mutations = vec![GameplayMutation::Block {
-            position,
-            block: BlockState::air(),
-        }];
-        if query.world_meta().game_mode != 1
-            && let Some(item) = catalog::survival_drop_for_block(&current)
-        {
-            mutations.push(GameplayMutation::DroppedItem {
-                position: Vec3::new(
-                    f64::from(position.x) + 0.5,
-                    f64::from(position.y) + 0.5,
-                    f64::from(position.z) + 0.5,
-                ),
-                item,
-            });
+        if query.world_meta().game_mode == 1 {
+            return GameplayEffect {
+                mutations: vec![
+                    GameplayMutation::ClearMining { player_id },
+                    GameplayMutation::Block {
+                        position,
+                        block: BlockState::air(),
+                    },
+                ],
+                emitted_events: Vec::new(),
+            };
         }
+        let duration_ms = catalog::survival_mining_duration_ms(
+            &current,
+            catalog::tool_spec_for_item(
+                player
+                    .inventory
+                    .selected_hotbar_stack(player.selected_hotbar_slot),
+            ),
+        )
+        .unwrap_or(50);
         GameplayEffect {
-            mutations,
+            mutations: vec![GameplayMutation::BeginMining {
+                player_id,
+                position,
+                duration_ms,
+            }],
             emitted_events: Vec::new(),
         }
     }
@@ -264,10 +290,13 @@ impl CanonicalGameplayPolicy {
         {
             return Self::place_rejection_effect(query, player_id, hand, place_pos, &player);
         }
-        let mut mutations = vec![GameplayMutation::Block {
-            position: place_pos,
-            block,
-        }];
+        let mut mutations = vec![
+            GameplayMutation::ClearMining { player_id },
+            GameplayMutation::Block {
+                position: place_pos,
+                block,
+            },
+        ];
         if query.world_meta().game_mode != 1 {
             let slot = held_inventory_slot(player.selected_hotbar_slot, hand);
             mutations.push(GameplayMutation::InventorySlot {
@@ -296,10 +325,13 @@ impl CanonicalGameplayPolicy {
                 return Self::block_changed_effect(player_id, position, target_block);
             }
             return GameplayEffect {
-                mutations: vec![GameplayMutation::OpenChest {
-                    player_id,
-                    position,
-                }],
+                mutations: vec![
+                    GameplayMutation::ClearMining { player_id },
+                    GameplayMutation::OpenChest {
+                        player_id,
+                        position,
+                    },
+                ],
                 emitted_events: Vec::new(),
             };
         }
@@ -323,6 +355,20 @@ impl CanonicalGameplayPolicy {
     ) -> GameplayEffect {
         GameplayEffect {
             mutations: Vec::new(),
+            emitted_events: vec![TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::BlockChanged { position, block },
+            }],
+        }
+    }
+
+    fn dig_rejection_effect(
+        player_id: PlayerId,
+        position: BlockPos,
+        block: BlockState,
+    ) -> GameplayEffect {
+        GameplayEffect {
+            mutations: vec![GameplayMutation::ClearMining { player_id }],
             emitted_events: vec![TargetedEvent {
                 target: EventTarget::Player(player_id),
                 event: CoreEvent::BlockChanged { position, block },

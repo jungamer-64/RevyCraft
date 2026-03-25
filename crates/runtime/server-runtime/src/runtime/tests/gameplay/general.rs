@@ -287,7 +287,16 @@ async fn survival_place_and_break_sync_for_java_1_12_and_consume_held_slot()
         (0, 36, Some((1, 63, 0)))
     );
 
-    write_packet(&mut actor, &codec, &player_digging_1_12(0, 2, 4, 0, 1)).await?;
+    write_packet(&mut actor, &codec, &player_digging_1_12(0, 2, 2, 0, 1)).await?;
+    assert_no_java_packet(
+        &mut observer,
+        &codec,
+        &mut observer_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
+    tokio::time::sleep(Duration::from_millis(850)).await;
     let break_change = read_until_java_packet(
         &mut observer,
         &codec,
@@ -296,7 +305,289 @@ async fn survival_place_and_break_sync_for_java_1_12_and_consume_held_slot()
         TestJavaPacket::BlockChange,
     )
     .await?;
-    assert_eq!(block_change_from_packet(&break_change)?, (2, 4, 0, 0, 0));
+    assert_eq!(block_change_from_packet(&break_change)?, (2, 2, 0, 0, 0));
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn survival_break_pickup_syncs_main_inventory_for_java_1_12() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let mut config = survival_server_config(temp_dir.path().join("world"));
+    config.topology.default_adapter = JE_340_ADAPTER_ID.into();
+    config.topology.enabled_adapters = Some(vec![JE_340_ADAPTER_ID.into()]);
+    let server = build_test_server(
+        config,
+        plugin_test_registries_with_allowlist(&[JE_340_ADAPTER_ID])?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut actor, mut actor_buffer, _) = login_modern_1_12(addr, "alpha").await?;
+    write_packet(&mut actor, &codec, &player_digging_1_12(0, 1, 3, 0, 1)).await?;
+    tokio::time::sleep(Duration::from_millis(1_550)).await;
+    let pickup_slot = read_until_set_slot(
+        &mut actor,
+        &codec,
+        &mut actor_buffer,
+        TestJavaProtocol::Je340,
+        0,
+        9,
+        64,
+    )
+    .await?;
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je340, &pickup_slot)?,
+        (0, 9, Some((3, 1, 0)))
+    );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn survival_oak_planks_break_pickup_returns_to_selected_hotbar_for_java_1_12()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let mut config = survival_server_config(temp_dir.path().join("world"));
+    config.topology.default_adapter = JE_340_ADAPTER_ID.into();
+    config.topology.enabled_adapters = Some(vec![JE_340_ADAPTER_ID.into()]);
+    let server = build_test_server(
+        config,
+        plugin_test_registries_with_allowlist(&[JE_340_ADAPTER_ID])?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut actor, mut actor_buffer, _) = login_modern_1_12(addr, "oak-self").await?;
+    let _ = read_until_java_packet(
+        &mut actor,
+        &codec,
+        &mut actor_buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+
+    write_packet(
+        &mut actor,
+        &codec,
+        &held_item_change_for_protocol(TestJavaProtocol::Je340, 4),
+    )
+    .await?;
+    let held_slot = read_until_java_packet(
+        &mut actor,
+        &codec,
+        &mut actor_buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+    assert_eq!(
+        held_item_from_packet_for_protocol(TestJavaProtocol::Je340, &held_slot)?,
+        4
+    );
+
+    write_packet(
+        &mut actor,
+        &codec,
+        &player_block_placement_1_12(1, 3, 0, 1, 0),
+    )
+    .await?;
+    let place_slot = read_until_set_slot(
+        &mut actor,
+        &codec,
+        &mut actor_buffer,
+        TestJavaProtocol::Je340,
+        0,
+        40,
+        16,
+    )
+    .await?;
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je340, &place_slot)?,
+        (0, 40, Some((5, 63, 0)))
+    );
+
+    write_packet(&mut actor, &codec, &player_digging_1_12(0, 1, 4, 0, 1)).await?;
+    tokio::time::sleep(Duration::from_millis(3_700)).await;
+    let pickup_slot = read_until_set_slot(
+        &mut actor,
+        &codec,
+        &mut actor_buffer,
+        TestJavaProtocol::Je340,
+        0,
+        40,
+        64,
+    )
+    .await?;
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je340, &pickup_slot)?,
+        (0, 40, Some((5, 64, 0)))
+    );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn survival_oak_planks_break_pickup_uses_main_inventory_when_planks_hotbar_is_full()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let mut config = survival_server_config(temp_dir.path().join("world"));
+    config.topology.default_adapter = JE_340_ADAPTER_ID.into();
+    config.topology.enabled_adapters = Some(vec![JE_340_ADAPTER_ID.into()]);
+    let server = build_test_server(
+        config,
+        plugin_test_registries_with_allowlist(&[JE_340_ADAPTER_ID])?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut placer, mut placer_buffer, _) = login_modern_1_12(addr, "oak-placer").await?;
+    let (mut breaker, mut breaker_buffer, _) = login_modern_1_12(addr, "oak-breaker").await?;
+    let _ = read_until_java_packet(
+        &mut placer,
+        &codec,
+        &mut placer_buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+    let _ = read_until_java_packet(
+        &mut breaker,
+        &codec,
+        &mut breaker_buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+
+    write_packet(
+        &mut placer,
+        &codec,
+        &held_item_change_for_protocol(TestJavaProtocol::Je340, 4),
+    )
+    .await?;
+    let held_slot = read_until_java_packet(
+        &mut placer,
+        &codec,
+        &mut placer_buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+    assert_eq!(
+        held_item_from_packet_for_protocol(TestJavaProtocol::Je340, &held_slot)?,
+        4
+    );
+
+    write_packet(
+        &mut placer,
+        &codec,
+        &player_block_placement_1_12(1, 3, 0, 1, 0),
+    )
+    .await?;
+    let place_slot = read_until_set_slot(
+        &mut placer,
+        &codec,
+        &mut placer_buffer,
+        TestJavaProtocol::Je340,
+        0,
+        40,
+        16,
+    )
+    .await?;
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je340, &place_slot)?,
+        (0, 40, Some((5, 63, 0)))
+    );
+
+    placer.shutdown().await?;
+
+    write_packet(&mut breaker, &codec, &player_digging_1_12(0, 1, 4, 0, 1)).await?;
+    tokio::time::sleep(Duration::from_millis(3_700)).await;
+    let pickup_slot = read_until_set_slot(
+        &mut breaker,
+        &codec,
+        &mut breaker_buffer,
+        TestJavaProtocol::Je340,
+        0,
+        9,
+        64,
+    )
+    .await?;
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je340, &pickup_slot)?,
+        (0, 9, Some((5, 1, 0)))
+    );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn survival_cancel_keeps_block_and_clears_break_animation_for_java_1_12()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let mut config = survival_server_config(temp_dir.path().join("world"));
+    config.topology.enabled_adapters = Some(vec![JE_340_ADAPTER_ID.into(), JE_5_ADAPTER_ID.into()]);
+    let server = build_test_server(
+        config,
+        plugin_test_registries_with_allowlist(&[JE_340_ADAPTER_ID, JE_5_ADAPTER_ID])?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut actor, mut actor_buffer, _) = login_modern_1_12(addr, "alpha").await?;
+    let (mut observer, mut observer_buffer, _) = login_legacy(addr, "beta").await?;
+
+    write_packet(&mut actor, &codec, &player_digging_1_12(0, 2, 2, 0, 1)).await?;
+    let stage_packet = read_until_java_packet(
+        &mut observer,
+        &codec,
+        &mut observer_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::BlockBreakAnimation,
+    )
+    .await?;
+    assert_eq!(
+        block_break_animation_from_packet(TestJavaProtocol::Je5, &stage_packet)?,
+        (1, 2, 2, 0, 0)
+    );
+
+    write_packet(&mut actor, &codec, &player_digging_1_12(1, 2, 2, 0, 1)).await?;
+    let clear_packet = read_until_java_packet(
+        &mut observer,
+        &codec,
+        &mut observer_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::BlockBreakAnimation,
+    )
+    .await?;
+    assert_eq!(
+        block_break_animation_from_packet(TestJavaProtocol::Je5, &clear_packet)?,
+        (1, 2, 2, 0, -1)
+    );
+
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert_no_java_packet(
+        &mut observer,
+        &codec,
+        &mut observer_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
+    assert_no_java_packet(
+        &mut actor,
+        &codec,
+        &mut actor_buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
 
     server.shutdown().await
 }

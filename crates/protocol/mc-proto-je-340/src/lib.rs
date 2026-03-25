@@ -7,12 +7,13 @@ mod tests;
 
 use decoding::decode_play_packet;
 use encoding::{
-    encode_block_change, encode_chunk, encode_close_window, encode_confirm_transaction,
-    encode_destroy_entities, encode_dropped_item_metadata, encode_dropped_item_spawn,
-    encode_entity_head_rotation, encode_entity_teleport, encode_held_item_change, encode_join_game,
-    encode_keep_alive, encode_named_entity_spawn, encode_open_window, encode_player_abilities,
-    encode_player_info_add, encode_position_and_look, encode_set_slot, encode_spawn_position,
-    encode_time_update, encode_update_health, encode_window_items, encode_window_property,
+    encode_block_break_animation, encode_block_change, encode_chunk, encode_close_window,
+    encode_confirm_transaction, encode_destroy_entities, encode_dropped_item_metadata,
+    encode_dropped_item_spawn, encode_entity_head_rotation, encode_entity_teleport,
+    encode_held_item_change, encode_join_game, encode_keep_alive, encode_named_entity_spawn,
+    encode_open_window, encode_player_abilities, encode_player_info_add, encode_position_and_look,
+    encode_set_slot, encode_spawn_position, encode_time_update, encode_update_health,
+    encode_window_items, encode_window_property,
 };
 use mc_core::{
     BlockPos, BlockState, ChunkColumn, CoreCommand, DroppedItemSnapshot, EntityId,
@@ -35,6 +36,7 @@ pub(crate) const INVENTORY_SPEC: InventoryProtocolSpec = JE_1_12_2_INVENTORY_SPE
 
 const PACKET_CB_NAMED_ENTITY_SPAWN: i32 = 0x05;
 const PACKET_CB_SPAWN_OBJECT: i32 = 0x00;
+const PACKET_CB_BLOCK_BREAK_ANIMATION: i32 = 0x08;
 const PACKET_CB_BLOCK_CHANGE: i32 = 0x0b;
 const PACKET_CB_TRANSACTION: i32 = 0x11;
 const PACKET_CB_CLOSE_WINDOW: i32 = 0x12;
@@ -240,6 +242,19 @@ impl JavaEditionProfile for Je340Profile {
         block: &BlockState,
     ) -> Result<Vec<u8>, ProtocolError> {
         Ok(encode_block_change(position, block))
+    }
+
+    fn encode_block_breaking_progress(
+        &self,
+        breaker_entity_id: EntityId,
+        position: BlockPos,
+        stage: Option<u8>,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        Ok(encode_block_break_animation(
+            breaker_entity_id,
+            position,
+            stage,
+        ))
     }
 
     fn encode_keep_alive_requested(&self, keep_alive_id: i32) -> Result<Vec<u8>, ProtocolError> {

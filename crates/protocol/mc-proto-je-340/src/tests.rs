@@ -1,6 +1,6 @@
 use super::{JE_340_ADAPTER_ID, Je340Adapter, PROTOCOL_VERSION_1_12_2, VERSION_NAME_1_12_2};
 use mc_core::{
-    CoreCommand, CoreEvent, DimensionId, DroppedItemSnapshot, EntityId, InteractionHand,
+    BlockPos, CoreCommand, CoreEvent, DimensionId, DroppedItemSnapshot, EntityId, InteractionHand,
     InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerInventory,
     PlayerSnapshot, Vec3,
@@ -585,7 +585,7 @@ fn encodes_dropped_item_spawn_and_metadata() {
     assert_eq!(metadata.read_u8().expect("metadata index should decode"), 6);
     assert_eq!(
         metadata.read_varint().expect("metadata type should decode"),
-        6
+        5
     );
     assert_eq!(
         read_slot(&mut metadata, crate::INVENTORY_SPEC.slot_nbt)
@@ -593,4 +593,52 @@ fn encodes_dropped_item_spawn_and_metadata() {
         Some(ItemStack::new("minecraft:cobblestone", 1, 0))
     );
     assert_eq!(metadata.read_u8().expect("terminator should decode"), 0xff);
+}
+
+#[test]
+fn encodes_block_break_animation_stage_and_clear() {
+    let adapter = Je340Adapter::new();
+    let context = PlayEncodingContext {
+        player_id: player_snapshot("break-1122").id,
+        entity_id: EntityId(1),
+    };
+
+    let stage_packet = adapter
+        .encode_play_event(
+            &CoreEvent::BlockBreakingProgress {
+                breaker_entity_id: EntityId(11),
+                position: BlockPos::new(2, 4, 0),
+                stage: Some(4),
+                duration_ms: 750,
+            },
+            &context,
+        )
+        .expect("break stage should encode");
+    let mut reader = PacketReader::new(&stage_packet[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x08);
+    assert_eq!(reader.read_varint().expect("entity id should decode"), 11);
+    assert_eq!(
+        mc_proto_test_support::TestJavaProtocol::Je340
+            .decode_block_break_animation(&stage_packet[0])
+            .expect("animation packet should decode"),
+        (11, 2, 4, 0, 4)
+    );
+
+    let clear_packet = adapter
+        .encode_play_event(
+            &CoreEvent::BlockBreakingProgress {
+                breaker_entity_id: EntityId(11),
+                position: BlockPos::new(2, 4, 0),
+                stage: None,
+                duration_ms: 750,
+            },
+            &context,
+        )
+        .expect("break clear should encode");
+    assert_eq!(
+        mc_proto_test_support::TestJavaProtocol::Je340
+            .decode_block_break_animation(&clear_packet[0])
+            .expect("clear packet should decode"),
+        (11, 2, 4, 0, -1)
+    );
 }

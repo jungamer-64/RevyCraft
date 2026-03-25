@@ -289,6 +289,22 @@ fn encode_gameplay_mutation(
             encode_inventory_slot(encoder, *slot);
             encode_option(encoder, stack.as_ref(), encode_item_stack)
         }
+        GameplayMutation::ClearMining { player_id } => {
+            encoder.write_u8(7);
+            encode_player_id(encoder, *player_id);
+            Ok(())
+        }
+        GameplayMutation::BeginMining {
+            player_id,
+            position,
+            duration_ms,
+        } => {
+            encoder.write_u8(8);
+            encode_player_id(encoder, *player_id);
+            encode_block_pos(encoder, *position);
+            encoder.write_u64(*duration_ms);
+            Ok(())
+        }
         GameplayMutation::Block { position, block } => {
             encoder.write_u8(4);
             encode_block_pos(encoder, *position);
@@ -336,6 +352,14 @@ fn decode_gameplay_mutation(
             player_id: decode_player_id(decoder)?,
             slot: decode_inventory_slot(decoder)?,
             stack: decode_option(decoder, decode_item_stack)?,
+        }),
+        7 => Ok(GameplayMutation::ClearMining {
+            player_id: decode_player_id(decoder)?,
+        }),
+        8 => Ok(GameplayMutation::BeginMining {
+            player_id: decode_player_id(decoder)?,
+            position: decode_block_pos(decoder)?,
+            duration_ms: decoder.read_u64()?,
         }),
         4 => Ok(GameplayMutation::Block {
             position: decode_block_pos(decoder)?,

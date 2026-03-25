@@ -221,7 +221,16 @@ async fn mixed_java_versions_share_survival_block_sync() -> Result<(), RuntimeEr
         (0, 36, Some((1, 63, 0)))
     );
 
-    write_packet(&mut modern_112, &codec, &player_digging_1_12(0, 2, 4, 0, 1)).await?;
+    write_packet(&mut modern_112, &codec, &player_digging_1_12(0, 2, 2, 0, 1)).await?;
+    assert_no_java_packet(
+        &mut legacy,
+        &codec,
+        &mut legacy_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
+    tokio::time::sleep(Duration::from_millis(850)).await;
 
     let legacy_break = read_until_java_packet(
         &mut legacy,
@@ -240,10 +249,10 @@ async fn mixed_java_versions_share_survival_block_sync() -> Result<(), RuntimeEr
     )
     .await?;
 
-    assert_eq!(block_change_from_packet(&legacy_break)?, (2, 4, 0, 0, 0));
+    assert_eq!(block_change_from_packet(&legacy_break)?, (2, 2, 0, 0, 0));
     assert_eq!(
         block_change_from_packet_1_8(&modern_18_break)?,
-        (2, 4, 0, 0)
+        (2, 2, 0, 0)
     );
 
     server.shutdown().await

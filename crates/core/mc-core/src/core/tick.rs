@@ -11,6 +11,7 @@ impl ServerCore {
     pub fn tick(&mut self, now_ms: u64) -> Vec<TargetedEvent> {
         let mut events = self.tick_active_containers();
         events.extend(self.tick_dropped_items(now_ms));
+        events.extend(self.tick_active_mining(now_ms));
         let player_ids = self.online_players.keys().copied().collect::<Vec<_>>();
         for player_id in player_ids {
             let Some(player) = self.online_players.get_mut(&player_id) else {
@@ -64,8 +65,9 @@ impl ServerCore {
     }
 
     pub(super) fn disconnect_player(&mut self, player_id: PlayerId) -> Vec<TargetedEvent> {
+        let mut events = self.clear_active_mining(player_id);
         let Some(player) = self.online_players.remove(&player_id) else {
-            return Vec::new();
+            return events;
         };
         if let Some(window) = player.active_container.as_ref() {
             if let Some(position) = world_chest_position(window) {
@@ -82,11 +84,12 @@ impl ServerCore {
         }
         self.saved_players
             .insert(player_id, Self::persisted_online_player_snapshot(&player));
-        vec![TargetedEvent {
+        events.push(TargetedEvent {
             target: EventTarget::EveryoneExcept(player_id),
             event: CoreEvent::EntityDespawned {
                 entity_ids: vec![player.entity_id],
             },
-        }]
+        });
+        events
     }
 }

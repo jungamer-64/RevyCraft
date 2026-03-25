@@ -802,6 +802,21 @@ pub(crate) fn encode_core_event(
             encode_entity_id(encoder, *entity_id);
             encode_dropped_item_snapshot(encoder, item)?;
         }
+        CoreEvent::BlockBreakingProgress {
+            breaker_entity_id,
+            position,
+            stage,
+            duration_ms,
+        } => {
+            encoder.write_u8(19);
+            encode_entity_id(encoder, *breaker_entity_id);
+            encode_block_pos(encoder, *position);
+            encode_option(encoder, stage.as_ref(), |encoder, stage| {
+                encoder.write_u8(*stage);
+                Ok(())
+            })?;
+            encoder.write_u64(*duration_ms);
+        }
         CoreEvent::EntityDespawned { entity_ids } => {
             encoder.write_u8(6);
             encoder.write_len(entity_ids.len())?;
@@ -922,6 +937,12 @@ pub(crate) fn decode_core_event(
         18 => Ok(CoreEvent::DroppedItemSpawned {
             entity_id: decode_entity_id(decoder)?,
             item: decode_dropped_item_snapshot(decoder)?,
+        }),
+        19 => Ok(CoreEvent::BlockBreakingProgress {
+            breaker_entity_id: decode_entity_id(decoder)?,
+            position: decode_block_pos(decoder)?,
+            stage: decode_option(decoder, |decoder| decoder.read_u8())?,
+            duration_ms: decoder.read_u64()?,
         }),
         6 => {
             let len = decoder.read_len()?;

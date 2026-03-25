@@ -5,10 +5,14 @@ use bedrockrs_proto::codec::{decode_packets, encode_packets};
 use bedrockrs_proto::compression::Compression as BedrockCompression;
 use bedrockrs_proto::info::RAKNET_GAMEPACKET_ID;
 use bedrockrs_proto::v662::enums::{
-    InputMode, ItemUseInventoryTransactionType, NewInteractionModel,
+    InputMode, ItemUseInventoryTransactionType, NewInteractionModel, PlayerActionType,
 };
-use bedrockrs_proto::v662::packets::{LoginPacket, RequestNetworkSettingsPacket};
-use bedrockrs_proto::v662::types::{NetworkBlockPosition, NetworkItemStackDescriptor};
+use bedrockrs_proto::v662::packets::{
+    LoginPacket, PlayerActionPacket, RequestNetworkSettingsPacket,
+};
+use bedrockrs_proto::v662::types::{
+    ActorRuntimeID, NetworkBlockPosition, NetworkItemStackDescriptor,
+};
 use bedrockrs_proto::v712::types::{
     PackedItemUseLegacyInventoryTransaction, PredictedResult, TriggerType,
 };
@@ -80,6 +84,16 @@ pub(crate) fn player_position_look(x: f64, y: f64, z: f64, yaw: f32, pitch: f32)
 pub(crate) fn held_item_change(slot: i16) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(0x09);
+    writer.write_i16(slot);
+    writer.into_inner()
+}
+
+pub(crate) fn held_item_change_for_protocol(protocol: TestJavaProtocol, slot: i16) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(match protocol {
+        TestJavaProtocol::Je5 | TestJavaProtocol::Je47 => 0x09,
+        TestJavaProtocol::Je340 => 0x1a,
+    });
     writer.write_i16(slot);
     writer.into_inner()
 }
@@ -281,6 +295,7 @@ pub(crate) enum TestBedrockPacket {
     StartGame,
     LevelChunk,
     UpdateBlock,
+    LevelEvent,
     AddItemActor,
     RemoveActor,
     InventoryContent,
@@ -345,6 +360,20 @@ pub(crate) fn bedrock_break_block_payload(
     bedrock_block_interaction_payload(ItemUseInventoryTransactionType::Destroy, position, face)
 }
 
+pub(crate) fn bedrock_start_break_block_payload(
+    position: mc_core::BlockPos,
+    face: i32,
+) -> Result<Vec<u8>, RuntimeError> {
+    bedrock_player_action_payload(PlayerActionType::StartDestroyBlock, position, face)
+}
+
+pub(crate) fn bedrock_abort_break_block_payload(
+    position: mc_core::BlockPos,
+    face: i32,
+) -> Result<Vec<u8>, RuntimeError> {
+    bedrock_player_action_payload(PlayerActionType::AbortDestroyBlock, position, face)
+}
+
 pub(crate) fn decode_bedrock_packets(
     payload: &[u8],
     compression: Option<&BedrockCompression>,
@@ -371,6 +400,7 @@ pub(crate) fn test_bedrock_packet(packet: &V924) -> Option<TestBedrockPacket> {
         V924::StartGamePacket(_) => TestBedrockPacket::StartGame,
         V924::LevelChunkPacket(_) => TestBedrockPacket::LevelChunk,
         V924::UpdateBlockPacket(_) => TestBedrockPacket::UpdateBlock,
+        V924::LevelEventPacket(_) => TestBedrockPacket::LevelEvent,
         V924::AddItemActorPacket(_) => TestBedrockPacket::AddItemActor,
         V924::RemoveActorPacket(_) => TestBedrockPacket::RemoveActor,
         V924::InventoryContentPacket(_) => TestBedrockPacket::InventoryContent,
@@ -400,6 +430,22 @@ pub(crate) fn decode_close_window(
 pub(crate) fn held_item_from_packet(packet: &[u8]) -> Result<i8, RuntimeError> {
     let mut reader = PacketReader::new(packet);
     if reader.read_varint()? != 0x09 {
+        return Err(RuntimeError::Config(
+            "expected held item change packet".to_string(),
+        ));
+    }
+    reader.read_i8().map_err(RuntimeError::from)
+}
+
+pub(crate) fn held_item_from_packet_for_protocol(
+    protocol: TestJavaProtocol,
+    packet: &[u8],
+) -> Result<i8, RuntimeError> {
+    let mut reader = PacketReader::new(packet);
+    let expected_packet_id = protocol
+        .clientbound_packet_id(TestJavaPacket::HeldItemChange)
+        .ok_or_else(|| RuntimeError::Config("held item change packet is unsupported".into()))?;
+    if reader.read_varint()? != expected_packet_id {
         return Err(RuntimeError::Config(
             "expected held item change packet".to_string(),
         ));
@@ -450,6 +496,32 @@ pub(crate) fn block_change_from_packet_1_12(
     let position = unpack_block_position(reader.read_i64()?);
     let block_state = reader.read_varint()?;
     Ok((position.x, position.y, position.z, block_state))
+}
+
+pub(crate) fn block_break_animation_from_packet(
+    protocol: TestJavaProtocol,
+    packet: &[u8],
+) -> Result<(i32, i32, i32, i32, i8), RuntimeError> {
+    protocol
+        .decode_block_break_animation(packet)
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+pub(crate) fn bedrock_level_event_from_packet(
+    packet: &V924,
+) -> Result<(i32, f32, f32, f32, i32), RuntimeError> {
+    match packet {
+        V924::LevelEventPacket(packet) => Ok((
+            packet.event_id,
+            packet.position.x,
+            packet.position.y,
+            packet.position.z,
+            packet.data,
+        )),
+        other => Err(RuntimeError::Config(format!(
+            "expected level event packet, got {other:?}"
+        ))),
+    }
 }
 
 pub(crate) fn player_abilities_flags(packet: &[u8]) -> Result<u8, RuntimeError> {
@@ -511,6 +583,35 @@ fn bedrock_block_interaction_payload(
         camera_orientation: Vec3::new(0.0, 0.0, 0.0),
         raw_move_vector: Vec2::new(0.0, 0.0),
     })
+}
+
+fn bedrock_player_action_payload(
+    action: PlayerActionType,
+    position: mc_core::BlockPos,
+    face: i32,
+) -> Result<Vec<u8>, RuntimeError> {
+    encode_packets(
+        &[V924::PlayerActionPacket(PlayerActionPacket {
+            player_runtime_id: ActorRuntimeID(1),
+            action,
+            block_position: NetworkBlockPosition {
+                x: position.x,
+                y: u32::try_from(position.y)
+                    .expect("test bedrock player action y should fit into u32"),
+                z: position.z,
+            },
+            result_pos: NetworkBlockPosition {
+                x: position.x,
+                y: u32::try_from(position.y)
+                    .expect("test bedrock player action result y should fit into u32"),
+                z: position.z,
+            },
+            face,
+        })],
+        None,
+        None,
+    )
+    .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
 fn empty_bedrock_item_stack_descriptor() -> Result<NetworkItemStackDescriptor, RuntimeError> {

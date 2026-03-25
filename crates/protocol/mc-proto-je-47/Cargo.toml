@@ -15,6 +15,7 @@ mc-proto-common = { path = "../mc-proto-common" }
 mc-proto-je-common = { path = "../mc-proto-je-common" }
 
 [dev-dependencies]
+mc-proto-test-support = { path = "../../testing/mc-proto-test-support" }
 uuid.workspace = true
 
 [lints]

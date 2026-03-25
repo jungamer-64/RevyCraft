@@ -152,6 +152,12 @@ pub enum CoreEvent {
         entity_id: EntityId,
         item: DroppedItemSnapshot,
     },
+    BlockBreakingProgress {
+        breaker_entity_id: EntityId,
+        position: BlockPos,
+        stage: Option<u8>,
+        duration_ms: u64,
+    },
     EntityDespawned {
         entity_ids: Vec<EntityId>,
     },

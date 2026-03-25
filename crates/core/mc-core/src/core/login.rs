@@ -65,6 +65,7 @@ impl ServerCore {
                 pending_keep_alive_id: None,
                 last_keep_alive_sent_at: None,
                 next_keep_alive_at: now_ms.saturating_add(self.keepalive_interval_ms),
+                active_mining: None,
             },
         );
 

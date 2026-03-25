@@ -15,11 +15,12 @@ use bedrockrs_proto::ProtoVersion;
 use bedrockrs_proto::V924;
 use bedrockrs_proto::v662::enums::{
     ConnectionFailReason, Difficulty, EditorWorldType, EducationEditionOffer, GamePublishSetting,
-    GameType, PacketCompressionAlgorithm, PlayStatus, PlayerPermissionLevel, SpawnBiomeType,
+    GameType, LevelEvent as BedrockLevelEvent, PacketCompressionAlgorithm, PlayStatus,
+    PlayerPermissionLevel, SpawnBiomeType,
 };
 use bedrockrs_proto::v662::packets::{
-    AddItemActorPacket, MovePlayerPacket, NetworkSettingsPacket, PlayStatusPacket,
-    RemoveActorPacket, UpdateBlockPacket,
+    AddItemActorPacket, LevelEventPacket, MovePlayerPacket, NetworkSettingsPacket,
+    PlayStatusPacket, RemoveActorPacket, UpdateBlockPacket,
 };
 use bedrockrs_proto::v662::types::{
     ActorRuntimeID, ActorUniqueID, BaseGameVersion, EduSharedUriResource, Experiments,
@@ -177,7 +178,7 @@ pub(crate) fn encode_play_bootstrap_packets(
         is_trial: false,
         movement_settings: SyncedPlayerMovementSettings {
             rewind_history_size: 3200,
-            server_authoritative_block_breaking: false,
+            server_authoritative_block_breaking: true,
         },
         current_level_time: u64::try_from(world_meta.time).unwrap_or_default(),
         enchantment_seed: 0,
@@ -286,6 +287,32 @@ pub(crate) fn encode_block_changed_packets(
     )])?])
 }
 
+pub(crate) fn encode_block_breaking_progress_packets(
+    _breaker_entity_id: EntityId,
+    position: BlockPos,
+    stage: Option<u8>,
+    duration_ms: u64,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    let (event_id, data) = match stage {
+        Some(0) => (
+            BedrockLevelEvent::StartBlockCracking as i32,
+            start_block_cracking_data(duration_ms),
+        ),
+        Some(stage) => (
+            BedrockLevelEvent::UpdateBlockCracking as i32,
+            i32::from(stage),
+        ),
+        None => (BedrockLevelEvent::StopBlockCracking as i32, 0),
+    };
+    Ok(vec![encode_v924(&[V924::LevelEventPacket(
+        LevelEventPacket {
+            event_id,
+            position: vek::Vec3::new(position.x as f32, position.y as f32, position.z as f32),
+            data,
+        },
+    )])?])
+}
+
 pub(crate) fn encode_inventory_contents_packets(
     window_id: u8,
     container: InventoryContainer,
@@ -340,4 +367,9 @@ fn bedrock_game_type(game_mode: u8) -> GameType {
         1 => GameType::Creative,
         _ => GameType::Survival,
     }
+}
+
+fn start_block_cracking_data(duration_ms: u64) -> i32 {
+    let ticks = duration_ms.div_ceil(50).max(1);
+    i32::try_from((65_535_u64 / ticks).max(1)).unwrap_or(i32::MAX)
 }

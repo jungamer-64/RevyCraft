@@ -405,6 +405,24 @@ impl BedrockTestClient {
             .await
     }
 
+    pub(crate) async fn start_break_block(
+        &mut self,
+        position: mc_core::BlockPos,
+        face: i32,
+    ) -> Result<(), RuntimeError> {
+        self.send_play_payload(&bedrock_start_break_block_payload(position, face)?)
+            .await
+    }
+
+    pub(crate) async fn abort_break_block(
+        &mut self,
+        position: mc_core::BlockPos,
+        face: i32,
+    ) -> Result<(), RuntimeError> {
+        self.send_play_payload(&bedrock_abort_break_block_payload(position, face)?)
+            .await
+    }
+
     pub(crate) async fn disconnect(&mut self) -> Result<(), RuntimeError> {
         self.send_queue
             .send_packet(Disconnect {}.into(), RakReliability::Reliable, true)

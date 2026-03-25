@@ -1,11 +1,13 @@
 mod command;
 mod inventory;
 mod login;
+mod mining;
 mod mutation;
 mod projection;
 mod tick;
 mod world;
 
+use crate::catalog::MiningToolSpec;
 use crate::events::PlayerSummary;
 use crate::inventory::ItemStack;
 use crate::player::PlayerSnapshot;
@@ -110,13 +112,25 @@ pub struct OnlinePlayer {
     pub(super) pending_keep_alive_id: Option<i32>,
     pub(super) last_keep_alive_sent_at: Option<u64>,
     pub(super) next_keep_alive_at: u64,
+    pub(super) active_mining: Option<ActiveMiningState>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct DroppedItemEntity {
     pub(crate) snapshot: DroppedItemSnapshot,
+    pub(crate) last_updated_at_ms: u64,
     pub(crate) pickup_allowed_at_ms: u64,
     pub(crate) despawn_at_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ActiveMiningState {
+    pub(crate) position: BlockPos,
+    pub(crate) started_at_ms: u64,
+    pub(crate) duration_ms: u64,
+    pub(crate) last_stage: Option<u8>,
+    #[expect(dead_code, reason = "tool bonuses are scaffolded but not applied yet")]
+    pub(crate) tool_context: Option<MiningToolSpec>,
 }
 
 impl ServerCore {

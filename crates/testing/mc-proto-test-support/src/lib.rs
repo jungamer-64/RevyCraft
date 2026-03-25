@@ -22,6 +22,7 @@ pub enum TestJavaPacket {
     EntityMetadata,
     PlayerInfoAdd,
     EntityTeleport,
+    BlockBreakAnimation,
     BlockChange,
     OpenWindow,
     CloseWindow,
@@ -120,6 +121,9 @@ impl TestJavaProtocol {
             (Self::Je5, TestJavaPacket::EntityTeleport) => Some(0x18),
             (Self::Je47, TestJavaPacket::EntityTeleport) => Some(0x18),
             (Self::Je340, TestJavaPacket::EntityTeleport) => Some(0x4c),
+            (Self::Je5, TestJavaPacket::BlockBreakAnimation) => Some(0x25),
+            (Self::Je47, TestJavaPacket::BlockBreakAnimation) => Some(0x25),
+            (Self::Je340, TestJavaPacket::BlockBreakAnimation) => Some(0x08),
             (Self::Je5, TestJavaPacket::BlockChange) => Some(0x23),
             (Self::Je47, TestJavaPacket::BlockChange) => Some(0x23),
             (Self::Je340, TestJavaPacket::BlockChange) => Some(0x0b),
@@ -350,6 +354,39 @@ impl TestJavaProtocol {
         Err(TestJavaProtocolError::Message("wanted slot missing"))
     }
 
+    pub fn decode_block_break_animation(
+        self,
+        packet: &[u8],
+    ) -> Result<(i32, i32, i32, i32, i8), TestJavaProtocolError> {
+        let mut reader = PacketReader::new(packet);
+        let expected_packet_id = self
+            .clientbound_packet_id(TestJavaPacket::BlockBreakAnimation)
+            .ok_or(TestJavaProtocolError::Message(
+                "expected block break animation packet id",
+            ))?;
+        if reader.read_varint()? != expected_packet_id {
+            return Err(TestJavaProtocolError::Message(
+                "expected block break animation packet",
+            ));
+        }
+        match self {
+            Self::Je5 => Ok((
+                reader.read_i32()?,
+                reader.read_i32()?,
+                reader.read_i32()?,
+                reader.read_i32()?,
+                reader.read_i8()?,
+            )),
+            Self::Je47 | Self::Je340 => {
+                let entity_id = reader.read_varint()?;
+                let packed = reader.read_i64()?;
+                let stage = reader.read_i8()?;
+                let (x, y, z) = unpack_block_position(packed);
+                Ok((entity_id, x, y, z, stage))
+            }
+        }
+    }
+
     fn slot_nbt_encoding(self) -> SlotNbtEncoding {
         match self {
             Self::Je5 => SlotNbtEncoding::LengthPrefixedBlob,
@@ -370,6 +407,22 @@ fn write_slot(writer: &mut PacketWriter, stack: Option<TestItemStack>, slot_nbt:
         SlotNbtEncoding::LengthPrefixedBlob => writer.write_i16(-1),
         SlotNbtEncoding::RootTag => writer.write_u8(0),
     }
+}
+
+fn unpack_block_position(packed: i64) -> (i32, i32, i32) {
+    fn sign_extend(value: i64, bits: u8) -> i64 {
+        let shift = 64 - i64::from(bits);
+        (value << shift) >> shift
+    }
+
+    let x = sign_extend((packed >> 38) & 0x3ff_ffff, 26);
+    let y = sign_extend((packed >> 26) & 0xfff, 12);
+    let z = sign_extend(packed & 0x3ff_ffff, 26);
+    (
+        i32::try_from(x).expect("packed x should fit into i32"),
+        i32::try_from(y).expect("packed y should fit into i32"),
+        i32::try_from(z).expect("packed z should fit into i32"),
+    )
 }
 
 fn read_slot(

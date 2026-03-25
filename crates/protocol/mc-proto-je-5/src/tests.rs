@@ -1,6 +1,6 @@
 use crate::{JE_5_ADAPTER_ID, Je5Adapter, PROTOCOL_VERSION_1_7_10, VERSION_NAME_1_7_10};
 use mc_core::{
-    BlockState, ChunkColumn, ChunkPos, ConnectionId, CoreCommand, CoreConfig, CoreEvent,
+    BlockPos, BlockState, ChunkColumn, ChunkPos, ConnectionId, CoreCommand, CoreConfig, CoreEvent,
     DroppedItemSnapshot, EntityId, InventoryClickButton, InventoryClickTarget, InventoryContainer,
     InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId,
     PlayerInventory, PlayerSnapshot, ServerCore, Vec3,
@@ -690,4 +690,49 @@ fn encodes_dropped_item_spawn_and_metadata() {
         Some(ItemStack::new("minecraft:cobblestone", 1, 0))
     );
     assert_eq!(metadata.read_u8().expect("terminator should decode"), 0x7f);
+}
+
+#[test]
+fn encodes_block_break_animation_stage_and_clear() {
+    let adapter = Je5Adapter::new();
+    let context = PlayEncodingContext {
+        player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"break-1710")),
+        entity_id: EntityId(1),
+    };
+
+    let stage_packet = adapter
+        .encode_play_event(
+            &CoreEvent::BlockBreakingProgress {
+                breaker_entity_id: EntityId(11),
+                position: BlockPos::new(2, 4, 0),
+                stage: Some(4),
+                duration_ms: 750,
+            },
+            &context,
+        )
+        .expect("break stage should encode");
+    assert_eq!(
+        mc_proto_test_support::TestJavaProtocol::Je5
+            .decode_block_break_animation(&stage_packet[0])
+            .expect("animation packet should decode"),
+        (11, 2, 4, 0, 4)
+    );
+
+    let clear_packet = adapter
+        .encode_play_event(
+            &CoreEvent::BlockBreakingProgress {
+                breaker_entity_id: EntityId(11),
+                position: BlockPos::new(2, 4, 0),
+                stage: None,
+                duration_ms: 750,
+            },
+            &context,
+        )
+        .expect("break clear should encode");
+    assert_eq!(
+        mc_proto_test_support::TestJavaProtocol::Je5
+            .decode_block_break_animation(&clear_packet[0])
+            .expect("clear packet should decode"),
+        (11, 2, 4, 0, -1)
+    );
 }

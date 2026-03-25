@@ -16,6 +16,30 @@ where
         .count()
 }
 
+fn block_break_progress_count(
+    events: &[TargetedEvent],
+    player_id: PlayerId,
+    position: BlockPos,
+    stage: Option<u8>,
+) -> usize {
+    events
+        .iter()
+        .filter(|event| match (&event.target, &event.event) {
+            (
+                EventTarget::Player(event_player_id),
+                CoreEvent::BlockBreakingProgress {
+                    position: event_position,
+                    stage: event_stage,
+                    ..
+                },
+            ) if *event_player_id == player_id && *event_position == position => {
+                *event_stage == stage
+            }
+            _ => false,
+        })
+        .count()
+}
+
 fn snapshot_block(core: &ServerCore, position: BlockPos) -> BlockState {
     core.snapshot()
         .chunks
@@ -634,7 +658,7 @@ fn survival_break_spawns_drop_and_snapshot_roundtrip_omits_active_drops() {
     let (mut core, player) = logged_in_core(CoreConfig::default(), 1, "breaker");
     let break_pos = BlockPos::new(2, 1, 0);
 
-    let break_events = core.apply_command(
+    let start_events = core.apply_command(
         CoreCommand::DigBlock {
             player_id: player,
             position: break_pos,
@@ -643,7 +667,16 @@ fn survival_break_spawns_drop_and_snapshot_roundtrip_omits_active_drops() {
         },
         0,
     );
+    assert!(block_break_progress_count(&start_events, player, break_pos, Some(0)) >= 1);
+    assert_eq!(
+        block_change_count(&start_events, break_pos, BlockState::is_air),
+        0
+    );
 
+    let early = core.tick(2_249);
+    assert_eq!(block_change_count(&early, break_pos, BlockState::is_air), 0);
+
+    let break_events = core.tick(2_250);
     assert!(block_change_count(&break_events, break_pos, BlockState::is_air) >= 1);
     assert_player_dropped_item_spawned_at(
         &break_events,
@@ -679,7 +712,12 @@ fn survival_break_drop_mapping_handles_grass_and_glass() {
         },
         0,
     );
-    assert_player_dropped_item_spawned(&grass_break, player, Some(("minecraft:dirt", 1)));
+    assert_eq!(
+        block_change_count(&grass_break, BlockPos::new(2, 3, 0), BlockState::is_air),
+        0
+    );
+    let grass_finish = core.tick(900);
+    assert_player_dropped_item_spawned(&grass_finish, player, Some(("minecraft:dirt", 1)));
 
     let glass_pos = BlockPos::new(4, 4, 0);
     let _ = core.apply_gameplay_effect(
@@ -702,10 +740,226 @@ fn survival_break_drop_mapping_handles_grass_and_glass() {
         0,
     );
     assert_eq!(
-        count_player_events(&glass_break, player, |event| {
+        block_change_count(&glass_break, glass_pos, BlockState::is_air),
+        0
+    );
+    let glass_finish = core.tick(450);
+    assert_eq!(
+        count_player_events(&glass_finish, player, |event| {
             matches!(event, CoreEvent::DroppedItemSpawned { .. })
         }),
         0
+    );
+}
+
+#[test]
+fn survival_mining_respects_exact_boundaries_for_dirt_sand_and_stone() {
+    for (position, threshold_ms, placed_block) in [
+        (BlockPos::new(2, 2, 0), 750_u64, None),
+        (BlockPos::new(4, 4, 0), 750_u64, Some(BlockState::sand())),
+        (BlockPos::new(2, 1, 0), 2_250_u64, None),
+    ] {
+        let (mut core, player) = logged_in_core(CoreConfig::default(), 1, "boundary");
+        if let Some(block) = placed_block.clone() {
+            let _ = core.apply_gameplay_effect(
+                GameplayEffect {
+                    mutations: vec![GameplayMutation::Block { position, block }],
+                    emitted_events: Vec::new(),
+                },
+                0,
+            );
+        }
+
+        let start = core.apply_command(
+            CoreCommand::DigBlock {
+                player_id: player,
+                position,
+                status: 0,
+                face: Some(BlockFace::Top),
+            },
+            0,
+        );
+        assert_eq!(block_change_count(&start, position, BlockState::is_air), 0);
+        let early = core.tick(threshold_ms.saturating_sub(1));
+        assert_eq!(block_change_count(&early, position, BlockState::is_air), 0);
+        let finish = core.tick(threshold_ms);
+        assert!(block_change_count(&finish, position, BlockState::is_air) >= 1);
+    }
+}
+
+#[test]
+fn survival_mining_cancel_and_held_slot_change_clear_progress() {
+    let (mut core, player) = logged_in_core(CoreConfig::default(), 1, "cancel");
+    let position = BlockPos::new(2, 2, 0);
+
+    let start = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: player,
+            position,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    assert!(block_break_progress_count(&start, player, position, Some(0)) >= 1);
+
+    let cancel = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: player,
+            position,
+            status: 1,
+            face: Some(BlockFace::Top),
+        },
+        100,
+    );
+    assert!(block_break_progress_count(&cancel, player, position, None) >= 1);
+    let after_cancel = core.tick(1_000);
+    assert_eq!(
+        block_change_count(&after_cancel, position, BlockState::is_air),
+        0
+    );
+    assert_eq!(snapshot_block(&core, position), BlockState::dirt());
+
+    let restart = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: player,
+            position,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        1_100,
+    );
+    assert!(block_break_progress_count(&restart, player, position, Some(0)) >= 1);
+    let held_change = set_held_slot(&mut core, player, 1);
+    assert!(block_break_progress_count(&held_change, player, position, None) >= 1);
+    let after_slot_change = core.tick(2_000);
+    assert_eq!(
+        block_change_count(&after_slot_change, position, BlockState::is_air),
+        0
+    );
+}
+
+#[test]
+fn survival_successful_place_and_external_block_change_clear_active_mining() {
+    let (mut core, player) = logged_in_core(CoreConfig::default(), 1, "clearers");
+    let mined_pos = BlockPos::new(2, 2, 0);
+
+    let _ = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: player,
+            position: mined_pos,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    let place = core.apply_command(
+        CoreCommand::PlaceBlock {
+            player_id: player,
+            hand: InteractionHand::Main,
+            position: BlockPos::new(4, 3, 0),
+            face: Some(BlockFace::Top),
+            held_item: Some(item("minecraft:stone", 64)),
+        },
+        100,
+    );
+    assert!(block_break_progress_count(&place, player, mined_pos, None) >= 1);
+    assert_eq!(
+        snapshot_block(&core, BlockPos::new(4, 4, 0)),
+        BlockState::stone()
+    );
+    let after_place = core.tick(1_000);
+    assert_eq!(
+        block_change_count(&after_place, mined_pos, BlockState::is_air),
+        0
+    );
+
+    let _ = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: player,
+            position: mined_pos,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        1_100,
+    );
+    let external = core.apply_gameplay_effect(
+        GameplayEffect {
+            mutations: vec![GameplayMutation::Block {
+                position: mined_pos,
+                block: BlockState::sand(),
+            }],
+            emitted_events: Vec::new(),
+        },
+        1_200,
+    );
+    assert!(block_break_progress_count(&external, player, mined_pos, None) >= 1);
+    let after_external = core.tick(2_000);
+    assert_eq!(snapshot_block(&core, mined_pos), BlockState::sand());
+    assert_eq!(
+        block_change_count(&after_external, mined_pos, BlockState::is_air),
+        0
+    );
+}
+
+#[test]
+fn survival_multiple_players_do_not_share_mining_progress() {
+    let mut core = ServerCore::new(CoreConfig::default());
+    let (first, _) = login_player(&mut core, 1, "first-miner");
+    let (second, _) = login_player(&mut core, 2, "second-miner");
+    let position = BlockPos::new(2, 1, 0);
+
+    let _ = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: first,
+            position,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    let _ = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: second,
+            position,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        1_000,
+    );
+
+    let early = core.tick(2_249);
+    assert_eq!(block_change_count(&early, position, BlockState::is_air), 0);
+
+    let finish = core.tick(2_250);
+    assert!(block_change_count(&finish, position, BlockState::is_air) >= 1);
+    assert!(online_player(&core, second).active_mining.is_none());
+}
+
+#[test]
+fn active_mining_is_not_persisted_in_snapshots() {
+    let (mut core, _player) = logged_in_core(CoreConfig::default(), 1, "snapshot-miner");
+    let _ = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: player_id("snapshot-miner"),
+            position: BlockPos::new(2, 1, 0),
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+
+    let snapshot = core.snapshot();
+    let mut restored = ServerCore::from_snapshot(CoreConfig::default(), snapshot);
+    let (_player, _) = login_player(&mut restored, 2, "snapshot-miner");
+    let events = restored.tick(3_000);
+    assert_eq!(
+        block_change_count(&events, BlockPos::new(2, 1, 0), BlockState::is_air),
+        0
+    );
+    assert_eq!(
+        snapshot_block(&restored, BlockPos::new(2, 1, 0)),
+        BlockState::stone()
     );
 }
 
@@ -786,6 +1040,61 @@ fn survival_pickup_delay_and_nearest_player_pickup_work() {
 }
 
 #[test]
+fn survival_high_fall_drop_becomes_pickable_after_settling() {
+    let mut core = ServerCore::new(CoreConfig::default());
+    let (player, _) = login_player(&mut core, 1, "high-fall");
+
+    let _ = core.apply_command(
+        CoreCommand::MoveIntent {
+            player_id: player,
+            position: Some(Vec3::new(1.5, 4.0, 0.5)),
+            yaw: Some(0.0),
+            pitch: Some(0.0),
+            on_ground: true,
+        },
+        0,
+    );
+
+    let spawn_events = core.apply_gameplay_effect(
+        GameplayEffect {
+            mutations: vec![GameplayMutation::DroppedItem {
+                position: Vec3::new(1.5, 24.5, 0.5),
+                item: item("minecraft:cobblestone", 1),
+            }],
+            emitted_events: Vec::new(),
+        },
+        0,
+    );
+    let entity_id = dropped_item_entity_id(&spawn_events, player);
+
+    let early = core.tick(500);
+    assert_eq!(
+        count_player_events(&early, player, |event| {
+            matches!(event, CoreEvent::InventorySlotChanged { .. })
+        }),
+        0
+    );
+    let falling_y = core
+        .dropped_items
+        .get(&entity_id)
+        .expect("high-fall dropped item should still exist")
+        .snapshot
+        .position
+        .y;
+    assert!(falling_y < 24.5);
+    assert!(falling_y > 4.25);
+
+    let landed = core.tick(4_000);
+    assert_inventory_slot_changed_to(
+        &landed,
+        player,
+        InventorySlot::MainInventory(0),
+        Some(("minecraft:cobblestone", 1)),
+    );
+    assert_player_entity_despawned(&landed, player, entity_id);
+}
+
+#[test]
 fn survival_partial_pickup_leaves_leftover_drop_for_late_joiners() {
     let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "picker");
     let _ = core.apply_command(
@@ -856,5 +1165,70 @@ fn survival_partial_pickup_leaves_leftover_drop_for_late_joiners() {
         &login_events,
         ConnectionId(2),
         Some(("minecraft:cobblestone", 6)),
+    );
+}
+
+#[test]
+fn survival_pickup_prefers_leftmost_hotbar_slot_before_main_inventory() {
+    let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "hotbar-first");
+    let _ = core.apply_command(
+        CoreCommand::MoveIntent {
+            player_id: first,
+            position: Some(Vec3::new(1.5, 4.0, 0.5)),
+            yaw: Some(0.0),
+            pitch: Some(0.0),
+            on_ground: true,
+        },
+        0,
+    );
+
+    let _ = core.apply_gameplay_effect(
+        GameplayEffect {
+            mutations: vec![
+                GameplayMutation::InventorySlot {
+                    player_id: first,
+                    slot: InventorySlot::Hotbar(0),
+                    stack: None,
+                },
+                GameplayMutation::InventorySlot {
+                    player_id: first,
+                    slot: InventorySlot::MainInventory(0),
+                    stack: None,
+                },
+            ],
+            emitted_events: Vec::new(),
+        },
+        0,
+    );
+
+    let _ = core.apply_gameplay_effect(
+        GameplayEffect {
+            mutations: vec![GameplayMutation::DroppedItem {
+                position: Vec3::new(1.5, 4.5, 0.5),
+                item: item("minecraft:dirt", 1),
+            }],
+            emitted_events: Vec::new(),
+        },
+        0,
+    );
+
+    let pickup = core.tick(500);
+    assert_inventory_slot_changed_to(
+        &pickup,
+        first,
+        InventorySlot::Hotbar(0),
+        Some(("minecraft:dirt", 1)),
+    );
+    assert_eq!(
+        count_player_events(&pickup, first, |event| {
+            matches!(
+                event,
+                CoreEvent::InventorySlotChanged {
+                    slot: InventorySlot::MainInventory(0),
+                    ..
+                }
+            )
+        }),
+        0
     );
 }

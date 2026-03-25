@@ -133,6 +133,21 @@ impl BedrockProfile for Bedrock924Profile {
         encoding::encode_block_changed_packets(position, block)
     }
 
+    fn encode_block_breaking_progress_packets(
+        &self,
+        breaker_entity_id: EntityId,
+        position: mc_core::BlockPos,
+        stage: Option<u8>,
+        duration_ms: u64,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        encoding::encode_block_breaking_progress_packets(
+            breaker_entity_id,
+            position,
+            stage,
+            duration_ms,
+        )
+    }
+
     fn encode_inventory_contents_packets(
         &self,
         window_id: u8,

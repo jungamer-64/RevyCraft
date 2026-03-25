@@ -92,20 +92,37 @@ pub(crate) fn decode_play_packet(
             }))
         }
         V924::PlayerActionPacket(PlayerActionPacket {
-            action:
-                PlayerActionType::StartDestroyBlock { .. }
-                | PlayerActionType::StopDestroyBlock { .. }
-                | PlayerActionType::CreativeDestroyBlock
-                | PlayerActionType::PredictDestroyBlock { .. },
+            action,
             block_position,
             face,
             ..
-        }) => Ok(Some(CoreCommand::DigBlock {
-            player_id,
-            position: block_pos_from_network(&block_position),
-            status: 2,
-            face: block_face_from_i32(face),
-        })),
+        }) => match action {
+            PlayerActionType::StartDestroyBlock | PlayerActionType::ContinueDestroyBlock => {
+                Ok(Some(CoreCommand::DigBlock {
+                    player_id,
+                    position: block_pos_from_network(&block_position),
+                    status: 0,
+                    face: block_face_from_i32(face),
+                }))
+            }
+            PlayerActionType::AbortDestroyBlock | PlayerActionType::StopDestroyBlock => {
+                Ok(Some(CoreCommand::DigBlock {
+                    player_id,
+                    position: block_pos_from_network(&block_position),
+                    status: 1,
+                    face: block_face_from_i32(face),
+                }))
+            }
+            PlayerActionType::CreativeDestroyBlock | PlayerActionType::PredictDestroyBlock => {
+                Ok(Some(CoreCommand::DigBlock {
+                    player_id,
+                    position: block_pos_from_network(&block_position),
+                    status: 2,
+                    face: block_face_from_i32(face),
+                }))
+            }
+            _ => Ok(None),
+        },
         V924::ItemStackRequestPacket(ItemStackRequestPacket { requests }) => {
             decode_item_stack_request_packet(player_id, &requests)
         }

@@ -1,4 +1,4 @@
-use super::super::{OnlinePlayer, ServerCore};
+use super::super::{DroppedItemEntity, OnlinePlayer, ServerCore};
 use super::crafting::{
     recompute_crafting_result_for_active_container, recompute_player_crafting_result,
 };
@@ -18,6 +18,10 @@ use crate::world::{BlockEntityState, BlockPos, BlockState, Vec3};
 use crate::{EntityId, PlayerId, PlayerSnapshot};
 
 const DROPPED_ITEM_PICKUP_RADIUS_SQUARED: f64 = 1.5 * 1.5;
+const DROPPED_ITEM_PHYSICS_STEP_MS: u64 = 50;
+const DROPPED_ITEM_GRAVITY_PER_STEP: f64 = 0.04;
+const DROPPED_ITEM_DRAG: f64 = 0.98;
+const DROPPED_ITEM_REST_HEIGHT: f64 = 0.25;
 
 impl ServerCore {
     pub fn open_crafting_table(
@@ -199,22 +203,22 @@ impl ServerCore {
         let item_ids = self.dropped_items.keys().copied().collect::<Vec<_>>();
 
         for entity_id in item_ids {
-            let Some(item) = self.dropped_items.get(&entity_id) else {
+            let Some(mut item) = self.dropped_items.remove(&entity_id) else {
                 continue;
             };
+            self.advance_dropped_item_entity(&mut item, now_ms);
             if now_ms >= item.despawn_at_ms {
                 despawned.push(entity_id);
                 continue;
             }
             if now_ms < item.pickup_allowed_at_ms {
+                self.dropped_items.insert(entity_id, item);
                 continue;
             }
             let Some(player_id) =
                 nearest_pickup_player(&self.online_players, item.snapshot.position)
             else {
-                continue;
-            };
-            let Some(mut item) = self.dropped_items.remove(&entity_id) else {
+                self.dropped_items.insert(entity_id, item);
                 continue;
             };
             let (pickup_events, leftover) = self
@@ -239,6 +243,53 @@ impl ServerCore {
         }
 
         events
+    }
+
+    fn advance_dropped_item_entity(&self, item: &mut DroppedItemEntity, now_ms: u64) {
+        let elapsed_ms = now_ms.saturating_sub(item.last_updated_at_ms);
+        let step_count = elapsed_ms / DROPPED_ITEM_PHYSICS_STEP_MS;
+        if step_count == 0 {
+            return;
+        }
+
+        for _ in 0..step_count {
+            self.advance_dropped_item_step(item);
+        }
+
+        item.last_updated_at_ms = item
+            .last_updated_at_ms
+            .saturating_add(step_count.saturating_mul(DROPPED_ITEM_PHYSICS_STEP_MS));
+    }
+
+    fn advance_dropped_item_step(&self, item: &mut DroppedItemEntity) {
+        let next_velocity_y =
+            (item.snapshot.velocity.y - DROPPED_ITEM_GRAVITY_PER_STEP) * DROPPED_ITEM_DRAG;
+        let next_y = item.snapshot.position.y + next_velocity_y;
+        if let Some(rest_y) =
+            self.dropped_item_rest_y(item.snapshot.position.x, next_y, item.snapshot.position.z)
+            && next_y <= rest_y
+        {
+            item.snapshot.position.y = rest_y;
+            item.snapshot.velocity.y = 0.0;
+            return;
+        }
+
+        item.snapshot.position.y = next_y;
+        item.snapshot.velocity.y = next_velocity_y;
+    }
+
+    fn dropped_item_rest_y(&self, x: f64, y: f64, z: f64) -> Option<f64> {
+        let block_x = x.floor() as i32;
+        let block_z = z.floor() as i32;
+        let max_block_y = (y.floor() as i32).clamp(0, 255);
+        for block_y in (0..=max_block_y).rev() {
+            let position = BlockPos::new(block_x, block_y, block_z);
+            if self.block_at(position).is_air() {
+                continue;
+            }
+            return Some(f64::from(block_y) + 1.0 + DROPPED_ITEM_REST_HEIGHT);
+        }
+        None
     }
 
     pub(in crate::core) fn unregister_world_chest_viewer(

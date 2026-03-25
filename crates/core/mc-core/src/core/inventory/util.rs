@@ -70,8 +70,8 @@ pub(crate) fn merge_stack_into_player_inventory(
 }
 
 fn persistent_slot_order() -> impl Iterator<Item = InventorySlot> {
-    (0_u8..27)
-        .map(InventorySlot::MainInventory)
-        .chain((0_u8..9).map(InventorySlot::Hotbar))
+    (0_u8..9)
+        .map(InventorySlot::Hotbar)
+        .chain((0_u8..27).map(InventorySlot::MainInventory))
         .chain(std::iter::once(InventorySlot::Offhand))
 }

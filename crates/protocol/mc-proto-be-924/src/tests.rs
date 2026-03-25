@@ -11,13 +11,16 @@ use bedrockrs_proto::V924;
 use bedrockrs_proto::codec::{decode_packets, encode_packets};
 use bedrockrs_proto::v662::enums::{
     ComplexInventoryTransactionType, ContainerEnumName, InputMode, ItemUseInventoryTransactionType,
-    NewInteractionModel, TextProcessingEventOrigin,
+    LevelEvent as BedrockLevelEvent, NewInteractionModel, PlayerActionType,
+    TextProcessingEventOrigin,
 };
 use bedrockrs_proto::v662::packets::{
-    ItemStackRequestPacket, LegacySetItemSlotsEntry, LoginPacket, RequestNetworkSettingsPacket,
-    RequestsEntry,
+    ItemStackRequestPacket, LegacySetItemSlotsEntry, LoginPacket, PlayerActionPacket,
+    RequestNetworkSettingsPacket, RequestsEntry,
 };
-use bedrockrs_proto::v662::types::{NetworkBlockPosition, NetworkItemStackDescriptor};
+use bedrockrs_proto::v662::types::{
+    ActorRuntimeID, NetworkBlockPosition, NetworkItemStackDescriptor,
+};
 use bedrockrs_proto::v712::enums::ItemStackRequestActionType;
 use bedrockrs_proto::v712::types::{
     ItemStackRequestSlotInfo, PackedItemUseLegacyInventoryTransaction, PredictedResult, TriggerType,
@@ -514,6 +517,126 @@ fn encodes_dropped_item_spawn_and_despawn_packets() {
             assert_eq!(packet.target_actor_id.0, bedrock_actor_id(EntityId(77)));
         }
         other => panic!("unexpected despawn packets: {other:?}"),
+    }
+}
+
+#[test]
+fn encodes_block_break_progress_packets() {
+    let adapter = Bedrock924Adapter::new();
+
+    let start = adapter
+        .encode_play_event(
+            &CoreEvent::BlockBreakingProgress {
+                breaker_entity_id: EntityId(77),
+                position: BlockPos::new(2, 4, 0),
+                stage: Some(0),
+                duration_ms: 750,
+            },
+            &play_context(),
+        )
+        .expect("break start should encode");
+    let packets =
+        decode_packets::<V924>(start[0].clone(), None, None).expect("level event should decode");
+    match packets.as_slice() {
+        [V924::LevelEventPacket(packet)] => {
+            assert_eq!(
+                packet.event_id,
+                BedrockLevelEvent::StartBlockCracking as i32
+            );
+            assert_eq!(packet.position.x, 2.0);
+            assert_eq!(packet.position.y, 4.0);
+            assert_eq!(packet.position.z, 0.0);
+            assert!(packet.data > 0);
+        }
+        other => panic!("unexpected break start packets: {other:?}"),
+    }
+
+    let update = adapter
+        .encode_play_event(
+            &CoreEvent::BlockBreakingProgress {
+                breaker_entity_id: EntityId(77),
+                position: BlockPos::new(2, 4, 0),
+                stage: Some(5),
+                duration_ms: 750,
+            },
+            &play_context(),
+        )
+        .expect("break update should encode");
+    let packets =
+        decode_packets::<V924>(update[0].clone(), None, None).expect("level event should decode");
+    match packets.as_slice() {
+        [V924::LevelEventPacket(packet)] => {
+            assert_eq!(
+                packet.event_id,
+                BedrockLevelEvent::UpdateBlockCracking as i32
+            );
+            assert_eq!(packet.data, 5);
+        }
+        other => panic!("unexpected break update packets: {other:?}"),
+    }
+
+    let stop = adapter
+        .encode_play_event(
+            &CoreEvent::BlockBreakingProgress {
+                breaker_entity_id: EntityId(77),
+                position: BlockPos::new(2, 4, 0),
+                stage: None,
+                duration_ms: 750,
+            },
+            &play_context(),
+        )
+        .expect("break stop should encode");
+    let packets =
+        decode_packets::<V924>(stop[0].clone(), None, None).expect("level event should decode");
+    match packets.as_slice() {
+        [V924::LevelEventPacket(packet)] => {
+            assert_eq!(packet.event_id, BedrockLevelEvent::StopBlockCracking as i32);
+            assert_eq!(packet.data, 0);
+        }
+        other => panic!("unexpected break stop packets: {other:?}"),
+    }
+}
+
+#[test]
+fn decodes_player_action_destroy_packets_to_dig_statuses() {
+    let adapter = Bedrock924Adapter::new();
+    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"bedrock-break-actions"));
+
+    for (action, expected_status) in [
+        (PlayerActionType::StartDestroyBlock, 0_u8),
+        (PlayerActionType::ContinueDestroyBlock, 0_u8),
+        (PlayerActionType::AbortDestroyBlock, 1_u8),
+        (PlayerActionType::StopDestroyBlock, 1_u8),
+        (PlayerActionType::CreativeDestroyBlock, 2_u8),
+        (PlayerActionType::PredictDestroyBlock, 2_u8),
+    ] {
+        let frame = encode_packets(
+            &[V924::PlayerActionPacket(PlayerActionPacket {
+                player_runtime_id: ActorRuntimeID(1),
+                action,
+                block_position: NetworkBlockPosition { x: 2, y: 4, z: 0 },
+                result_pos: NetworkBlockPosition { x: 2, y: 4, z: 0 },
+                face: 1,
+            })],
+            None,
+            None,
+        )
+        .expect("player action should encode");
+        let command = adapter
+            .decode_play(player_id, &frame)
+            .expect("player action should decode")
+            .expect("player action should produce a command");
+        assert!(matches!(
+            command,
+            CoreCommand::DigBlock {
+                player_id: decoded_player,
+                position,
+                status,
+                face: Some(mc_core::BlockFace::Top),
+            } if decoded_player == player_id
+                && position == BlockPos::new(2, 4, 0)
+                && status == expected_status
+        ));
     }
 }
 

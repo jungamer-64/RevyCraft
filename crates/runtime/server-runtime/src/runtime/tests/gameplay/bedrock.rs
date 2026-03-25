@@ -295,8 +295,23 @@ async fn bedrock_survival_block_changes_and_inventory_decrement_are_broadcast_to
     }
 
     bedrock
-        .break_block(mc_core::BlockPos::new(2, 4, 0), 1)
+        .start_break_block(mc_core::BlockPos::new(2, 2, 0), 1)
         .await?;
+    let cracking =
+        read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::LevelEvent, 64).await?;
+    let (event_id, x, y, z, data) = bedrock_level_event_from_packet(&cracking)?;
+    assert_eq!(event_id, 3600);
+    assert_eq!((x, y, z), (2.0, 2.0, 0.0));
+    assert!(data > 0);
+    assert_no_java_packet(
+        &mut legacy,
+        &codec,
+        &mut legacy_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
+    tokio::time::sleep(Duration::from_millis(850)).await;
 
     let legacy_break = read_until_java_packet(
         &mut legacy,
@@ -323,15 +338,66 @@ async fn bedrock_survival_block_changes_and_inventory_decrement_are_broadcast_to
     )
     .await?;
 
-    assert_eq!(block_change_from_packet(&legacy_break)?, (2, 4, 0, 0, 0));
+    assert_eq!(block_change_from_packet(&legacy_break)?, (2, 2, 0, 0, 0));
     assert_eq!(
         block_change_from_packet_1_8(&modern_18_break)?,
-        (2, 4, 0, 0)
+        (2, 2, 0, 0)
     );
     assert_eq!(
         block_change_from_packet_1_12(&modern_112_break)?,
-        (2, 4, 0, 0)
+        (2, 2, 0, 0)
     );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn bedrock_survival_abort_cancels_block_break_and_emits_stop_cracking()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let mut config = survival_server_config(temp_dir.path().join("world"));
+    config.topology.be_enabled = true;
+    config.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into()]);
+    config.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.into();
+    config.topology.enabled_bedrock_adapters = Some(vec![BE_924_ADAPTER_ID.into()]);
+    config.profiles.bedrock_auth = BEDROCK_OFFLINE_AUTH_PROFILE_ID.into();
+
+    let server = build_test_server(
+        config,
+        plugin_test_registries_with_allowlist(&[JE_5_ADAPTER_ID, BE_924_ADAPTER_ID])?,
+    )
+    .await?;
+    let udp_addr = udp_listener_addr(&server);
+    let tcp_addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut observer, mut observer_buffer, _) = login_legacy(tcp_addr, "observer").await?;
+    let mut bedrock = BedrockTestClient::connect(udp_addr).await?;
+    bedrock.login("builder").await?;
+    let _ = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::StartGame, 32).await?;
+    let _ = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::LevelChunk, 64).await?;
+
+    bedrock
+        .start_break_block(mc_core::BlockPos::new(2, 2, 0), 1)
+        .await?;
+    let start = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::LevelEvent, 64).await?;
+    assert_eq!(bedrock_level_event_from_packet(&start)?.0, 3600);
+
+    bedrock
+        .abort_break_block(mc_core::BlockPos::new(2, 2, 0), 1)
+        .await?;
+    let stop = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::LevelEvent, 64).await?;
+    assert_eq!(bedrock_level_event_from_packet(&stop)?.0, 3601);
+
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert_no_java_packet(
+        &mut observer,
+        &codec,
+        &mut observer_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
 
     server.shutdown().await
 }

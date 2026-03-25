@@ -1,10 +1,11 @@
 use crate::{
-    PACKET_CB_BLOCK_CHANGE, PACKET_CB_CLOSE_WINDOW, PACKET_CB_DESTROY_ENTITIES,
-    PACKET_CB_ENTITY_HEAD_ROTATION, PACKET_CB_ENTITY_METADATA, PACKET_CB_ENTITY_TELEPORT,
-    PACKET_CB_HELD_ITEM_CHANGE, PACKET_CB_JOIN_GAME, PACKET_CB_KEEP_ALIVE, PACKET_CB_MAP_CHUNK,
-    PACKET_CB_MAP_CHUNK_BULK, PACKET_CB_NAMED_ENTITY_SPAWN, PACKET_CB_OPEN_WINDOW,
-    PACKET_CB_PLAYER_ABILITIES, PACKET_CB_PLAYER_POSITION_AND_LOOK, PACKET_CB_SET_SLOT,
-    PACKET_CB_SPAWN_OBJECT, PACKET_CB_SPAWN_POSITION, PACKET_CB_TIME_UPDATE, PACKET_CB_TRANSACTION,
+    PACKET_CB_BLOCK_BREAK_ANIMATION, PACKET_CB_BLOCK_CHANGE, PACKET_CB_CLOSE_WINDOW,
+    PACKET_CB_DESTROY_ENTITIES, PACKET_CB_ENTITY_HEAD_ROTATION, PACKET_CB_ENTITY_METADATA,
+    PACKET_CB_ENTITY_TELEPORT, PACKET_CB_HELD_ITEM_CHANGE, PACKET_CB_JOIN_GAME,
+    PACKET_CB_KEEP_ALIVE, PACKET_CB_MAP_CHUNK, PACKET_CB_MAP_CHUNK_BULK,
+    PACKET_CB_NAMED_ENTITY_SPAWN, PACKET_CB_OPEN_WINDOW, PACKET_CB_PLAYER_ABILITIES,
+    PACKET_CB_PLAYER_POSITION_AND_LOOK, PACKET_CB_SET_SLOT, PACKET_CB_SPAWN_OBJECT,
+    PACKET_CB_SPAWN_POSITION, PACKET_CB_TIME_UPDATE, PACKET_CB_TRANSACTION,
     PACKET_CB_UPDATE_HEALTH, PACKET_CB_WINDOW_ITEMS, PACKET_CB_WINDOW_PROPERTY,
 };
 use mc_core::{
@@ -191,6 +192,21 @@ pub(crate) fn encode_block_change(position: BlockPos, block: &BlockState) -> Vec
     writer.write_i32(position.z);
     writer.write_varint(i32::from(block_id));
     writer.write_u8(metadata);
+    writer.into_inner()
+}
+
+pub(crate) fn encode_block_break_animation(
+    entity_id: EntityId,
+    position: BlockPos,
+    stage: Option<u8>,
+) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(PACKET_CB_BLOCK_BREAK_ANIMATION);
+    writer.write_i32(entity_id.0);
+    writer.write_i32(position.x);
+    writer.write_i32(position.y);
+    writer.write_i32(position.z);
+    writer.write_i8(stage.map_or(-1, |stage| i8::try_from(stage).unwrap_or(9)));
     writer.into_inner()
 }
 

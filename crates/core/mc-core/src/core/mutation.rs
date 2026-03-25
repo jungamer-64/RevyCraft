@@ -39,6 +39,21 @@ impl ServerCore {
                 } => {
                     events.extend(self.apply_inventory_slot_mutation(player_id, slot, stack));
                 }
+                GameplayMutation::ClearMining { player_id } => {
+                    events.extend(self.clear_active_mining(player_id));
+                }
+                GameplayMutation::BeginMining {
+                    player_id,
+                    position,
+                    duration_ms,
+                } => {
+                    events.extend(self.apply_begin_mining_mutation(
+                        player_id,
+                        position,
+                        duration_ms,
+                        now_ms,
+                    ));
+                }
                 GameplayMutation::OpenChest {
                     player_id,
                     position,
@@ -174,8 +189,9 @@ impl ServerCore {
         position: BlockPos,
         block: BlockState,
     ) -> Vec<TargetedEvent> {
+        let mut events = self.clear_active_mining_at(position);
         self.set_block_at(position, block.clone());
-        let mut events = self.close_world_chest_if_invalid(position, &block);
+        events.extend(self.close_world_chest_if_invalid(position, &block));
         if block.key.as_str() == crate::catalog::CHEST {
             self.block_entities
                 .entry(position)
@@ -202,6 +218,7 @@ impl ServerCore {
             entity_id,
             DroppedItemEntity {
                 snapshot: snapshot.clone(),
+                last_updated_at_ms: now_ms,
                 pickup_allowed_at_ms: now_ms.saturating_add(DROPPED_ITEM_PICKUP_DELAY_MS),
                 despawn_at_ms: now_ms.saturating_add(DROPPED_ITEM_DESPAWN_MS),
             },

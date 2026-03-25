@@ -245,7 +245,12 @@ fn non_player_window_slot_from_raw(
 
 fn visible_slots(container: InventoryContainer) -> impl Iterator<Item = InventorySlot> {
     let local = match container {
-        InventoryContainer::Player => (0_u8..9).map(InventorySlot::Auxiliary).collect::<Vec<_>>(),
+        InventoryContainer::Player => (0_u8..9)
+            .map(InventorySlot::Auxiliary)
+            .chain((0_u8..27).map(InventorySlot::MainInventory))
+            .chain((0_u8..9).map(InventorySlot::Hotbar))
+            .chain(std::iter::once(InventorySlot::Offhand))
+            .collect::<Vec<_>>(),
         InventoryContainer::CraftingTable
         | InventoryContainer::Chest
         | InventoryContainer::Furnace => {

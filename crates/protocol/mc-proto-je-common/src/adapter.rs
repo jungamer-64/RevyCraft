@@ -78,6 +78,12 @@ pub trait JavaEditionProfile: Default + Send + Sync {
         position: BlockPos,
         block: &BlockState,
     ) -> Result<Vec<u8>, ProtocolError>;
+    fn encode_block_breaking_progress(
+        &self,
+        breaker_entity_id: EntityId,
+        position: BlockPos,
+        stage: Option<u8>,
+    ) -> Result<Vec<u8>, ProtocolError>;
     fn encode_keep_alive_requested(&self, keep_alive_id: i32) -> Result<Vec<u8>, ProtocolError>;
     fn decode_play(
         &self,
@@ -290,6 +296,16 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
             CoreEvent::BlockChanged { position, block } => {
                 Ok(vec![self.profile.encode_block_changed(*position, block)?])
             }
+            CoreEvent::BlockBreakingProgress {
+                breaker_entity_id,
+                position,
+                stage,
+                ..
+            } => Ok(vec![self.profile.encode_block_breaking_progress(
+                *breaker_entity_id,
+                *position,
+                *stage,
+            )?]),
             CoreEvent::KeepAliveRequested { keep_alive_id } => Ok(vec![
                 self.profile.encode_keep_alive_requested(*keep_alive_id)?,
             ]),
