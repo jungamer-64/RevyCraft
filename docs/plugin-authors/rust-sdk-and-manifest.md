@@ -1,92 +1,66 @@
 # Rust SDK と manifest
 
-## 概要
+この文書は、Rust で RevyCraft plugin を書くときの正本です。`mc-plugin-api` と `mc-plugin-sdk-rust` の役割分担、trait / macro、`StaticPluginManifest`、plugin ABI `3.5` を現在の実装に合わせて整理します。
 
-この文書は、RevyCraft plugin を Rust で実装する人向けに、`mc-plugin-api` と `mc-plugin-sdk-rust` の役割分担、正規入口、manifest の書き方を整理したものです。
-
-## 対象読者
-
-- Rust で protocol / gameplay / storage / auth / admin-ui plugin を書く人
-- どの module や macro を使うべきか知りたい人
-- unsupported path を避けたい人
-
-## この文書でわかること
-
-- `mc-plugin-api` と `mc-plugin-sdk-rust` の違い
-- kind ごとの trait と export macro
-- `StaticPluginManifest` と descriptor の整合ルール
-- plugin 作者が依存してよい surface と避けるべき surface
-
-## 関連資料
-
-- [`plugin-model.md`](plugin-model.md)
-- [`../contributors/runtime-and-plugin-architecture.md`](../contributors/runtime-and-plugin-architecture.md)
-- [`../../crates/plugin/mc-plugin-api/src/lib.rs`](../../crates/plugin/mc-plugin-api/src/lib.rs)
-- [`../../crates/plugin/mc-plugin-sdk-rust/src/lib.rs`](../../crates/plugin/mc-plugin-sdk-rust/src/lib.rs)
-
-## crate の役割分担
+## crate の役割
 
 | crate | 役割 | 使いどころ |
 | --- | --- | --- |
-| `mc-plugin-api` | C ABI、manifest struct、host API table、typed codec | host / runtime 実装、ABI 契約の確認、macro が最終的に公開する symbol の理解 |
+| `mc-plugin-api` | ABI `3.5`、manifest struct、host API、typed codec | host / runtime 実装、ABI 契約確認 |
 | `mc-plugin-sdk-rust` | Rust 向け trait、manifest helper、capability helper、export macro | 通常の Rust plugin authoring の正規入口 |
 
-通常の Rust plugin 作者は、まず SDK を使い、ABI の詳細が必要なときだけ API crate を読むのが安全です。
+通常の plugin 作者は `mc-plugin-sdk-rust` を使い、ABI の細部が必要なときだけ `mc-plugin-api` を読みます。
 
-## 正規入口
+## kind ごとの正規入口
 
-`mc-plugin-sdk-rust` で常用する module は次です。
+| kind | trait / helper | export |
+| --- | --- | --- |
+| protocol | `RustProtocolPlugin`、`declare_protocol_plugin!`、`delegate_protocol_adapter!` | `declare_protocol_plugin!` または `export_plugin!(protocol, ...)` |
+| gameplay | `RustGameplayPlugin` または `PolicyGameplayPlugin` | `export_plugin!(gameplay, ...)` |
+| storage | `RustStoragePlugin` | `export_plugin!(storage, ...)` |
+| auth | `RustAuthPlugin` | `export_plugin!(auth, ...)` |
+| admin-ui | `RustAdminUiPlugin` | `export_plugin!(admin_ui, ...)` |
 
-- `protocol`
-- `gameplay`
-- `storage`
-- `auth`
-- `admin_ui`
-- `manifest`
-- `capabilities`
+共通でよく使う module は次です。
 
-kind ごとの trait は次のとおりです。
+- `mc_plugin_sdk_rust::manifest`
+- `mc_plugin_sdk_rust::capabilities`
+- `mc_plugin_sdk_rust::{protocol, gameplay, storage, auth, admin_ui}`
 
-- protocol
-  `RustProtocolPlugin`
-- gameplay
-  `RustGameplayPlugin` または `PolicyGameplayPlugin`
-- storage
-  `RustStoragePlugin`
-- auth
-  `RustAuthPlugin`
-- admin-ui
-  `RustAdminUiPlugin`
+## `StaticPluginManifest` が埋めるもの
 
-## manifest の基本
+`StaticPluginManifest` は embedded manifest 用の helper です。constructor を使うと plugin kind、ABI、host ABI range、required manifest capability が自動で入ります。
 
-Rust からは `StaticPluginManifest` を使うのが基本です。kind ごとの constructor が用意されています。
+現在の constructor が生成する manifest capability は次です。
 
-- `StaticPluginManifest::protocol_with_capabilities(...)`
-- `StaticPluginManifest::gameplay(...)`
-- `StaticPluginManifest::storage(...)`
-- `StaticPluginManifest::auth(...)`
-- `StaticPluginManifest::admin_ui(...)`
+- `StaticPluginManifest::protocol(...)`
+  `runtime.reload.protocol`
+- `StaticPluginManifest::gameplay(..., profile_id)`
+  `gameplay.profile:<profile_id>` と `runtime.reload.gameplay`
+- `StaticPluginManifest::storage(..., profile_id)`
+  `storage.profile:<profile_id>` と `runtime.reload.storage`
+- `StaticPluginManifest::auth(..., profile_id)`
+  `auth.profile:<profile_id>` と `runtime.reload.auth`
+- `StaticPluginManifest::admin_ui(..., profile_id)`
+  `admin-ui.profile:<profile_id>` と `runtime.reload.admin-ui`
 
-manifest が持つ主な情報は次です。
+ABI はすべて `CURRENT_PLUGIN_ABI`、すなわち `3.5` に揃います。通常の Rust plugin ではこれを手で上書きする必要はありません。
 
-- `plugin_id`
-- `display_name`
-- `plugin_kind`
-- `plugin_abi`
-- `min_host_abi`
-- `max_host_abi`
-- `capabilities`
+## runtime capability set は別物
 
-ABI は通常 `CURRENT_PLUGIN_ABI` に揃えます。現行 host ABI は `3.5` です。workspace plugin は rebuild / repackage 前提で扱ってください。
+embedded manifest と runtime capability set は別です。
 
-## kind ごとの export パターン
+- embedded manifest
+  host が load 時に検証する capability 文字列
+- runtime capability set
+  plugin が `capability_set()` で返す enum-based capability set
 
-### protocol plugin
+特に protocol plugin ではこの差が重要です。`StaticPluginManifest::protocol(...)` は embedded manifest に `runtime.reload.protocol` だけを書きますが、runtime 側の `ProtocolCapability::Je` や `ProtocolCapability::Je47` のような情報は `capability_set()` 側で表現します。
 
-protocol plugin では `declare_protocol_plugin!` か `delegate_protocol_adapter!` を使うのが最短です。
+## protocol plugin の最小パターン
 
 ```rust
+use mc_core::ProtocolCapability;
 use mc_plugin_sdk_rust::protocol::declare_protocol_plugin;
 use mc_proto_je_47::Je47Adapter;
 
@@ -95,100 +69,114 @@ declare_protocol_plugin!(
     Je47Adapter,
     "je-47",
     "JE 1.8.x (Protocol 47) Plugin",
-    &["protocol.je", "protocol.je.47", "runtime.reload.protocol"],
-    &["runtime.reload.protocol"],
+    &[
+        ProtocolCapability::RuntimeReload,
+        ProtocolCapability::Je,
+        ProtocolCapability::Je47,
+    ],
 );
 ```
 
-この macro は adapter の委譲実装と manifest / exported symbol の公開までまとめて行います。
+この macro は次をまとめて行います。
 
-現行の protocol export surface は `ProtocolPluginApiV2` で、exported symbol は `mc_plugin_protocol_api_v2` です。通常は macro を使えば symbol 名を意識する必要はありません。
+- adapter への委譲実装
+- embedded manifest の export
+- protocol API v2 の export
 
-protocol plugin では次の責務境界を守ってください。
+現在の protocol export surface は `ProtocolPluginApiV2`、exported symbol は `mc_plugin_protocol_api_v2` です。通常は macro に任せれば十分です。
 
-- `mc-core` へ渡す `CoreCommand::InventoryClick` は semantic target と validation だけにする
-- raw slot や version ごとの差分は `decode_play(session, frame)` の時点で解決する
-- `encode_play_event(event, session, context)` では session-owned state を見ながら packet を組み立てる
-- active window や reject pending のような protocol-owned state がある場合は `session_closed()` と `export_session_state()` / `import_session_state()` で寿命管理する
-
-JE の clicked-item echo / reject-ack gating、Bedrock の active window rewrite / authoritative inventory は protocol plugin 側の責務です。core や runtime に edition-specific な分岐を戻さないでください。
-
-### gameplay / storage / auth / admin-ui plugin
-
-これらは trait 実装と `export_plugin!` の組み合わせが基本です。
+## non-protocol plugin の最小パターン
 
 ```rust
+use mc_core::{GameplayCapability, GameplayCapabilitySet};
+use mc_plugin_api::codec::gameplay::GameplayDescriptor;
+use mc_plugin_sdk_rust::capabilities::gameplay_capabilities;
 use mc_plugin_sdk_rust::export_plugin;
+use mc_plugin_sdk_rust::gameplay::RustGameplayPlugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+
+#[derive(Default)]
+pub struct CanonicalGameplayPlugin;
+
+impl RustGameplayPlugin for CanonicalGameplayPlugin {
+    fn descriptor(&self) -> GameplayDescriptor {
+        GameplayDescriptor {
+            profile: "canonical".into(),
+        }
+    }
+
+    fn capability_set(&self) -> GameplayCapabilitySet {
+        gameplay_capabilities(&[GameplayCapability::RuntimeReload])
+    }
+}
 
 const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
     "gameplay-canonical",
     "Canonical Gameplay Plugin",
-    &["gameplay.profile:canonical", "runtime.reload.gameplay"],
+    "canonical",
 );
 
 export_plugin!(gameplay, CanonicalGameplayPlugin, MANIFEST);
 ```
 
-`export_plugin!` は kind ごとに異なる ABI entrypoint を公開します。通常は macro に任せ、手で exported symbol を組み立てないほうが安全です。
+`PolicyGameplayPlugin` を実装すると、`GameplayPolicyResolver` ベースの gameplay plugin をより薄く書けます。既存の canonical / readonly gameplay plugin はこの系統の実装例です。
 
-## descriptor と manifest の整合チェック
+## descriptor と manifest の整合
 
-kind ごとに、descriptor と manifest capability を一致させてください。
+host は descriptor と embedded manifest を照合します。現在の整合条件は次です。
 
 - gameplay
-  `GameplayDescriptor.profile` と `gameplay.profile:<id>`
+  `GameplayDescriptor.profile` と manifest の `gameplay.profile:<id>`
 - storage
-  `StorageDescriptor.storage_profile` と `storage.profile:<id>`
+  `StorageDescriptor.storage_profile` と manifest の `storage.profile:<id>`
 - auth
-  `AuthDescriptor.auth_profile` / `AuthDescriptor.mode` と `auth.profile:<id>` / `auth.mode:<mode>`
+  `AuthDescriptor.auth_profile` と manifest の `auth.profile:<id>`
 - admin-ui
-  `AdminUiDescriptor.ui_profile` と `admin-ui.profile:<id>`
+  `AdminUiDescriptor.ui_profile` と manifest の `admin-ui.profile:<id>`
 
-reload を有効にしたい場合は、manifest に `runtime.reload.<kind>` を加え、対応する export / import surface を実装します。
+auth mode は descriptor 側で表現され、manifest 側では検証しません。runtime は selection 解決時に `online_mode` と auth descriptor mode の整合を確認します。
 
-特に protocol plugin は reload 時に session ごとの protocol state も移送されるため、reload 対応を宣言するなら `export_session_state()` / `import_session_state()` が no-op でよいかを明示的に判断してください。
+## `capability_set()` の注意
 
-## gameplay host API の扱い
+kind ごとの trait は `capability_set()` の default 実装として空集合を返します。実際には host が `RuntimeReload` capability を要求するため、ほとんどの plugin は明示的に上書きします。
 
-gameplay plugin だけは host callback を受けられます。通常の Rust authoring では ABI の `HostApiTableV1` を直接触らず、SDK の `GameplayHost` trait を使ってください。
+例:
 
-読める情報は次です。
+- protocol
+  `ProtocolCapability::RuntimeReload`
+- gameplay
+  `GameplayCapability::RuntimeReload`
+- storage
+  `StorageCapability::RuntimeReload`
+- auth
+  `AuthCapability::RuntimeReload`
+- admin-ui
+  `AdminUiCapability::RuntimeReload`
 
-- world meta
-- player snapshot
-- block state
-- block entity
-- can_edit_block
-- log
+reload 以外の runtime capability は、必要なものだけ enum で追加します。
 
-host callback は同期 invoke の一部として扱われるため、重い処理や不必要な往復を前提にしない設計が向いています。
+## `plugin.toml` との関係
 
-## unsupported path
+`StaticPluginManifest` が生成するのは shared library 内の embedded manifest です。`runtime/plugins/<plugin-id>/plugin.toml` は別物で、packaging 側が discovery 用に使います。
 
-次の surface は plugin 作者向けの公開入口として扱いません。
+workspace 内 plugin では通常、`xtask` が package 時に `plugin.toml` を生成 / 配置します。external packaged plugin を配布する場合は、shared library に加えて `plugin.toml` も必要です。
 
-| path | 扱い |
-| --- | --- |
-| `mc_plugin_sdk_rust::__macro_support` | exported macro の内部実装です |
-| `mc_plugin_host::__test_hooks` | workspace 内の shared test crate 用です |
-| `mc_proto_je_common::__version_support` | protocol version crate 用の内部 path です |
-| `mc_proto_be_common::__version_support` | protocol version crate 用の内部 path です |
-| `mc_plugin_api::codec::gameplay::host_blob::*` | runtime / host integration helper として扱い、通常の authoring surface とは分けます |
-| `mc_plugin_sdk_rust::test_support` | `in-process-testing` feature を有効にした test / dev build 用です |
+## 避けるべき内部 path
 
-これらに依存すると、workspace 内部の都合で壊れやすくなります。
+- `mc_plugin_sdk_rust::__macro_support`
+- `mc_plugin_host::__test_hooks`
+- `mc_proto_je_common::__version_support`
+- `mc_proto_be_common::__version_support`
+
+これらは公開 authoring surface ではありません。
 
 ## packaging まで含めた確認項目
 
-実装後は次を確認してください。
+1. descriptor の profile id が manifest constructor に渡した profile id と一致している
+2. `capability_set()` が `RuntimeReload` を含んでいる
+3. protocol plugin なら runtime capability に adapter / transport 系の capability を入れている
+4. auth plugin なら descriptor mode が実装メソッドと一致している
+5. `cargo run -p xtask -- package-plugins` 後に `runtime/plugins/<plugin-id>/` ができる
+6. config の allowlist と profile selection がその plugin を参照している
 
-1. trait 実装が kind と一致している
-2. descriptor と manifest capability が一致している
-3. `runtime.reload.*` を宣言したなら export / import surface がある
-4. protocol plugin なら `decode_play()` の時点で raw slot を semantic slot へ変換している
-5. gameplay plugin なら `GameplaySessionSnapshot.protocol` を見て必要な version 分岐を plugin 側で完結できる
-6. shared library が package され、`runtime/plugins/<plugin-id>/plugin.toml` から見える
-7. allowlist と profile selection が config から参照されている
-
-workspace 内 plugin なら `cargo run -p xtask -- package-plugins`、全量 package を見たいときは `cargo run -p xtask -- package-all-plugins` を使うと確認しやすくなります。
+workspace 全量を見たいときは `cargo run -p xtask -- package-all-plugins` も使えます。

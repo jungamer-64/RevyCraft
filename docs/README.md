@@ -1,59 +1,49 @@
 # RevyCraft Docs
 
-## 概要
+この `docs/` は、読者ごとに「どの文書を正本として読めばよいか」を揃えるためのハブです。リポジトリの入口は [`../README.md`](../README.md)、ここは audience ごとの導線と topic ごとの正本を示す場所として扱います。
 
-このディレクトリは、RevyCraft のドキュメントを読者別に整理した入口です。README はリポジトリ全体のポータル、ここは docs 全体のハブとして扱います。
+## 読者別の入口
 
-## 対象読者
-
-- コードを読む・直す実装 contributors
-- サーバーを package / 起動 / reload する運用者
-- plugin を追加実装する外部または workspace 内の plugin 作者
-
-## この文書でわかること
-
-- どの読者が、どの docs から読み始めればよいか
-- docs 全体で共通に使う主要用語
-- README と `docs/` の役割分担
-
-## 関連資料
-
-- [`../README.md`](../README.md)
-- [`contributors/repository-overview.md`](contributors/repository-overview.md)
-- [`operators/getting-started.md`](operators/getting-started.md)
-- [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md)
-
-## 読み始める場所
-
-| 読者 | 最初に読む文書 | 次に読む文書 |
+| 読者 | 最初に読む文書 | その後の正本 |
 | --- | --- | --- |
-| 実装 contributors | [`contributors/repository-overview.md`](contributors/repository-overview.md) | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md) |
 | 運用者 | [`operators/getting-started.md`](operators/getting-started.md) | [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md) |
+| 実装 contributors | [`contributors/repository-overview.md`](contributors/repository-overview.md) | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md) |
 | plugin 作者 | [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md) | [`plugin-authors/rust-sdk-and-manifest.md`](plugin-authors/rust-sdk-and-manifest.md) |
 
-## 主要用語
+## トピックごとの正本
+
+- package / 起動 / release bundle
+  [`operators/getting-started.md`](operators/getting-started.md)
+- `runtime/server.toml` の解釈、相対 path 解決、reload、admin console / gRPC
+  [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md)
+- workspace の責務分割、boot path、公開 surface と内部 surface
+  [`contributors/repository-overview.md`](contributors/repository-overview.md)
+- runtime / plugin host / session lifecycle の責務境界
+  [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md)
+- `CoreCommand` / `GameplayEffect` / `CoreEvent` の流れ
+  [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md)
+- reload の内部意味論、failure policy、consistency gate
+  [`contributors/reload-semantics-and-boundaries.md`](contributors/reload-semantics-and-boundaries.md)
+- plugin kind、packaged layout、discovery と activation
+  [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md)
+- Rust SDK、macro、manifest、ABI `3.5`
+  [`plugin-authors/rust-sdk-and-manifest.md`](plugin-authors/rust-sdk-and-manifest.md)
+
+## 共通用語
 
 - `packaged plugin`
-  `runtime/plugins/<plugin-id>/` 配下に置かれる、shared library と `plugin.toml` の組です。runtime は `target/` を直接読みません。
+  `runtime/plugins/<plugin-id>/` 配下にある `plugin.toml` と shared library の組です。
 - `LoadedPluginSet`
-  `mc-plugin-host` が runtime selection を解決した結果として返す immutable snapshot です。protocol registry と、active な gameplay / storage / auth / admin-ui profile を含みます。
+  `mc-plugin-host` が runtime selection を解決した結果として返す immutable snapshot です。
 - `ServerSupervisor`
-  runtime を外から操作する公開 entrypoint です。boot、status、session_status、admin control plane、manual reload をここから扱います。
-- `RunningServer`
-  `ServerSupervisor` の内部で使う lower-level handle です。runtime 実装を読むときにだけ意識すれば十分です。
+  runtime の外向け公開入口です。boot、status、reload、shutdown、admin control plane をここから扱います。
 - `generation`
-  reload 境界をまたぐ世代番号です。topology generation と plugin generation の両方があり、session がどの世代に pin されているかの観測にも使います。
+  topology reload と plugin reload をまたいで観測するための世代番号です。
 - `profile`
-  config で選択される kind ごとの実行プロファイルです。例として gameplay profile、auth profile、admin-ui profile があります。
+  auth / gameplay / storage / admin-ui の kind ごとに config で選ぶ実行プロファイルです。
 - `quarantine`
-  壊れた candidate artifact や runtime failure を起こした active plugin を隔離し、同じ失敗を繰り返さないようにする failure policy です。
+  壊れた candidate artifact や active plugin を隔離する failure policy です。
 
-## 文書構成
+## 読み方
 
-- `contributors/`
-  runtime の責務分離、plugin host、reload、安全境界、test harness、`CoreCommand` / `CoreEvent` / `GameplayEffect` の流れを追いたい実装 contributors 向けです。
-  主な文書: [`contributors/repository-overview.md`](contributors/repository-overview.md), [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md), [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md), [`contributors/reload-semantics-and-boundaries.md`](contributors/reload-semantics-and-boundaries.md)
-- `operators/`
-  package、起動、設定、manual reload、watch reload、admin console / gRPC 運用を確認したい人向けです。
-- `plugin-authors/`
-  plugin kind、manifest、SDK、unsupported path、packaged layout を把握したい plugin 作者向けです。
+ドキュメントどうしの説明が食い違うときは、topic ごとの正本を優先してください。それでも実装と差がある場合は、`apps/server`、`tools/xtask`、`crates/config/server-config`、`crates/runtime/server-runtime` が source of truth です。

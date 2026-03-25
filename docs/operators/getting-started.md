@@ -1,29 +1,8 @@
 # 運用者向けスタートガイド
 
-## 概要
+この文書は、RevyCraft を package、起動、release bundle 化するための正本です。`runtime/server.toml` の各 key や reload の意味は [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。
 
-この文書は、RevyCraft を package、起動、配布する運用者向けの最短ガイドです。実行コマンド、sample plugin、runtime directory の見方をまとめます。
-
-## 対象読者
-
-- 開発中またはローカル検証用にサーバーを起動したい人
-- release bundle を作りたい人
-- `runtime/` 配下に何が置かれるか把握したい人
-
-## この文書でわかること
-
-- 通常起動に必要なコマンド
-- sample plugin と allowlist packaging の前提
-- `package-all-plugins` と release bundle の使い分け
-- 起動後に admin console / gRPC がどう現れるか
-
-## 関連資料
-
-- [`../../README.md`](../../README.md)
-- [`configuration-and-reload.md`](configuration-and-reload.md)
-- [`../contributors/repository-overview.md`](../contributors/repository-overview.md)
-
-## 最短の起動手順
+## 開発起動
 
 通常の開発起動は次の 2 コマンドです。
 
@@ -32,42 +11,41 @@ cargo run -p xtask -- package-plugins
 cargo run -p server-bootstrap
 ```
 
-`package-plugins` は `runtime/server.toml` を優先して読み、存在しない場合だけ `runtime/server.toml.example` に fallback します。`live.plugins.allowlist` に含まれる plugin だけを `runtime/plugins/` に package し、workspace 外で持ち込んだ third-party plugin directory は消しません。
+`package-plugins` は managed plugin を build して `runtime/plugins/` へ package します。`--config` を指定しない場合の config 解決順は次です。
 
-`server-bootstrap` は `runtime/server.toml` を読みます。設定ファイルが無い場合は default config で起動し、plugin は `runtime/plugins/<plugin-id>/plugin.toml` から解決します。runtime は `target/` の build artifact を直接読みません。
+1. `runtime/server.toml`
+2. `runtime/server.toml.example`
+3. どちらも無ければ error
 
-別 path の config で起動したいときは、`REVY_SERVER_CONFIG=/path/to/server.toml cargo run -p server-bootstrap` を使います。指定 path が見つからない場合は warning を出し、default config fallback で起動を試みます。
+このとき `live.plugins.allowlist` に含まれる plugin だけを package します。allowlist が無い、または空の場合は失敗します。managed plugin のうち allowlist から外れたものは packaging 対象から外れますが、workspace 外から持ち込んだ third-party plugin directory は消しません。
 
-## sample に含まれる plugin
+`server-bootstrap` は `REVY_SERVER_CONFIG` があればその path、無ければ `runtime/server.toml` を選びます。選ばれた path が存在しない場合は warning を出し、`ServerConfig::default()` を使って起動します。この built-in default では `runtime/plugins` と `runtime/world` が使われます。
 
-default sample で想定している plugin は次の 10 個です。
+## package と boot が読む config の違い
 
-- `je-5`
-- `je-47`
-- `je-340`
-- `be-924`
-- `gameplay-canonical`
-- `gameplay-readonly`
-- `storage-je-anvil-1_7_10`
-- `auth-offline`
-- `auth-bedrock-offline`
-- `admin-ui-console`
+同じ `runtime/` 配下のファイルでも、コマンドごとに既定の source of truth が違います。
 
-optional plugin として、`auth-mojang-online`、`auth-bedrock-xbl`、`auth-online-stub`、`be-placeholder` もあります。JE online auth や Bedrock XBL を使うときは allowlist と profile を明示してください。
+| コマンド | 既定の config source | path が無い場合 |
+| --- | --- | --- |
+| `cargo run -p xtask -- package-plugins` | `runtime/server.toml` を優先し、無ければ `runtime/server.toml.example` | error |
+| `cargo run -p server-bootstrap` | `REVY_SERVER_CONFIG` または `runtime/server.toml` | warning を出して built-in default config |
+| `cargo run -p xtask -- build-release-bundles` | `runtime/server.toml.example` | error |
 
-## 全量 package したいとき
+この差は意図的です。開発 packaging は active config に寄せ、runtime boot は「config が無くても default で起動できる」設計にし、release bundle は sample config を既定の source of truth としています。
 
-workspace 管理下の plugin を全量 build / package したいときだけ、次を使います。
+## optional plugin を含めて全量 package したいとき
+
+workspace 管理下の plugin を allowlist 無視で全量 package したいときだけ、次を使います。
 
 ```bash
 cargo run -p xtask -- package-all-plugins
 ```
 
-これは optional plugin も含めて package します。通常の開発起動では `package-plugins` を使うほうが、active config と実行内容が一致しやすくなります。
+これは `auth-mojang-online`、`auth-bedrock-xbl`、`auth-online-stub`、`be-placeholder` のような optional plugin も含めます。通常の開発起動では `package-plugins` のほうが、実際に起動する selection と package 結果を揃えやすくなります。
 
 ## release bundle を作るとき
 
-配布用の runnable bundle を target ごとにまとめて作るときは次を使います。
+配布用 bundle は target ごとに生成します。
 
 ```bash
 cargo run -p xtask -- build-release-bundles \
@@ -75,19 +53,19 @@ cargo run -p xtask -- build-release-bundles \
   --target aarch64-apple-darwin
 ```
 
-既定では `runtime/server.toml.example` を source of truth として読み、`dist/releases/<target>/` に bundle を生成します。bundle には次が入ります。
+既定では `runtime/server.toml.example` を読み、`dist/releases/<target>/` に bundle を生成します。bundle には次が入ります。
 
 - `server-bootstrap` の release binary
 - `runtime/server.toml`
-- 既定 config を使った場合の `runtime/server.toml.example`
 - allowlist に一致する packaged plugin 群
+- source config が既定の `runtime/server.toml.example` だった場合のみ、その example file
 
 次は含みません。
 
 - `world` などの運用データ
 - admin token などの秘匿情報
 
-出力先や config を変えたいときは、明示的に指定します。
+出力先や config source を変えるときは明示的に指定します。
 
 ```bash
 cargo run -p xtask -- build-release-bundles \
@@ -96,31 +74,26 @@ cargo run -p xtask -- build-release-bundles \
   --config runtime/server.toml.example
 ```
 
-cross target build に必要な Rust target component と linker 設定は事前に用意してください。
+cross target build に必要な Rust target component や linker 設定は事前に用意してください。
 
 ## runtime ディレクトリの見方
 
 - `runtime/server.toml`
-  実行時に優先して読む config です。
+  開発時に優先して使う active config です。
 - `runtime/server.toml.example`
-  sample config 兼、bundle 生成時の既定 source of truth です。
-- `runtime/plugins/`
-  packaged plugin の配置先です。
+  sample config 兼、release bundle 生成時の既定 source です。
+- `runtime/plugins/<plugin-id>/`
+  packaged plugin の配置先です。各 directory に `plugin.toml` と shared library が入ります。
 - `runtime/world/`
-  world データの既定配置先です。
+  sample config の既定 world data 置き場です。
 
-## 起動後に何が起きるか
+## 起動後に見えるもの
 
-起動フローは概ね次の順です。
+起動直後は listener の bind 結果と runtime status summary が標準出力へ出ます。さらに次の admin surface が条件つきで有効になります。
 
-1. config 読み込み
-2. `mc-plugin-host` 構築
-3. plugin activation
-4. `LoadedPluginSet` snapshot 取得
-5. `ServerSupervisor::boot(...)` で listener / generation / session supervision を開始
+- local console
+  `live.admin.ui_profile` で有効な admin-ui profile が解決できた場合に、stdio 上の line-oriented operator loop が起動します。
+- built-in gRPC
+  `static.admin.grpc.enabled = true` の場合に、同じ process へ unary gRPC control plane が bind されます。
 
-有効な `live.admin.ui_profile` が解決できた場合は、stdio 上に line-oriented operator loop を起動します。`static.admin.grpc.enabled = true` のときは同じ process に unary gRPC control plane も bind します。
-
-## 次に読む文書
-
-設定項目、reload 可能範囲、watch reload、admin console / gRPC の詳細は [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。
+console EOF の扱い、permission、reload command、gRPC principal 設定は [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。

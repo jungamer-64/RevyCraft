@@ -1,124 +1,97 @@
 # リポジトリ概要
 
-## 概要
+この文書は、RevyCraft の実装 contributors 向け入口です。workspace の責務分割、boot path、公開 surface と内部 surface を最初に揃えます。
 
-この文書は、RevyCraft の実装 contributors 向けの入口です。workspace の役割分担、起動経路、公開 surface と内部 surface の境界を最初に整理します。
+## 最初に追う順番
 
-## 対象読者
+1. [`../../README.md`](../../README.md)
+2. [`../README.md`](../README.md)
+3. [`../../runtime/server.toml.example`](../../runtime/server.toml.example)
+4. [`../../apps/server/src/main.rs`](../../apps/server/src/main.rs)
+5. [`../../crates/runtime/server-runtime/src/runtime/mod.rs`](../../crates/runtime/server-runtime/src/runtime/mod.rs)
+6. [`../../crates/plugin/mc-plugin-host/src/lib.rs`](../../crates/plugin/mc-plugin-host/src/lib.rs)
 
-- runtime / plugin host / plugin crates の実装を追う contributors
-- どこからコードを読み始めるべきか知りたい人
+この順で「どこが入口で、何が package 済み前提で、どこまでが公開 API か」を先に掴むと読みやすくなります。
 
-## この文書でわかること
-
-- RevyCraft を読むときに最初に押さえる設計上の前提
-- ワークスペースの責務分割
-- `ServerSupervisor` を中心にした boot path
-- 公開してよい surface と implementation-only surface の違い
-
-## 関連資料
-
-- [`../README.md`](../README.md)
-- [`../operators/getting-started.md`](../operators/getting-started.md)
-- [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)
-- [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)
-- [`core-command-event-flow.md`](core-command-event-flow.md)
-
-## 先に押さえる結論
-
-- RevyCraft は monolithic server ではなく、packaged plugin を前提にした plugin-first runtime です。
-- runtime の外向け entrypoint は `ServerSupervisor` です。boot、status、admin、manual reload はここから扱います。
-- runtime が見るのは mutable registry ではなく `LoadedPluginSet` snapshot です。plugin catalog と active runtime view は同じではありません。
-- 実行条件は「build 済み」ではなく「package 済み」です。`server-bootstrap` は `target/` を直接見ず、`runtime/plugins/<plugin-id>/plugin.toml` を基準にします。
-
-## 最初に追うファイル
-
-- `README.md`
-- `docs/README.md`
-- `runtime/server.toml.example`
-- `apps/server/src/main.rs`
-- `crates/runtime/server-runtime/src/runtime/mod.rs`
-- `crates/runtime/server-runtime/src/runtime/selection.rs`
-- `crates/runtime/server-runtime/src/runtime/topology_manager.rs`
-- `crates/runtime/server-runtime/src/runtime/kernel.rs`
-- `crates/runtime/server-runtime/src/runtime/bootstrap/builder.rs`
-- `crates/plugin/mc-plugin-host/src/lib.rs`
-- `crates/plugin/mc-plugin-host/src/registry.rs`
-- `crates/plugin/mc-plugin-api/src/lib.rs`
-- `crates/plugin/mc-plugin-sdk-rust/src/lib.rs`
-
-## ワークスペース構成
+## workspace map
 
 | パス | 役割 |
 | --- | --- |
-| `apps/server` | `server-bootstrap` binary。config 読み込み、plugin host 構築、runtime 起動、stdio / gRPC admin transport の起動 |
-| `crates/core/mc-core` | protocol 非依存の state machine。world/player state、command 適用、event 生成 |
-| `crates/runtime/server-runtime` | transport、listener/topology、session supervision、status snapshot、admin control plane |
-| `crates/plugin/mc-plugin-host` | packaged plugin discovery、activation、generation reload、quarantine、runtime selection |
-| `crates/plugin/mc-plugin-api` | ABI `3.4`、manifest、host API、typed codec |
-| `crates/plugin/mc-plugin-sdk-rust` | Rust plugin authoring SDK。manifest helper、traits、export macro |
-| `crates/protocol/mc-proto-*` | edition/version adapter と codec 実装 |
-| `plugins/*/*` | protocol / gameplay / storage / auth / admin-ui の concrete plugin 実装 |
+| `apps/server` | `server-bootstrap` binary。config 読み込み、runtime 起動、stdio / gRPC admin surface を束ねる |
+| `crates/config/server-config` | `runtime/server.toml` の load / normalize / validate を担う |
+| `crates/runtime/server-runtime` | listener、generation、session、status、reload、admin control plane を持つ orchestration 層 |
+| `crates/core/mc-core` | protocol 非依存の semantic state machine |
+| `crates/plugin/mc-plugin-api` | plugin ABI `3.5`、manifest、host API、typed codec |
+| `crates/plugin/mc-plugin-host` | packaged plugin discovery、activation、selection、reload、quarantine |
+| `crates/plugin/mc-plugin-sdk-rust` | Rust plugin authoring 向けの trait、manifest helper、macro |
+| `crates/protocol/mc-proto-*` | edition / version ごとの codec と adapter 実装 |
+| `plugins/*/*` | concrete plugin 実装 |
 | `crates/testing/*` | packaged harness、plugin-host fixture、protocol test support |
-| `tools/xtask` | active-config packaging、full packaging、release bundle 生成 |
-| `runtime` | 実行時設定、packaged plugin 配置先、world データ |
+| `tools/xtask` | package-plugins、package-all-plugins、build-release-bundles |
+| `runtime/` | active config、packaged plugin、world data |
 
-## 起動経路
+## boot path
 
-通常の開発フローは次の順で追うと把握しやすいです。
+通常の開発フローは次の 2 段階です。
 
 1. `cargo run -p xtask -- package-plugins`
 2. `cargo run -p server-bootstrap`
 
-内部では次の順で責務が流れます。
+内部では概ね次の責務順で流れます。
 
-1. `xtask` が `runtime/server.toml` を優先し、無ければ `runtime/server.toml.example` を読んで allowlist 対象だけを `runtime/plugins/` に package します。
-2. `ServerSupervisor::boot(ServerConfigSource)` が config を materialize します。
-3. `mc_plugin_host::host::plugin_host_from_config(...)` が packaged plugin catalog を構築します。
-4. `PluginHost::load_plugin_set(...)` が runtime selection を解決し、`LoadedPluginSet` を返します。
-5. `server-runtime` 内部の `boot_server(...)` が protocol / profile を有効化し、listener bind と runtime loop 起動を行います。
-6. `ServerSupervisor` は内部の `RunningServer` を包み、status / reload / shutdown を外へ公開します。
+1. `xtask` が config から allowlist を読み、managed plugin を `runtime/plugins/` へ package する
+2. `ServerSupervisor::boot(ServerConfigSource)` が config を materialize する
+3. `mc_plugin_host::host::plugin_host_from_config(...)` が packaged plugin catalog を作る
+4. `PluginHost::load_plugin_set(...)` が runtime selection を解決し、`LoadedPluginSet` を返す
+5. `server-runtime` が storage profile から world snapshot を読み、listener / generation / session supervision を起動する
+6. `ServerSupervisor` が外向けの status / reload / shutdown / admin handle を公開する
 
-## 公開 surface と内部 surface
+重要なのは、runtime の実行条件が「build 済み」ではなく「package 済み」であることです。`server-bootstrap` は `target/` を直接見ず、`runtime/plugins/<plugin-id>/plugin.toml` を起点にします。
 
-| 区分 | 入口 | 使い方 |
-| --- | --- | --- |
-| 公開 runtime surface | `ServerSupervisor` | runtime の boot、manual reload、status、admin control plane はここを基準に扱います |
-| 公開 plugin ABI | `mc_plugin_api::{abi, manifest, host_api, codec::*}` | host と plugin の wire 契約です |
-| 公開 Rust authoring surface | `mc_plugin_sdk_rust::{protocol, gameplay, storage, auth, admin_ui, manifest, capabilities}` | Rust plugin 作者向けの正規入口です |
-| runtime 内部 | `RunningServer`, `RuntimeServer`, `boot_server(...)` | runtime 実装を読むときだけ使う lower-level detail です |
-| implementation-only | `mc_plugin_sdk_rust::__macro_support` | exported macro を支える内部実装で、直接依存しません |
-| implementation-only | `mc_plugin_host::__test_hooks` | shared test crate を支える内部 path です |
-| implementation-only | `mc_proto_je_common::__version_support`, `mc_proto_be_common::__version_support` | protocol version crate 用の内部 path です |
-| integration-specific | `mc_plugin_api::codec::gameplay::host_blob::*` | runtime / host integration helper として使い、通常の plugin authoring surface とは分けて扱います |
+## 公開 surface
 
-## 主要 subsystem の責務
+日常的に API として扱ってよいものは次です。
 
-### `mc-core`
+- `ServerSupervisor`
+  boot、status、session_status、reload、shutdown、admin control plane の公開入口です。
+- `server_config::*`
+  config schema と validation を扱う公開入口です。
+- `mc_plugin_api`
+  host と plugin 間の ABI 契約です。
+- `mc_plugin_sdk_rust`
+  Rust plugin authoring の正規入口です。
 
-`mc-core` は protocol を知らない state machine です。runtime は `CoreCommand` を流し、plugin や transport は `CoreEvent` を各 wire format に変換します。
+## implementation-only surface
 
-### `mc-plugin-host`
+次は内部実装として扱います。
 
-`mc-plugin-host` は discovery、manifest / ABI validation、profile activation、runtime selection、generation reload、quarantine を担います。runtime に渡すのは mutable registry ではなく immutable な `LoadedPluginSet` です。
+- `RunningServer`、`RuntimeServer`
+  runtime 実装を読むときの lower-level detail です。
+- `mc_plugin_sdk_rust::__macro_support`
+  macro の内部実装です。
+- `mc_plugin_host::__test_hooks`
+  test support 用の内部 surface です。
+- `mc_proto_je_common::__version_support`
+- `mc_proto_be_common::__version_support`
 
-### `server-runtime`
+これらは external contract と見なさない前提で読んだほうが安全です。
 
-`server-runtime` は orchestration 層です。config、listener、session、tick / save loop、reload、status snapshot、admin control plane を束ねます。
+## 主要な読みどころ
 
-読み順は `RuntimeServer` façade から始めて、次に `selection`、`topology_manager`、`kernel`、その後に `session/*` と `admin.rs` を追うと責務が混ざりにくいです。`RuntimeServer` 自体は manager 群を束ねる薄い入口として扱い、selection / topology / kernel の内部 state を直接読む時間を増やすと設計意図を掴みやすくなります。
+- runtime / plugin host の責務境界
+  [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)
+- `CoreCommand` / `GameplayEffect` / `CoreEvent` の流れ
+  [`core-command-event-flow.md`](core-command-event-flow.md)
+- reload の意味論と failure policy
+  [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)
 
-### `mc-plugin-api` と `mc-plugin-sdk-rust`
+## テストの入口
 
-`mc-plugin-api` は host と plugin が共有する契約、`mc-plugin-sdk-rust` は Rust からその契約を扱いやすくする helper です。plugin 作者向けには SDK、runtime / host 実装者向けには API crate を基準に読むのがわかりやすいです。
+- packaged integration
+  `crates/testing/mc-plugin-test-support`
+- plugin host fixture
+  `crates/testing/mc-plugin-host-test-support`
+- protocol test support
+  `crates/testing/mc-proto-test-support`
 
-## テストで見るべき場所
-
-- `crates/runtime/server-runtime/src/runtime/tests.rs`
-- `crates/runtime/server-runtime/src/runtime/tests/reload/`
-- `crates/plugin/mc-plugin-host/src/plugin_host/tests.rs`
-- `crates/testing/mc-plugin-test-support`
-- `crates/testing/mc-plugin-host-test-support`
-- `crates/testing/mc-proto-test-support`
-
-packaged integration tests は `mc-plugin-test-support` crate の `PackagedPluginHarness::shared()` を入口にし、`xtask package-all-plugins` を source of truth として扱います。in-process plugin fixture は `mc-plugin-host-test-support` crate に集約されていて、`mc_plugin_host_test_support::TestPluginHostBuilder` と `TestPluginHost::discover(...)` が正規入口です。
+packaged integration では `xtask package-all-plugins` 系の成果物を source of truth とし、in-process fixture は `mc-plugin-host-test-support` 側に寄せています。
