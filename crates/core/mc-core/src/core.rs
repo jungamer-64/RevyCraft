@@ -10,7 +10,8 @@ use crate::events::PlayerSummary;
 use crate::inventory::ItemStack;
 use crate::player::PlayerSnapshot;
 use crate::world::{
-    BlockEntityState, BlockPos, ChunkColumn, ChunkPos, DimensionId, WorldMeta, required_chunks,
+    BlockEntityState, BlockPos, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot, WorldMeta,
+    required_chunks,
 };
 use crate::{DEFAULT_KEEPALIVE_INTERVAL_MS, DEFAULT_KEEPALIVE_TIMEOUT_MS, EntityId, PlayerId};
 use serde::{Deserialize, Serialize};
@@ -91,6 +92,7 @@ pub struct ServerCore {
     pub(super) chest_viewers: BTreeMap<BlockPos, BTreeMap<PlayerId, u8>>,
     pub(super) saved_players: BTreeMap<PlayerId, PlayerSnapshot>,
     pub(super) online_players: BTreeMap<PlayerId, OnlinePlayer>,
+    pub(super) dropped_items: BTreeMap<EntityId, DroppedItemEntity>,
     pub(super) next_entity_id: i32,
     pub(super) next_keep_alive_id: i32,
     pub(super) keepalive_interval_ms: u64,
@@ -108,6 +110,13 @@ pub struct OnlinePlayer {
     pub(super) pending_keep_alive_id: Option<i32>,
     pub(super) last_keep_alive_sent_at: Option<u64>,
     pub(super) next_keep_alive_at: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DroppedItemEntity {
+    pub(crate) snapshot: DroppedItemSnapshot,
+    pub(crate) pickup_allowed_at_ms: u64,
+    pub(crate) despawn_at_ms: u64,
 }
 
 impl ServerCore {
@@ -133,6 +142,7 @@ impl ServerCore {
             chest_viewers: BTreeMap::new(),
             saved_players: BTreeMap::new(),
             online_players: BTreeMap::new(),
+            dropped_items: BTreeMap::new(),
             next_entity_id: 1,
             next_keep_alive_id: 1,
             keepalive_interval_ms: DEFAULT_KEEPALIVE_INTERVAL_MS,

@@ -1,7 +1,8 @@
 use crate::probe::{bedrock_probe_intent, detects_bedrock_datagram};
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, EntityId, InventoryContainer,
-    InventorySlot, InventoryWindowContents, ItemStack, PlayerId, PlayerSnapshot, WorldMeta,
+    BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DroppedItemSnapshot, EntityId,
+    InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerId,
+    PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest,
@@ -43,6 +44,15 @@ pub trait BedrockProfile: Default + Send + Sync {
         &self,
         entity_id: EntityId,
         player: &PlayerSnapshot,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_dropped_item_spawn_packets(
+        &self,
+        entity_id: EntityId,
+        item: &DroppedItemSnapshot,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_entity_despawn_packets(
+        &self,
+        entity_ids: &[EntityId],
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
     fn encode_chunk_batch_packets(
         &self,
@@ -202,6 +212,9 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
             CoreEvent::EntityMoved { entity_id, player } => {
                 self.profile.encode_entity_moved_packets(*entity_id, player)
             }
+            CoreEvent::DroppedItemSpawned { entity_id, item } => self
+                .profile
+                .encode_dropped_item_spawn_packets(*entity_id, item),
             CoreEvent::ChunkBatch { chunks } => self.profile.encode_chunk_batch_packets(chunks),
             CoreEvent::BlockChanged { position, block } => {
                 self.profile.encode_block_changed_packets(*position, block)
@@ -246,9 +259,11 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
             CoreEvent::SelectedHotbarSlotChanged { slot } => self
                 .profile
                 .encode_selected_hotbar_slot_changed_packets(*slot),
+            CoreEvent::EntityDespawned { entity_ids } => {
+                self.profile.encode_entity_despawn_packets(entity_ids)
+            }
             CoreEvent::KeepAliveRequested { .. }
             | CoreEvent::EntitySpawned { .. }
-            | CoreEvent::EntityDespawned { .. }
             | CoreEvent::InventoryTransactionProcessed { .. }
             | CoreEvent::CursorChanged { .. }
             | CoreEvent::LoginAccepted { .. }

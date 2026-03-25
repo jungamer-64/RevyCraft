@@ -1,15 +1,16 @@
 use super::{JE_340_ADAPTER_ID, Je340Adapter, PROTOCOL_VERSION_1_12_2, VERSION_NAME_1_12_2};
 use mc_core::{
-    CoreCommand, CoreEvent, DimensionId, InteractionHand, InventoryClickButton,
-    InventoryClickTarget, InventoryContainer, InventorySlot, InventoryTransactionContext,
-    InventoryWindowContents, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3,
+    CoreCommand, CoreEvent, DimensionId, DroppedItemSnapshot, EntityId, InteractionHand,
+    InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerInventory,
+    PlayerSnapshot, Vec3,
 };
 use mc_proto_common::{
     Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter, PlayEncodingContext,
     PlaySyncAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter, StatusRequest,
     TransportKind, WireFormatKind,
 };
-use mc_proto_je_common::__version_support::blocks::legacy_block_state_id;
+use mc_proto_je_common::__version_support::{blocks::legacy_block_state_id, inventory::read_slot};
 use uuid::Uuid;
 
 fn player_snapshot(name: &str) -> PlayerSnapshot {
@@ -546,4 +547,50 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
         reader.read_i16().expect("property value should decode"),
         123
     );
+}
+
+#[test]
+fn encodes_dropped_item_spawn_and_metadata() {
+    let adapter = Je340Adapter::new();
+    let packets = adapter
+        .encode_play_event(
+            &CoreEvent::DroppedItemSpawned {
+                entity_id: EntityId(11),
+                item: DroppedItemSnapshot {
+                    item: ItemStack::new("minecraft:cobblestone", 1, 0),
+                    position: Vec3::new(1.5, 4.5, 0.5),
+                    velocity: Vec3::new(0.0, 0.0, 0.0),
+                },
+            },
+            &PlayEncodingContext {
+                player_id: player_snapshot("drop-1122").id,
+                entity_id: EntityId(1),
+            },
+        )
+        .expect("dropped item should encode");
+    assert_eq!(packets.len(), 2);
+
+    let mut spawn = PacketReader::new(&packets[0]);
+    assert_eq!(spawn.read_varint().expect("packet id should decode"), 0x00);
+    assert_eq!(spawn.read_varint().expect("entity id should decode"), 11);
+    assert_eq!(spawn.read_bytes(16).expect("uuid should decode").len(), 16);
+    assert_eq!(spawn.read_u8().expect("object type should decode"), 2);
+
+    let mut metadata = PacketReader::new(&packets[1]);
+    assert_eq!(
+        metadata.read_varint().expect("packet id should decode"),
+        0x3c
+    );
+    assert_eq!(metadata.read_varint().expect("entity id should decode"), 11);
+    assert_eq!(metadata.read_u8().expect("metadata index should decode"), 6);
+    assert_eq!(
+        metadata.read_varint().expect("metadata type should decode"),
+        6
+    );
+    assert_eq!(
+        read_slot(&mut metadata, crate::INVENTORY_SPEC.slot_nbt)
+            .expect("metadata slot should decode"),
+        Some(ItemStack::new("minecraft:cobblestone", 1, 0))
+    );
+    assert_eq!(metadata.read_u8().expect("terminator should decode"), 0xff);
 }

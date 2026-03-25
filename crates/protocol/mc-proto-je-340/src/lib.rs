@@ -8,16 +8,16 @@ mod tests;
 use decoding::decode_play_packet;
 use encoding::{
     encode_block_change, encode_chunk, encode_close_window, encode_confirm_transaction,
-    encode_destroy_entities, encode_entity_head_rotation, encode_entity_teleport,
-    encode_held_item_change, encode_join_game, encode_keep_alive, encode_named_entity_spawn,
-    encode_open_window, encode_player_abilities, encode_player_info_add, encode_position_and_look,
-    encode_set_slot, encode_spawn_position, encode_time_update, encode_update_health,
-    encode_window_items, encode_window_property,
+    encode_destroy_entities, encode_dropped_item_metadata, encode_dropped_item_spawn,
+    encode_entity_head_rotation, encode_entity_teleport, encode_held_item_change, encode_join_game,
+    encode_keep_alive, encode_named_entity_spawn, encode_open_window, encode_player_abilities,
+    encode_player_info_add, encode_position_and_look, encode_set_slot, encode_spawn_position,
+    encode_time_update, encode_update_health, encode_window_items, encode_window_property,
 };
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, CoreCommand, EntityId, InventoryContainer, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerSnapshot,
-    WorldMeta,
+    BlockPos, BlockState, ChunkColumn, CoreCommand, DroppedItemSnapshot, EntityId,
+    InventoryContainer, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
+    ItemStack, PlayerId, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
 use mc_proto_je_common::{
@@ -34,6 +34,7 @@ pub const JE_340_ADAPTER_ID: &str = "je-340";
 pub(crate) const INVENTORY_SPEC: InventoryProtocolSpec = JE_1_12_2_INVENTORY_SPEC;
 
 const PACKET_CB_NAMED_ENTITY_SPAWN: i32 = 0x05;
+const PACKET_CB_SPAWN_OBJECT: i32 = 0x00;
 const PACKET_CB_BLOCK_CHANGE: i32 = 0x0b;
 const PACKET_CB_TRANSACTION: i32 = 0x11;
 const PACKET_CB_CLOSE_WINDOW: i32 = 0x12;
@@ -50,6 +51,7 @@ const PACKET_CB_PLAYER_ABILITIES: i32 = 0x2c;
 const PACKET_CB_PLAYER_POSITION_AND_LOOK: i32 = 0x2f;
 const PACKET_CB_DESTROY_ENTITIES: i32 = 0x32;
 const PACKET_CB_ENTITY_HEAD_ROTATION: i32 = 0x36;
+const PACKET_CB_ENTITY_METADATA: i32 = 0x3c;
 const PACKET_CB_HELD_ITEM_CHANGE: i32 = 0x3a;
 const PACKET_CB_SPAWN_POSITION: i32 = 0x46;
 const PACKET_CB_TIME_UPDATE: i32 = 0x47;
@@ -146,6 +148,17 @@ impl JavaEditionProfile for Je340Profile {
         Ok(vec![
             encode_entity_teleport(entity_id, player),
             encode_entity_head_rotation(entity_id, player.yaw),
+        ])
+    }
+
+    fn encode_dropped_item_spawn(
+        &self,
+        entity_id: EntityId,
+        item: &DroppedItemSnapshot,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        Ok(vec![
+            encode_dropped_item_spawn(entity_id, item),
+            encode_dropped_item_metadata(entity_id, item)?,
         ])
     }
 

@@ -1,22 +1,22 @@
 use crate::{
     PACKET_CB_BLOCK_CHANGE, PACKET_CB_CLOSE_WINDOW, PACKET_CB_DESTROY_ENTITIES,
-    PACKET_CB_ENTITY_HEAD_ROTATION, PACKET_CB_ENTITY_TELEPORT, PACKET_CB_HELD_ITEM_CHANGE,
-    PACKET_CB_JOIN_GAME, PACKET_CB_KEEP_ALIVE, PACKET_CB_MAP_CHUNK, PACKET_CB_NAMED_ENTITY_SPAWN,
-    PACKET_CB_OPEN_WINDOW, PACKET_CB_PLAYER_ABILITIES, PACKET_CB_PLAYER_INFO,
-    PACKET_CB_PLAYER_POSITION_AND_LOOK, PACKET_CB_SET_SLOT, PACKET_CB_SPAWN_POSITION,
-    PACKET_CB_TIME_UPDATE, PACKET_CB_TRANSACTION, PACKET_CB_UPDATE_HEALTH, PACKET_CB_WINDOW_ITEMS,
-    PACKET_CB_WINDOW_PROPERTY,
+    PACKET_CB_ENTITY_HEAD_ROTATION, PACKET_CB_ENTITY_METADATA, PACKET_CB_ENTITY_TELEPORT,
+    PACKET_CB_HELD_ITEM_CHANGE, PACKET_CB_JOIN_GAME, PACKET_CB_KEEP_ALIVE, PACKET_CB_MAP_CHUNK,
+    PACKET_CB_NAMED_ENTITY_SPAWN, PACKET_CB_OPEN_WINDOW, PACKET_CB_PLAYER_ABILITIES,
+    PACKET_CB_PLAYER_INFO, PACKET_CB_PLAYER_POSITION_AND_LOOK, PACKET_CB_SET_SLOT,
+    PACKET_CB_SPAWN_OBJECT, PACKET_CB_SPAWN_POSITION, PACKET_CB_TIME_UPDATE, PACKET_CB_TRANSACTION,
+    PACKET_CB_UPDATE_HEALTH, PACKET_CB_WINDOW_ITEMS, PACKET_CB_WINDOW_PROPERTY,
 };
 use mc_core::{
-    BlockPos, ChunkColumn, DimensionId, EntityId, InventoryContainer, InventoryWindowContents,
-    PlayerSnapshot, WorldMeta,
+    BlockPos, ChunkColumn, DimensionId, DroppedItemSnapshot, EntityId, InventoryContainer,
+    InventoryWindowContents, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{PacketWriter, ProtocolError};
 use mc_proto_je_common::__version_support::{
     blocks::legacy_block_state_id,
     chunks::build_chunk_data_1_8,
     inventory::{unique_slot_count, window_items, window_type, write_slot},
-    metadata::write_empty_metadata_1_8,
+    metadata::{write_empty_metadata_1_8, write_item_stack_metadata_1_8},
     players::encode_player_info_add as encode_shared_player_info_add,
     positions::{pack_block_position, to_angle_byte, to_fixed_point},
 };
@@ -136,6 +136,37 @@ pub(crate) fn encode_entity_head_rotation(entity_id: EntityId, yaw: f32) -> Vec<
     writer.write_varint(entity_id.0);
     writer.write_i8(to_angle_byte(yaw));
     writer.into_inner()
+}
+
+pub(crate) fn encode_dropped_item_spawn(
+    entity_id: EntityId,
+    item: &DroppedItemSnapshot,
+) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(PACKET_CB_SPAWN_OBJECT);
+    writer.write_varint(entity_id.0);
+    writer.write_u8(2);
+    writer.write_i32(to_fixed_point(item.position.x));
+    writer.write_i32(to_fixed_point(item.position.y));
+    writer.write_i32(to_fixed_point(item.position.z));
+    writer.write_i8(0);
+    writer.write_i8(0);
+    writer.write_i32(1);
+    writer.write_i16(0);
+    writer.write_i16(0);
+    writer.write_i16(0);
+    writer.into_inner()
+}
+
+pub(crate) fn encode_dropped_item_metadata(
+    entity_id: EntityId,
+    item: &DroppedItemSnapshot,
+) -> Result<Vec<u8>, ProtocolError> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(PACKET_CB_ENTITY_METADATA);
+    writer.write_varint(entity_id.0);
+    write_item_stack_metadata_1_8(&mut writer, 10, &item.item, crate::INVENTORY_SPEC.slot_nbt)?;
+    Ok(writer.into_inner())
 }
 
 pub(crate) fn encode_destroy_entities(entity_ids: &[EntityId]) -> Result<Vec<u8>, ProtocolError> {

@@ -243,43 +243,60 @@ async fn unsupported_creative_inventory_action_is_corrected() -> Result<(), Runt
 }
 
 #[tokio::test]
-async fn survival_place_is_rejected_with_block_and_inventory_correction() -> Result<(), RuntimeError>
-{
+async fn survival_place_and_break_sync_for_java_1_12_and_consume_held_slot()
+-> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
+    let mut config = survival_server_config(temp_dir.path().join("world"));
+    config.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into(), JE_340_ADAPTER_ID.into()]);
     let server = build_test_server(
-        loopback_server_config(temp_dir.path().join("world")),
-        plugin_test_registries_tcp_only()?,
+        config,
+        plugin_test_registries_with_allowlist(&[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID])?,
     )
     .await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
 
-    let (mut stream, mut buffer, _) = login_legacy(addr, "alpha").await?;
+    let (mut actor, mut actor_buffer, _) = login_modern_1_12(addr, "alpha").await?;
+    let (mut observer, mut observer_buffer, _) = login_legacy(addr, "beta").await?;
     write_packet(
-        &mut stream,
+        &mut actor,
         &codec,
-        &player_block_placement(2, 3, 0, 1, Some((1, 64, 0))),
+        &player_block_placement_1_12(2, 3, 0, 1, 0),
     )
     .await?;
     let block_change = read_until_java_packet(
-        &mut stream,
+        &mut observer,
         &codec,
-        &mut buffer,
+        &mut observer_buffer,
         TestJavaProtocol::Je5,
         TestJavaPacket::BlockChange,
     )
     .await?;
     let set_slot = read_until_java_packet(
-        &mut stream,
+        &mut actor,
         &codec,
-        &mut buffer,
-        TestJavaProtocol::Je5,
+        &mut actor_buffer,
+        TestJavaProtocol::Je340,
         TestJavaPacket::SetSlot,
     )
     .await?;
 
-    assert_eq!(block_change_from_packet(&block_change)?, (2, 4, 0, 0, 0));
-    assert_java_set_slot(TestJavaProtocol::Je5, &set_slot, 36, Some((1, 64, 0)))?;
+    assert_eq!(block_change_from_packet(&block_change)?, (2, 4, 0, 1, 0));
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je340, &set_slot)?,
+        (0, 36, Some((1, 63, 0)))
+    );
+
+    write_packet(&mut actor, &codec, &player_digging_1_12(0, 2, 4, 0, 1)).await?;
+    let break_change = read_until_java_packet(
+        &mut observer,
+        &codec,
+        &mut observer_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
+    assert_eq!(block_change_from_packet(&break_change)?, (2, 4, 0, 0, 0));
 
     server.shutdown().await
 }

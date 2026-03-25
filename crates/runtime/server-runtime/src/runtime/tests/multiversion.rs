@@ -1,5 +1,16 @@
 use super::*;
 
+fn multi_version_survival_server_config(world_dir: PathBuf) -> ServerConfig {
+    let mut config = loopback_server_config(world_dir);
+    config.bootstrap.game_mode = 0;
+    config.topology.enabled_adapters = Some(vec![
+        JE_5_ADAPTER_ID.into(),
+        JE_47_ADAPTER_ID.into(),
+        JE_340_ADAPTER_ID.into(),
+    ]);
+    config
+}
+
 #[tokio::test]
 async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
@@ -146,6 +157,93 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
     assert_eq!(
         block_change_from_packet_1_8(&modern_18_block_change)?,
         (2, 4, 0, 16)
+    );
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn mixed_java_versions_share_survival_block_sync() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let config = multi_version_survival_server_config(temp_dir.path().join("world"));
+    let server = build_test_server(config, plugin_test_registries_all()?).await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut legacy, mut legacy_buffer) =
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "legacy").await?;
+    let (mut modern_18, mut modern_18_buffer) =
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je47, "middle").await?;
+    let (mut modern_112, mut modern_112_buffer) =
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je340, "latest").await?;
+
+    write_packet(
+        &mut modern_112,
+        &codec,
+        &player_block_placement_1_12(2, 3, 0, 1, 0),
+    )
+    .await?;
+
+    let legacy_place = read_until_java_packet(
+        &mut legacy,
+        &codec,
+        &mut legacy_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
+    let modern_18_place = read_until_java_packet(
+        &mut modern_18,
+        &codec,
+        &mut modern_18_buffer,
+        TestJavaProtocol::Je47,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
+    let modern_112_slot = read_until_set_slot(
+        &mut modern_112,
+        &codec,
+        &mut modern_112_buffer,
+        TestJavaProtocol::Je340,
+        0,
+        36,
+        16,
+    )
+    .await?;
+
+    assert_eq!(block_change_from_packet(&legacy_place)?, (2, 4, 0, 1, 0));
+    assert_eq!(
+        block_change_from_packet_1_8(&modern_18_place)?,
+        (2, 4, 0, 16)
+    );
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je340, &modern_112_slot)?,
+        (0, 36, Some((1, 63, 0)))
+    );
+
+    write_packet(&mut modern_112, &codec, &player_digging_1_12(0, 2, 4, 0, 1)).await?;
+
+    let legacy_break = read_until_java_packet(
+        &mut legacy,
+        &codec,
+        &mut legacy_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
+    let modern_18_break = read_until_java_packet(
+        &mut modern_18,
+        &codec,
+        &mut modern_18_buffer,
+        TestJavaProtocol::Je47,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
+
+    assert_eq!(block_change_from_packet(&legacy_break)?, (2, 4, 0, 0, 0));
+    assert_eq!(
+        block_change_from_packet_1_8(&modern_18_break)?,
+        (2, 4, 0, 0)
     );
 
     server.shutdown().await

@@ -162,6 +162,15 @@ pub(crate) fn player_digging(status: u8, x: i32, y: u8, z: i32, face: u8) -> Vec
     writer.into_inner()
 }
 
+pub(crate) fn player_digging_1_12(status: i32, x: i32, y: i32, z: i32, face: u8) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x14);
+    writer.write_varint(status);
+    writer.write_i64(pack_block_position(mc_core::BlockPos::new(x, y, z)));
+    writer.write_u8(face);
+    writer.into_inner()
+}
+
 pub(crate) fn player_position_look_1_8(x: f64, y: f64, z: f64, yaw: f32, pitch: f32) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(0x06);
@@ -272,6 +281,8 @@ pub(crate) enum TestBedrockPacket {
     StartGame,
     LevelChunk,
     UpdateBlock,
+    AddItemActor,
+    RemoveActor,
     InventoryContent,
     InventorySlot,
     PlayerHotbar,
@@ -360,6 +371,8 @@ pub(crate) fn test_bedrock_packet(packet: &V924) -> Option<TestBedrockPacket> {
         V924::StartGamePacket(_) => TestBedrockPacket::StartGame,
         V924::LevelChunkPacket(_) => TestBedrockPacket::LevelChunk,
         V924::UpdateBlockPacket(_) => TestBedrockPacket::UpdateBlock,
+        V924::AddItemActorPacket(_) => TestBedrockPacket::AddItemActor,
+        V924::RemoveActorPacket(_) => TestBedrockPacket::RemoveActor,
         V924::InventoryContentPacket(_) => TestBedrockPacket::InventoryContent,
         V924::InventorySlotPacket(_) => TestBedrockPacket::InventorySlot,
         V924::PlayerHotbarPacket(_) => TestBedrockPacket::PlayerHotbar,
@@ -506,6 +519,26 @@ fn empty_bedrock_item_stack_descriptor() -> Result<NetworkItemStackDescriptor, R
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     NetworkItemStackDescriptor::deserialize(&mut Cursor::new(bytes))
         .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+pub(crate) fn bedrock_stack_descriptor_summary(
+    descriptor: &NetworkItemStackDescriptor,
+) -> Result<(i32, u16, u32), RuntimeError> {
+    let mut bytes = Vec::new();
+    descriptor
+        .serialize(&mut bytes)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let mut cursor = Cursor::new(bytes);
+    let item_id = <i32 as ProtoCodecVAR>::deserialize(&mut cursor)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    if item_id == 0 {
+        return Ok((0, 0, 0));
+    }
+    let count = <u16 as ProtoCodecLE>::deserialize(&mut cursor)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let aux = <u32 as ProtoCodecVAR>::deserialize(&mut cursor)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    Ok((item_id, count, aux))
 }
 
 fn encode_bedrock_player_auth_input(

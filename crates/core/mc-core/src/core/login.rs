@@ -74,6 +74,7 @@ impl ServerCore {
             connection_id,
             existing_players,
         ));
+        events.extend(self.dropped_item_spawn_events_for_connection(connection_id));
         events.extend(join_events);
 
         events.push(TargetedEvent {

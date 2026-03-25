@@ -55,3 +55,21 @@ pub fn is_supported_placeable_item(key: &str) -> bool {
 pub fn is_supported_inventory_item(key: &str) -> bool {
     matches!(key, OAK_LOG | STICK | CHEST) || is_supported_placeable_item(key)
 }
+
+#[must_use]
+pub fn survival_drop_for_block(block: &BlockState) -> Option<crate::ItemStack> {
+    let key = match block.key.as_str() {
+        STONE => COBBLESTONE,
+        GRASS_BLOCK => DIRT,
+        DIRT => DIRT,
+        COBBLESTONE => COBBLESTONE,
+        OAK_PLANKS => OAK_PLANKS,
+        SAND => SAND,
+        SANDSTONE => SANDSTONE,
+        BRICKS => BRICKS,
+        CHEST => CHEST,
+        GLASS => return None,
+        _ => return None,
+    };
+    Some(crate::ItemStack::new(key, 1, 0))
+}

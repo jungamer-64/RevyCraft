@@ -1,13 +1,20 @@
-use super::ServerCore;
+use super::{DroppedItemEntity, ServerCore};
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
 use crate::gameplay::{GameplayEffect, GameplayMutation};
 use crate::inventory::{InventoryContainer, InventorySlot, ItemStack};
 use crate::player::{InteractionHand, PlayerSnapshot};
-use crate::world::{BlockPos, BlockState, Vec3};
-use crate::{HOTBAR_SLOT_COUNT, PlayerId};
+use crate::world::{BlockPos, BlockState, DroppedItemSnapshot, Vec3};
+use crate::{ConnectionId, EntityId, HOTBAR_SLOT_COUNT, PlayerId};
+
+const DROPPED_ITEM_PICKUP_DELAY_MS: u64 = 500;
+const DROPPED_ITEM_DESPAWN_MS: u64 = 5 * 60 * 1000;
 
 impl ServerCore {
-    pub fn apply_gameplay_effect(&mut self, effect: GameplayEffect) -> Vec<TargetedEvent> {
+    pub fn apply_gameplay_effect(
+        &mut self,
+        effect: GameplayEffect,
+        now_ms: u64,
+    ) -> Vec<TargetedEvent> {
         let mut events = Vec::new();
         for mutation in effect.mutations {
             match mutation {
@@ -40,6 +47,9 @@ impl ServerCore {
                 }
                 GameplayMutation::Block { position, block } => {
                     events.extend(self.apply_block_mutation(position, block));
+                }
+                GameplayMutation::DroppedItem { position, item } => {
+                    events.extend(self.apply_dropped_item_mutation(position, item, now_ms));
                 }
             }
         }
@@ -173,6 +183,64 @@ impl ServerCore {
         }
         events.extend(self.emit_block_change(position));
         events
+    }
+
+    pub(super) fn apply_dropped_item_mutation(
+        &mut self,
+        position: Vec3,
+        item: ItemStack,
+        now_ms: u64,
+    ) -> Vec<TargetedEvent> {
+        let entity_id = EntityId(self.next_entity_id);
+        self.next_entity_id = self.next_entity_id.saturating_add(1);
+        let snapshot = DroppedItemSnapshot {
+            item,
+            position,
+            velocity: Vec3::new(0.0, 0.0, 0.0),
+        };
+        self.dropped_items.insert(
+            entity_id,
+            DroppedItemEntity {
+                snapshot: snapshot.clone(),
+                pickup_allowed_at_ms: now_ms.saturating_add(DROPPED_ITEM_PICKUP_DELAY_MS),
+                despawn_at_ms: now_ms.saturating_add(DROPPED_ITEM_DESPAWN_MS),
+            },
+        );
+        self.dropped_item_spawn_events(entity_id, &snapshot)
+    }
+
+    pub(super) fn dropped_item_spawn_events(
+        &self,
+        entity_id: EntityId,
+        item: &DroppedItemSnapshot,
+    ) -> Vec<TargetedEvent> {
+        self.online_players
+            .keys()
+            .copied()
+            .map(|player_id| TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::DroppedItemSpawned {
+                    entity_id,
+                    item: item.clone(),
+                },
+            })
+            .collect()
+    }
+
+    pub(super) fn dropped_item_spawn_events_for_connection(
+        &self,
+        connection_id: ConnectionId,
+    ) -> Vec<TargetedEvent> {
+        self.dropped_items
+            .iter()
+            .map(|(entity_id, item)| TargetedEvent {
+                target: EventTarget::Connection(connection_id),
+                event: CoreEvent::DroppedItemSpawned {
+                    entity_id: *entity_id,
+                    item: item.snapshot.clone(),
+                },
+            })
+            .collect()
     }
 
     pub(crate) fn place_inventory_correction(

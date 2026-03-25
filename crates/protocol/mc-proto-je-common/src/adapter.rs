@@ -2,9 +2,9 @@ use crate::handshake::decode_handshake_frame;
 use crate::login::{encode_login_success_packet, read_login_byte_array, write_login_byte_array};
 use crate::status::{encode_status_pong_packet, encode_status_response_packet};
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, EntityId, InventoryContainer,
-    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId,
-    PlayerSnapshot, WorldMeta,
+    BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DroppedItemSnapshot, EntityId,
+    InventoryContainer, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
+    ItemStack, PlayerId, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
@@ -33,6 +33,11 @@ pub trait JavaEditionProfile: Default + Send + Sync {
         &self,
         entity_id: EntityId,
         player: &PlayerSnapshot,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_dropped_item_spawn(
+        &self,
+        entity_id: EntityId,
+        item: &DroppedItemSnapshot,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
     fn encode_entity_despawn(&self, entity_ids: &[EntityId]) -> Result<Vec<u8>, ProtocolError>;
     fn encode_container_opened(
@@ -223,6 +228,9 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
             }
             CoreEvent::EntityMoved { entity_id, player } => {
                 self.profile.encode_entity_moved(*entity_id, player)
+            }
+            CoreEvent::DroppedItemSpawned { entity_id, item } => {
+                self.profile.encode_dropped_item_spawn(*entity_id, item)
             }
             CoreEvent::EntityDespawned { entity_ids } => {
                 Ok(vec![self.profile.encode_entity_despawn(entity_ids)?])

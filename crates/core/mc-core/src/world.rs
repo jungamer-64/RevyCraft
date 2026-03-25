@@ -435,6 +435,13 @@ pub struct ChunkDelta {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DroppedItemSnapshot {
+    pub item: ItemStack,
+    pub position: Vec3,
+    pub velocity: Vec3,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldSnapshot {
     pub meta: WorldMeta,
     pub chunks: BTreeMap<ChunkPos, ChunkColumn>,

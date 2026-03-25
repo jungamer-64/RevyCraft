@@ -206,19 +206,6 @@ pub(super) fn assert_transaction_processed(
 }
 
 #[track_caller]
-pub(super) fn assert_inventory_slot_changed(
-    events: &[TargetedEvent],
-    player_id: PlayerId,
-    slot: InventorySlot,
-) {
-    assert_player_event(
-        events,
-        player_id,
-        |event| matches!(event, CoreEvent::InventorySlotChanged { slot: event_slot, .. } if *event_slot == slot),
-    );
-}
-
-#[track_caller]
 pub(super) fn assert_inventory_slot_changed_in_window(
     events: &[TargetedEvent],
     player_id: PlayerId,
@@ -379,6 +366,58 @@ pub(super) fn assert_connection_inventory_contents(
                 ..
             }
         )
+    });
+}
+
+#[track_caller]
+pub(super) fn assert_connection_dropped_item_spawned(
+    events: &[TargetedEvent],
+    connection_id: ConnectionId,
+    expected: Option<(&str, u8)>,
+) {
+    assert_connection_event(events, connection_id, |event| match event {
+        CoreEvent::DroppedItemSpawned { item, .. } => Some(stack_summary(&item.item)) == expected,
+        _ => false,
+    });
+}
+
+#[track_caller]
+pub(super) fn assert_player_dropped_item_spawned(
+    events: &[TargetedEvent],
+    player_id: PlayerId,
+    expected: Option<(&str, u8)>,
+) {
+    assert_player_event(events, player_id, |event| match event {
+        CoreEvent::DroppedItemSpawned { item, .. } => Some(stack_summary(&item.item)) == expected,
+        _ => false,
+    });
+}
+
+#[track_caller]
+pub(super) fn assert_player_dropped_item_spawned_at(
+    events: &[TargetedEvent],
+    player_id: PlayerId,
+    key: &str,
+    count: u8,
+    position: Vec3,
+) {
+    assert_player_event(events, player_id, |event| match event {
+        CoreEvent::DroppedItemSpawned { item, .. } => {
+            stack_summary(&item.item) == (key, count) && item.position == position
+        }
+        _ => false,
+    });
+}
+
+#[track_caller]
+pub(super) fn assert_player_entity_despawned(
+    events: &[TargetedEvent],
+    player_id: PlayerId,
+    entity_id: EntityId,
+) {
+    assert_player_event(events, player_id, |event| match event {
+        CoreEvent::EntityDespawned { entity_ids } => entity_ids.contains(&entity_id),
+        _ => false,
     });
 }
 

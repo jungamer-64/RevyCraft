@@ -11,8 +11,8 @@ mod tests;
 
 use bedrockrs_proto::ProtoVersion;
 use mc_core::{
-    BlockState, ChunkColumn, CoreCommand, EntityId, InventoryContainer, InventorySlot,
-    InventoryWindowContents, ItemStack, PlayerId, PlayerSnapshot, WorldMeta,
+    BlockState, ChunkColumn, CoreCommand, DroppedItemSnapshot, EntityId, InventoryContainer,
+    InventorySlot, InventoryWindowContents, ItemStack, PlayerId, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_be_common::{BedrockAdapter, BedrockProfile};
 use mc_proto_common::{
@@ -101,6 +101,21 @@ impl BedrockProfile for Bedrock924Profile {
         player: &PlayerSnapshot,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         encoding::encode_entity_moved_packets(entity_id, player)
+    }
+
+    fn encode_dropped_item_spawn_packets(
+        &self,
+        entity_id: EntityId,
+        item: &DroppedItemSnapshot,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        encoding::encode_dropped_item_spawn_packets(entity_id, item)
+    }
+
+    fn encode_entity_despawn_packets(
+        &self,
+        entity_ids: &[EntityId],
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        encoding::encode_entity_despawn_packets(entity_ids)
     }
 
     fn encode_chunk_batch_packets(

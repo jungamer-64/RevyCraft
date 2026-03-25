@@ -28,10 +28,11 @@ use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
 use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, ChunkPos, CoreCommand, CoreEvent, EntityId,
-    InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
+    BlockPos, BlockState, ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DroppedItemSnapshot,
+    EntityId, InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerInventory,
 };
+use mc_proto_be_common::__version_support::world::bedrock_actor_id;
 use mc_proto_common::{
     HandshakeProbe, LoginRequest, PlayEncodingContext, PlaySyncAdapter, SessionAdapter,
 };
@@ -455,6 +456,65 @@ fn decodes_item_stack_request_take_action() {
             clicked_item: None,
         } if decoded_player == player_id
     ));
+}
+
+#[test]
+fn encodes_dropped_item_spawn_and_despawn_packets() {
+    let adapter = Bedrock924Adapter::new();
+    let frames = adapter
+        .encode_play_event(
+            &CoreEvent::DroppedItemSpawned {
+                entity_id: EntityId(77),
+                item: DroppedItemSnapshot {
+                    item: item("minecraft:cobblestone", 1),
+                    position: mc_core::Vec3::new(1.5, 4.5, 0.5),
+                    velocity: mc_core::Vec3::new(0.0, 0.0, 0.0),
+                },
+            },
+            &play_context(),
+        )
+        .expect("dropped item should encode");
+    let packets =
+        decode_packets::<V924>(frames[0].clone(), None, None).expect("item actor should decode");
+    match packets.as_slice() {
+        [V924::AddItemActorPacket(packet)] => {
+            assert_eq!(packet.target_actor_id.0, bedrock_actor_id(EntityId(77)));
+            assert_eq!(packet.position.x, 1.5);
+            assert_eq!(packet.position.y, 4.5);
+            assert_eq!(packet.position.z, 0.5);
+
+            let mut item_bytes = Vec::new();
+            packet
+                .item
+                .serialize(&mut item_bytes)
+                .expect("item descriptor should serialize");
+            let mut cursor = Cursor::new(item_bytes);
+            let item_id =
+                <i32 as ProtoCodecVAR>::deserialize(&mut cursor).expect("item id should decode");
+            let count =
+                <u16 as ProtoCodecLE>::deserialize(&mut cursor).expect("count should decode");
+            assert_ne!(item_id, 0);
+            assert_eq!(count, 1);
+        }
+        other => panic!("unexpected dropped item packets: {other:?}"),
+    }
+
+    let frames = adapter
+        .encode_play_event(
+            &CoreEvent::EntityDespawned {
+                entity_ids: vec![EntityId(77)],
+            },
+            &play_context(),
+        )
+        .expect("despawn should encode");
+    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        .expect("despawn packet should decode");
+    match packets.as_slice() {
+        [V924::RemoveActorPacket(packet)] => {
+            assert_eq!(packet.target_actor_id.0, bedrock_actor_id(EntityId(77)));
+        }
+        other => panic!("unexpected despawn packets: {other:?}"),
+    }
 }
 
 fn play_context() -> PlayEncodingContext {

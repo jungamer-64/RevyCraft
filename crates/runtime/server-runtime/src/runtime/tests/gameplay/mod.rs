@@ -13,8 +13,24 @@ fn creative_server_config(world_dir: PathBuf) -> ServerConfig {
     config
 }
 
+fn survival_server_config(world_dir: PathBuf) -> ServerConfig {
+    let mut config = loopback_server_config(world_dir);
+    config.bootstrap.game_mode = 0;
+    config
+}
+
 fn multi_version_creative_server_config(world_dir: PathBuf) -> ServerConfig {
     let mut config = creative_server_config(world_dir);
+    config.topology.enabled_adapters = Some(vec![
+        JE_5_ADAPTER_ID.into(),
+        JE_47_ADAPTER_ID.into(),
+        JE_340_ADAPTER_ID.into(),
+    ]);
+    config
+}
+
+fn multi_version_survival_server_config(world_dir: PathBuf) -> ServerConfig {
+    let mut config = survival_server_config(world_dir);
     config.topology.enabled_adapters = Some(vec![
         JE_5_ADAPTER_ID.into(),
         JE_47_ADAPTER_ID.into(),

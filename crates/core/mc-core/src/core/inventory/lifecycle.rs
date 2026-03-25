@@ -8,14 +8,16 @@ use super::state::{
     OpenInventoryWindow, OpenInventoryWindowState,
 };
 use super::sync::{inventory_diff_events, property_diff_events, property_events};
-use super::util::{MAX_STACK_SIZE, stack_keys_match};
+use super::util::merge_stack_into_player_inventory;
 use crate::catalog;
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
 use crate::inventory::{
     InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory,
 };
-use crate::world::{BlockEntityState, BlockPos, BlockState};
-use crate::{PlayerId, PlayerSnapshot};
+use crate::world::{BlockEntityState, BlockPos, BlockState, Vec3};
+use crate::{EntityId, PlayerId, PlayerSnapshot};
+
+const DROPPED_ITEM_PICKUP_RADIUS_SQUARED: f64 = 1.5 * 1.5;
 
 impl ServerCore {
     pub fn open_crafting_table(
@@ -191,6 +193,54 @@ impl ServerCore {
         events
     }
 
+    pub(in crate::core) fn tick_dropped_items(&mut self, now_ms: u64) -> Vec<TargetedEvent> {
+        let mut events = Vec::new();
+        let mut despawned = Vec::new();
+        let item_ids = self.dropped_items.keys().copied().collect::<Vec<_>>();
+
+        for entity_id in item_ids {
+            let Some(item) = self.dropped_items.get(&entity_id) else {
+                continue;
+            };
+            if now_ms >= item.despawn_at_ms {
+                despawned.push(entity_id);
+                continue;
+            }
+            if now_ms < item.pickup_allowed_at_ms {
+                continue;
+            }
+            let Some(player_id) =
+                nearest_pickup_player(&self.online_players, item.snapshot.position)
+            else {
+                continue;
+            };
+            let Some(mut item) = self.dropped_items.remove(&entity_id) else {
+                continue;
+            };
+            let (pickup_events, leftover) = self
+                .merge_stack_into_online_player_inventory(player_id, item.snapshot.item.clone());
+            events.extend(pickup_events);
+            match leftover {
+                Some(leftover) => {
+                    item.snapshot.item = leftover;
+                    self.dropped_items.insert(entity_id, item);
+                }
+                None => despawned.push(entity_id),
+            }
+        }
+
+        if !despawned.is_empty() {
+            despawned.sort();
+            despawned.dedup();
+            for entity_id in &despawned {
+                self.dropped_items.remove(entity_id);
+            }
+            events.extend(self.broadcast_entity_despawn(&despawned));
+        }
+
+        events
+    }
+
     pub(in crate::core) fn unregister_world_chest_viewer(
         &mut self,
         position: BlockPos,
@@ -203,6 +253,74 @@ impl ServerCore {
         if viewers.is_empty() {
             self.chest_viewers.remove(&position);
         }
+    }
+
+    fn merge_stack_into_online_player_inventory(
+        &mut self,
+        player_id: PlayerId,
+        stack: ItemStack,
+    ) -> (Vec<TargetedEvent>, Option<ItemStack>) {
+        let Some(before_player) = self.online_players.get(&player_id) else {
+            return (Vec::new(), Some(stack));
+        };
+        let (window_id, container) = before_player
+            .active_container
+            .as_ref()
+            .map(|window| (window.window_id, window.container))
+            .unwrap_or((0, InventoryContainer::Player));
+        let before_contents = before_player
+            .active_container
+            .as_ref()
+            .map(|window| window.contents(&before_player.snapshot.inventory))
+            .unwrap_or_else(|| {
+                InventoryWindowContents::player(before_player.snapshot.inventory.clone())
+            });
+
+        let leftover = {
+            let player = self
+                .online_players
+                .get_mut(&player_id)
+                .expect("online player should still exist");
+            let leftover = merge_stack_into_player_inventory(&mut player.snapshot.inventory, stack);
+            self.saved_players
+                .insert(player_id, player.snapshot.clone());
+            leftover
+        };
+
+        let Some(after_player) = self.online_players.get(&player_id) else {
+            return (Vec::new(), leftover);
+        };
+        let after_contents = after_player
+            .active_container
+            .as_ref()
+            .map(|window| window.contents(&after_player.snapshot.inventory))
+            .unwrap_or_else(|| {
+                InventoryWindowContents::player(after_player.snapshot.inventory.clone())
+            });
+
+        (
+            inventory_diff_events(
+                window_id,
+                container,
+                player_id,
+                &before_contents,
+                &after_contents,
+            ),
+            leftover,
+        )
+    }
+
+    fn broadcast_entity_despawn(&self, entity_ids: &[EntityId]) -> Vec<TargetedEvent> {
+        self.online_players
+            .keys()
+            .copied()
+            .map(|player_id| TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::EntityDespawned {
+                    entity_ids: entity_ids.to_vec(),
+                },
+            })
+            .collect()
     }
 
     pub(in crate::core) fn close_world_chest_if_invalid(
@@ -494,7 +612,7 @@ fn persist_online_window_state(player: &OnlinePlayer) -> PlayerSnapshot {
         let _ = persisted.inventory.set_slot(slot, None);
     }
     for stack in overflow {
-        merge_into_persistent_inventory(&mut persisted.inventory, stack);
+        let _ = merge_stack_into_player_inventory(&mut persisted.inventory, stack);
     }
     recompute_player_crafting_result(&mut persisted.inventory);
     persisted
@@ -513,7 +631,7 @@ fn fold_active_container_items_into_player(
     match &window.state {
         OpenInventoryWindowState::CraftingTable { slots } => {
             for stack in slots.iter().skip(1).flatten().cloned() {
-                merge_into_persistent_inventory(inventory, stack);
+                let _ = merge_stack_into_player_inventory(inventory, stack);
             }
         }
         OpenInventoryWindowState::Chest(chest) => {
@@ -521,48 +639,38 @@ fn fold_active_container_items_into_player(
                 return;
             }
             for stack in chest.slots.iter().flatten().cloned() {
-                merge_into_persistent_inventory(inventory, stack);
+                let _ = merge_stack_into_player_inventory(inventory, stack);
             }
         }
         OpenInventoryWindowState::Furnace(furnace) => {
             for stack in furnace.local_slots().into_iter().flatten() {
-                merge_into_persistent_inventory(inventory, stack);
+                let _ = merge_stack_into_player_inventory(inventory, stack);
             }
         }
     }
 }
 
-fn merge_into_persistent_inventory(inventory: &mut PlayerInventory, mut stack: ItemStack) {
-    for slot in persistent_slot_order() {
-        let Some(existing) = inventory.get_slot(slot).cloned() else {
-            continue;
-        };
-        if !stack_keys_match(&existing, &stack) || existing.count >= MAX_STACK_SIZE {
+fn nearest_pickup_player(
+    players: &std::collections::BTreeMap<PlayerId, OnlinePlayer>,
+    position: Vec3,
+) -> Option<PlayerId> {
+    let mut best = None;
+    for (player_id, player) in players {
+        let distance_squared = distance_squared(player.snapshot.position, position);
+        if distance_squared > DROPPED_ITEM_PICKUP_RADIUS_SQUARED {
             continue;
         }
-        let available = MAX_STACK_SIZE.saturating_sub(existing.count);
-        let moved = available.min(stack.count);
-        let mut next = existing;
-        next.count = next.count.saturating_add(moved);
-        let _ = inventory.set_slot(slot, Some(next));
-        stack.count = stack.count.saturating_sub(moved);
-        if stack.count == 0 {
-            return;
+        match best {
+            Some((_, best_distance_squared)) if distance_squared >= best_distance_squared => {}
+            _ => best = Some((*player_id, distance_squared)),
         }
     }
-
-    for slot in persistent_slot_order() {
-        if inventory.get_slot(slot).is_some() {
-            continue;
-        }
-        let _ = inventory.set_slot(slot, Some(stack));
-        return;
-    }
+    best.map(|(player_id, _)| player_id)
 }
 
-fn persistent_slot_order() -> impl Iterator<Item = InventorySlot> {
-    (0_u8..27)
-        .map(InventorySlot::MainInventory)
-        .chain((0_u8..9).map(InventorySlot::Hotbar))
-        .chain(std::iter::once(InventorySlot::Offhand))
+fn distance_squared(left: Vec3, right: Vec3) -> f64 {
+    let dx = left.x - right.x;
+    let dy = left.y - right.y;
+    let dz = left.z - right.z;
+    dx * dx + dy * dy + dz * dz
 }

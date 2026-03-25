@@ -74,7 +74,7 @@ impl ServerCore {
             | CoreCommand::DigBlock { .. }
             | CoreCommand::PlaceBlock { .. }
             | CoreCommand::UseBlock { .. }) => {
-                self.apply_gameplay_command(&command, session, resolver)
+                self.apply_gameplay_command(&command, now_ms, session, resolver)
             }
             CoreCommand::KeepAliveResponse {
                 player_id,
@@ -116,6 +116,7 @@ impl ServerCore {
     fn apply_gameplay_command<R: GameplayPolicyResolver + ?Sized>(
         &mut self,
         command: &CoreCommand,
+        now_ms: u64,
         session: Option<&SessionCapabilitySet>,
         resolver: &R,
     ) -> Result<Vec<TargetedEvent>, String> {
@@ -124,6 +125,6 @@ impl ServerCore {
             "gameplay-owned command requires session capabilities",
         )?;
         let effect = resolver.handle_command(self, session, command)?;
-        Ok(self.apply_gameplay_effect(effect))
+        Ok(self.apply_gameplay_effect(effect, now_ms))
     }
 }

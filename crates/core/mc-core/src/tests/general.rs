@@ -16,6 +16,35 @@ where
         .count()
 }
 
+fn snapshot_block(core: &ServerCore, position: BlockPos) -> BlockState {
+    core.snapshot()
+        .chunks
+        .get(&position.chunk_pos())
+        .map(|chunk| {
+            chunk.get_block(
+                u8::try_from(position.x.rem_euclid(CHUNK_WIDTH))
+                    .expect("snapshot block x should fit into u8"),
+                position.y,
+                u8::try_from(position.z.rem_euclid(CHUNK_WIDTH))
+                    .expect("snapshot block z should fit into u8"),
+            )
+        })
+        .unwrap_or_else(BlockState::air)
+}
+
+fn dropped_item_entity_id(events: &[TargetedEvent], player_id: PlayerId) -> EntityId {
+    events
+        .iter()
+        .find_map(|event| match (&event.target, &event.event) {
+            (
+                EventTarget::Player(event_player_id),
+                CoreEvent::DroppedItemSpawned { entity_id, .. },
+            ) if *event_player_id == player_id => Some(*entity_id),
+            _ => None,
+        })
+        .expect("dropped item spawn event should exist for player")
+}
+
 #[test]
 fn chunk_column_stores_semantic_states() {
     let mut column = ChunkColumn::new(ChunkPos::new(0, 0));
@@ -561,9 +590,9 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
 }
 
 #[test]
-fn survival_place_rejection_emits_authoritative_corrections() {
+fn survival_place_consumes_selected_stack_and_updates_world() {
     let (mut survival, lone) = logged_in_core(CoreConfig::default(), 3, "lone");
-    let reject_events = survival.apply_command(
+    let place_events = survival.apply_command(
         CoreCommand::PlaceBlock {
             player_id: lone,
             hand: InteractionHand::Main,
@@ -574,14 +603,258 @@ fn survival_place_rejection_emits_authoritative_corrections() {
         0,
     );
 
-    assert_player_event(&reject_events, lone, |event| {
-        matches!(
-            event,
-            CoreEvent::BlockChanged {
-                position,
-                block,
-            } if *position == BlockPos::new(2, 4, 0) && block.is_air()
-        )
-    });
-    assert_inventory_slot_changed(&reject_events, lone, InventorySlot::Hotbar(0));
+    assert!(
+        block_change_count(&place_events, BlockPos::new(2, 4, 0), |block| {
+            *block == BlockState::stone()
+        }) >= 1
+    );
+    assert_inventory_slot_changed_to(
+        &place_events,
+        lone,
+        InventorySlot::Hotbar(0),
+        Some(("minecraft:stone", 63)),
+    );
+    assert_eq!(
+        snapshot_block(&survival, BlockPos::new(2, 4, 0)),
+        BlockState::stone()
+    );
+    assert_eq!(
+        survival
+            .snapshot()
+            .players
+            .get(&lone)
+            .and_then(|player| player.inventory.get_slot(InventorySlot::Hotbar(0)))
+            .map(stack_summary),
+        Some(("minecraft:stone", 63))
+    );
+}
+
+#[test]
+fn survival_break_spawns_drop_and_snapshot_roundtrip_omits_active_drops() {
+    let (mut core, player) = logged_in_core(CoreConfig::default(), 1, "breaker");
+    let break_pos = BlockPos::new(2, 1, 0);
+
+    let break_events = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: player,
+            position: break_pos,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+
+    assert!(block_change_count(&break_events, break_pos, BlockState::is_air) >= 1);
+    assert_player_dropped_item_spawned_at(
+        &break_events,
+        player,
+        "minecraft:cobblestone",
+        1,
+        Vec3::new(2.5, 1.5, 0.5),
+    );
+    assert_eq!(snapshot_block(&core, break_pos), BlockState::air());
+
+    let snapshot = core.snapshot();
+    let mut restored = ServerCore::from_snapshot(CoreConfig::default(), snapshot);
+    let (_late, login_events) = login_player(&mut restored, 2, "late");
+    assert_eq!(
+        login_events
+            .iter()
+            .filter(|event| matches!(event.event, CoreEvent::DroppedItemSpawned { .. }))
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn survival_break_drop_mapping_handles_grass_and_glass() {
+    let (mut core, player) = logged_in_core(CoreConfig::default(), 1, "mapper");
+
+    let grass_break = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: player,
+            position: BlockPos::new(2, 3, 0),
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    assert_player_dropped_item_spawned(&grass_break, player, Some(("minecraft:dirt", 1)));
+
+    let glass_pos = BlockPos::new(4, 4, 0);
+    let _ = core.apply_gameplay_effect(
+        GameplayEffect {
+            mutations: vec![GameplayMutation::Block {
+                position: glass_pos,
+                block: BlockState::glass(),
+            }],
+            emitted_events: Vec::new(),
+        },
+        0,
+    );
+    let glass_break = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: player,
+            position: glass_pos,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    assert_eq!(
+        count_player_events(&glass_break, player, |event| {
+            matches!(event, CoreEvent::DroppedItemSpawned { .. })
+        }),
+        0
+    );
+}
+
+#[test]
+fn survival_pickup_delay_and_nearest_player_pickup_work() {
+    let mut core = ServerCore::new(CoreConfig::default());
+    let (first, _) = login_player(&mut core, 1, "near");
+    let (second, _) = login_player(&mut core, 2, "far");
+
+    let _ = core.apply_command(
+        CoreCommand::MoveIntent {
+            player_id: first,
+            position: Some(Vec3::new(1.5, 4.0, 0.5)),
+            yaw: Some(0.0),
+            pitch: Some(0.0),
+            on_ground: true,
+        },
+        0,
+    );
+    let _ = core.apply_command(
+        CoreCommand::MoveIntent {
+            player_id: second,
+            position: Some(Vec3::new(4.5, 4.0, 0.5)),
+            yaw: Some(0.0),
+            pitch: Some(0.0),
+            on_ground: true,
+        },
+        0,
+    );
+
+    let spawn_events = core.apply_gameplay_effect(
+        GameplayEffect {
+            mutations: vec![GameplayMutation::DroppedItem {
+                position: Vec3::new(1.5, 4.5, 0.5),
+                item: item("minecraft:cobblestone", 1),
+            }],
+            emitted_events: Vec::new(),
+        },
+        0,
+    );
+    let entity_id = dropped_item_entity_id(&spawn_events, first);
+
+    let no_pickup = core.tick(499);
+    assert_eq!(
+        count_player_events(&no_pickup, first, |event| {
+            matches!(
+                event,
+                CoreEvent::InventorySlotChanged {
+                    slot: InventorySlot::MainInventory(0),
+                    ..
+                }
+            )
+        }),
+        0
+    );
+    assert_eq!(
+        count_player_events(&no_pickup, first, |event| {
+            matches!(event, CoreEvent::EntityDespawned { .. })
+        }),
+        0
+    );
+
+    let pickup = core.tick(500);
+    assert_inventory_slot_changed_to(
+        &pickup,
+        first,
+        InventorySlot::MainInventory(0),
+        Some(("minecraft:cobblestone", 1)),
+    );
+    assert_eq!(
+        count_player_events(&pickup, second, |event| {
+            matches!(event, CoreEvent::InventorySlotChanged { .. })
+        }),
+        0
+    );
+    assert_player_entity_despawned(&pickup, first, entity_id);
+    assert_player_entity_despawned(&pickup, second, entity_id);
+}
+
+#[test]
+fn survival_partial_pickup_leaves_leftover_drop_for_late_joiners() {
+    let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "picker");
+    let _ = core.apply_command(
+        CoreCommand::MoveIntent {
+            player_id: first,
+            position: Some(Vec3::new(1.5, 4.0, 0.5)),
+            yaw: Some(0.0),
+            pitch: Some(0.0),
+            on_ground: true,
+        },
+        0,
+    );
+
+    let mut fill_mutations = vec![
+        GameplayMutation::InventorySlot {
+            player_id: first,
+            slot: InventorySlot::MainInventory(0),
+            stack: Some(item("minecraft:cobblestone", 60)),
+        },
+        GameplayMutation::InventorySlot {
+            player_id: first,
+            slot: InventorySlot::Offhand,
+            stack: Some(item("minecraft:dirt", 64)),
+        },
+    ];
+    for slot in 1_u8..27 {
+        fill_mutations.push(GameplayMutation::InventorySlot {
+            player_id: first,
+            slot: InventorySlot::MainInventory(slot),
+            stack: Some(item("minecraft:dirt", 64)),
+        });
+    }
+    let _ = core.apply_gameplay_effect(
+        GameplayEffect {
+            mutations: fill_mutations,
+            emitted_events: Vec::new(),
+        },
+        0,
+    );
+
+    let _ = core.apply_gameplay_effect(
+        GameplayEffect {
+            mutations: vec![GameplayMutation::DroppedItem {
+                position: Vec3::new(1.5, 4.5, 0.5),
+                item: item("minecraft:cobblestone", 10),
+            }],
+            emitted_events: Vec::new(),
+        },
+        0,
+    );
+
+    let pickup = core.tick(500);
+    assert_inventory_slot_changed_to(
+        &pickup,
+        first,
+        InventorySlot::MainInventory(0),
+        Some(("minecraft:cobblestone", 64)),
+    );
+    assert_eq!(
+        count_player_events(&pickup, first, |event| {
+            matches!(event, CoreEvent::EntityDespawned { .. })
+        }),
+        0
+    );
+
+    let (_late, login_events) = login_player(&mut core, 2, "late-leftover");
+    assert_connection_dropped_item_spawned(
+        &login_events,
+        ConnectionId(2),
+        Some(("minecraft:cobblestone", 6)),
+    );
 }

@@ -48,6 +48,10 @@ pub enum GameplayMutation {
         position: BlockPos,
         block: BlockState,
     },
+    DroppedItem {
+        position: Vec3,
+        item: ItemStack,
+    },
 }
 
 pub trait GameplayQuery {
@@ -188,10 +192,10 @@ impl CanonicalGameplayPolicy {
         if query.player_snapshot(player_id).is_none() {
             return GameplayEffect::default();
         }
-        if query.world_meta().game_mode != 1 || !query.can_edit_block(player_id, position) {
-            return Self::block_changed_effect(player_id, position, query.block_state(position));
-        }
         let current = query.block_state(position);
+        if !query.can_edit_block(player_id, position) {
+            return Self::block_changed_effect(player_id, position, current);
+        }
         if current.is_air() || current.key.as_str() == "minecraft:bedrock" {
             return Self::block_changed_effect(player_id, position, current);
         }
@@ -203,11 +207,24 @@ impl CanonicalGameplayPolicy {
         {
             return Self::block_changed_effect(player_id, position, current);
         }
+        let mut mutations = vec![GameplayMutation::Block {
+            position,
+            block: BlockState::air(),
+        }];
+        if query.world_meta().game_mode != 1
+            && let Some(item) = catalog::survival_drop_for_block(&current)
+        {
+            mutations.push(GameplayMutation::DroppedItem {
+                position: Vec3::new(
+                    f64::from(position.x) + 0.5,
+                    f64::from(position.y) + 0.5,
+                    f64::from(position.z) + 0.5,
+                ),
+                item,
+            });
+        }
         GameplayEffect {
-            mutations: vec![GameplayMutation::Block {
-                position,
-                block: BlockState::air(),
-            }],
+            mutations,
             emitted_events: Vec::new(),
         }
     }
@@ -241,18 +258,26 @@ impl CanonicalGameplayPolicy {
         else {
             return Self::place_rejection_effect(query, player_id, hand, place_pos, &player);
         };
-        if query.world_meta().game_mode != 1
-            || !query.can_edit_block(player_id, place_pos)
+        if !query.can_edit_block(player_id, place_pos)
             || query.block_state(position).is_air()
             || !query.block_state(place_pos).is_air()
         {
             return Self::place_rejection_effect(query, player_id, hand, place_pos, &player);
         }
+        let mut mutations = vec![GameplayMutation::Block {
+            position: place_pos,
+            block,
+        }];
+        if query.world_meta().game_mode != 1 {
+            let slot = held_inventory_slot(player.selected_hotbar_slot, hand);
+            mutations.push(GameplayMutation::InventorySlot {
+                player_id,
+                slot,
+                stack: consumed_stack(&selected_stack),
+            });
+        }
         GameplayEffect {
-            mutations: vec![GameplayMutation::Block {
-                position: place_pos,
-                block,
-            }],
+            mutations,
             emitted_events: Vec::new(),
         }
     }
@@ -499,4 +524,17 @@ fn place_rejection_events_snapshot(
         player_id, hand, player,
     ));
     events
+}
+
+fn held_inventory_slot(selected_hotbar_slot: u8, hand: InteractionHand) -> InventorySlot {
+    match hand {
+        InteractionHand::Main => InventorySlot::Hotbar(selected_hotbar_slot),
+        InteractionHand::Offhand => InventorySlot::Offhand,
+    }
+}
+
+fn consumed_stack(stack: &ItemStack) -> Option<ItemStack> {
+    let mut stack = stack.clone();
+    stack.count = stack.count.saturating_sub(1);
+    (stack.count > 0).then_some(stack)
 }

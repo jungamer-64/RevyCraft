@@ -8,6 +8,7 @@ use crate::inventory::{
     encode_inventory_contents_packets as encode_bedrock_inventory_contents_packets,
     encode_inventory_slot_changed_packets as encode_bedrock_inventory_slot_changed_packets,
     encode_selected_hotbar_slot_changed_packets as encode_bedrock_selected_hotbar_slot_changed_packets,
+    network_item_stack_descriptor,
 };
 use crate::runtime_ids::block_runtime_id;
 use bedrockrs_proto::ProtoVersion;
@@ -17,7 +18,8 @@ use bedrockrs_proto::v662::enums::{
     GameType, PacketCompressionAlgorithm, PlayStatus, PlayerPermissionLevel, SpawnBiomeType,
 };
 use bedrockrs_proto::v662::packets::{
-    MovePlayerPacket, NetworkSettingsPacket, PlayStatusPacket, UpdateBlockPacket,
+    AddItemActorPacket, MovePlayerPacket, NetworkSettingsPacket, PlayStatusPacket,
+    RemoveActorPacket, UpdateBlockPacket,
 };
 use bedrockrs_proto::v662::types::{
     ActorRuntimeID, ActorUniqueID, BaseGameVersion, EduSharedUriResource, Experiments,
@@ -30,8 +32,8 @@ use bedrockrs_proto::v898::packets::ResourcePackStackPacket;
 use bedrockrs_proto::v924::packets::StartGamePacket;
 use bedrockrs_proto::v924::types::LevelSettings;
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, EntityId, InventoryContainer, InventorySlot,
-    InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, EntityId, InventoryContainer,
+    InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_be_common::__version_support::world::{
     bedrock_actor_id, block_pos_to_network, vec3_to_bedrock,
@@ -102,10 +104,11 @@ pub(crate) fn encode_play_bootstrap_packets(
     entity_id: EntityId,
     world_meta: &WorldMeta,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    let game_type = bedrock_game_type(world_meta.game_mode);
     let start_game = StartGamePacket {
         target_actor_id: ActorUniqueID(bedrock_actor_id(entity_id)),
         target_runtime_id: ActorRuntimeID(bedrock_actor_id(entity_id)),
-        actor_game_type: GameType::Creative,
+        actor_game_type: game_type.clone(),
         position: vec3_to_bedrock(player.position),
         rotation: Vec2::new(player.yaw, player.pitch),
         settings: LevelSettings {
@@ -116,7 +119,7 @@ pub(crate) fn encode_play_bootstrap_packets(
                 dimension: 0,
             },
             generator_type: bedrockrs_proto::v662::enums::GeneratorType::Overworld,
-            game_type: GameType::Creative,
+            game_type,
             is_hardcore_enabled: false,
             game_difficulty: Difficulty::Peaceful,
             default_spawn_block_position: block_pos_to_network(world_meta.spawn),
@@ -202,7 +205,9 @@ pub(crate) fn encode_play_bootstrap_packets(
             status: PlayStatus::PlayerSpawn,
         })])?,
     ];
-    packets.extend(encode_creative_content_packet()?);
+    if world_meta.game_mode == 1 {
+        packets.extend(encode_creative_content_packet()?);
+    }
     Ok(packets)
 }
 
@@ -222,6 +227,38 @@ pub(crate) fn encode_entity_moved_packets(
             tick: 0,
         },
     )])?])
+}
+
+pub(crate) fn encode_dropped_item_spawn_packets(
+    entity_id: EntityId,
+    item: &DroppedItemSnapshot,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    Ok(vec![encode_v924(&[V924::AddItemActorPacket(
+        AddItemActorPacket {
+            target_actor_id: ActorUniqueID(bedrock_actor_id(entity_id)),
+            target_runtime_id: ActorRuntimeID(bedrock_actor_id(entity_id)),
+            item: network_item_stack_descriptor(Some(&item.item))?,
+            position: vec3_to_bedrock(item.position),
+            velocity: vec3_to_bedrock(item.velocity),
+            entity_data: vec![],
+            from_fishing: false,
+        },
+    )])?])
+}
+
+pub(crate) fn encode_entity_despawn_packets(
+    entity_ids: &[EntityId],
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    entity_ids
+        .iter()
+        .map(|entity_id| {
+            encode_v924(&[V924::RemoveActorPacket(RemoveActorPacket {
+                target_actor_id: ActorUniqueID(bedrock_actor_id(*entity_id)),
+            })])
+        })
+        .map(|packet| packet.map(|payload| vec![payload]))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|packets| packets.into_iter().flatten().collect())
 }
 
 pub(crate) fn encode_chunk_batch_packets(
@@ -296,4 +333,11 @@ pub(crate) fn encode_selected_hotbar_slot_changed_packets(
 
 fn play_status(status: PlayStatus) -> Result<Vec<u8>, ProtocolError> {
     encode_v924(&[V924::PlayStatusPacket(PlayStatusPacket { status })])
+}
+
+fn bedrock_game_type(game_mode: u8) -> GameType {
+    match game_mode {
+        1 => GameType::Creative,
+        _ => GameType::Survival,
+    }
 }

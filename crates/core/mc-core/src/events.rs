@@ -1,6 +1,8 @@
 use crate::inventory::{InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack};
 use crate::player::{InteractionHand, PlayerSnapshot};
-use crate::world::{BlockFace, BlockPos, BlockState, ChunkColumn, Vec3, WorldMeta};
+use crate::world::{
+    BlockFace, BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, Vec3, WorldMeta,
+};
 use crate::{ConnectionId, EntityId, PlayerId};
 use serde::{Deserialize, Serialize};
 
@@ -145,6 +147,10 @@ pub enum CoreEvent {
     EntityMoved {
         entity_id: EntityId,
         player: PlayerSnapshot,
+    },
+    DroppedItemSpawned {
+        entity_id: EntityId,
+        item: DroppedItemSnapshot,
     },
     EntityDespawned {
         entity_ids: Vec<EntityId>,

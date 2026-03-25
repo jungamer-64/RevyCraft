@@ -29,8 +29,8 @@ pub use self::inventory::{
 pub use self::player::{InteractionHand, PlayerSnapshot};
 pub use self::world::{
     BlockEntityState, BlockFace, BlockKey, BlockPos, BlockState, ChunkColumn, ChunkDelta, ChunkPos,
-    ChunkSection, DimensionId, SectionBlockIndex, SectionPos, Vec3, WorldMeta, WorldSnapshot,
-    expand_block_index,
+    ChunkSection, DimensionId, DroppedItemSnapshot, SectionBlockIndex, SectionPos, Vec3, WorldMeta,
+    WorldSnapshot, expand_block_index,
 };
 
 #[cfg(test)]

@@ -10,8 +10,8 @@ use crate::codec::__internal::inventory::{
 use mc_core::{
     BlockEntityState, BlockFace, BlockPos, BlockState, CapabilityAnnouncement, ChunkColumn,
     ChunkSection, ClosedCapability, ClosedCapabilitySet, ConnectionId, CoreCommand, CoreEvent,
-    DimensionId, EntityId, InteractionHand, PlayerId, PlayerSnapshot, PluginBuildTag, Vec3,
-    WorldMeta, WorldSnapshot, expand_block_index,
+    DimensionId, DroppedItemSnapshot, EntityId, InteractionHand, PlayerId, PlayerSnapshot,
+    PluginBuildTag, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
 };
 use mc_proto_common::ConnectionPhase;
 use std::collections::BTreeMap;
@@ -268,6 +268,26 @@ pub(crate) fn decode_block_state(
     Ok(BlockState {
         key: mc_core::BlockKey::new(key),
         properties,
+    })
+}
+
+pub(crate) fn encode_dropped_item_snapshot(
+    encoder: &mut Encoder,
+    item: &DroppedItemSnapshot,
+) -> Result<(), ProtocolCodecError> {
+    encode_item_stack(encoder, &item.item)?;
+    encode_vec3(encoder, item.position);
+    encode_vec3(encoder, item.velocity);
+    Ok(())
+}
+
+pub(crate) fn decode_dropped_item_snapshot(
+    decoder: &mut Decoder<'_>,
+) -> Result<DroppedItemSnapshot, ProtocolCodecError> {
+    Ok(DroppedItemSnapshot {
+        item: decode_item_stack(decoder)?,
+        position: decode_vec3(decoder)?,
+        velocity: decode_vec3(decoder)?,
     })
 }
 
@@ -777,6 +797,11 @@ pub(crate) fn encode_core_event(
             encode_entity_id(encoder, *entity_id);
             encode_player_snapshot(encoder, player)?;
         }
+        CoreEvent::DroppedItemSpawned { entity_id, item } => {
+            encoder.write_u8(18);
+            encode_entity_id(encoder, *entity_id);
+            encode_dropped_item_snapshot(encoder, item)?;
+        }
         CoreEvent::EntityDespawned { entity_ids } => {
             encoder.write_u8(6);
             encoder.write_len(entity_ids.len())?;
@@ -893,6 +918,10 @@ pub(crate) fn decode_core_event(
         5 => Ok(CoreEvent::EntityMoved {
             entity_id: decode_entity_id(decoder)?,
             player: decode_player_snapshot(decoder)?,
+        }),
+        18 => Ok(CoreEvent::DroppedItemSpawned {
+            entity_id: decode_entity_id(decoder)?,
+            item: decode_dropped_item_snapshot(decoder)?,
         }),
         6 => {
             let len = decoder.read_len()?;

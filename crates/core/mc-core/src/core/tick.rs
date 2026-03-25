@@ -10,6 +10,7 @@ use crate::{PlayerId, SessionCapabilitySet};
 impl ServerCore {
     pub fn tick(&mut self, now_ms: u64) -> Vec<TargetedEvent> {
         let mut events = self.tick_active_containers();
+        events.extend(self.tick_dropped_items(now_ms));
         let player_ids = self.online_players.keys().copied().collect::<Vec<_>>();
         for player_id in player_ids {
             let Some(player) = self.online_players.get_mut(&player_id) else {
@@ -49,7 +50,7 @@ impl ServerCore {
         resolver: &R,
     ) -> Result<Vec<TargetedEvent>, String> {
         let effect = resolver.handle_tick(self, session, player_id, now_ms)?;
-        Ok(self.apply_gameplay_effect(effect))
+        Ok(self.apply_gameplay_effect(effect, now_ms))
     }
 
     pub(super) fn accept_keep_alive(&mut self, player_id: PlayerId, keep_alive_id: i32) {

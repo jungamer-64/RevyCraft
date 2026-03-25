@@ -6,10 +6,10 @@ use crate::codec::__internal::inventory::{
 use crate::codec::__internal::shared::{
     decode_block_pos, decode_block_state, decode_capability_announcement, decode_connection_phase,
     decode_core_command, decode_core_event, decode_entity_id, decode_f32_value, decode_option,
-    decode_player_id, decode_player_snapshot, decode_u8_value, encode_block_pos,
+    decode_player_id, decode_player_snapshot, decode_u8_value, decode_vec3, encode_block_pos,
     encode_block_state, encode_capability_announcement, encode_connection_phase,
     encode_core_command, encode_core_event, encode_entity_id, encode_option, encode_player_id,
-    encode_player_snapshot,
+    encode_player_snapshot, encode_vec3,
 };
 use crate::codec::gameplay::{
     GameplayDescriptor, GameplayOpCode, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
@@ -303,6 +303,11 @@ fn encode_gameplay_mutation(
             encode_block_pos(encoder, *position);
             Ok(())
         }
+        GameplayMutation::DroppedItem { position, item } => {
+            encoder.write_u8(6);
+            encode_vec3(encoder, *position);
+            encode_item_stack(encoder, item)
+        }
     }
 }
 
@@ -339,6 +344,10 @@ fn decode_gameplay_mutation(
         5 => Ok(GameplayMutation::OpenChest {
             player_id: decode_player_id(decoder)?,
             position: decode_block_pos(decoder)?,
+        }),
+        6 => Ok(GameplayMutation::DroppedItem {
+            position: decode_vec3(decoder)?,
+            item: decode_item_stack(decoder)?,
         }),
         _ => Err(ProtocolCodecError::InvalidValue(
             "invalid gameplay mutation tag",

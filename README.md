@@ -47,7 +47,7 @@ cargo run -p xtask -- build-release-bundles \
 - offline-mode / online-mode auth
 - superflat overworld generation
 - initial chunk send
-- creative-style block break / place
+- survival / creative block break / place
 - authoritative inventory sync
 - JE non-player container/window foundation
 - multiple players
@@ -59,7 +59,7 @@ cargo run -p xtask -- build-release-bundles \
 
 具体的な対応 version / protocol number / adapter id は、active な plugin 構成と config に依存します。README では個別一覧を固定せず、実行時の構成を正として扱います。
 
-Bedrock は creative-style world interaction baseline までで、chat / containers / combat / mobs / Nether / End は未実装です。JE では generic container/window 基盤が入り、player inventory の `window 0` に加えて session-local な non-player `CraftingTable` / `Chest` / `Furnace` window と、gameplay から開ける world-backed な single chest を扱えます。world-backed chest は persistence、same-chest multi-view sync、non-empty break reject を持ちます。furnace は `sand -> glass`、`cobblestone -> stone` と `oak_log` / `oak_planks` / `stick` の starter subset を扱います。world-backed furnace、double chest、operator trigger、Bedrock container/property handling はまだ未実装です。
+Bedrock / JE の world interaction は survival v1 まで対応しています。creative は従来通り無限設置 / 即時破壊、survival は finite placement、single-block break、ephemeral な world drop、500ms pickup delay、5 分 despawn を持ちます。drop は persistence されず restart で消えます。durability、mining speed、tool requirement、hunger / exhaustion、loot table、fortune / silk touch は未実装です。JE では generic container/window 基盤が入り、player inventory の `window 0` に加えて session-local な non-player `CraftingTable` / `Chest` / `Furnace` window と、gameplay から開ける world-backed な single chest を扱えます。world-backed chest は persistence、same-chest multi-view sync、non-empty break reject を持ちます。furnace は `sand -> glass`、`cobblestone -> stone` と `oak_log` / `oak_planks` / `stick` の starter subset を扱います。world-backed furnace、double chest、operator trigger、Bedrock container/property handling はまだ未実装です。
 
 ## リポジトリの入口
 

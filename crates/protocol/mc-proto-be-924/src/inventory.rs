@@ -449,7 +449,7 @@ fn container_type(container: InventoryContainer) -> ContainerType {
     }
 }
 
-fn network_item_stack_descriptor(
+pub(crate) fn network_item_stack_descriptor(
     stack: Option<&ItemStack>,
 ) -> Result<NetworkItemStackDescriptor, ProtocolError> {
     decode_descriptor(build_item_stack_descriptor_bytes(stack)?)
