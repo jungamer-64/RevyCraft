@@ -1,6 +1,7 @@
 use crate::RuntimeError;
 use crate::runtime::{RuntimeServer, SessionState};
 use mc_core::{ConnectionId, SessionCapabilitySet};
+use mc_proto_common::ProtocolSessionSnapshot;
 
 impl RuntimeServer {
     pub(in crate::runtime::session) fn refresh_session_capabilities(session: &mut SessionState) {
@@ -20,6 +21,18 @@ impl RuntimeServer {
             protocol_generation: adapter.plugin_generation_id(),
             gameplay_generation: gameplay.plugin_generation_id(),
         });
+    }
+
+    pub(in crate::runtime) fn protocol_session_snapshot(
+        connection_id: ConnectionId,
+        session: &SessionState,
+    ) -> ProtocolSessionSnapshot {
+        ProtocolSessionSnapshot {
+            connection_id,
+            phase: session.phase,
+            player_id: session.player_id,
+            entity_id: session.entity_id,
+        }
     }
 
     pub(in crate::runtime::session) async fn resolve_gameplay_for_adapter(

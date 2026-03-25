@@ -368,16 +368,22 @@ pub(crate) fn encode_protocol_request_payload(
             Ok(())
         }
         ProtocolRequest::EncodeLoginSuccess { player } => encode_player_snapshot(encoder, player),
-        ProtocolRequest::DecodePlay { player_id, frame } => {
-            encode_player_id(encoder, *player_id);
+        ProtocolRequest::DecodePlay { session, frame } => {
+            encode_protocol_session_snapshot(encoder, session)?;
             encoder.write_bytes(frame)
         }
-        ProtocolRequest::EncodePlayEvent { event, context } => {
+        ProtocolRequest::EncodePlayEvent {
+            session,
+            event,
+            context,
+        } => {
+            encode_protocol_session_snapshot(encoder, session)?;
             encode_core_event(encoder, event)?;
             encode_play_encoding_context(encoder, context);
             Ok(())
         }
-        ProtocolRequest::ExportSessionState { session } => {
+        ProtocolRequest::SessionClosed { session }
+        | ProtocolRequest::ExportSessionState { session } => {
             encode_protocol_session_snapshot(encoder, session)
         }
         ProtocolRequest::ImportSessionState { session, blob } => {
@@ -428,12 +434,16 @@ pub(crate) fn decode_protocol_request_payload(
             player: decode_player_snapshot(decoder)?,
         }),
         ProtocolOpCode::DecodePlay => Ok(ProtocolRequest::DecodePlay {
-            player_id: decode_player_id(decoder)?,
+            session: decode_protocol_session_snapshot(decoder)?,
             frame: decoder.read_bytes()?,
         }),
         ProtocolOpCode::EncodePlayEvent => Ok(ProtocolRequest::EncodePlayEvent {
+            session: decode_protocol_session_snapshot(decoder)?,
             event: decode_core_event(decoder)?,
             context: decode_play_encoding_context(decoder)?,
+        }),
+        ProtocolOpCode::SessionClosed => Ok(ProtocolRequest::SessionClosed {
+            session: decode_protocol_session_snapshot(decoder)?,
         }),
         ProtocolOpCode::ExportSessionState => Ok(ProtocolRequest::ExportSessionState {
             session: decode_protocol_session_snapshot(decoder)?,
@@ -509,7 +519,10 @@ pub(crate) fn encode_protocol_response_payload(
         (ProtocolOpCode::TryDecodeWireFrame, ProtocolResponse::WireFrameDecodeResult(result)) => {
             encode_option(encoder, result.as_ref(), encode_wire_frame_decode_result)
         }
-        (ProtocolOpCode::ImportSessionState, ProtocolResponse::Empty) => Ok(()),
+        (
+            ProtocolOpCode::ImportSessionState | ProtocolOpCode::SessionClosed,
+            ProtocolResponse::Empty,
+        ) => Ok(()),
         _ => Err(ProtocolCodecError::InvalidValue(
             "protocol response did not match opcode",
         )),
@@ -565,6 +578,8 @@ pub(crate) fn decode_protocol_response_payload(
         ProtocolOpCode::TryDecodeWireFrame => Ok(ProtocolResponse::WireFrameDecodeResult(
             decode_option(decoder, decode_wire_frame_decode_result)?,
         )),
-        ProtocolOpCode::ImportSessionState => Ok(ProtocolResponse::Empty),
+        ProtocolOpCode::ImportSessionState | ProtocolOpCode::SessionClosed => {
+            Ok(ProtocolResponse::Empty)
+        }
     }
 }

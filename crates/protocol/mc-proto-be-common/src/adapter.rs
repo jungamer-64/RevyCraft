@@ -1,14 +1,14 @@
 use crate::probe::{bedrock_probe_intent, detects_bedrock_datagram};
 use mc_core::{
     BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DroppedItemSnapshot, EntityId,
-    InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerId,
-    PlayerSnapshot, WorldMeta,
+    InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot,
+    WorldMeta,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest,
     PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
-    RawPacketStreamWireCodec, ServerListStatus, SessionAdapter, StatusRequest, TransportKind,
-    WireCodec,
+    ProtocolSessionSnapshot, RawPacketStreamWireCodec, ServerListStatus, SessionAdapter,
+    StatusRequest, TransportKind, WireCodec,
 };
 
 pub trait BedrockProfile: Default + Send + Sync {
@@ -31,7 +31,7 @@ pub trait BedrockProfile: Default + Send + Sync {
     ) -> Result<Vec<u8>, ProtocolError>;
     fn decode_play_packet(
         &self,
-        player_id: PlayerId,
+        session: &ProtocolSessionSnapshot,
         frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError>;
     fn encode_play_bootstrap_packets(
@@ -101,6 +101,33 @@ pub trait BedrockProfile: Default + Send + Sync {
         &self,
         slot: u8,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+
+    fn session_closed(&self, _session: &ProtocolSessionSnapshot) -> Result<(), ProtocolError> {
+        Ok(())
+    }
+
+    fn observe_event(
+        &self,
+        _session: &ProtocolSessionSnapshot,
+        _event: &CoreEvent,
+    ) -> Result<(), ProtocolError> {
+        Ok(())
+    }
+
+    fn export_session_state(
+        &self,
+        _session: &ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        Ok(Vec::new())
+    }
+
+    fn import_session_state(
+        &self,
+        _session: &ProtocolSessionSnapshot,
+        _blob: &[u8],
+    ) -> Result<(), ProtocolError> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -196,18 +223,19 @@ impl<P: BedrockProfile> SessionAdapter for BedrockAdapter<P> {
 impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
     fn decode_play(
         &self,
-        player_id: PlayerId,
+        session: &ProtocolSessionSnapshot,
         frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError> {
-        self.profile.decode_play_packet(player_id, frame)
+        self.profile.decode_play_packet(session, frame)
     }
 
     fn encode_play_event(
         &self,
         event: &CoreEvent,
+        session: &ProtocolSessionSnapshot,
         _context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
-        match event {
+        let frames = match event {
             CoreEvent::PlayBootstrap {
                 player,
                 entity_id,
@@ -286,7 +314,13 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
             | CoreEvent::CursorChanged { .. }
             | CoreEvent::LoginAccepted { .. }
             | CoreEvent::Disconnect { .. } => Ok(Vec::new()),
-        }
+        }?;
+        self.profile.observe_event(session, event)?;
+        Ok(frames)
+    }
+
+    fn session_closed(&self, session: &ProtocolSessionSnapshot) -> Result<(), ProtocolError> {
+        self.profile.session_closed(session)
     }
 }
 
@@ -297,5 +331,20 @@ impl<P: BedrockProfile> ProtocolAdapter for BedrockAdapter<P> {
 
     fn bedrock_listener_descriptor(&self) -> Option<BedrockListenerDescriptor> {
         Some(self.profile.listener_descriptor())
+    }
+
+    fn export_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        self.profile.export_session_state(session)
+    }
+
+    fn import_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        blob: &[u8],
+    ) -> Result<(), ProtocolError> {
+        self.profile.import_session_state(session, blob)
     }
 }

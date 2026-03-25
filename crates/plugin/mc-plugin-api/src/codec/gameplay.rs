@@ -14,7 +14,8 @@ use crate::codec::__internal::shared::{
 };
 use mc_core::{
     CapabilityAnnouncement, CoreCommand, GameplayCapability, GameplayEffect, GameplayJoinEffect,
-    GameplayProfileId, PlayerId, PlayerSnapshot, WorldMeta,
+    GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet,
+    WorldMeta,
 };
 use mc_proto_common::ConnectionPhase;
 
@@ -59,7 +60,10 @@ pub struct GameplaySessionSnapshot {
     pub phase: ConnectionPhase,
     pub player_id: Option<PlayerId>,
     pub entity_id: Option<mc_core::EntityId>,
+    pub protocol: ProtocolCapabilitySet,
     pub gameplay_profile: GameplayProfileId,
+    pub protocol_generation: Option<PluginGenerationId>,
+    pub gameplay_generation: Option<PluginGenerationId>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -407,7 +411,8 @@ mod tests {
         BlockEntityState, BlockPos, BlockState, CapabilityAnnouncement, CoreCommand, CoreEvent,
         GameplayCapability, GameplayCapabilitySet, GameplayEffect, GameplayJoinEffect,
         GameplayMutation, GameplayProfileId, InventoryContainer, InventorySlot, ItemStack,
-        PlayerId, PlayerInventory, PlayerSnapshot, TargetedEvent, Vec3, WorldMeta,
+        PlayerId, PlayerInventory, PlayerSnapshot, ProtocolCapabilitySet, TargetedEvent, Vec3,
+        WorldMeta,
     };
     use mc_proto_common::ConnectionPhase;
     use uuid::Uuid;
@@ -440,7 +445,10 @@ mod tests {
             phase: ConnectionPhase::Play,
             player_id: Some(sample_player_id()),
             entity_id: Some(mc_core::EntityId(3)),
+            protocol: ProtocolCapabilitySet::new(),
             gameplay_profile: GameplayProfileId::new("canonical"),
+            protocol_generation: None,
+            gameplay_generation: None,
         }
     }
 

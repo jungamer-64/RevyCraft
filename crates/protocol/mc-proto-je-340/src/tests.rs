@@ -1,14 +1,14 @@
 use super::{JE_340_ADAPTER_ID, Je340Adapter, PROTOCOL_VERSION_1_12_2, VERSION_NAME_1_12_2};
 use mc_core::{
     BlockPos, CoreCommand, CoreEvent, DimensionId, DroppedItemSnapshot, EntityId, InteractionHand,
-    InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerInventory,
-    PlayerSnapshot, Vec3,
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventoryContainer,
+    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId,
+    PlayerInventory, PlayerSnapshot, Vec3,
 };
 use mc_proto_common::{
-    Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter, PlayEncodingContext,
-    PlaySyncAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter, StatusRequest,
-    TransportKind, WireFormatKind,
+    ConnectionPhase, Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter,
+    PlayEncodingContext, PlaySyncAdapter, ProtocolDescriptor, ProtocolSessionSnapshot,
+    ServerListStatus, SessionAdapter, StatusRequest, TransportKind, WireFormatKind,
 };
 use mc_proto_je_common::__version_support::{blocks::legacy_block_state_id, inventory::read_slot};
 use uuid::Uuid;
@@ -29,6 +29,49 @@ fn player_snapshot(name: &str) -> PlayerSnapshot {
         selected_hotbar_slot: 0,
     }
 }
+
+fn decode_session(player_id: PlayerId) -> ProtocolSessionSnapshot {
+    ProtocolSessionSnapshot {
+        connection_id: mc_core::ConnectionId(1),
+        phase: ConnectionPhase::Play,
+        player_id: Some(player_id),
+        entity_id: None,
+    }
+}
+
+fn encode_session(context: &PlayEncodingContext) -> ProtocolSessionSnapshot {
+    ProtocolSessionSnapshot {
+        connection_id: mc_core::ConnectionId(1),
+        phase: ConnectionPhase::Play,
+        player_id: Some(context.player_id),
+        entity_id: Some(context.entity_id),
+    }
+}
+
+trait TestPlaySyncAdapterExt: PlaySyncAdapter {
+    fn decode_play_for(
+        &self,
+        player_id: PlayerId,
+        frame: &[u8],
+    ) -> Result<Option<CoreCommand>, mc_proto_common::ProtocolError> {
+        mc_proto_common::PlaySyncAdapter::decode_play(self, &decode_session(player_id), frame)
+    }
+
+    fn encode_play_event_for(
+        &self,
+        event: &CoreEvent,
+        context: &PlayEncodingContext,
+    ) -> Result<Vec<Vec<u8>>, mc_proto_common::ProtocolError> {
+        mc_proto_common::PlaySyncAdapter::encode_play_event(
+            self,
+            event,
+            &encode_session(context),
+            context,
+        )
+    }
+}
+
+impl<T: PlaySyncAdapter + ?Sized> TestPlaySyncAdapterExt for T {}
 
 #[test]
 fn decodes_handshake_status_and_login_packets() {
@@ -99,7 +142,7 @@ fn encodes_status_and_offhand_inventory_events() {
 
     let player = player_snapshot("alpha");
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 0,
                 container: InventoryContainer::Player,
@@ -131,7 +174,7 @@ fn decodes_offhand_block_place() {
     writer.write_f32(0.5);
     writer.write_f32(0.5);
     let command = adapter
-        .decode_play(player_id, &writer.into_inner())
+        .decode_play_for(player_id, &writer.into_inner())
         .expect("block place should decode")
         .expect("block place should produce a command");
     assert!(matches!(
@@ -148,7 +191,7 @@ fn encodes_player_spawn_with_player_info() {
     let adapter = Je340Adapter::new();
     let player = player_snapshot("alpha");
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::EntitySpawned {
                 entity_id: mc_core::EntityId(7),
                 player: player.clone(),
@@ -210,7 +253,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     writer.write_i16(0);
     writer.write_u8(0);
     let command = adapter
-        .decode_play(player_id, &writer.into_inner())
+        .decode_play_for(player_id, &writer.into_inner())
         .expect("click window should decode")
         .expect("click window should produce a command");
     assert!(matches!(
@@ -220,9 +263,11 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
                 window_id: 0,
                 action_number: 11,
             },
-            target: InventoryClickTarget::WindowSlot(45),
+            target: InventoryClickTarget::Slot(InventorySlot::Offhand),
             button: InventoryClickButton::Left,
-            clicked_item: Some(ref stack),
+            validation: InventoryClickValidation::StrictSlotEcho {
+                clicked_item: Some(ref stack),
+            },
             ..
         } if stack.key.as_str() == "minecraft:glass" && stack.count == 1
     ));
@@ -233,7 +278,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     writer.write_i16(11);
     writer.write_bool(false);
     let command = adapter
-        .decode_play(player_id, &writer.into_inner())
+        .decode_play_for(player_id, &writer.into_inner())
         .expect("confirm transaction should decode")
         .expect("confirm transaction should produce a command");
     assert!(matches!(
@@ -249,7 +294,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     ));
 
     let packet = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventoryTransactionProcessed {
                 transaction: InventoryTransactionContext {
                     window_id: 0,
@@ -270,7 +315,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     assert!(reader.read_bool().expect("accepted should decode"));
 
     let packet = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::CursorChanged {
                 stack: Some(ItemStack::new("minecraft:stick", 4, 0)),
             },
@@ -297,7 +342,7 @@ fn pack_block_position(position: mc_core::BlockPos) -> i64 {
 fn encodes_block_change_packets() {
     let adapter = Je340Adapter::new();
     let packet = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::BlockChanged {
                 position: mc_core::BlockPos::new(2, 3, 4),
                 block: mc_core::BlockState::glass(),
@@ -327,7 +372,7 @@ fn encodes_and_decodes_container_window_packets() {
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"window-open-1122"));
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 2,
                 container: InventoryContainer::CraftingTable,
@@ -353,7 +398,7 @@ fn encodes_and_decodes_container_window_packets() {
     assert_eq!(reader.read_u8().expect("slot count should decode"), 0);
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerClosed { window_id: 2 },
             &PlayEncodingContext {
                 player_id,
@@ -369,7 +414,7 @@ fn encodes_and_decodes_container_window_packets() {
     close.write_varint(0x08);
     close.write_u8(2);
     let command = adapter
-        .decode_play(player_id, &close.into_inner())
+        .decode_play_for(player_id, &close.into_inner())
         .expect("close window should decode")
         .expect("close window should produce command");
     assert_eq!(
@@ -391,7 +436,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
     };
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 4,
                 container: InventoryContainer::Chest,
@@ -414,7 +459,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
     assert_eq!(reader.read_u8().expect("slot count should decode"), 27);
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 4,
                 container: InventoryContainer::Chest,
@@ -430,7 +475,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
     assert_eq!(reader.read_i16().expect("slot should decode"), 27);
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 4,
                 container: InventoryContainer::Chest,
@@ -456,7 +501,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
     };
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 3,
                 container: InventoryContainer::Furnace,
@@ -479,7 +524,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
     assert_eq!(reader.read_u8().expect("slot count should decode"), 3);
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventoryContents {
                 window_id: 3,
                 container: InventoryContainer::Furnace,
@@ -506,7 +551,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
         InventorySlot::Hotbar(0),
     ] {
         let packets = adapter
-            .encode_play_event(
+            .encode_play_event_for(
                 &CoreEvent::InventorySlotChanged {
                     window_id: 3,
                     container: InventoryContainer::Furnace,
@@ -530,7 +575,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
     }
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerPropertyChanged {
                 window_id: 3,
                 property_id: 2,
@@ -553,7 +598,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
 fn encodes_dropped_item_spawn_and_metadata() {
     let adapter = Je340Adapter::new();
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::DroppedItemSpawned {
                 entity_id: EntityId(11),
                 item: DroppedItemSnapshot {
@@ -604,7 +649,7 @@ fn encodes_block_break_animation_stage_and_clear() {
     };
 
     let stage_packet = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::BlockBreakingProgress {
                 breaker_entity_id: EntityId(11),
                 position: BlockPos::new(2, 4, 0),
@@ -625,7 +670,7 @@ fn encodes_block_break_animation_stage_and_clear() {
     );
 
     let clear_packet = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::BlockBreakingProgress {
                 breaker_entity_id: EntityId(11),
                 position: BlockPos::new(2, 4, 0),

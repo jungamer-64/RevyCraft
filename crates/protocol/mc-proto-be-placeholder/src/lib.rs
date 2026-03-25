@@ -1,10 +1,10 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::{CoreCommand, CoreEvent, PlayerId, PlayerSnapshot};
+use mc_core::{CoreCommand, CoreEvent, PlayerSnapshot};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, LoginRequest,
     PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
-    RawPacketStreamWireCodec, ServerListStatus, SessionAdapter, StatusRequest, TransportKind,
-    WireCodec, WireFormatKind,
+    ProtocolSessionSnapshot, RawPacketStreamWireCodec, ServerListStatus, SessionAdapter,
+    StatusRequest, TransportKind, WireCodec, WireFormatKind,
 };
 
 const VERSION_NAME_PLACEHOLDER: &str = "bedrock-placeholder";
@@ -127,7 +127,7 @@ impl SessionAdapter for BePlaceholderAdapter {
 impl PlaySyncAdapter for BePlaceholderAdapter {
     fn decode_play(
         &self,
-        _player_id: PlayerId,
+        _session: &ProtocolSessionSnapshot,
         _frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError> {
         Err(unsupported())
@@ -136,6 +136,7 @@ impl PlaySyncAdapter for BePlaceholderAdapter {
     fn encode_play_event(
         &self,
         _event: &CoreEvent,
+        _session: &ProtocolSessionSnapshot,
         _context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         Err(unsupported())

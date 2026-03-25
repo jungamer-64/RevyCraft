@@ -314,9 +314,12 @@ pub(crate) fn translate_drop_action(
     }
 }
 
-pub(crate) fn request_transaction(client_request_id: u32) -> InventoryTransactionContext {
+pub(crate) fn request_transaction(
+    window_id: u8,
+    client_request_id: u32,
+) -> InventoryTransactionContext {
     InventoryTransactionContext {
-        window_id: 0,
+        window_id,
         action_number: i16::try_from(client_request_id.min(i16::MAX as u32))
             .expect("bounded request id should fit into i16"),
     }

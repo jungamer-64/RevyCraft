@@ -15,7 +15,7 @@ pub use self::traits::{
 };
 pub use self::types::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState,
-    LoginRequest, PlayEncodingContext, ProtocolDescriptor, ServerListStatus, StatusRequest,
-    TransportKind, WireFormatKind,
+    LoginRequest, PlayEncodingContext, ProtocolDescriptor, ProtocolSessionSnapshot,
+    ServerListStatus, StatusRequest, TransportKind, WireFormatKind,
 };
 pub use self::wire::{MinecraftWireCodec, RawPacketStreamWireCodec};

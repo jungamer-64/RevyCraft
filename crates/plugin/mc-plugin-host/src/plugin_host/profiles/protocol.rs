@@ -1,9 +1,9 @@
 use super::{
     Arc, BedrockListenerDescriptor, BytesMut, ConnectionPhase, Edition, HandshakeIntent,
-    HandshakeProbe, LoginRequest, PlayEncodingContext, PlayerId, PluginFailureDispatch,
-    PluginGenerationId, PluginKind, ProtocolAdapter, ProtocolCapabilitySet, ProtocolDescriptor,
-    ProtocolError, ProtocolGeneration, ProtocolRequest, ProtocolResponse, RwLock, ServerListStatus,
-    StatusRequest, TransportKind, WireCodec, WireFormatKind, WireFrameDecodeResult,
+    HandshakeProbe, LoginRequest, PlayEncodingContext, PluginFailureDispatch, PluginGenerationId,
+    PluginKind, ProtocolAdapter, ProtocolCapabilitySet, ProtocolDescriptor, ProtocolError,
+    ProtocolGeneration, ProtocolRequest, ProtocolResponse, RwLock, ServerListStatus, StatusRequest,
+    TransportKind, WireCodec, WireFormatKind, WireFrameDecodeResult,
 };
 
 pub(crate) struct HotSwappableProtocolAdapter {
@@ -275,12 +275,12 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
 impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
     fn decode_play(
         &self,
-        player_id: PlayerId,
+        session: &mc_proto_common::ProtocolSessionSnapshot,
         frame: &[u8],
     ) -> Result<Option<mc_core::CoreCommand>, ProtocolError> {
         self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::DecodePlay {
-                player_id,
+                session: session.clone(),
                 frame: frame.to_vec(),
             })? {
                 ProtocolResponse::CoreCommand(command) => Ok(command),
@@ -294,16 +294,34 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
     fn encode_play_event(
         &self,
         event: &mc_core::CoreEvent,
+        session: &mc_proto_common::ProtocolSessionSnapshot,
         context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::EncodePlayEvent {
+                session: session.clone(),
                 event: event.clone(),
                 context: *context,
             })? {
                 ProtocolResponse::Frames(frames) => Ok(frames),
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected encode_play_event payload: {other:?}"
+                ))),
+            }
+        })
+    }
+
+    fn session_closed(
+        &self,
+        session: &mc_proto_common::ProtocolSessionSnapshot,
+    ) -> Result<(), ProtocolError> {
+        self.with_generation(|generation| {
+            match generation.invoke(&ProtocolRequest::SessionClosed {
+                session: session.clone(),
+            })? {
+                ProtocolResponse::Empty => Ok(()),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected session_closed payload: {other:?}"
                 ))),
             }
         })

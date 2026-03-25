@@ -192,7 +192,19 @@ impl SessionRegistry {
                     phase: handle.phase,
                     player_id: Some(handle.player_id?),
                     entity_id: handle.entity_id,
+                    protocol: handle
+                        .session_capabilities
+                        .as_ref()
+                        .map(|capabilities| capabilities.protocol.clone())?,
                     gameplay_profile: handle.gameplay_profile.clone()?,
+                    protocol_generation: handle
+                        .session_capabilities
+                        .as_ref()
+                        .and_then(|capabilities| capabilities.protocol_generation),
+                    gameplay_generation: handle
+                        .session_capabilities
+                        .as_ref()
+                        .and_then(|capabilities| capabilities.gameplay_generation),
                 })
             })
             .collect()

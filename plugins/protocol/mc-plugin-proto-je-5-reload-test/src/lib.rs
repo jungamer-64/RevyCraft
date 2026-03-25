@@ -1,7 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::{
-    CoreCommand, CoreEvent, PlayerId, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet,
-};
+use mc_core::{CoreCommand, CoreEvent, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet};
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_sdk_rust::capabilities::{build_tag_contains, protocol_capabilities};
 use mc_plugin_sdk_rust::export_plugin;
@@ -126,18 +124,19 @@ impl SessionAdapter for Je5ReloadTestProtocolPlugin {
 impl PlaySyncAdapter for Je5ReloadTestProtocolPlugin {
     fn decode_play(
         &self,
-        player_id: PlayerId,
+        session: &ProtocolSessionSnapshot,
         frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError> {
-        self.adapter.decode_play(player_id, frame)
+        self.adapter.decode_play(session, frame)
     }
 
     fn encode_play_event(
         &self,
         event: &CoreEvent,
+        session: &ProtocolSessionSnapshot,
         context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
-        self.adapter.encode_play_event(event, context)
+        self.adapter.encode_play_event(event, session, context)
     }
 }
 

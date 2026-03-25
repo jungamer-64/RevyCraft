@@ -10,12 +10,12 @@ use super::sync::{
     window_contents,
 };
 use super::util::{MAX_STACK_SIZE, decrement_cursor, reduce_slot_stack, stack_keys_match};
+use crate::PlayerId;
 use crate::events::{
-    CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget,
+    CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
     InventoryTransactionContext, TargetedEvent,
 };
 use crate::inventory::{InventoryContainer, InventorySlot, ItemStack, PlayerInventory};
-use crate::{PlayerId, ProtocolCapability, SessionCapabilitySet};
 
 impl ServerCore {
     pub(in crate::core) fn apply_inventory_click(
@@ -24,8 +24,7 @@ impl ServerCore {
         transaction: InventoryTransactionContext,
         target: InventoryClickTarget,
         button: InventoryClickButton,
-        clicked_item: Option<&ItemStack>,
-        session: Option<&SessionCapabilitySet>,
+        validation: &InventoryClickValidation,
     ) -> Vec<TargetedEvent> {
         let Some(before_player) = self.online_players.get(&player_id) else {
             return Vec::new();
@@ -58,8 +57,7 @@ impl ServerCore {
             .as_ref()
             .filter(|window| window.window_id == transaction.window_id)
             .and_then(OpenInventoryWindow::world_furnace_position);
-        let resolved_slot =
-            resolve_inventory_target(&target, transaction.window_id, container, session);
+        let resolved_slot = resolve_inventory_target(&target);
 
         let (applied, after_contents, after_properties, after_cursor, selected_hotbar_slot) = {
             let player = self
@@ -106,12 +104,13 @@ impl ServerCore {
 
         let clicked_slot_stack =
             resolved_slot.and_then(|slot| after_contents.get_slot(slot).cloned());
-        let bedrock_authoritative =
-            session.is_some_and(|session| session.protocol.contains(&ProtocolCapability::Bedrock));
-        let accepted = if bedrock_authoritative {
-            applied
-        } else {
-            applied && resolved_slot.is_some() && clicked_item == clicked_slot_stack.as_ref()
+        let accepted = match validation {
+            InventoryClickValidation::Authoritative => applied,
+            InventoryClickValidation::StrictSlotEcho { clicked_item } => {
+                applied
+                    && resolved_slot.is_some()
+                    && clicked_item.as_ref() == clicked_slot_stack.as_ref()
+            }
         };
 
         let mut events = vec![TargetedEvent {

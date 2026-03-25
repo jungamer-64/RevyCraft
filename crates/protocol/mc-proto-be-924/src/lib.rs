@@ -11,21 +11,118 @@ mod tests;
 
 use bedrockrs_proto::ProtoVersion;
 use mc_core::{
-    BlockState, ChunkColumn, CoreCommand, DroppedItemSnapshot, EntityId, InventoryContainer,
-    InventorySlot, InventoryWindowContents, ItemStack, PlayerId, PlayerSnapshot, WorldMeta,
+    BlockState, ChunkColumn, CoreCommand, CoreEvent, DroppedItemSnapshot, EntityId,
+    InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot,
+    WorldMeta,
 };
 use mc_proto_be_common::{BedrockAdapter, BedrockProfile};
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, LoginRequest, ProtocolDescriptor,
-    ProtocolError, TransportKind, WireFormatKind,
+    ProtocolError, ProtocolSessionSnapshot, TransportKind, WireFormatKind,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 pub const BE_924_ADAPTER_ID: &str = "be-924";
 pub const BE_924_VERSION_NAME: &str = "bedrock-26.3";
 pub const BE_924_PROTOCOL_NUMBER: i32 = 924;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct BedrockTrackedWindow {
+    window_id: u8,
+    container: InventoryContainer,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct BedrockProtocolSessionState {
+    active_window: Option<BedrockTrackedWindow>,
+}
+
 #[derive(Default)]
-pub struct Bedrock924Profile;
+struct BedrockProtocolSessionStore {
+    sessions: Mutex<HashMap<mc_core::ConnectionId, BedrockProtocolSessionState>>,
+}
+
+impl BedrockProtocolSessionStore {
+    fn active_window_id(&self, session: &ProtocolSessionSnapshot) -> Option<u8> {
+        self.sessions
+            .lock()
+            .expect("bedrock protocol session store should not be poisoned")
+            .get(&session.connection_id)
+            .and_then(|state| state.active_window)
+            .map(|window| window.window_id)
+    }
+
+    fn observe_event(&self, session: &ProtocolSessionSnapshot, event: &CoreEvent) {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .expect("bedrock protocol session store should not be poisoned");
+        let state = sessions.entry(session.connection_id).or_default();
+        match event {
+            CoreEvent::ContainerOpened {
+                window_id,
+                container,
+                ..
+            } if *container != InventoryContainer::Player => {
+                state.active_window = Some(BedrockTrackedWindow {
+                    window_id: *window_id,
+                    container: *container,
+                });
+            }
+            CoreEvent::ContainerClosed { window_id } => {
+                if state
+                    .active_window
+                    .is_some_and(|window| window.window_id == *window_id)
+                {
+                    state.active_window = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn export_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        let state = self
+            .sessions
+            .lock()
+            .expect("bedrock protocol session store should not be poisoned")
+            .get(&session.connection_id)
+            .cloned()
+            .unwrap_or_default();
+        serde_json::to_vec(&state).map_err(|error| ProtocolError::Plugin(error.to_string()))
+    }
+
+    fn import_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        blob: &[u8],
+    ) -> Result<(), ProtocolError> {
+        let state = serde_json::from_slice(blob)
+            .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
+        self.sessions
+            .lock()
+            .expect("bedrock protocol session store should not be poisoned")
+            .insert(session.connection_id, state);
+        Ok(())
+    }
+
+    fn remove_session(&self, session: &ProtocolSessionSnapshot) {
+        self.sessions
+            .lock()
+            .expect("bedrock protocol session store should not be poisoned")
+            .remove(&session.connection_id);
+    }
+}
+
+#[derive(Default)]
+pub struct Bedrock924Profile {
+    sessions: BedrockProtocolSessionStore,
+}
 
 pub type Bedrock924Adapter = BedrockAdapter<Bedrock924Profile>;
 
@@ -80,10 +177,10 @@ impl BedrockProfile for Bedrock924Profile {
 
     fn decode_play_packet(
         &self,
-        player_id: PlayerId,
+        session: &ProtocolSessionSnapshot,
         frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError> {
-        decoding::decode_play_packet(player_id, frame)
+        decoding::decode_play_packet(session, &self.sessions, frame)
     }
 
     fn encode_play_bootstrap_packets(
@@ -197,5 +294,34 @@ impl BedrockProfile for Bedrock924Profile {
         slot: u8,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         encoding::encode_selected_hotbar_slot_changed_packets(slot)
+    }
+
+    fn observe_event(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        event: &CoreEvent,
+    ) -> Result<(), ProtocolError> {
+        self.sessions.observe_event(session, event);
+        Ok(())
+    }
+
+    fn session_closed(&self, session: &ProtocolSessionSnapshot) -> Result<(), ProtocolError> {
+        self.sessions.remove_session(session);
+        Ok(())
+    }
+
+    fn export_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        self.sessions.export_session_state(session)
+    }
+
+    fn import_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        blob: &[u8],
+    ) -> Result<(), ProtocolError> {
+        self.sessions.import_session_state(session, blob)
     }
 }

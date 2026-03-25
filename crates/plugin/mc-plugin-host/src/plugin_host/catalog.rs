@@ -2,7 +2,7 @@ use crate::PluginHostError as RuntimeError;
 use mc_plugin_api::abi::PluginKind;
 #[cfg(any(test, feature = "in-process-testing"))]
 use mc_plugin_api::host_api::{
-    AdminUiPluginApiV1, AuthPluginApiV1, GameplayPluginApiV2, ProtocolPluginApiV1,
+    AdminUiPluginApiV1, AuthPluginApiV1, GameplayPluginApiV2, ProtocolPluginApiV2,
     StoragePluginApiV1,
 };
 #[cfg(any(test, feature = "in-process-testing"))]
@@ -24,7 +24,7 @@ pub(crate) struct ArtifactIdentity {
 pub struct InProcessProtocolPlugin {
     pub plugin_id: String,
     pub manifest: &'static PluginManifestV1,
-    pub api: &'static ProtocolPluginApiV1,
+    pub api: &'static ProtocolPluginApiV2,
 }
 
 #[cfg(any(test, feature = "in-process-testing"))]

@@ -1,7 +1,7 @@
 use super::*;
 use mc_core::{
     GameplayCapability, GameplayCapabilitySet, GameplayPolicyResolver, GameplayProfileId,
-    GameplayQuery, ProtocolCapabilitySet, SessionCapabilitySet,
+    GameplayQuery, SessionCapabilitySet,
 };
 
 struct HostQuery<'a> {
@@ -45,12 +45,12 @@ fn session_capabilities(
     session: &GameplaySessionSnapshot,
 ) -> SessionCapabilitySet {
     SessionCapabilitySet {
-        protocol: ProtocolCapabilitySet::new(),
+        protocol: session.protocol.clone(),
         gameplay: plugin_capabilities.clone(),
         gameplay_profile: session.gameplay_profile.clone(),
         entity_id: session.entity_id,
-        protocol_generation: None,
-        gameplay_generation: None,
+        protocol_generation: session.protocol_generation,
+        gameplay_generation: session.gameplay_generation,
     }
 }
 

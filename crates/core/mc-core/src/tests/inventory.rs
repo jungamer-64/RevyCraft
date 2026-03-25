@@ -169,8 +169,63 @@ impl WindowZeroSession {
         button: InventoryClickButton,
         clicked_item: Option<ItemStack>,
     ) -> (i16, Vec<TargetedEvent>) {
+        fn player_window_slot(raw_slot: u8) -> Option<InventorySlot> {
+            match raw_slot {
+                0..=8 => Some(InventorySlot::Auxiliary(raw_slot)),
+                9..=35 => Some(InventorySlot::MainInventory(raw_slot - 9)),
+                36..=44 => Some(InventorySlot::Hotbar(raw_slot - 36)),
+                _ => None,
+            }
+        }
+
+        fn non_player_window_slot(
+            container: InventoryContainer,
+            raw_slot: u8,
+        ) -> Option<InventorySlot> {
+            match container {
+                InventoryContainer::Player => player_window_slot(raw_slot),
+                InventoryContainer::CraftingTable => match raw_slot {
+                    0..=9 => Some(InventorySlot::Container(raw_slot)),
+                    10..=36 => Some(InventorySlot::MainInventory(raw_slot - 10)),
+                    37..=45 => Some(InventorySlot::Hotbar(raw_slot - 37)),
+                    _ => None,
+                },
+                InventoryContainer::Chest => match raw_slot {
+                    0..=26 => Some(InventorySlot::Container(raw_slot)),
+                    27..=53 => Some(InventorySlot::MainInventory(raw_slot - 27)),
+                    54..=62 => Some(InventorySlot::Hotbar(raw_slot - 54)),
+                    _ => None,
+                },
+                InventoryContainer::Furnace => match raw_slot {
+                    0..=2 => Some(InventorySlot::Container(raw_slot)),
+                    3..=29 => Some(InventorySlot::MainInventory(raw_slot - 3)),
+                    30..=38 => Some(InventorySlot::Hotbar(raw_slot - 30)),
+                    _ => None,
+                },
+            }
+        }
+
         let action_number = self.next_action_number;
         self.next_action_number += 1;
+        let target = match raw_slot {
+            -999 => InventoryClickTarget::Outside,
+            raw_slot if raw_slot.is_negative() => InventoryClickTarget::Unsupported,
+            raw_slot => {
+                let raw_slot =
+                    u8::try_from(raw_slot).expect("non-negative test raw slot should fit in u8");
+                let slot = if window_id == 0 {
+                    player_window_slot(raw_slot)
+                } else {
+                    self.online()
+                        .active_container
+                        .as_ref()
+                        .filter(|window| window.window_id == window_id)
+                        .and_then(|window| non_player_window_slot(window.container, raw_slot))
+                };
+                slot.map(InventoryClickTarget::Slot)
+                    .unwrap_or(InventoryClickTarget::Unsupported)
+            }
+        };
         let events = self.core.apply_command(
             CoreCommand::InventoryClick {
                 player_id: self.player,
@@ -178,9 +233,9 @@ impl WindowZeroSession {
                     window_id,
                     action_number,
                 },
-                target: InventoryClickTarget::WindowSlot(raw_slot),
+                target,
                 button,
-                clicked_item,
+                validation: InventoryClickValidation::StrictSlotEcho { clicked_item },
             },
             0,
         );
@@ -374,7 +429,7 @@ fn bedrock_authoritative_click_accepts_without_clicked_item_echo() {
             },
             target: InventoryClickTarget::Slot(InventorySlot::Hotbar(1)),
             button: InventoryClickButton::Left,
-            clicked_item: None,
+            validation: InventoryClickValidation::Authoritative,
         },
         &bedrock,
     );
@@ -414,7 +469,7 @@ fn bedrock_outside_click_drops_cursor_authoritatively() {
             },
             target: InventoryClickTarget::Outside,
             button: InventoryClickButton::Left,
-            clicked_item: None,
+            validation: InventoryClickValidation::Authoritative,
         },
         &bedrock,
     );

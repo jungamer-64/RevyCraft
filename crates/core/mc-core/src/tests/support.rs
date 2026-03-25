@@ -90,7 +90,7 @@ pub(super) fn click_slot(
             },
             target: InventoryClickTarget::Slot(slot),
             button,
-            clicked_item,
+            validation: InventoryClickValidation::StrictSlotEcho { clicked_item },
         },
         0,
     )

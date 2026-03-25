@@ -1,14 +1,16 @@
 use crate::{JE_5_ADAPTER_ID, Je5Adapter, PROTOCOL_VERSION_1_7_10, VERSION_NAME_1_7_10};
 use mc_core::{
     BlockPos, BlockState, ChunkColumn, ChunkPos, ConnectionId, CoreCommand, CoreConfig, CoreEvent,
-    DroppedItemSnapshot, EntityId, InventoryClickButton, InventoryClickTarget, InventoryContainer,
-    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId,
-    PlayerInventory, PlayerSnapshot, ServerCore, Vec3,
+    DroppedItemSnapshot, EntityId, InventoryClickButton, InventoryClickTarget,
+    InventoryClickValidation, InventoryContainer, InventorySlot, InventoryTransactionContext,
+    InventoryWindowContents, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, ServerCore,
+    Vec3,
 };
 use mc_proto_common::{
-    Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter, PlayEncodingContext,
-    PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter,
-    StatusRequest, TransportKind, WireFormatKind,
+    ConnectionPhase, Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter,
+    PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor,
+    ProtocolSessionSnapshot, ServerListStatus, SessionAdapter, StatusRequest, TransportKind,
+    WireFormatKind,
 };
 use mc_proto_je_common::__version_support::{
     blocks::legacy_block, chunks::get_nibble, inventory::read_slot,
@@ -31,6 +33,49 @@ fn player_snapshot(name: &str) -> PlayerSnapshot {
         selected_hotbar_slot: 0,
     }
 }
+
+fn decode_session(player_id: PlayerId) -> ProtocolSessionSnapshot {
+    ProtocolSessionSnapshot {
+        connection_id: ConnectionId(1),
+        phase: ConnectionPhase::Play,
+        player_id: Some(player_id),
+        entity_id: None,
+    }
+}
+
+fn encode_session(context: &PlayEncodingContext) -> ProtocolSessionSnapshot {
+    ProtocolSessionSnapshot {
+        connection_id: ConnectionId(1),
+        phase: ConnectionPhase::Play,
+        player_id: Some(context.player_id),
+        entity_id: Some(context.entity_id),
+    }
+}
+
+trait TestPlaySyncAdapterExt: PlaySyncAdapter {
+    fn decode_play_for(
+        &self,
+        player_id: PlayerId,
+        frame: &[u8],
+    ) -> Result<Option<CoreCommand>, mc_proto_common::ProtocolError> {
+        mc_proto_common::PlaySyncAdapter::decode_play(self, &decode_session(player_id), frame)
+    }
+
+    fn encode_play_event_for(
+        &self,
+        event: &CoreEvent,
+        context: &PlayEncodingContext,
+    ) -> Result<Vec<Vec<u8>>, mc_proto_common::ProtocolError> {
+        mc_proto_common::PlaySyncAdapter::encode_play_event(
+            self,
+            event,
+            &encode_session(context),
+            context,
+        )
+    }
+}
+
+impl<T: PlaySyncAdapter + ?Sized> TestPlaySyncAdapterExt for T {}
 
 #[test]
 fn decodes_handshake_status_and_login_packets() {
@@ -130,7 +175,7 @@ fn decodes_play_packets_into_core_commands() {
     writer.write_bool(true);
 
     let command = adapter
-        .decode_play(player_id, &writer.into_inner())
+        .decode_play_for(player_id, &writer.into_inner())
         .expect("position should decode")
         .expect("position should produce a command");
     assert!(matches!(
@@ -151,7 +196,7 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
     held_item.write_varint(0x09);
     held_item.write_i16(4);
     let command = adapter
-        .decode_play(player_id, &held_item.into_inner())
+        .decode_play_for(player_id, &held_item.into_inner())
         .expect("held item change should decode")
         .expect("held item change should produce command");
     assert!(matches!(command, CoreCommand::SetHeldSlot { slot: 4, .. }));
@@ -165,7 +210,7 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
     settings.write_u8(1);
     settings.write_bool(true);
     let command = adapter
-        .decode_play(player_id, &settings.into_inner())
+        .decode_play_for(player_id, &settings.into_inner())
         .expect("settings should decode")
         .expect("settings should produce command");
     assert!(matches!(
@@ -184,7 +229,7 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
     creative_inventory.write_i16(0);
     creative_inventory.write_i16(-1);
     let command = adapter
-        .decode_play(player_id, &creative_inventory.into_inner())
+        .decode_play_for(player_id, &creative_inventory.into_inner())
         .expect("creative inventory should decode")
         .expect("creative inventory should produce command");
     assert!(matches!(
@@ -211,7 +256,7 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
     placement.write_u8(8);
     placement.write_u8(8);
     let command = adapter
-        .decode_play(player_id, &placement.into_inner())
+        .decode_play_for(player_id, &placement.into_inner())
         .expect("placement should decode")
         .expect("placement should produce command");
     assert!(matches!(
@@ -242,7 +287,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     click.write_i16(0);
     click.write_i16(-1);
     let command = adapter
-        .decode_play(player_id, &click.into_inner())
+        .decode_play_for(player_id, &click.into_inner())
         .expect("click window should decode")
         .expect("click window should produce a command");
     assert!(matches!(
@@ -252,9 +297,11 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
                 window_id: 0,
                 action_number: 7,
             },
-            target: InventoryClickTarget::WindowSlot(1),
+            target: InventoryClickTarget::Slot(InventorySlot::Auxiliary(1)),
             button: InventoryClickButton::Left,
-            clicked_item: Some(ref stack),
+            validation: InventoryClickValidation::StrictSlotEcho {
+                clicked_item: Some(ref stack),
+            },
             ..
         } if stack.key.as_str() == "minecraft:oak_log" && stack.count == 1
     ));
@@ -265,7 +312,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     confirm.write_i16(7);
     confirm.write_bool(false);
     let command = adapter
-        .decode_play(player_id, &confirm.into_inner())
+        .decode_play_for(player_id, &confirm.into_inner())
         .expect("confirm transaction should decode")
         .expect("confirm transaction should produce a command");
     assert!(matches!(
@@ -281,7 +328,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     ));
 
     let packet = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventoryTransactionProcessed {
                 transaction: InventoryTransactionContext {
                     window_id: 0,
@@ -302,7 +349,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     assert!(reader.read_bool().expect("accepted should decode"));
 
     let packet = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::CursorChanged {
                 stack: Some(ItemStack::new("minecraft:oak_log", 1, 0)),
             },
@@ -388,10 +435,10 @@ fn play_bootstrap_and_chunk_batch_emit_join_game_and_chunks() {
         entity_id: mc_core::EntityId(1),
     };
     let bootstrap_packets = adapter
-        .encode_play_event(&play_bootstrap, &context)
+        .encode_play_event_for(&play_bootstrap, &context)
         .expect("play bootstrap should encode");
     let chunk_packets = adapter
-        .encode_play_event(&chunk_batch, &context)
+        .encode_play_event_for(&chunk_batch, &context)
         .expect("chunk batch should encode");
 
     assert!(bootstrap_packets.iter().any(|packet| packet[0] == 0x01));
@@ -408,7 +455,7 @@ fn encodes_inventory_and_block_events() {
     };
     let inventory = PlayerInventory::creative_starter();
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventoryContents {
                 window_id: 0,
                 container: InventoryContainer::Player,
@@ -420,12 +467,12 @@ fn encodes_inventory_and_block_events() {
     assert_eq!(packets[0][0], 0x30);
 
     let packets = adapter
-        .encode_play_event(&CoreEvent::SelectedHotbarSlotChanged { slot: 4 }, &context)
+        .encode_play_event_for(&CoreEvent::SelectedHotbarSlotChanged { slot: 4 }, &context)
         .expect("held slot change should encode");
     assert_eq!(packets[0][0], 0x09);
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::BlockChanged {
                 position: mc_core::BlockPos::new(2, 4, 0),
                 block: BlockState::glass(),
@@ -442,7 +489,7 @@ fn encodes_and_decodes_container_window_packets() {
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"window-open-1710"));
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 2,
                 container: InventoryContainer::CraftingTable,
@@ -469,7 +516,7 @@ fn encodes_and_decodes_container_window_packets() {
     assert!(reader.read_bool().expect("use title should decode"));
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerClosed { window_id: 2 },
             &PlayEncodingContext {
                 player_id,
@@ -485,7 +532,7 @@ fn encodes_and_decodes_container_window_packets() {
     close.write_varint(0x0d);
     close.write_u8(2);
     let command = adapter
-        .decode_play(player_id, &close.into_inner())
+        .decode_play_for(player_id, &close.into_inner())
         .expect("close window should decode")
         .expect("close window should produce command");
     assert_eq!(
@@ -507,7 +554,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
     };
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 4,
                 container: InventoryContainer::Chest,
@@ -531,7 +578,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
     assert!(reader.read_bool().expect("use title should decode"));
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 4,
                 container: InventoryContainer::Chest,
@@ -547,7 +594,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
     assert_eq!(reader.read_i16().expect("slot should decode"), 27);
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 4,
                 container: InventoryContainer::Chest,
@@ -573,7 +620,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
     };
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 3,
                 container: InventoryContainer::Furnace,
@@ -597,7 +644,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
     assert!(reader.read_bool().expect("use title should decode"));
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 3,
                 container: InventoryContainer::Furnace,
@@ -613,7 +660,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
     assert_eq!(reader.read_i16().expect("slot should decode"), 3);
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 3,
                 container: InventoryContainer::Furnace,
@@ -629,7 +676,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
     assert_eq!(reader.read_i16().expect("slot should decode"), 30);
 
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerPropertyChanged {
                 window_id: 3,
                 property_id: 1,
@@ -652,7 +699,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
 fn encodes_dropped_item_spawn_and_metadata() {
     let adapter = Je5Adapter::new();
     let packets = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::DroppedItemSpawned {
                 entity_id: EntityId(11),
                 item: DroppedItemSnapshot {
@@ -701,7 +748,7 @@ fn encodes_block_break_animation_stage_and_clear() {
     };
 
     let stage_packet = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::BlockBreakingProgress {
                 breaker_entity_id: EntityId(11),
                 position: BlockPos::new(2, 4, 0),
@@ -719,7 +766,7 @@ fn encodes_block_break_animation_stage_and_clear() {
     );
 
     let clear_packet = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::BlockBreakingProgress {
                 breaker_entity_id: EntityId(11),
                 position: BlockPos::new(2, 4, 0),

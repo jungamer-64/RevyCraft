@@ -69,7 +69,10 @@ impl HotSwappableGameplayProfile {
             phase,
             player_id,
             entity_id: session.entity_id,
+            protocol: session.protocol.clone(),
             gameplay_profile: session.gameplay_profile.clone(),
+            protocol_generation: session.protocol_generation,
+            gameplay_generation: session.gameplay_generation,
         }
     }
 

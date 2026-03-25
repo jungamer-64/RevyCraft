@@ -17,12 +17,12 @@ mc-proto-be-common = { path = "../mc-proto-be-common" }
 mc-proto-common = { path = "../mc-proto-common" }
 nbtx.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 uuid.workspace = true
 vek.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
-serde_json.workspace = true
 
 [lints]
 workspace = true

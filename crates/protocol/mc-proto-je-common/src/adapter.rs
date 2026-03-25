@@ -4,13 +4,165 @@ use crate::status::{encode_status_pong_packet, encode_status_response_packet};
 use mc_core::{
     BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DroppedItemSnapshot, EntityId,
     InventoryContainer, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
-    ItemStack, PlayerId, PlayerSnapshot, WorldMeta,
+    ItemStack, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
     PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
-    ServerListStatus, SessionAdapter, StatusRequest, TransportKind, WireCodec,
+    ProtocolSessionSnapshot, ServerListStatus, SessionAdapter, StatusRequest, TransportKind,
+    WireCodec,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct JavaTrackedWindow {
+    pub window_id: u8,
+    pub container: InventoryContainer,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct JavaProtocolSessionState {
+    pub active_window: Option<JavaTrackedWindow>,
+    pub pending_rejected_transaction: Option<InventoryTransactionContext>,
+}
+
+#[derive(Default)]
+pub struct JavaProtocolSessionStore {
+    sessions: Mutex<HashMap<mc_core::ConnectionId, JavaProtocolSessionState>>,
+}
+
+impl JavaProtocolSessionStore {
+    fn with_session<R>(
+        &self,
+        connection_id: mc_core::ConnectionId,
+        f: impl FnOnce(&mut JavaProtocolSessionState) -> R,
+    ) -> R {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .expect("java protocol session store should not be poisoned");
+        f(sessions.entry(connection_id).or_default())
+    }
+
+    pub fn resolve_container(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        window_id: u8,
+    ) -> Option<InventoryContainer> {
+        if window_id == 0 {
+            return Some(InventoryContainer::Player);
+        }
+        self.sessions
+            .lock()
+            .expect("java protocol session store should not be poisoned")
+            .get(&session.connection_id)
+            .and_then(|state| state.active_window)
+            .filter(|window| window.window_id == window_id)
+            .map(|window| window.container)
+    }
+
+    pub fn should_gate_click(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        transaction: InventoryTransactionContext,
+    ) -> bool {
+        self.sessions
+            .lock()
+            .expect("java protocol session store should not be poisoned")
+            .get(&session.connection_id)
+            .and_then(|state| state.pending_rejected_transaction)
+            .is_some_and(|pending| pending.window_id == transaction.window_id)
+    }
+
+    pub fn observe_transaction_ack(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        transaction: InventoryTransactionContext,
+        accepted: bool,
+    ) {
+        if accepted {
+            return;
+        }
+        self.with_session(session.connection_id, |state| {
+            if state.pending_rejected_transaction == Some(transaction) {
+                state.pending_rejected_transaction = None;
+            }
+        });
+    }
+
+    pub fn observe_event(&self, session: &ProtocolSessionSnapshot, event: &CoreEvent) {
+        self.with_session(session.connection_id, |state| match event {
+            CoreEvent::ContainerOpened {
+                window_id,
+                container,
+                ..
+            } if *container != InventoryContainer::Player => {
+                state.active_window = Some(JavaTrackedWindow {
+                    window_id: *window_id,
+                    container: *container,
+                });
+            }
+            CoreEvent::ContainerClosed { window_id } => {
+                if state
+                    .active_window
+                    .is_some_and(|window| window.window_id == *window_id)
+                {
+                    state.active_window = None;
+                }
+                if state
+                    .pending_rejected_transaction
+                    .is_some_and(|transaction| transaction.window_id == *window_id)
+                {
+                    state.pending_rejected_transaction = None;
+                }
+            }
+            CoreEvent::InventoryTransactionProcessed {
+                transaction,
+                accepted: false,
+            } => {
+                state.pending_rejected_transaction = Some(*transaction);
+            }
+            _ => {}
+        });
+    }
+
+    pub fn export_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        let state = self
+            .sessions
+            .lock()
+            .expect("java protocol session store should not be poisoned")
+            .get(&session.connection_id)
+            .cloned()
+            .unwrap_or_default();
+        serde_json::to_vec(&state).map_err(|error| ProtocolError::Plugin(error.to_string()))
+    }
+
+    pub fn import_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        blob: &[u8],
+    ) -> Result<(), ProtocolError> {
+        let state = serde_json::from_slice(blob)
+            .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
+        self.sessions
+            .lock()
+            .expect("java protocol session store should not be poisoned")
+            .insert(session.connection_id, state);
+        Ok(())
+    }
+
+    pub fn remove_session(&self, session: &ProtocolSessionSnapshot) {
+        self.sessions
+            .lock()
+            .expect("java protocol session store should not be poisoned")
+            .remove(&session.connection_id);
+    }
+}
 
 pub trait JavaEditionProfile: Default + Send + Sync {
     fn adapter_id(&self) -> &'static str;
@@ -87,9 +239,36 @@ pub trait JavaEditionProfile: Default + Send + Sync {
     fn encode_keep_alive_requested(&self, keep_alive_id: i32) -> Result<Vec<u8>, ProtocolError>;
     fn decode_play(
         &self,
-        player_id: PlayerId,
+        session: &ProtocolSessionSnapshot,
         frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError>;
+
+    fn session_closed(&self, _session: &ProtocolSessionSnapshot) -> Result<(), ProtocolError> {
+        Ok(())
+    }
+
+    fn observe_event(
+        &self,
+        _session: &ProtocolSessionSnapshot,
+        _event: &CoreEvent,
+    ) -> Result<(), ProtocolError> {
+        Ok(())
+    }
+
+    fn export_session_state(
+        &self,
+        _session: &ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        Ok(Vec::new())
+    }
+
+    fn import_session_state(
+        &self,
+        _session: &ProtocolSessionSnapshot,
+        _blob: &[u8],
+    ) -> Result<(), ProtocolError> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -208,18 +387,19 @@ impl<P: JavaEditionProfile> SessionAdapter for JavaEditionAdapter<P> {
 impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
     fn decode_play(
         &self,
-        player_id: PlayerId,
+        session: &ProtocolSessionSnapshot,
         frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError> {
-        self.profile.decode_play(player_id, frame)
+        self.profile.decode_play(session, frame)
     }
 
     fn encode_play_event(
         &self,
         event: &CoreEvent,
+        session: &ProtocolSessionSnapshot,
         _context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
-        match event {
+        let frames = match event {
             CoreEvent::PlayBootstrap {
                 player,
                 entity_id,
@@ -312,12 +492,33 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
             CoreEvent::LoginAccepted { .. } | CoreEvent::Disconnect { .. } => Err(
                 ProtocolError::InvalidPacket("session event cannot be encoded as play sync"),
             ),
-        }
+        }?;
+        self.profile.observe_event(session, event)?;
+        Ok(frames)
+    }
+
+    fn session_closed(&self, session: &ProtocolSessionSnapshot) -> Result<(), ProtocolError> {
+        self.profile.session_closed(session)
     }
 }
 
 impl<P: JavaEditionProfile> ProtocolAdapter for JavaEditionAdapter<P> {
     fn descriptor(&self) -> ProtocolDescriptor {
         self.profile.descriptor()
+    }
+
+    fn export_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        self.profile.export_session_state(session)
+    }
+
+    fn import_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        blob: &[u8],
+    ) -> Result<(), ProtocolError> {
+        self.profile.import_session_state(session, blob)
     }
 }

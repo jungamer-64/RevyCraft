@@ -27,10 +27,7 @@ pub use crate::{
     AdminTransportCountView, ListenerBinding, PluginFailureAction, PluginFailureMatrix,
     PluginHostStatusSnapshot,
 };
-use mc_core::{
-    CoreEvent, EntityId, GameplayProfileId, InventoryContainer, InventoryTransactionContext,
-    PlayerId, SessionCapabilitySet,
-};
+use mc_core::{CoreEvent, EntityId, GameplayProfileId, PlayerId, SessionCapabilitySet};
 use mc_plugin_host::registry::ProtocolRegistry;
 use mc_plugin_host::runtime::{AuthGenerationHandle, GameplayProfileHandle, RuntimeReloadContext};
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
@@ -318,8 +315,6 @@ pub(crate) struct SessionState {
     pub(crate) player_id: Option<PlayerId>,
     pub(crate) entity_id: Option<EntityId>,
     pub(crate) session_capabilities: Option<SessionCapabilitySet>,
-    pub(crate) active_non_player_window: Option<(u8, InventoryContainer)>,
-    pub(crate) pending_rejected_inventory_transaction: Option<InventoryTransactionContext>,
 }
 
 pub(crate) struct AcceptedGenerationSession {

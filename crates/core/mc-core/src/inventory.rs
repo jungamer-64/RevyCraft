@@ -211,7 +211,7 @@ impl InventorySlot {
     }
 
     #[must_use]
-    pub const fn legacy_window_index(self) -> Option<u8> {
+    pub(crate) const fn legacy_window_index(self) -> Option<u8> {
         match self {
             Self::Auxiliary(index) if index < AUXILIARY_SLOT_COUNT => Some(index),
             Self::MainInventory(index) if index < MAIN_INVENTORY_SLOT_COUNT => {
@@ -219,19 +219,6 @@ impl InventorySlot {
             }
             Self::Hotbar(index) if index < HOTBAR_SLOT_COUNT => Some(HOTBAR_START_SLOT + index),
             _ => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn from_legacy_window_index(index: u8) -> Option<Self> {
-        if index < AUXILIARY_SLOT_COUNT {
-            Some(Self::Auxiliary(index))
-        } else if index < HOTBAR_START_SLOT {
-            Some(Self::MainInventory(index - AUXILIARY_SLOT_COUNT))
-        } else if index < HOTBAR_START_SLOT + HOTBAR_SLOT_COUNT {
-            Some(Self::Hotbar(index - HOTBAR_START_SLOT))
-        } else {
-            None
         }
     }
 

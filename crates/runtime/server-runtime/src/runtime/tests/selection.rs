@@ -1,6 +1,6 @@
 use super::*;
 use crate::runtime::selection::SelectionResolver;
-use mc_core::PlayerId;
+use mc_core::{PlayerId, ProtocolCapabilitySet};
 use mc_plugin_api::codec::auth::AuthMode;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_proto_common::ConnectionPhase;
@@ -86,7 +86,10 @@ fn selection_resolver_rejects_removing_active_gameplay_profile() -> Result<(), R
             phase: ConnectionPhase::Play,
             player_id: Some(PlayerId(Uuid::nil())),
             entity_id: None,
+            protocol: ProtocolCapabilitySet::new(),
             gameplay_profile: "canonical".into(),
+            protocol_generation: None,
+            gameplay_generation: None,
         }],
     ) {
         Ok(_) => panic!("selection resolver should reject removing an in-use gameplay profile"),

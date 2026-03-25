@@ -17,16 +17,19 @@ use encoding::{
 };
 use mc_core::{
     BlockPos, ChunkColumn, CoreCommand, DroppedItemSnapshot, EntityId, InventoryContainer,
-    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId,
-    PlayerSnapshot, WorldMeta,
+    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerSnapshot,
+    WorldMeta,
 };
-use mc_proto_common::{Edition, ProtocolDescriptor, ProtocolError, TransportKind, WireFormatKind};
+use mc_proto_common::{
+    Edition, ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot, TransportKind,
+    WireFormatKind,
+};
 use mc_proto_je_common::{
     __version_support::inventory::{
         CURSOR_SLOT_ID, CURSOR_WINDOW_ID, InventoryProtocolSpec, JE_1_8_X_INVENTORY_SPEC,
         protocol_slot, signed_window_id,
     },
-    JavaEditionAdapter, JavaEditionProfile, format_text_component,
+    JavaEditionAdapter, JavaEditionProfile, JavaProtocolSessionStore, format_text_component,
 };
 
 const PROTOCOL_VERSION_1_8_X: i32 = 47;
@@ -76,7 +79,9 @@ const PACKET_SB_SETTINGS: i32 = 0x15;
 const PACKET_SB_CLIENT_COMMAND: i32 = 0x16;
 
 #[derive(Default)]
-pub struct Je47Profile;
+pub struct Je47Profile {
+    sessions: JavaProtocolSessionStore,
+}
 
 pub type Je47Adapter = JavaEditionAdapter<Je47Profile>;
 
@@ -262,9 +267,38 @@ impl JavaEditionProfile for Je47Profile {
 
     fn decode_play(
         &self,
-        player_id: PlayerId,
+        session: &ProtocolSessionSnapshot,
         frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError> {
-        decode_play_packet(player_id, frame)
+        decode_play_packet(session, &self.sessions, frame)
+    }
+
+    fn observe_event(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        event: &mc_core::CoreEvent,
+    ) -> Result<(), ProtocolError> {
+        self.sessions.observe_event(session, event);
+        Ok(())
+    }
+
+    fn session_closed(&self, session: &ProtocolSessionSnapshot) -> Result<(), ProtocolError> {
+        self.sessions.remove_session(session);
+        Ok(())
+    }
+
+    fn export_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        self.sessions.export_session_state(session)
+    }
+
+    fn import_session_state(
+        &self,
+        session: &ProtocolSessionSnapshot,
+        blob: &[u8],
+    ) -> Result<(), ProtocolError> {
+        self.sessions.import_session_state(session, blob)
     }
 }

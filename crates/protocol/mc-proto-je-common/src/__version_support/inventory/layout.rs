@@ -8,6 +8,9 @@ pub const CURSOR_SLOT_ID: i16 = -1;
 pub const CRAFTING_TABLE_WINDOW_TYPE: &str = "minecraft:crafting_table";
 pub const CHEST_WINDOW_TYPE: &str = "minecraft:chest";
 pub const FURNACE_WINDOW_TYPE: &str = "minecraft:furnace";
+const LEGACY_PLAYER_AUXILIARY_SLOT_COUNT: u8 = 9;
+const LEGACY_PLAYER_HOTBAR_START_SLOT: u8 = 36;
+const LEGACY_PLAYER_HOTBAR_SLOT_COUNT: u8 = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlayerInventoryLayout {
@@ -73,13 +76,13 @@ pub const fn protocol_slot(
 ) -> Option<i16> {
     match container {
         InventoryContainer::Player => match layout {
-            PlayerInventoryLayout::Legacy => match slot.legacy_window_index() {
+            PlayerInventoryLayout::Legacy => match legacy_player_window_index(slot) {
                 Some(index) => Some(index as i16),
                 None => None,
             },
             PlayerInventoryLayout::ModernWithOffhand => match slot {
                 InventorySlot::Offhand => Some(45),
-                _ => match slot.legacy_window_index() {
+                _ => match legacy_player_window_index(slot) {
                     Some(index) => Some(index as i16),
                     None => None,
                 },
@@ -115,14 +118,14 @@ pub fn inventory_slot(
         InventoryContainer::Player => match layout {
             PlayerInventoryLayout::Legacy => u8::try_from(raw_slot)
                 .ok()
-                .and_then(InventorySlot::from_legacy_window_index),
+                .and_then(legacy_player_inventory_slot),
             PlayerInventoryLayout::ModernWithOffhand => {
                 if raw_slot == 45 {
                     Some(InventorySlot::Offhand)
                 } else {
                     u8::try_from(raw_slot)
                         .ok()
-                        .and_then(InventorySlot::from_legacy_window_index)
+                        .and_then(legacy_player_inventory_slot)
                 }
             }
         },
@@ -184,5 +187,32 @@ pub(super) const fn container_descriptor(container: InventoryContainer) -> Conta
             main_inventory_start: 3,
             hotbar_start: 30,
         },
+    }
+}
+
+const fn legacy_player_window_index(slot: InventorySlot) -> Option<u8> {
+    match slot {
+        InventorySlot::Auxiliary(index) if index < LEGACY_PLAYER_AUXILIARY_SLOT_COUNT => Some(index),
+        InventorySlot::MainInventory(index) if index < 27 => {
+            Some(LEGACY_PLAYER_AUXILIARY_SLOT_COUNT + index)
+        }
+        InventorySlot::Hotbar(index) if index < LEGACY_PLAYER_HOTBAR_SLOT_COUNT => {
+            Some(LEGACY_PLAYER_HOTBAR_START_SLOT + index)
+        }
+        _ => None,
+    }
+}
+
+const fn legacy_player_inventory_slot(index: u8) -> Option<InventorySlot> {
+    if index < LEGACY_PLAYER_AUXILIARY_SLOT_COUNT {
+        Some(InventorySlot::Auxiliary(index))
+    } else if index < LEGACY_PLAYER_HOTBAR_START_SLOT {
+        Some(InventorySlot::MainInventory(
+            index - LEGACY_PLAYER_AUXILIARY_SLOT_COUNT,
+        ))
+    } else if index < LEGACY_PLAYER_HOTBAR_START_SLOT + LEGACY_PLAYER_HOTBAR_SLOT_COUNT {
+        Some(InventorySlot::Hotbar(index - LEGACY_PLAYER_HOTBAR_START_SLOT))
+    } else {
+        None
     }
 }

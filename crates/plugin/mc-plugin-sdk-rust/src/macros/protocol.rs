@@ -44,7 +44,22 @@ macro_rules! declare_protocol_plugin {
 #[macro_export]
 macro_rules! delegate_protocol_adapter {
     ($plugin_ty:ty, $field:ident, $capability_body:block $(,)?) => {
-        impl $crate::protocol::RustProtocolPlugin for $plugin_ty {}
+        impl $crate::protocol::RustProtocolPlugin for $plugin_ty {
+            fn export_session_state(
+                &self,
+                session: &mc_plugin_api::codec::protocol::ProtocolSessionSnapshot,
+            ) -> Result<Vec<u8>, mc_proto_common::ProtocolError> {
+                mc_proto_common::ProtocolAdapter::export_session_state(&self.$field, session)
+            }
+
+            fn import_session_state(
+                &self,
+                session: &mc_plugin_api::codec::protocol::ProtocolSessionSnapshot,
+                blob: &[u8],
+            ) -> Result<(), mc_proto_common::ProtocolError> {
+                mc_proto_common::ProtocolAdapter::import_session_state(&self.$field, session, blob)
+            }
+        }
 
         impl mc_proto_common::HandshakeProbe for $plugin_ty {
             fn transport_kind(&self) -> mc_proto_common::TransportKind {
@@ -133,18 +148,26 @@ macro_rules! delegate_protocol_adapter {
         impl mc_proto_common::PlaySyncAdapter for $plugin_ty {
             fn decode_play(
                 &self,
-                player_id: mc_core::PlayerId,
+                session: &mc_proto_common::ProtocolSessionSnapshot,
                 frame: &[u8],
             ) -> Result<Option<mc_core::CoreCommand>, mc_proto_common::ProtocolError> {
-                self.$field.decode_play(player_id, frame)
+                self.$field.decode_play(session, frame)
             }
 
             fn encode_play_event(
                 &self,
                 event: &mc_core::CoreEvent,
+                session: &mc_proto_common::ProtocolSessionSnapshot,
                 context: &mc_proto_common::PlayEncodingContext,
             ) -> Result<Vec<Vec<u8>>, mc_proto_common::ProtocolError> {
-                self.$field.encode_play_event(event, context)
+                self.$field.encode_play_event(event, session, context)
+            }
+
+            fn session_closed(
+                &self,
+                session: &mc_proto_common::ProtocolSessionSnapshot,
+            ) -> Result<(), mc_proto_common::ProtocolError> {
+                self.$field.session_closed(session)
             }
         }
 

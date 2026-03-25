@@ -1,11 +1,11 @@
 use crate::errors::{ProtocolError, StorageError};
 use crate::types::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, LoginRequest, PlayEncodingContext,
-    ProtocolDescriptor, ServerListStatus, StatusRequest, TransportKind,
+    ProtocolDescriptor, ProtocolSessionSnapshot, ServerListStatus, StatusRequest, TransportKind,
 };
 use bytes::BytesMut;
 use mc_core::{
-    CoreCommand, CoreEvent, PlayerId, PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet,
+    CoreCommand, CoreEvent, PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet,
     WorldSnapshot,
 };
 use std::path::Path;
@@ -124,7 +124,7 @@ pub trait PlaySyncAdapter: Send + Sync {
     /// the adapter's play phase.
     fn decode_play(
         &self,
-        player_id: PlayerId,
+        session: &ProtocolSessionSnapshot,
         frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError>;
 
@@ -135,8 +135,17 @@ pub trait PlaySyncAdapter: Send + Sync {
     fn encode_play_event(
         &self,
         event: &CoreEvent,
+        session: &ProtocolSessionSnapshot,
         context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the adapter cannot clean up state for the
+    /// provided play session.
+    fn session_closed(&self, _session: &ProtocolSessionSnapshot) -> Result<(), ProtocolError> {
+        Ok(())
+    }
 }
 
 pub trait ProtocolAdapter: SessionAdapter + PlaySyncAdapter + Send + Sync {
@@ -155,5 +164,28 @@ pub trait ProtocolAdapter: SessionAdapter + PlaySyncAdapter + Send + Sync {
     #[must_use]
     fn plugin_generation_id(&self) -> Option<PluginGenerationId> {
         None
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the adapter cannot export session-owned
+    /// protocol state for reload handoff.
+    fn export_session_state(
+        &self,
+        _session: &ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        Ok(Vec::new())
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError`] when the adapter cannot import a previously
+    /// exported session-owned protocol state blob.
+    fn import_session_state(
+        &self,
+        _session: &ProtocolSessionSnapshot,
+        _blob: &[u8],
+    ) -> Result<(), ProtocolError> {
+        Ok(())
     }
 }

@@ -1,9 +1,10 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::inventory::{
-    decode_inventory_click_button, decode_inventory_click_target, decode_inventory_container,
-    decode_inventory_slot, decode_inventory_transaction_context, decode_inventory_window_contents,
-    decode_item_stack, decode_player_inventory, encode_inventory_click_button,
-    encode_inventory_click_target, encode_inventory_container, encode_inventory_slot,
+    decode_inventory_click_button, decode_inventory_click_target,
+    decode_inventory_click_validation, decode_inventory_container, decode_inventory_slot,
+    decode_inventory_transaction_context, decode_inventory_window_contents, decode_item_stack,
+    decode_player_inventory, encode_inventory_click_button, encode_inventory_click_target,
+    encode_inventory_click_validation, encode_inventory_container, encode_inventory_slot,
     encode_inventory_transaction_context, encode_inventory_window_contents, encode_item_stack,
     encode_player_inventory,
 };
@@ -616,14 +617,14 @@ pub(crate) fn encode_core_command(
             transaction,
             target,
             button,
-            clicked_item,
+            validation,
         } => {
             encoder.write_u8(11);
             encode_player_id(encoder, *player_id);
             encode_inventory_transaction_context(encoder, *transaction);
             encode_inventory_click_target(encoder, *target);
             encode_inventory_click_button(encoder, *button);
-            encode_option(encoder, clicked_item.as_ref(), encode_item_stack)?;
+            encode_inventory_click_validation(encoder, validation)?;
         }
         CoreCommand::InventoryTransactionAck {
             player_id,
@@ -742,7 +743,7 @@ pub(crate) fn decode_core_command(
             transaction: decode_inventory_transaction_context(decoder)?,
             target: decode_inventory_click_target(decoder)?,
             button: decode_inventory_click_button(decoder)?,
-            clicked_item: decode_option(decoder, decode_item_stack)?,
+            validation: decode_inventory_click_validation(decoder)?,
         }),
         12 => Ok(CoreCommand::InventoryTransactionAck {
             player_id: decode_player_id(decoder)?,

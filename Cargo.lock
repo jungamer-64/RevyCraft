@@ -2000,6 +2000,7 @@ dependencies = [
  "mc-core",
  "mc-proto-common",
  "num-traits",
+ "serde",
  "serde_json",
 ]
 

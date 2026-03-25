@@ -1,8 +1,9 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::shared::{decode_option, encode_option};
 use mc_core::{
-    InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerInventory,
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventoryContainer,
+    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack,
+    PlayerInventory,
 };
 
 pub(crate) fn encode_inventory_container(encoder: &mut Encoder, container: InventoryContainer) {
@@ -88,12 +89,8 @@ pub(crate) fn encode_inventory_click_target(encoder: &mut Encoder, target: Inven
             encoder.write_u8(1);
             encode_inventory_slot(encoder, slot);
         }
-        InventoryClickTarget::WindowSlot(slot) => {
-            encoder.write_u8(2);
-            encoder.write_i16(slot);
-        }
-        InventoryClickTarget::Outside => encoder.write_u8(3),
-        InventoryClickTarget::Unsupported => encoder.write_u8(4),
+        InventoryClickTarget::Outside => encoder.write_u8(2),
+        InventoryClickTarget::Unsupported => encoder.write_u8(3),
     }
 }
 
@@ -102,11 +99,40 @@ pub(crate) fn decode_inventory_click_target(
 ) -> Result<InventoryClickTarget, ProtocolCodecError> {
     match decoder.read_u8()? {
         1 => Ok(InventoryClickTarget::Slot(decode_inventory_slot(decoder)?)),
-        2 => Ok(InventoryClickTarget::WindowSlot(decoder.read_i16()?)),
-        3 => Ok(InventoryClickTarget::Outside),
-        4 => Ok(InventoryClickTarget::Unsupported),
+        2 => Ok(InventoryClickTarget::Outside),
+        3 => Ok(InventoryClickTarget::Unsupported),
         _ => Err(ProtocolCodecError::InvalidValue(
             "invalid inventory click target",
+        )),
+    }
+}
+
+pub(crate) fn encode_inventory_click_validation(
+    encoder: &mut Encoder,
+    validation: &InventoryClickValidation,
+) -> Result<(), ProtocolCodecError> {
+    match validation {
+        InventoryClickValidation::StrictSlotEcho { clicked_item } => {
+            encoder.write_u8(1);
+            encode_option(encoder, clicked_item.as_ref(), encode_item_stack)
+        }
+        InventoryClickValidation::Authoritative => {
+            encoder.write_u8(2);
+            Ok(())
+        }
+    }
+}
+
+pub(crate) fn decode_inventory_click_validation(
+    decoder: &mut Decoder<'_>,
+) -> Result<InventoryClickValidation, ProtocolCodecError> {
+    match decoder.read_u8()? {
+        1 => Ok(InventoryClickValidation::StrictSlotEcho {
+            clicked_item: decode_option(decoder, decode_item_stack)?,
+        }),
+        2 => Ok(InventoryClickValidation::Authoritative),
+        _ => Err(ProtocolCodecError::InvalidValue(
+            "invalid inventory click validation",
         )),
     }
 }

@@ -55,15 +55,10 @@ impl ServerCore {
                 transaction,
                 target,
                 button,
-                clicked_item,
-            } => Ok(self.apply_inventory_click(
-                player_id,
-                transaction,
-                target,
-                button,
-                clicked_item.as_ref(),
-                session,
-            )),
+                validation,
+            } => {
+                Ok(self.apply_inventory_click(player_id, transaction, target, button, &validation))
+            }
             CoreCommand::CloseContainer {
                 player_id,
                 window_id,

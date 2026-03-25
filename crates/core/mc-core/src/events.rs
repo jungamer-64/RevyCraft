@@ -21,9 +21,14 @@ pub enum InventoryClickButton {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InventoryClickTarget {
     Slot(InventorySlot),
-    WindowSlot(i16),
     Outside,
     Unsupported,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum InventoryClickValidation {
+    StrictSlotEcho { clicked_item: Option<ItemStack> },
+    Authoritative,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -66,7 +71,7 @@ pub enum CoreCommand {
         transaction: InventoryTransactionContext,
         target: InventoryClickTarget,
         button: InventoryClickButton,
-        clicked_item: Option<ItemStack>,
+        validation: InventoryClickValidation,
     },
     InventoryTransactionAck {
         player_id: PlayerId,

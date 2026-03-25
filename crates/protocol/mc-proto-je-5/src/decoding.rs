@@ -7,15 +7,22 @@ use crate::{
 };
 use mc_core::{
     BlockFace, BlockPos, CoreCommand, InteractionHand, InventoryClickButton, InventoryClickTarget,
-    InventoryTransactionContext, PlayerId, Vec3,
+    InventoryClickValidation, InventoryTransactionContext, PlayerId, Vec3,
 };
-use mc_proto_common::{PacketReader, ProtocolError};
-use mc_proto_je_common::__version_support::inventory::{inventory_slot, read_slot};
+use mc_proto_common::{PacketReader, ProtocolError, ProtocolSessionSnapshot};
+use mc_proto_je_common::{
+    __version_support::inventory::{inventory_slot, read_slot},
+    JavaProtocolSessionStore,
+};
 
 pub(crate) fn decode_play_packet(
-    player_id: PlayerId,
+    session: &ProtocolSessionSnapshot,
+    sessions: &JavaProtocolSessionStore,
     frame: &[u8],
 ) -> Result<Option<CoreCommand>, ProtocolError> {
+    let player_id = session.player_id.ok_or(ProtocolError::InvalidPacket(
+        "play session is missing player id",
+    ))?;
     let mut reader = PacketReader::new(frame);
     let packet_id = reader.read_varint()?;
     match packet_id {
@@ -46,6 +53,8 @@ pub(crate) fn decode_play_packet(
             slot: reader.read_i16()?,
         })),
         PACKET_SB_CONFIRM_TRANSACTION => Ok(Some(decode_confirm_transaction_packet(
+            session,
+            sessions,
             player_id,
             &mut reader,
         )?)),
@@ -53,7 +62,9 @@ pub(crate) fn decode_play_packet(
             player_id,
             window_id: reader.read_u8()?,
         })),
-        PACKET_SB_CLICK_WINDOW => Ok(Some(decode_click_window_packet(player_id, &mut reader)?)),
+        PACKET_SB_CLICK_WINDOW => {
+            decode_click_window_packet(session, sessions, player_id, &mut reader)
+        }
         PACKET_SB_CREATIVE_INVENTORY_ACTION => {
             let slot = reader.read_i16()?;
             let stack = read_slot(&mut reader, crate::INVENTORY_SPEC.slot_nbt)?;
@@ -182,9 +193,11 @@ const fn i8_to_u8(value: i8) -> u8 {
 }
 
 fn decode_click_window_packet(
+    session: &ProtocolSessionSnapshot,
+    sessions: &JavaProtocolSessionStore,
     player_id: PlayerId,
     reader: &mut PacketReader<'_>,
-) -> Result<CoreCommand, ProtocolError> {
+) -> Result<Option<CoreCommand>, ProtocolError> {
     let window_id = reader.read_u8()?;
     let raw_slot = reader.read_i16()?;
     let raw_button = reader.read_i8()?;
@@ -201,31 +214,51 @@ fn decode_click_window_packet(
     } else if raw_slot == -999 {
         InventoryClickTarget::Outside
     } else {
-        InventoryClickTarget::WindowSlot(raw_slot)
+        sessions
+            .resolve_container(session, window_id)
+            .and_then(|container| inventory_slot(container, crate::INVENTORY_SPEC.layout, raw_slot))
+            .map(InventoryClickTarget::Slot)
+            .unwrap_or(InventoryClickTarget::Unsupported)
     };
 
-    Ok(CoreCommand::InventoryClick {
+    let transaction = InventoryTransactionContext {
+        window_id,
+        action_number,
+    };
+    if sessions.should_gate_click(session, transaction) {
+        return Ok(None);
+    }
+
+    Ok(Some(CoreCommand::InventoryClick {
         player_id,
-        transaction: InventoryTransactionContext {
-            window_id,
-            action_number,
-        },
+        transaction,
         target,
         button,
-        clicked_item,
-    })
+        validation: InventoryClickValidation::StrictSlotEcho { clicked_item },
+    }))
 }
 
 fn decode_confirm_transaction_packet(
+    session: &ProtocolSessionSnapshot,
+    sessions: &JavaProtocolSessionStore,
     player_id: PlayerId,
     reader: &mut PacketReader<'_>,
 ) -> Result<CoreCommand, ProtocolError> {
-    Ok(CoreCommand::InventoryTransactionAck {
+    let command = CoreCommand::InventoryTransactionAck {
         player_id,
         transaction: InventoryTransactionContext {
             window_id: reader.read_u8()?,
             action_number: reader.read_i16()?,
         },
         accepted: reader.read_bool()?,
-    })
+    };
+    if let CoreCommand::InventoryTransactionAck {
+        transaction,
+        accepted,
+        ..
+    } = command
+    {
+        sessions.observe_transaction_ack(session, transaction, accepted);
+    }
+    Ok(command)
 }

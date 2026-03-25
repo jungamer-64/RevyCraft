@@ -32,12 +32,14 @@ use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFla
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use mc_core::{
     BlockPos, BlockState, ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DroppedItemSnapshot,
-    EntityId, InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerInventory,
+    EntityId, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
+    InventoryContainer, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
+    ItemStack, PlayerId, PlayerInventory,
 };
 use mc_proto_be_common::__version_support::world::bedrock_actor_id;
 use mc_proto_common::{
-    HandshakeProbe, LoginRequest, PlayEncodingContext, PlaySyncAdapter, SessionAdapter,
+    ConnectionPhase, HandshakeProbe, LoginRequest, PlayEncodingContext, PlaySyncAdapter,
+    ProtocolSessionSnapshot, SessionAdapter,
 };
 use serde_json::json;
 use std::io::Cursor;
@@ -50,6 +52,49 @@ fn test_jwt(payload: &serde_json::Value) -> String {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
     format!("{header}.{payload}.")
 }
+
+fn decode_session(player_id: PlayerId) -> ProtocolSessionSnapshot {
+    ProtocolSessionSnapshot {
+        connection_id: mc_core::ConnectionId(1),
+        phase: ConnectionPhase::Play,
+        player_id: Some(player_id),
+        entity_id: None,
+    }
+}
+
+fn encode_session(context: &PlayEncodingContext) -> ProtocolSessionSnapshot {
+    ProtocolSessionSnapshot {
+        connection_id: mc_core::ConnectionId(1),
+        phase: ConnectionPhase::Play,
+        player_id: Some(context.player_id),
+        entity_id: Some(context.entity_id),
+    }
+}
+
+trait TestPlaySyncAdapterExt: PlaySyncAdapter {
+    fn decode_play_for(
+        &self,
+        player_id: PlayerId,
+        frame: &[u8],
+    ) -> Result<Option<CoreCommand>, mc_proto_common::ProtocolError> {
+        mc_proto_common::PlaySyncAdapter::decode_play(self, &decode_session(player_id), frame)
+    }
+
+    fn encode_play_event_for(
+        &self,
+        event: &CoreEvent,
+        context: &PlayEncodingContext,
+    ) -> Result<Vec<Vec<u8>>, mc_proto_common::ProtocolError> {
+        mc_proto_common::PlaySyncAdapter::encode_play_event(
+            self,
+            event,
+            &encode_session(context),
+            context,
+        )
+    }
+}
+
+impl<T: PlaySyncAdapter + ?Sized> TestPlaySyncAdapterExt for T {}
 
 #[test]
 fn request_network_settings_maps_to_login_request() {
@@ -177,7 +222,7 @@ fn encodes_chunk_and_block_packets() {
     chunk.set_block(1, 4, 2, BlockState::bricks());
 
     let frames = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ChunkBatch {
                 chunks: vec![chunk],
             },
@@ -196,7 +241,7 @@ fn encodes_chunk_and_block_packets() {
     }
 
     let frames = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::BlockChanged {
                 position: BlockPos::new(2, 3, 4),
                 block: BlockState::glass(),
@@ -231,7 +276,7 @@ fn encodes_inventory_and_container_packets() {
     );
 
     let frames = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventoryContents {
                 window_id: 2,
                 container: InventoryContainer::Chest,
@@ -265,7 +310,7 @@ fn encodes_inventory_and_container_packets() {
     );
 
     let frames = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 2,
                 container: InventoryContainer::Chest,
@@ -286,7 +331,7 @@ fn encodes_inventory_and_container_packets() {
     }
 
     let frames = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::SelectedHotbarSlotChanged { slot: 4 },
             &play_context(),
         )
@@ -299,7 +344,7 @@ fn encodes_inventory_and_container_packets() {
     ));
 
     let frames = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 2,
                 container: InventoryContainer::CraftingTable,
@@ -318,7 +363,7 @@ fn encodes_inventory_and_container_packets() {
     ));
 
     let frames = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerClosed { window_id: 2 },
             &play_context(),
         )
@@ -331,7 +376,7 @@ fn encodes_inventory_and_container_packets() {
     ));
 
     let frames = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::ContainerPropertyChanged {
                 window_id: 2,
                 property_id: 1,
@@ -362,7 +407,7 @@ fn decodes_legacy_inventory_transaction_item_use() {
     ));
 
     let command = adapter
-        .decode_play(player_id, &frame)
+        .decode_play_for(player_id, &frame)
         .expect("legacy inventory transaction should decode")
         .expect("legacy inventory transaction should produce a command");
     assert!(matches!(
@@ -406,7 +451,7 @@ fn decodes_player_auth_input_item_use() {
     });
 
     let command = adapter
-        .decode_play(player_id, &frame)
+        .decode_play_for(player_id, &frame)
         .expect("player auth input should decode")
         .expect("player auth input should produce a command");
     assert!(matches!(
@@ -443,7 +488,7 @@ fn decodes_item_stack_request_take_action() {
     .expect("item stack request should encode");
 
     let command = adapter
-        .decode_play(player_id, &frame)
+        .decode_play_for(player_id, &frame)
         .expect("item stack request should decode")
         .expect("item stack request should produce a command");
     assert!(matches!(
@@ -456,7 +501,7 @@ fn decodes_item_stack_request_take_action() {
             },
             target: InventoryClickTarget::Slot(InventorySlot::Hotbar(0)),
             button: InventoryClickButton::Left,
-            clicked_item: None,
+            validation: InventoryClickValidation::Authoritative,
         } if decoded_player == player_id
     ));
 }
@@ -465,7 +510,7 @@ fn decodes_item_stack_request_take_action() {
 fn encodes_dropped_item_spawn_and_despawn_packets() {
     let adapter = Bedrock924Adapter::new();
     let frames = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::DroppedItemSpawned {
                 entity_id: EntityId(77),
                 item: DroppedItemSnapshot {
@@ -503,7 +548,7 @@ fn encodes_dropped_item_spawn_and_despawn_packets() {
     }
 
     let frames = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::EntityDespawned {
                 entity_ids: vec![EntityId(77)],
             },
@@ -525,7 +570,7 @@ fn encodes_block_break_progress_packets() {
     let adapter = Bedrock924Adapter::new();
 
     let start = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::BlockBreakingProgress {
                 breaker_entity_id: EntityId(77),
                 position: BlockPos::new(2, 4, 0),
@@ -552,7 +597,7 @@ fn encodes_block_break_progress_packets() {
     }
 
     let update = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::BlockBreakingProgress {
                 breaker_entity_id: EntityId(77),
                 position: BlockPos::new(2, 4, 0),
@@ -576,7 +621,7 @@ fn encodes_block_break_progress_packets() {
     }
 
     let stop = adapter
-        .encode_play_event(
+        .encode_play_event_for(
             &CoreEvent::BlockBreakingProgress {
                 breaker_entity_id: EntityId(77),
                 position: BlockPos::new(2, 4, 0),
@@ -623,7 +668,7 @@ fn decodes_player_action_destroy_packets_to_dig_statuses() {
         )
         .expect("player action should encode");
         let command = adapter
-            .decode_play(player_id, &frame)
+            .decode_play_for(player_id, &frame)
             .expect("player action should decode")
             .expect("player action should produce a command");
         assert!(matches!(

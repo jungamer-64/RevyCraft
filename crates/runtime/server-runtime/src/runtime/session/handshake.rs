@@ -27,7 +27,7 @@ impl RuntimeServer {
                 self.handle_login_frame(connection_id, transport_io, session, &frame)
                     .await
             }
-            ConnectionPhase::Play => self.handle_play_frame(session, &frame).await,
+            ConnectionPhase::Play => self.handle_play_frame(connection_id, session, &frame).await,
         }
     }
 

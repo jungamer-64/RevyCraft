@@ -15,13 +15,15 @@ use bedrockrs_proto::v662::packets::{
 use bedrockrs_proto::v712::enums::ItemStackRequestActionType;
 use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecVAR};
-use mc_core::{CoreCommand, InteractionHand, PlayerId, Vec3};
+use mc_core::{CoreCommand, InteractionHand, InventoryClickValidation, PlayerId, Vec3};
 use mc_proto_be_common::__version_support::{
     login::parse_bedrock_login_payload,
     world::{block_face_from_i32, block_pos_from_network, protocol_error},
 };
-use mc_proto_common::{LoginRequest, ProtocolError};
+use mc_proto_common::{LoginRequest, ProtocolError, ProtocolSessionSnapshot};
 use std::io::Cursor;
+
+use crate::BedrockProtocolSessionStore;
 
 pub(crate) fn decode_login_request(frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
     let packets = decode_v924(frame)?;
@@ -57,9 +59,13 @@ pub(crate) fn decode_login_request(frame: &[u8]) -> Result<LoginRequest, Protoco
 }
 
 pub(crate) fn decode_play_packet(
-    player_id: PlayerId,
+    session: &ProtocolSessionSnapshot,
+    sessions: &BedrockProtocolSessionStore,
     frame: &[u8],
 ) -> Result<Option<CoreCommand>, ProtocolError> {
+    let player_id = session.player_id.ok_or(ProtocolError::InvalidPacket(
+        "play session is missing player id",
+    ))?;
     if let Some(command) = decode_inventory_transaction_frame(player_id, frame)? {
         return Ok(Some(command));
     }
@@ -124,7 +130,7 @@ pub(crate) fn decode_play_packet(
             _ => Ok(None),
         },
         V924::ItemStackRequestPacket(ItemStackRequestPacket { requests }) => {
-            decode_item_stack_request_packet(player_id, &requests)
+            decode_item_stack_request_packet(session, sessions, player_id, &requests)
         }
         V924::PlayerAuthInputPacket(PlayerAuthInputPacket {
             item_stack_request,
@@ -134,7 +140,7 @@ pub(crate) fn decode_play_packet(
             ..
         }) => {
             if let Some(request) = item_stack_request {
-                return decode_auth_input_stack_request(player_id, &request);
+                return decode_auth_input_stack_request(session, sessions, player_id, &request);
             }
             if let Some(transaction) = item_use_transaction {
                 return decode_item_use_transaction(player_id, &transaction);
@@ -155,9 +161,11 @@ pub(crate) fn decode_play_packet(
             packet.container_id,
             bedrockrs_proto::v662::enums::ContainerID::First
         )
-        .then_some(CoreCommand::CloseContainer {
+        .then(|| sessions.active_window_id(session))
+        .flatten()
+        .map(|window_id| CoreCommand::CloseContainer {
             player_id,
-            window_id: 0,
+            window_id,
         })),
         V924::ClientCacheStatusPacket(_) | V924::ResourcePackClientResponsePacket(_) => Ok(None),
         _ => Ok(None),
@@ -240,6 +248,8 @@ fn decode_inventory_transaction_frame(
 }
 
 fn decode_item_stack_request_packet(
+    session: &ProtocolSessionSnapshot,
+    sessions: &BedrockProtocolSessionStore,
     player_id: PlayerId,
     requests: &[bedrockrs_proto::v662::packets::RequestsEntry<V924>],
 ) -> Result<Option<CoreCommand>, ProtocolError> {
@@ -248,12 +258,17 @@ fn decode_item_stack_request_packet(
     };
     decode_request_actions(
         player_id,
-        request_transaction(request.client_request_id),
+        request_transaction(
+            sessions.active_window_id(session).unwrap_or(0),
+            request.client_request_id,
+        ),
         &request.actions,
     )
 }
 
 fn decode_auth_input_stack_request(
+    session: &ProtocolSessionSnapshot,
+    sessions: &BedrockProtocolSessionStore,
     player_id: PlayerId,
     request: &bedrockrs_proto::v766::packets::player_auth_input_packet::PerformItemStackRequestData<
         V924,
@@ -266,7 +281,10 @@ fn decode_auth_input_stack_request(
         .collect::<Vec<_>>();
     decode_request_actions(
         player_id,
-        request_transaction(request.client_request_id),
+        request_transaction(
+            sessions.active_window_id(session).unwrap_or(0),
+            request.client_request_id,
+        ),
         &actions,
     )
 }
@@ -305,7 +323,7 @@ fn decode_request_actions(
             transaction,
             target,
             button,
-            clicked_item: None,
+            validation: InventoryClickValidation::Authoritative,
         },
     ))
 }

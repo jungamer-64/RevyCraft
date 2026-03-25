@@ -1,4 +1,4 @@
-use mc_core::{EntityId, PlayerId};
+use mc_core::{ConnectionId, EntityId, PlayerId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,4 +96,12 @@ pub struct ServerListStatus {
 pub struct PlayEncodingContext {
     pub player_id: PlayerId,
     pub entity_id: EntityId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProtocolSessionSnapshot {
+    pub connection_id: ConnectionId,
+    pub phase: ConnectionPhase,
+    pub player_id: Option<PlayerId>,
+    pub entity_id: Option<EntityId>,
 }

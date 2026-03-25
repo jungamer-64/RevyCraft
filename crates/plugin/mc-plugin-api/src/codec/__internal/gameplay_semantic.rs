@@ -15,8 +15,8 @@ use crate::codec::gameplay::{
     GameplayDescriptor, GameplayOpCode, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
 };
 use mc_core::{
-    EventTarget, GameplayEffect, GameplayJoinEffect, GameplayMutation, GameplayProfileId,
-    PlayerInventory, TargetedEvent,
+    CapabilityAnnouncement, EventTarget, GameplayEffect, GameplayJoinEffect, GameplayMutation,
+    GameplayProfileId, PlayerInventory, ProtocolCapability, TargetedEvent,
 };
 
 pub(crate) fn encode_gameplay_request_payload(
@@ -175,7 +175,27 @@ pub(crate) fn encode_gameplay_session_snapshot(
             Ok(())
         },
     )?;
-    encoder.write_string(snapshot.gameplay_profile.as_str())
+    encode_capability_announcement(
+        encoder,
+        &CapabilityAnnouncement::<ProtocolCapability>::new(snapshot.protocol.clone()),
+    )?;
+    encoder.write_string(snapshot.gameplay_profile.as_str())?;
+    encode_option(
+        encoder,
+        snapshot.protocol_generation.as_ref(),
+        |encoder, generation| {
+            encoder.write_u64(generation.0);
+            Ok(())
+        },
+    )?;
+    encode_option(
+        encoder,
+        snapshot.gameplay_generation.as_ref(),
+        |encoder, generation| {
+            encoder.write_u64(generation.0);
+            Ok(())
+        },
+    )
 }
 
 pub(crate) fn decode_gameplay_session_snapshot(
@@ -185,7 +205,14 @@ pub(crate) fn decode_gameplay_session_snapshot(
         phase: decode_connection_phase(decoder)?,
         player_id: decode_option(decoder, decode_player_id)?,
         entity_id: decode_option(decoder, decode_entity_id)?,
+        protocol: decode_capability_announcement::<ProtocolCapability>(decoder)?.capabilities,
         gameplay_profile: GameplayProfileId::new(decoder.read_string()?),
+        protocol_generation: decode_option(decoder, |decoder| {
+            Ok(mc_core::PluginGenerationId(decoder.read_u64()?))
+        })?,
+        gameplay_generation: decode_option(decoder, |decoder| {
+            Ok(mc_core::PluginGenerationId(decoder.read_u64()?))
+        })?,
     })
 }
 

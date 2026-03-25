@@ -1,8 +1,8 @@
 use super::super::{OnlinePlayer, ServerCore};
 use super::state::ContainerDescriptor;
+use crate::PlayerId;
 use crate::events::{CoreEvent, EventTarget, InventoryClickTarget, TargetedEvent};
 use crate::inventory::{InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack};
-use crate::{PlayerId, ProtocolCapability, SessionCapabilitySet};
 
 pub(super) fn active_window_container(
     player: &OnlinePlayer,
@@ -42,24 +42,9 @@ pub(super) fn window_contents(
     }
 }
 
-pub(super) fn resolve_inventory_target(
-    target: &InventoryClickTarget,
-    window_id: u8,
-    container: InventoryContainer,
-    session: Option<&SessionCapabilitySet>,
-) -> Option<InventorySlot> {
+pub(super) fn resolve_inventory_target(target: &InventoryClickTarget) -> Option<InventorySlot> {
     match target {
         InventoryClickTarget::Slot(slot) => Some(*slot),
-        InventoryClickTarget::WindowSlot(raw_slot) => match container {
-            InventoryContainer::Player => {
-                player_window_slot_from_raw(*raw_slot, player_window_supports_offhand(session))
-            }
-            InventoryContainer::CraftingTable
-            | InventoryContainer::Chest
-            | InventoryContainer::Furnace => {
-                non_player_window_slot_from_raw(window_id, container, *raw_slot)
-            }
-        },
         InventoryClickTarget::Outside | InventoryClickTarget::Unsupported => None,
     }
 }
@@ -198,48 +183,6 @@ impl ServerCore {
             },
         });
         events
-    }
-}
-
-fn player_window_supports_offhand(session: Option<&SessionCapabilitySet>) -> bool {
-    session.is_some_and(|session| session.protocol.contains(&ProtocolCapability::Je340))
-}
-
-fn player_window_slot_from_raw(raw_slot: i16, supports_offhand: bool) -> Option<InventorySlot> {
-    if supports_offhand && raw_slot == 45 {
-        return Some(InventorySlot::Offhand);
-    }
-    u8::try_from(raw_slot)
-        .ok()
-        .and_then(InventorySlot::from_legacy_window_index)
-}
-
-fn non_player_window_slot_from_raw(
-    window_id: u8,
-    container: InventoryContainer,
-    raw_slot: i16,
-) -> Option<InventorySlot> {
-    if window_id == 0 {
-        return None;
-    }
-    let descriptor = container_descriptor(container)?;
-    match raw_slot {
-        raw if raw >= 0 && raw < i16::from(descriptor.local_slot_count) => Some(
-            InventorySlot::container(u8::try_from(raw).expect("container slot should fit into u8")),
-        ),
-        raw if raw >= descriptor.main_inventory_start && raw < descriptor.hotbar_start => {
-            Some(InventorySlot::MainInventory(
-                u8::try_from(raw - descriptor.main_inventory_start)
-                    .expect("main inventory slot should fit into u8"),
-            ))
-        }
-        raw if raw >= descriptor.hotbar_start && raw < descriptor.hotbar_start + 9 => {
-            Some(InventorySlot::Hotbar(
-                u8::try_from(raw - descriptor.hotbar_start)
-                    .expect("hotbar slot should fit into u8"),
-            ))
-        }
-        _ => None,
     }
 }
 

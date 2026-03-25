@@ -56,22 +56,32 @@ pub fn handle_protocol_request<P: RustProtocolPlugin>(
             .encode_login_success(&player)
             .map(ProtocolResponse::Frame)
             .map_err(|error| error.to_string()),
-        ProtocolRequest::DecodePlay { player_id, frame } => plugin
-            .decode_play(player_id, &frame)
+        ProtocolRequest::DecodePlay { session, frame } => plugin
+            .decode_play(&session, &frame)
             .map(ProtocolResponse::CoreCommand)
             .map_err(|error| error.to_string()),
-        ProtocolRequest::EncodePlayEvent { event, context } => plugin
-            .encode_play_event(&event, &context)
+        ProtocolRequest::EncodePlayEvent {
+            session,
+            event,
+            context,
+        } => plugin
+            .encode_play_event(&event, &session, &context)
             .map(ProtocolResponse::Frames)
             .map_err(|error| error.to_string()),
-        ProtocolRequest::ExportSessionState { session } => plugin
-            .export_session_state(&session)
-            .map(ProtocolResponse::SessionTransferBlob)
-            .map_err(|error| error.to_string()),
-        ProtocolRequest::ImportSessionState { session, blob } => plugin
-            .import_session_state(&session, &blob)
+        ProtocolRequest::SessionClosed { session } => plugin
+            .session_closed(&session)
             .map(|()| ProtocolResponse::Empty)
             .map_err(|error| error.to_string()),
+        ProtocolRequest::ExportSessionState { session } => {
+            RustProtocolPlugin::export_session_state(plugin, &session)
+                .map(ProtocolResponse::SessionTransferBlob)
+                .map_err(|error| error.to_string())
+        }
+        ProtocolRequest::ImportSessionState { session, blob } => {
+            RustProtocolPlugin::import_session_state(plugin, &session, &blob)
+                .map(|()| ProtocolResponse::Empty)
+                .map_err(|error| error.to_string())
+        }
         ProtocolRequest::EncodeWireFrame { payload } => plugin
             .wire_codec()
             .encode_frame(&payload)

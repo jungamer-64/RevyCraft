@@ -9,10 +9,8 @@ use crate::codec::__internal::protocol_semantic::{
     decode_protocol_request_payload, decode_protocol_response_payload,
     encode_protocol_request_payload, encode_protocol_response_payload,
 };
-use mc_core::{
-    CapabilityAnnouncement, ConnectionId, CoreCommand, CoreEvent, EntityId, PlayerId,
-    PlayerSnapshot, ProtocolCapability,
-};
+use mc_core::{CapabilityAnnouncement, CoreCommand, CoreEvent, PlayerSnapshot, ProtocolCapability};
+pub use mc_proto_common::ProtocolSessionSnapshot;
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, LoginRequest, PlayEncodingContext,
     ProtocolDescriptor, ServerListStatus, StatusRequest,
@@ -39,6 +37,7 @@ pub enum ProtocolOpCode {
     ImportSessionState = 16,
     EncodeWireFrame = 17,
     TryDecodeWireFrame = 18,
+    SessionClosed = 19,
 }
 
 impl TryFrom<u8> for ProtocolOpCode {
@@ -64,17 +63,10 @@ impl TryFrom<u8> for ProtocolOpCode {
             16 => Ok(Self::ImportSessionState),
             17 => Ok(Self::EncodeWireFrame),
             18 => Ok(Self::TryDecodeWireFrame),
+            19 => Ok(Self::SessionClosed),
             _ => Err(ProtocolCodecError::InvalidProtocolOpCode(value)),
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProtocolSessionSnapshot {
-    pub connection_id: ConnectionId,
-    pub phase: ConnectionPhase,
-    pub player_id: Option<PlayerId>,
-    pub entity_id: Option<EntityId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,12 +111,16 @@ pub enum ProtocolRequest {
         player: PlayerSnapshot,
     },
     DecodePlay {
-        player_id: PlayerId,
+        session: ProtocolSessionSnapshot,
         frame: Vec<u8>,
     },
     EncodePlayEvent {
+        session: ProtocolSessionSnapshot,
         event: CoreEvent,
         context: PlayEncodingContext,
+    },
+    SessionClosed {
+        session: ProtocolSessionSnapshot,
     },
     ExportSessionState {
         session: ProtocolSessionSnapshot,
@@ -159,6 +155,7 @@ impl ProtocolRequest {
             Self::EncodeLoginSuccess { .. } => ProtocolOpCode::EncodeLoginSuccess,
             Self::DecodePlay { .. } => ProtocolOpCode::DecodePlay,
             Self::EncodePlayEvent { .. } => ProtocolOpCode::EncodePlayEvent,
+            Self::SessionClosed { .. } => ProtocolOpCode::SessionClosed,
             Self::ExportSessionState { .. } => ProtocolOpCode::ExportSessionState,
             Self::ImportSessionState { .. } => ProtocolOpCode::ImportSessionState,
             Self::EncodeWireFrame { .. } => ProtocolOpCode::EncodeWireFrame,
@@ -386,6 +383,15 @@ mod tests {
         }
     }
 
+    fn sample_protocol_session() -> super::ProtocolSessionSnapshot {
+        super::ProtocolSessionSnapshot {
+            connection_id: ConnectionId(1),
+            phase: ConnectionPhase::Play,
+            player_id: Some(sample_player_id()),
+            entity_id: Some(EntityId(7)),
+        }
+    }
+
     fn sample_protocol_round_trips() -> Vec<(ProtocolRequest, ProtocolResponse)> {
         let mut round_trips = sample_protocol_round_trips_part_one();
         round_trips.extend(sample_protocol_round_trips_part_two());
@@ -482,13 +488,14 @@ mod tests {
             ),
             (
                 ProtocolRequest::DecodePlay {
-                    player_id: sample_player_id(),
+                    session: sample_protocol_session(),
                     frame: vec![10, 11],
                 },
                 ProtocolResponse::CoreCommand(Some(sample_command())),
             ),
             (
                 ProtocolRequest::EncodePlayEvent {
+                    session: sample_protocol_session(),
                     event: sample_event(),
                     context: PlayEncodingContext {
                         player_id: sample_player_id(),
@@ -499,23 +506,13 @@ mod tests {
             ),
             (
                 ProtocolRequest::ExportSessionState {
-                    session: super::ProtocolSessionSnapshot {
-                        connection_id: ConnectionId(1),
-                        phase: ConnectionPhase::Play,
-                        player_id: Some(sample_player_id()),
-                        entity_id: Some(EntityId(7)),
-                    },
+                    session: sample_protocol_session(),
                 },
                 ProtocolResponse::SessionTransferBlob(vec![15, 16]),
             ),
             (
                 ProtocolRequest::ImportSessionState {
-                    session: super::ProtocolSessionSnapshot {
-                        connection_id: ConnectionId(1),
-                        phase: ConnectionPhase::Play,
-                        player_id: Some(sample_player_id()),
-                        entity_id: Some(EntityId(7)),
-                    },
+                    session: sample_protocol_session(),
                     blob: vec![17, 18],
                 },
                 ProtocolResponse::Empty,
@@ -603,7 +600,7 @@ mod tests {
     fn malformed_payloads_fail_deterministically() {
         let response = encode_protocol_response(
             &ProtocolRequest::DecodePlay {
-                player_id: sample_player_id(),
+                session: sample_protocol_session(),
                 frame: vec![1],
             },
             &ProtocolResponse::CoreCommand(Some(sample_command())),
@@ -613,7 +610,7 @@ mod tests {
         let _ = truncated.pop();
         let error = decode_protocol_response(
             &ProtocolRequest::DecodePlay {
-                player_id: sample_player_id(),
+                session: sample_protocol_session(),
                 frame: vec![1],
             },
             &truncated,
@@ -629,7 +626,7 @@ mod tests {
         bad_response_flag[7] = 0;
         let error = decode_protocol_response(
             &ProtocolRequest::DecodePlay {
-                player_id: sample_player_id(),
+                session: sample_protocol_session(),
                 frame: vec![1],
             },
             &bad_response_flag,
@@ -675,6 +672,7 @@ mod tests {
             stack: Some(ItemStack::new("minecraft:shield", 1, 0)),
         };
         let request = ProtocolRequest::EncodePlayEvent {
+            session: sample_protocol_session(),
             event,
             context: PlayEncodingContext {
                 player_id: sample_player_id(),
@@ -694,7 +692,7 @@ mod tests {
         };
         let response = ProtocolResponse::CoreCommand(Some(login_command));
         let decode_play = ProtocolRequest::DecodePlay {
-            player_id: sample_player_id(),
+            session: sample_protocol_session(),
             frame: vec![0x10],
         };
         let encoded_response =

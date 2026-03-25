@@ -118,19 +118,24 @@ impl RuntimeServer {
         connection_id: mc_core::ConnectionId,
         session: &SessionState,
     ) -> Result<(), RuntimeError> {
-        if let (Some(gameplay), Some(gameplay_profile), Some(player_id)) = (
+        if let Some(adapter) = session.adapter.as_ref() {
+            adapter
+                .session_closed(&Self::protocol_session_snapshot(connection_id, session))
+                .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        }
+        if let (Some(gameplay), Some(session_capabilities), Some(player_id)) = (
             session.gameplay.as_ref(),
-            session
-                .session_capabilities
-                .as_ref()
-                .map(|capabilities| capabilities.gameplay_profile.clone()),
+            session.session_capabilities.as_ref(),
             session.player_id,
         ) {
             gameplay.session_closed(&GameplaySessionSnapshot {
                 phase: session.phase,
                 player_id: Some(player_id),
                 entity_id: session.entity_id,
-                gameplay_profile,
+                protocol: session_capabilities.protocol.clone(),
+                gameplay_profile: session_capabilities.gameplay_profile.clone(),
+                protocol_generation: session_capabilities.protocol_generation,
+                gameplay_generation: session_capabilities.gameplay_generation,
             })?;
         }
         self.sessions.remove(connection_id).await;

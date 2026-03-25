@@ -3,7 +3,8 @@ use bytes::BytesMut;
 use mc_core::{
     BlockPos, CapabilityAnnouncement, CoreCommand, CoreEvent, DimensionId, GameplayCapability,
     GameplayEffect, GameplayJoinEffect, GameplayPolicyResolver, GameplayProfileId, GameplayQuery,
-    PlayerId, PlayerSnapshot, ProtocolCapability, SessionCapabilitySet, WorldMeta,
+    PlayerId, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet, SessionCapabilitySet,
+    WorldMeta,
 };
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
 use mc_plugin_api::codec::admin_ui::{
@@ -198,7 +199,7 @@ impl SessionAdapter for DirectProtocolPlugin {
 impl mc_proto_common::PlaySyncAdapter for DirectProtocolPlugin {
     fn decode_play(
         &self,
-        _player_id: PlayerId,
+        _session: &mc_proto_common::ProtocolSessionSnapshot,
         _frame: &[u8],
     ) -> Result<Option<CoreCommand>, ProtocolError> {
         Err(ProtocolError::InvalidPacket("unused test protocol method"))
@@ -207,6 +208,7 @@ impl mc_proto_common::PlaySyncAdapter for DirectProtocolPlugin {
     fn encode_play_event(
         &self,
         _event: &CoreEvent,
+        _session: &mc_proto_common::ProtocolSessionSnapshot,
         _context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         Err(ProtocolError::InvalidPacket("unused test protocol method"))
@@ -251,6 +253,18 @@ fn test_player_id() -> PlayerId {
     PlayerId(unsafe { std::mem::zeroed() })
 }
 
+fn gameplay_session(profile: &str, player_id: Option<PlayerId>) -> GameplaySessionSnapshot {
+    GameplaySessionSnapshot {
+        phase: ConnectionPhase::Play,
+        player_id,
+        entity_id: None,
+        protocol: ProtocolCapabilitySet::new(),
+        gameplay_profile: GameplayProfileId::new(profile),
+        protocol_generation: None,
+        gameplay_generation: None,
+    }
+}
+
 #[test]
 fn direct_protocol_requests_route_wire_codec_ops_through_plugin_codec() {
     assert_eq!(
@@ -293,12 +307,7 @@ fn direct_protocol_requests_route_wire_codec_ops_through_plugin_codec() {
 #[test]
 fn direct_gameplay_requests_require_host_api_for_host_callbacks() {
     let request = GameplayRequest::HandleTick {
-        session: GameplaySessionSnapshot {
-            phase: ConnectionPhase::Play,
-            player_id: None,
-            entity_id: None,
-            gameplay_profile: GameplayProfileId::new("probe"),
-        },
+        session: gameplay_session("probe", None),
         now_ms: 0,
     };
     let error =
@@ -633,7 +642,7 @@ mod declared_protocol_plugin {
     impl mc_proto_common::PlaySyncAdapter for DeclaredProtocolAdapter {
         fn decode_play(
             &self,
-            _player_id: PlayerId,
+            _session: &mc_proto_common::ProtocolSessionSnapshot,
             _frame: &[u8],
         ) -> Result<Option<CoreCommand>, ProtocolError> {
             Err(ProtocolError::InvalidPacket(
@@ -644,6 +653,7 @@ mod declared_protocol_plugin {
         fn encode_play_event(
             &self,
             _event: &CoreEvent,
+            _session: &mc_proto_common::ProtocolSessionSnapshot,
             _context: &PlayEncodingContext,
         ) -> Result<Vec<Vec<u8>>, ProtocolError> {
             Err(ProtocolError::InvalidPacket(
@@ -765,21 +775,11 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
     let entrypoints_b = plugin_b::in_process_plugin_entrypoints();
 
     let request_a = GameplayRequest::HandleTick {
-        session: GameplaySessionSnapshot {
-            phase: ConnectionPhase::Play,
-            player_id: Some(test_player_id()),
-            entity_id: None,
-            gameplay_profile: GameplayProfileId::new("plugin-a"),
-        },
+        session: gameplay_session("plugin-a", Some(test_player_id())),
         now_ms: 1,
     };
     let request_b = GameplayRequest::HandleTick {
-        session: GameplaySessionSnapshot {
-            phase: ConnectionPhase::Play,
-            player_id: Some(test_player_id()),
-            entity_id: None,
-            gameplay_profile: GameplayProfileId::new("plugin-b"),
-        },
+        session: gameplay_session("plugin-b", Some(test_player_id())),
         now_ms: 2,
     };
 
@@ -805,12 +805,7 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
 fn exported_gameplay_plugins_reject_null_host_api() {
     let entrypoints = plugin_a::in_process_plugin_entrypoints();
     let request = GameplayRequest::HandleTick {
-        session: GameplaySessionSnapshot {
-            phase: ConnectionPhase::Play,
-            player_id: Some(test_player_id()),
-            entity_id: None,
-            gameplay_profile: GameplayProfileId::new("plugin-a"),
-        },
+        session: gameplay_session("plugin-a", Some(test_player_id())),
         now_ms: 3,
     };
     let payload = encode_gameplay_request(&request).expect("gameplay request should encode");
@@ -847,12 +842,7 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     host_api.abi = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
     let entrypoints = plugin_a::in_process_plugin_entrypoints();
     let request = GameplayRequest::HandleTick {
-        session: GameplaySessionSnapshot {
-            phase: ConnectionPhase::Play,
-            player_id: Some(test_player_id()),
-            entity_id: None,
-            gameplay_profile: GameplayProfileId::new("plugin-a"),
-        },
+        session: gameplay_session("plugin-a", Some(test_player_id())),
         now_ms: 4,
     };
     let payload = encode_gameplay_request(&request).expect("gameplay request should encode");
@@ -876,7 +866,7 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
-        "gameplay host api ABI 2.0 did not match plugin ABI 3.4"
+        "gameplay host api ABI 2.0 did not match plugin ABI 3.5"
     );
 }
 
@@ -986,7 +976,7 @@ fn exported_admin_ui_plugins_reject_mismatched_host_api_abi() {
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
-        "admin-ui host api ABI 2.0 did not match plugin ABI 3.4"
+        "admin-ui host api ABI 2.0 did not match plugin ABI 3.5"
     );
 }
 

@@ -7,5 +7,5 @@ mod status;
 #[doc(hidden)]
 pub mod __version_support;
 
-pub use self::adapter::{JavaEditionAdapter, JavaEditionProfile};
+pub use self::adapter::{JavaEditionAdapter, JavaEditionProfile, JavaProtocolSessionStore};
 pub use self::status::format_text_component;
