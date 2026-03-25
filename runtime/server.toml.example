@@ -12,8 +12,8 @@ storage_profile = "je-anvil-1_7_10"
 
 [static.plugins]
 plugins_dir = "plugins"
-plugin_abi_min = "3.0"
-plugin_abi_max = "3.0"
+plugin_abi_min = "3.5"
+plugin_abi_max = "3.5"
 
 [static.admin.grpc]
 enabled = false
