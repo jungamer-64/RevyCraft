@@ -10,8 +10,8 @@ use base64::Engine;
 use bedrockrs_proto::V924;
 use bedrockrs_proto::codec::{decode_packets, encode_packets};
 use bedrockrs_proto::v662::enums::{
-    ContainerEnumName, ComplexInventoryTransactionType, InputMode,
-    ItemUseInventoryTransactionType, NewInteractionModel, TextProcessingEventOrigin,
+    ComplexInventoryTransactionType, ContainerEnumName, InputMode, ItemUseInventoryTransactionType,
+    NewInteractionModel, TextProcessingEventOrigin,
 };
 use bedrockrs_proto::v662::packets::{
     ItemStackRequestPacket, LegacySetItemSlotsEntry, LoginPacket, RequestNetworkSettingsPacket,
@@ -20,22 +20,21 @@ use bedrockrs_proto::v662::packets::{
 use bedrockrs_proto::v662::types::{NetworkBlockPosition, NetworkItemStackDescriptor};
 use bedrockrs_proto::v712::enums::ItemStackRequestActionType;
 use bedrockrs_proto::v712::types::{
-    ItemStackRequestSlotInfo, PackedItemUseLegacyInventoryTransaction, PredictedResult,
-    TriggerType,
+    ItemStackRequestSlotInfo, PackedItemUseLegacyInventoryTransaction, PredictedResult, TriggerType,
 };
 use bedrockrs_proto::v729::types::FullContainerName;
-use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
 use bedrockrs_proto::v766::packets::ClientPlayMode;
-use bedrockrs_proto::v766::packets::player_auth_input_packet::{
-    PlayerAuthInputFlags,
-};
+use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
+use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use mc_core::{
     BlockPos, BlockState, ChunkColumn, ChunkPos, CoreCommand, CoreEvent, EntityId,
     InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerInventory,
 };
-use mc_proto_common::{HandshakeProbe, LoginRequest, PlayEncodingContext, PlaySyncAdapter, SessionAdapter};
+use mc_proto_common::{
+    HandshakeProbe, LoginRequest, PlayEncodingContext, PlaySyncAdapter, SessionAdapter,
+};
 use serde_json::json;
 use std::io::Cursor;
 use uuid::Uuid;
@@ -174,10 +173,15 @@ fn encodes_chunk_and_block_packets() {
     chunk.set_block(1, 4, 2, BlockState::bricks());
 
     let frames = adapter
-        .encode_play_event(&CoreEvent::ChunkBatch { chunks: vec![chunk] }, &play_context())
+        .encode_play_event(
+            &CoreEvent::ChunkBatch {
+                chunks: vec![chunk],
+            },
+            &play_context(),
+        )
         .expect("chunk batch should encode");
-    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
-        .expect("chunk packet should decode");
+    let packets =
+        decode_packets::<V924>(frames[0].clone(), None, None).expect("chunk packet should decode");
     match packets.as_slice() {
         [V924::LevelChunkPacket(packet)] => {
             assert_eq!(packet.chunk_position.x, 0);
@@ -196,14 +200,17 @@ fn encodes_chunk_and_block_packets() {
             &play_context(),
         )
         .expect("block change should encode");
-    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
-        .expect("block packet should decode");
+    let packets =
+        decode_packets::<V924>(frames[0].clone(), None, None).expect("block packet should decode");
     match packets.as_slice() {
         [V924::UpdateBlockPacket(packet)] => {
             assert_eq!(packet.block_position.x, 2);
             assert_eq!(packet.block_position.y, 3);
             assert_eq!(packet.block_position.z, 4);
-            assert_eq!(packet.block_runtime_id, block_runtime_id(&BlockState::glass()));
+            assert_eq!(
+                packet.block_runtime_id,
+                block_runtime_id(&BlockState::glass())
+            );
         }
         other => panic!("unexpected block packets: {other:?}"),
     }
@@ -280,8 +287,8 @@ fn encodes_inventory_and_container_packets() {
             &play_context(),
         )
         .expect("selected hotbar slot should encode");
-    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
-        .expect("hotbar packet should decode");
+    let packets =
+        decode_packets::<V924>(frames[0].clone(), None, None).expect("hotbar packet should decode");
     assert!(matches!(
         packets.as_slice(),
         [V924::PlayerHotbarPacket(packet)] if packet.selected_slot == 4
@@ -297,8 +304,8 @@ fn encodes_inventory_and_container_packets() {
             &play_context(),
         )
         .expect("container open should encode");
-    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
-        .expect("open packet should decode");
+    let packets =
+        decode_packets::<V924>(frames[0].clone(), None, None).expect("open packet should decode");
     assert!(matches!(
         packets.as_slice(),
         [V924::ContainerOpenPacket(packet)]
@@ -312,8 +319,8 @@ fn encodes_inventory_and_container_packets() {
             &play_context(),
         )
         .expect("container close should encode");
-    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
-        .expect("close packet should decode");
+    let packets =
+        decode_packets::<V924>(frames[0].clone(), None, None).expect("close packet should decode");
     assert!(matches!(
         packets.as_slice(),
         [V924::ContainerClosePacket(packet)] if packet.server_initiated_close
@@ -340,7 +347,10 @@ fn encodes_inventory_and_container_packets() {
 #[test]
 fn decodes_legacy_inventory_transaction_item_use() {
     let adapter = Bedrock924Adapter::new();
-    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"bedrock-legacy-item-use"));
+    let player_id = PlayerId(Uuid::new_v3(
+        &Uuid::NAMESPACE_OID,
+        b"bedrock-legacy-item-use",
+    ));
     let frame = encode_legacy_item_use_transaction(sample_item_use_transaction(
         ItemUseInventoryTransactionType::Place,
         BlockPos::new(2, 3, 4),
@@ -449,7 +459,10 @@ fn decodes_item_stack_request_take_action() {
 
 fn play_context() -> PlayEncodingContext {
     PlayEncodingContext {
-        player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"bedrock-encode-context")),
+        player_id: PlayerId(Uuid::new_v3(
+            &Uuid::NAMESPACE_OID,
+            b"bedrock-encode-context",
+        )),
         entity_id: EntityId(1),
     }
 }

@@ -1,10 +1,11 @@
-use crate::codec::encode_v924;
 use crate::chunk::level_chunk_packet;
+use crate::codec::encode_v924;
 use crate::inventory::{
     encode_container_closed_packets as encode_bedrock_container_closed_packets,
     encode_container_opened_packets as encode_bedrock_container_opened_packets,
     encode_container_property_changed_packets as encode_bedrock_container_property_changed_packets,
-    encode_creative_content_packet, encode_inventory_contents_packets as encode_bedrock_inventory_contents_packets,
+    encode_creative_content_packet,
+    encode_inventory_contents_packets as encode_bedrock_inventory_contents_packets,
     encode_inventory_slot_changed_packets as encode_bedrock_inventory_slot_changed_packets,
     encode_selected_hotbar_slot_changed_packets as encode_bedrock_selected_hotbar_slot_changed_packets,
 };
@@ -264,7 +265,9 @@ pub(crate) fn encode_container_opened_packets(
     encode_bedrock_container_opened_packets(window_id, container)
 }
 
-pub(crate) fn encode_container_closed_packets(window_id: u8) -> Result<Vec<Vec<u8>>, ProtocolError> {
+pub(crate) fn encode_container_closed_packets(
+    window_id: u8,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
     encode_bedrock_container_closed_packets(window_id)
 }
 

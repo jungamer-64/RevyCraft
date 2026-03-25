@@ -45,9 +45,10 @@ impl RuntimeServer {
 }
 
 fn rewrite_bedrock_inventory_command(session: &SessionState, command: CoreCommand) -> CoreCommand {
-    let is_bedrock = session.session_capabilities.as_ref().is_some_and(|capabilities| {
-        capabilities.protocol.contains(&ProtocolCapability::Bedrock)
-    });
+    let is_bedrock = session
+        .session_capabilities
+        .as_ref()
+        .is_some_and(|capabilities| capabilities.protocol.contains(&ProtocolCapability::Bedrock));
     if !is_bedrock {
         return command;
     }

@@ -1,10 +1,12 @@
 use super::*;
 use crate::runtime::RunningServer;
-use binary_util::interfaces::{Reader, Writer};
 use bedrockrs_proto::ProtoVersion;
 use bedrockrs_proto::V924;
 use bedrockrs_proto::compression::Compression as BedrockCompression;
+use binary_util::interfaces::{Reader, Writer};
+use rak_rs::client::DEFAULT_MTU;
 use rak_rs::connection::queue::{RecvQueue, SendQueue};
+use rak_rs::protocol::Magic;
 use rak_rs::protocol::frame::FramePacket;
 use rak_rs::protocol::packet::RakPacket;
 use rak_rs::protocol::packet::offline::{
@@ -16,8 +18,6 @@ use rak_rs::protocol::packet::online::{
     NewConnection, OnlinePacket,
 };
 use rak_rs::protocol::reliability::Reliability as RakReliability;
-use rak_rs::client::DEFAULT_MTU;
-use rak_rs::protocol::Magic;
 use rsa::rand_core::{OsRng, RngCore};
 use std::sync::Arc;
 
@@ -313,9 +313,7 @@ impl BedrockTestClient {
 
         let session_reply = Self::recv_offline_packet(&socket).await?;
         let OfflinePacket::SessionInfoReply(SessionInfoReply {
-            mtu_size,
-            security,
-            ..
+            mtu_size, security, ..
         }) = session_reply
         else {
             return Err(RuntimeError::Config(
@@ -355,9 +353,12 @@ impl BedrockTestClient {
     }
 
     pub(crate) async fn login(&mut self, username: &str) -> Result<(), RuntimeError> {
-        self.send_bedrock_payload(&bedrock_transport_payload(&bedrock_network_settings_request()?))
-            .await?;
-        let packet = read_until_bedrock_packet(self, TestBedrockPacket::NetworkSettings, 16).await?;
+        self.send_bedrock_payload(&bedrock_transport_payload(
+            &bedrock_network_settings_request()?,
+        ))
+        .await?;
+        let packet =
+            read_until_bedrock_packet(self, TestBedrockPacket::NetworkSettings, 16).await?;
         let V924::NetworkSettingsPacket(settings) = packet else {
             unreachable!("network settings packet classification should match");
         };
@@ -374,6 +375,36 @@ impl BedrockTestClient {
         Ok(())
     }
 
+    pub(crate) async fn send_play_payload(&mut self, payload: &[u8]) -> Result<(), RuntimeError> {
+        let payload = if let Some(compression) = self.compression.as_ref() {
+            compression
+                .compress(payload.to_vec())
+                .map_err(|error| RuntimeError::Config(error.to_string()))?
+        } else {
+            payload.to_vec()
+        };
+        self.send_bedrock_payload(&bedrock_transport_payload(&payload))
+            .await
+    }
+
+    pub(crate) async fn place_block(
+        &mut self,
+        position: mc_core::BlockPos,
+        face: i32,
+    ) -> Result<(), RuntimeError> {
+        self.send_play_payload(&bedrock_place_block_payload(position, face)?)
+            .await
+    }
+
+    pub(crate) async fn break_block(
+        &mut self,
+        position: mc_core::BlockPos,
+        face: i32,
+    ) -> Result<(), RuntimeError> {
+        self.send_play_payload(&bedrock_break_block_payload(position, face)?)
+            .await
+    }
+
     async fn perform_mtu_discovery(
         socket: &Arc<tokio::net::UdpSocket>,
     ) -> Result<u16, RuntimeError> {
@@ -388,7 +419,12 @@ impl BedrockTestClient {
             )
             .await?;
 
-            let response = match tokio::time::timeout(Duration::from_millis(500), Self::recv_udp(socket)).await {
+            let response = match tokio::time::timeout(
+                Duration::from_millis(500),
+                Self::recv_udp(socket),
+            )
+            .await
+            {
                 Ok(result) => result?,
                 Err(_) => continue,
             };
@@ -515,14 +551,17 @@ impl BedrockTestClient {
 
     async fn recv_raknet_payload(&mut self) -> Result<Vec<u8>, RuntimeError> {
         loop {
-            let payload = tokio::time::timeout(Duration::from_secs(2), Self::recv_udp(&self.socket))
-                .await
-                .map_err(|_| RuntimeError::Config("timed out waiting for RakNet payload".to_string()))??;
+            let payload =
+                tokio::time::timeout(Duration::from_secs(2), Self::recv_udp(&self.socket))
+                    .await
+                    .map_err(|_| {
+                        RuntimeError::Config("timed out waiting for RakNet payload".to_string())
+                    })??;
 
             match payload.first().copied() {
                 Some(0x80..=0x8d) => {
-                    let frame =
-                        FramePacket::read_from_slice(&payload).map_err(|error| RuntimeError::Config(error.to_string()))?;
+                    let frame = FramePacket::read_from_slice(&payload)
+                        .map_err(|error| RuntimeError::Config(error.to_string()))?;
                     if self.recv_queue.insert(frame).is_err() {
                         continue;
                     }
@@ -540,7 +579,9 @@ impl BedrockTestClient {
     ) -> Result<OfflinePacket, RuntimeError> {
         let payload = tokio::time::timeout(Duration::from_secs(2), Self::recv_udp(socket))
             .await
-            .map_err(|_| RuntimeError::Config("timed out waiting for offline RakNet packet".to_string()))??;
+            .map_err(|_| {
+                RuntimeError::Config("timed out waiting for offline RakNet packet".to_string())
+            })??;
         OfflinePacket::read_from_slice(&payload)
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }

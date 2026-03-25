@@ -159,7 +159,9 @@ pub(crate) fn encode_container_opened_packets(
     )])?])
 }
 
-pub(crate) fn encode_container_closed_packets(window_id: u8) -> Result<Vec<Vec<u8>>, ProtocolError> {
+pub(crate) fn encode_container_closed_packets(
+    window_id: u8,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
     if window_id == 0 {
         return Ok(Vec::new());
     }
@@ -232,7 +234,11 @@ pub(crate) fn translate_take_action(
     source: &ItemStackRequestSlotInfo<V924>,
     destination: &ItemStackRequestSlotInfo<V924>,
     amount: i8,
-) -> Option<(InventoryTransactionContext, InventoryClickTarget, InventoryClickButton)> {
+) -> Option<(
+    InventoryTransactionContext,
+    InventoryClickTarget,
+    InventoryClickButton,
+)> {
     let source = decode_request_slot(source)?;
     let destination = decode_request_slot(destination)?;
     match (source, destination) {
@@ -250,7 +256,11 @@ pub(crate) fn translate_place_action(
     source: &ItemStackRequestSlotInfo<V924>,
     destination: &ItemStackRequestSlotInfo<V924>,
     amount: i8,
-) -> Option<(InventoryTransactionContext, InventoryClickTarget, InventoryClickButton)> {
+) -> Option<(
+    InventoryTransactionContext,
+    InventoryClickTarget,
+    InventoryClickButton,
+)> {
     let source = decode_request_slot(source)?;
     let destination = decode_request_slot(destination)?;
     match (source, destination) {
@@ -267,7 +277,11 @@ pub(crate) fn translate_swap_action(
     transaction: InventoryTransactionContext,
     source: &ItemStackRequestSlotInfo<V924>,
     destination: &ItemStackRequestSlotInfo<V924>,
-) -> Option<(InventoryTransactionContext, InventoryClickTarget, InventoryClickButton)> {
+) -> Option<(
+    InventoryTransactionContext,
+    InventoryClickTarget,
+    InventoryClickButton,
+)> {
     let source = decode_request_slot(source)?;
     let destination = decode_request_slot(destination)?;
     match (source, destination) {
@@ -285,7 +299,11 @@ pub(crate) fn translate_drop_action(
     transaction: InventoryTransactionContext,
     source: &ItemStackRequestSlotInfo<V924>,
     amount: i8,
-) -> Option<(InventoryTransactionContext, InventoryClickTarget, InventoryClickButton)> {
+) -> Option<(
+    InventoryTransactionContext,
+    InventoryClickTarget,
+    InventoryClickButton,
+)> {
     match decode_request_slot(source)? {
         RequestSlot::Cursor => Some((
             transaction,
@@ -380,7 +398,10 @@ fn active_container_slot_location(
         )),
         InventoryContainer::CraftingTable => match slot {
             0 => Ok((0, ContainerEnumName::CraftingOutputPreviewContainer)),
-            1..=9 => Ok((u32::from(slot - 1), ContainerEnumName::CraftingInputContainer)),
+            1..=9 => Ok((
+                u32::from(slot - 1),
+                ContainerEnumName::CraftingInputContainer,
+            )),
             _ => Err(ProtocolError::Plugin(format!(
                 "unsupported crafting-table slot for bedrock encoding: {slot}"
             ))),
@@ -492,14 +513,14 @@ fn build_item_instance_descriptor_bytes(
     Ok(bytes)
 }
 
-fn decode_descriptor(
-    bytes: Vec<u8>,
-) -> Result<NetworkItemStackDescriptor, ProtocolError> {
+fn decode_descriptor(bytes: Vec<u8>) -> Result<NetworkItemStackDescriptor, ProtocolError> {
     NetworkItemStackDescriptor::deserialize(&mut Cursor::new(bytes))
         .map_err(|error| ProtocolError::Plugin(error.to_string()))
 }
 
-fn decode_instance_descriptor(bytes: Vec<u8>) -> Result<NetworkItemInstanceDescriptor, ProtocolError> {
+fn decode_instance_descriptor(
+    bytes: Vec<u8>,
+) -> Result<NetworkItemInstanceDescriptor, ProtocolError> {
     NetworkItemInstanceDescriptor::deserialize(&mut Cursor::new(bytes))
         .map_err(|error| ProtocolError::Plugin(error.to_string()))
 }
@@ -535,11 +556,13 @@ fn decode_container_enum_name(
 }
 
 fn bedrock_item_encoding(stack: &ItemStack) -> Result<BedrockItemEncoding, ProtocolError> {
-    let block_runtime_id = mc_core::catalog::placeable_block_state_from_item_key(stack.key.as_str())
-        .map(|block| {
-            i32::try_from(block_runtime_id(&block)).expect("bedrock block runtime id should fit into i32")
-        })
-        .unwrap_or(EMPTY_BLOCK_RUNTIME_ID);
+    let block_runtime_id =
+        mc_core::catalog::placeable_block_state_from_item_key(stack.key.as_str())
+            .map(|block| {
+                i32::try_from(block_runtime_id(&block))
+                    .expect("bedrock block runtime id should fit into i32")
+            })
+            .unwrap_or(EMPTY_BLOCK_RUNTIME_ID);
     let item_id = match stack.key.as_str() {
         "minecraft:stone" => 1,
         "minecraft:grass_block" => 2,

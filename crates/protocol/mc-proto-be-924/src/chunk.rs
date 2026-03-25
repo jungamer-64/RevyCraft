@@ -46,9 +46,9 @@ fn encode_chunk_payload(chunk: &ChunkColumn) -> Result<Vec<u8>, ProtocolError> {
         write_subchunk(
             &mut bytes,
             i8::try_from(section_y).expect("section index should fit into i8"),
-            chunk.sections.get(
-                &i32::try_from(section_y).expect("section index should fit into i32"),
-            ),
+            chunk
+                .sections
+                .get(&i32::try_from(section_y).expect("section index should fit into i32")),
         )?;
     }
     write_biomes(&mut bytes, chunk);
@@ -58,7 +58,8 @@ fn encode_chunk_payload(chunk: &ChunkColumn) -> Result<Vec<u8>, ProtocolError> {
 }
 
 fn encoded_subchunk_count(chunk: &ChunkColumn) -> usize {
-    chunk.sections
+    chunk
+        .sections
         .keys()
         .next_back()
         .and_then(|highest| usize::try_from(*highest + 1).ok())

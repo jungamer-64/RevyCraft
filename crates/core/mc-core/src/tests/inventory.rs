@@ -387,11 +387,10 @@ fn bedrock_authoritative_click_accepts_without_clicked_item_echo() {
         Some(("minecraft:oak_log", 1)),
     );
     assert_eq!(
-        count_player_events(
-            &events,
-            session.player,
-            |event| matches!(event, CoreEvent::InventoryContents { .. }),
-        ),
+        count_player_events(&events, session.player, |event| matches!(
+            event,
+            CoreEvent::InventoryContents { .. }
+        ),),
         0,
     );
 }

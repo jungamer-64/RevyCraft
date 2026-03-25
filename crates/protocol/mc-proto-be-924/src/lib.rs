@@ -1,6 +1,6 @@
 #![allow(clippy::multiple_crate_versions)]
-mod codec;
 mod chunk;
+mod codec;
 mod decoding;
 mod encoding;
 mod inventory;

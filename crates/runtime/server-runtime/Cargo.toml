@@ -35,6 +35,7 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+bedrockrs_proto_core.workspace = true
 mc-plugin-auth-bedrock-offline = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-offline", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-auth-bedrock-xbl = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-xbl", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline", features = ["disable-exported-symbols", "in-process-testing"] }
@@ -63,6 +64,7 @@ base64.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 toml.workspace = true
+vek.workspace = true
 
 [lints]
 workspace = true

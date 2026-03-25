@@ -101,8 +101,8 @@ impl ServerCore {
 
         let clicked_slot_stack =
             resolved_slot.and_then(|slot| after_contents.get_slot(slot).cloned());
-        let bedrock_authoritative = session
-            .is_some_and(|session| session.protocol.contains(&ProtocolCapability::Bedrock));
+        let bedrock_authoritative =
+            session.is_some_and(|session| session.protocol.contains(&ProtocolCapability::Bedrock));
         let accepted = if bedrock_authoritative {
             applied
         } else {

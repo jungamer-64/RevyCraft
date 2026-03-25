@@ -56,9 +56,12 @@ impl RuntimeServer {
                     accepted,
                 } = event
                     && !accepted
-                    && !session.session_capabilities.as_ref().is_some_and(|capabilities| {
-                        capabilities.protocol.contains(&ProtocolCapability::Bedrock)
-                    })
+                    && !session
+                        .session_capabilities
+                        .as_ref()
+                        .is_some_and(|capabilities| {
+                            capabilities.protocol.contains(&ProtocolCapability::Bedrock)
+                        })
                 {
                     session.pending_rejected_inventory_transaction = Some(*transaction);
                 }

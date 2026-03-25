@@ -200,10 +200,11 @@ fn decode_inventory_transaction_frame(
 
     let _raw_id = <i32 as ProtoCodecVAR>::deserialize(&mut packet_cursor)
         .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
-    let _: Vec<bedrockrs_proto::v662::packets::LegacySetItemSlotsEntry> = <Vec<
-        bedrockrs_proto::v662::packets::LegacySetItemSlotsEntry,
-    > as ProtoCodec>::deserialize(&mut packet_cursor)
-    .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
+    let _: Vec<bedrockrs_proto::v662::packets::LegacySetItemSlotsEntry> =
+        <Vec<bedrockrs_proto::v662::packets::LegacySetItemSlotsEntry> as ProtoCodec>::deserialize(
+            &mut packet_cursor,
+        )
+        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
     let transaction_type = ComplexInventoryTransactionType::deserialize(&mut packet_cursor)
         .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
     if !matches!(
@@ -228,7 +229,11 @@ fn decode_item_stack_request_packet(
     let Some(request) = requests.first() else {
         return Ok(None);
     };
-    decode_request_actions(player_id, request_transaction(request.client_request_id), &request.actions)
+    decode_request_actions(
+        player_id,
+        request_transaction(request.client_request_id),
+        &request.actions,
+    )
 }
 
 fn decode_auth_input_stack_request(
@@ -242,7 +247,11 @@ fn decode_auth_input_stack_request(
         .iter()
         .map(|entry| entry.action_type.clone())
         .collect::<Vec<_>>();
-    decode_request_actions(player_id, request_transaction(request.client_request_id), &actions)
+    decode_request_actions(
+        player_id,
+        request_transaction(request.client_request_id),
+        &actions,
+    )
 }
 
 fn decode_request_actions(
@@ -268,18 +277,18 @@ fn decode_request_actions(
             source,
             destination,
         } => translate_swap_action(transaction, source, destination),
-        ItemStackRequestActionType::Drop {
-            amount,
-            source,
-            ..
-        } => translate_drop_action(transaction, source, *amount),
+        ItemStackRequestActionType::Drop { amount, source, .. } => {
+            translate_drop_action(transaction, source, *amount)
+        }
         _ => None,
     };
-    Ok(translated.map(|(transaction, target, button)| CoreCommand::InventoryClick {
-        player_id,
-        transaction,
-        target,
-        button,
-        clicked_item: None,
-    }))
+    Ok(translated.map(
+        |(transaction, target, button)| CoreCommand::InventoryClick {
+            player_id,
+            transaction,
+            target,
+            button,
+            clicked_item: None,
+        },
+    ))
 }

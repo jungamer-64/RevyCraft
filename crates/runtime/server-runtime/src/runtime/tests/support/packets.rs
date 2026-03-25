@@ -1,12 +1,25 @@
 use super::*;
 use base64::Engine;
-use bedrockrs_proto::info::RAKNET_GAMEPACKET_ID;
 use bedrockrs_proto::V924;
 use bedrockrs_proto::codec::{decode_packets, encode_packets};
 use bedrockrs_proto::compression::Compression as BedrockCompression;
+use bedrockrs_proto::info::RAKNET_GAMEPACKET_ID;
+use bedrockrs_proto::v662::enums::{
+    InputMode, ItemUseInventoryTransactionType, NewInteractionModel,
+};
 use bedrockrs_proto::v662::packets::{LoginPacket, RequestNetworkSettingsPacket};
+use bedrockrs_proto::v662::types::{NetworkBlockPosition, NetworkItemStackDescriptor};
+use bedrockrs_proto::v712::types::{
+    PackedItemUseLegacyInventoryTransaction, PredictedResult, TriggerType,
+};
+use bedrockrs_proto::v766::packets::ClientPlayMode;
+use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
+use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
+use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use mc_proto_be_924::BE_924_PROTOCOL_NUMBER;
 use serde_json::json;
+use std::io::Cursor;
+use vek::{Vec2, Vec3};
 
 pub(crate) fn encode_handshake(
     protocol_version: i32,
@@ -269,9 +282,11 @@ pub(crate) enum TestBedrockPacket {
 
 pub(crate) fn bedrock_network_settings_request() -> Result<Vec<u8>, RuntimeError> {
     encode_packets(
-        &[V924::RequestNetworkSettingsPacket(RequestNetworkSettingsPacket {
-            client_network_version: BE_924_PROTOCOL_NUMBER,
-        })],
+        &[V924::RequestNetworkSettingsPacket(
+            RequestNetworkSettingsPacket {
+                client_network_version: BE_924_PROTOCOL_NUMBER,
+            },
+        )],
         None,
         None,
     )
@@ -303,6 +318,20 @@ pub(crate) fn bedrock_login_packet(
         None,
     )
     .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+pub(crate) fn bedrock_place_block_payload(
+    position: mc_core::BlockPos,
+    face: i32,
+) -> Result<Vec<u8>, RuntimeError> {
+    bedrock_block_interaction_payload(ItemUseInventoryTransactionType::Place, position, face)
+}
+
+pub(crate) fn bedrock_break_block_payload(
+    position: mc_core::BlockPos,
+    face: i32,
+) -> Result<Vec<u8>, RuntimeError> {
+    bedrock_block_interaction_payload(ItemUseInventoryTransactionType::Destroy, position, face)
 }
 
 pub(crate) fn decode_bedrock_packets(
@@ -396,6 +425,20 @@ pub(crate) fn block_change_from_packet_1_8(
     Ok((position.x, position.y, position.z, block_state))
 }
 
+pub(crate) fn block_change_from_packet_1_12(
+    packet: &[u8],
+) -> Result<(i32, i32, i32, i32), RuntimeError> {
+    let mut reader = PacketReader::new(packet);
+    if reader.read_varint()? != 0x0b {
+        return Err(RuntimeError::Config(
+            "expected 1.12.2 block change packet".to_string(),
+        ));
+    }
+    let position = unpack_block_position(reader.read_i64()?);
+    let block_state = reader.read_varint()?;
+    Ok((position.x, position.y, position.z, block_state))
+}
+
 pub(crate) fn player_abilities_flags(packet: &[u8]) -> Result<u8, RuntimeError> {
     let mut reader = PacketReader::new(packet);
     if reader.read_varint()? != 0x39 {
@@ -409,6 +452,87 @@ pub(crate) fn player_abilities_flags(packet: &[u8]) -> Result<u8, RuntimeError> 
 pub(crate) fn packet_id(frame: &[u8]) -> i32 {
     let mut reader = PacketReader::new(frame);
     reader.read_varint().expect("packet id should decode")
+}
+
+fn bedrock_block_interaction_payload(
+    action_type: ItemUseInventoryTransactionType,
+    position: mc_core::BlockPos,
+    face: i32,
+) -> Result<Vec<u8>, RuntimeError> {
+    encode_bedrock_player_auth_input(PlayerAuthInputPacket {
+        player_rotation: Vec2::new(0.0, 0.0),
+        player_position: Vec3::new(0.0, 0.0, 0.0),
+        move_vector: Vec3::new(0.0, 0.0, 0.0),
+        player_head_rotation: 0.0,
+        input_data: PlayerAuthInputFlags::PerformItemInteraction as u128,
+        input_mode: InputMode::Mouse,
+        play_mode: ClientPlayMode::Normal,
+        new_interaction_model: NewInteractionModel::Crosshair,
+        interact_rotation: Vec3::new(0.0, 0.0, 0.0),
+        client_tick: 0,
+        velocity: Vec3::new(0.0, 0.0, 0.0),
+        item_use_transaction: Some(PackedItemUseLegacyInventoryTransaction {
+            id: 0,
+            container_slots: None,
+            action: bedrockrs_proto::v662::types::InventoryTransaction { action: Vec::new() },
+            action_type,
+            trigger_type: TriggerType::PlayerInput,
+            position: NetworkBlockPosition {
+                x: position.x,
+                y: u32::try_from(position.y)
+                    .expect("test bedrock block interaction y should fit into u32"),
+                z: position.z,
+            },
+            face,
+            slot: 0,
+            item: empty_bedrock_item_stack_descriptor()?,
+            from_position: Vec3::new(0.0, 0.0, 0.0),
+            click_position: Vec3::new(0.5, 0.5, 0.5),
+            target_block_id: 0,
+            predicted_result: PredictedResult::Success,
+        }),
+        item_stack_request: None,
+        player_block_actions: None,
+        client_predicted_vehicle: None,
+        analog_move_vector: Vec2::new(0.0, 0.0),
+        camera_orientation: Vec3::new(0.0, 0.0, 0.0),
+        raw_move_vector: Vec2::new(0.0, 0.0),
+    })
+}
+
+fn empty_bedrock_item_stack_descriptor() -> Result<NetworkItemStackDescriptor, RuntimeError> {
+    let mut bytes = Vec::new();
+    <i32 as ProtoCodecVAR>::serialize(&0, &mut bytes)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    NetworkItemStackDescriptor::deserialize(&mut Cursor::new(bytes))
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+fn encode_bedrock_player_auth_input(
+    packet: PlayerAuthInputPacket<V924>,
+) -> Result<Vec<u8>, RuntimeError> {
+    let mut body = Vec::new();
+    PacketHeader {
+        packet_id: 144,
+        sender_sub_client_id: 0,
+        target_sub_client_id: 0,
+    }
+    .serialize(&mut body)
+    .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    packet
+        .serialize(&mut body)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    <Vec2<f32> as ProtoCodecLE>::serialize(&packet.raw_move_vector, &mut body)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+
+    let mut frame = Vec::new();
+    <u32 as ProtoCodecVAR>::serialize(
+        &u32::try_from(body.len()).expect("test bedrock payload length should fit into u32"),
+        &mut frame,
+    )
+    .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    frame.extend_from_slice(&body);
+    Ok(frame)
 }
 
 pub(crate) fn login_encryption_response(

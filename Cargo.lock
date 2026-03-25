@@ -3242,6 +3242,7 @@ dependencies = [
  "base64",
  "bedrockrs_network",
  "bedrockrs_proto",
+ "bedrockrs_proto_core",
  "binary-util",
  "bytes",
  "libloading",
@@ -3285,6 +3286,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "vek",
 ]
 
 [[package]]
