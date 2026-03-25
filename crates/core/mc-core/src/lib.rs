@@ -4,7 +4,6 @@ pub mod inventory;
 
 pub(crate) mod core;
 pub(crate) mod events;
-pub(crate) mod gameplay;
 pub(crate) mod player;
 #[cfg(test)]
 mod tests;
@@ -14,14 +13,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
+pub use self::core::transaction::GameplayTransaction;
 pub use self::core::{ClientView, CoreConfig, ServerCore};
 pub use self::events::{
-    CoreCommand, CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget,
-    InventoryClickValidation, InventoryTransactionContext, PlayerSummary, TargetedEvent,
-};
-pub use self::gameplay::{
-    CanonicalGameplayPolicy, GameplayEffect, GameplayJoinEffect, GameplayMutation,
-    GameplayPolicyResolver, GameplayQuery, ReadonlyGameplayPolicy,
+    CoreCommand, CoreEvent, EventTarget, GameplayCommand, InventoryClickButton,
+    InventoryClickTarget, InventoryClickValidation, InventoryTransactionContext, PlayerSummary,
+    TargetedEvent,
 };
 pub use self::inventory::{
     InventoryContainer, InventorySlot, InventoryWindowContents, ItemKey, ItemStack, PlayerInventory,
@@ -33,8 +30,6 @@ pub use self::world::{
     WorldSnapshot, expand_block_index,
 };
 
-#[cfg(test)]
-pub(crate) use self::gameplay::canonical_session_capabilities;
 #[cfg(test)]
 pub(crate) use self::world::flatten_block_index;
 

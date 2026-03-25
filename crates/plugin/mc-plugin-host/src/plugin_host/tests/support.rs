@@ -88,41 +88,10 @@ pub(super) fn protocol_reload_session(
     }
 }
 
-pub(super) struct StubGameplayQuery {
-    pub(super) level_name: &'static str,
-}
-
-impl GameplayQuery for StubGameplayQuery {
-    fn world_meta(&self) -> WorldMeta {
-        WorldMeta {
-            level_name: self.level_name.to_string(),
-            seed: 0,
-            spawn: BlockPos::new(0, 64, 0),
-            dimension: DimensionId::Overworld,
-            age: 0,
-            time: 0,
-            level_type: "FLAT".to_string(),
-            game_mode: 0,
-            difficulty: 1,
-            max_players: 20,
-        }
-    }
-
-    fn player_snapshot(&self, _player_id: PlayerId) -> Option<mc_core::PlayerSnapshot> {
-        None
-    }
-
-    fn block_state(&self, _position: BlockPos) -> BlockState {
-        BlockState::air()
-    }
-
-    fn block_entity(&self, _position: BlockPos) -> Option<mc_core::BlockEntityState> {
-        None
-    }
-
-    fn can_edit_block(&self, _player_id: PlayerId, _position: BlockPos) -> bool {
-        false
-    }
+pub(super) fn stub_server_core(level_name: &str) -> ServerCore {
+    let mut config = CoreConfig::default();
+    config.level_name = level_name.to_string();
+    ServerCore::new(config)
 }
 
 pub(super) fn je_handshake_frame(protocol_version: i32) -> Vec<u8> {

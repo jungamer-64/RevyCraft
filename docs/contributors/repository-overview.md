@@ -21,7 +21,7 @@
 | `crates/config/server-config` | `runtime/server.toml` の load / normalize / validate を担う |
 | `crates/runtime/server-runtime` | listener、generation、session、status、reload、admin control plane を持つ orchestration 層 |
 | `crates/core/mc-core` | protocol 非依存の semantic state machine |
-| `crates/plugin/mc-plugin-api` | plugin ABI `3.5`、manifest、host API、typed codec |
+| `crates/plugin/mc-plugin-api` | plugin ABI `4.0`、manifest、host API、typed codec |
 | `crates/plugin/mc-plugin-host` | packaged plugin discovery、activation、selection、reload、quarantine |
 | `crates/plugin/mc-plugin-sdk-rust` | Rust plugin authoring 向けの trait、manifest helper、macro |
 | `crates/protocol/mc-proto-*` | edition / version ごとの codec と adapter 実装 |
@@ -80,7 +80,7 @@
 
 - runtime / plugin host の責務境界
   [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)
-- `CoreCommand` / `GameplayEffect` / `CoreEvent` の流れ
+- `CoreCommand` / `GameplayCommand` / `GameplayTransaction` / `CoreEvent` の流れ
   [`core-command-event-flow.md`](core-command-event-flow.md)
 - reload の意味論と failure policy
   [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)

@@ -1,17 +1,19 @@
-use super::super::{OnlinePlayer, ServerCore};
+use super::super::PlayerSessionState;
 use super::state::ContainerDescriptor;
 use crate::PlayerId;
 use crate::events::{CoreEvent, EventTarget, InventoryClickTarget, TargetedEvent};
-use crate::inventory::{InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack};
+use crate::inventory::{
+    InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory,
+};
 
 pub(super) fn active_window_container(
-    player: &OnlinePlayer,
+    session: &PlayerSessionState,
     window_id: u8,
 ) -> Option<InventoryContainer> {
     if window_id == 0 {
         Some(InventoryContainer::Player)
     } else {
-        player
+        session
             .active_container
             .as_ref()
             .filter(|window| window.window_id == window_id)
@@ -20,24 +22,20 @@ pub(super) fn active_window_container(
 }
 
 pub(super) fn window_contents(
-    player: &OnlinePlayer,
+    session: &PlayerSessionState,
+    inventory: &PlayerInventory,
     container: InventoryContainer,
 ) -> InventoryWindowContents {
     match container {
-        InventoryContainer::Player => {
-            InventoryWindowContents::player(player.snapshot.inventory.clone())
-        }
+        InventoryContainer::Player => InventoryWindowContents::player(inventory.clone()),
         InventoryContainer::CraftingTable
         | InventoryContainer::Chest
-        | InventoryContainer::Furnace => player
+        | InventoryContainer::Furnace => session
             .active_container
             .as_ref()
-            .map(|window| window.contents(&player.snapshot.inventory))
+            .map(|window| window.contents(inventory))
             .unwrap_or_else(|| {
-                InventoryWindowContents::with_container(
-                    player.snapshot.inventory.clone(),
-                    Vec::new(),
-                )
+                InventoryWindowContents::with_container(inventory.clone(), Vec::new())
             }),
     }
 }
@@ -70,7 +68,7 @@ pub(super) fn container_descriptor(container: InventoryContainer) -> Option<Cont
     }
 }
 
-pub(super) fn inventory_diff_events(
+pub(in crate::core) fn inventory_diff_events(
     window_id: u8,
     container: InventoryContainer,
     player_id: PlayerId,
@@ -94,7 +92,7 @@ pub(super) fn inventory_diff_events(
         .collect()
 }
 
-pub(super) fn property_events(
+pub(in crate::core) fn property_events(
     window_id: u8,
     player_id: PlayerId,
     entries: &[(u8, i16)],
@@ -112,7 +110,7 @@ pub(super) fn property_events(
         .collect()
 }
 
-pub(super) fn property_diff_events(
+pub(in crate::core) fn property_diff_events(
     window_id: u8,
     player_id: PlayerId,
     before: &[(u8, i16)],
@@ -137,53 +135,51 @@ pub(super) fn property_diff_events(
         .collect()
 }
 
-impl ServerCore {
-    pub(super) fn window_resync_events(
-        player_id: PlayerId,
-        window_id: u8,
-        container: InventoryContainer,
-        contents: &InventoryWindowContents,
-        selected_hotbar_slot: u8,
-        cursor: Option<&ItemStack>,
-        slot: Option<InventorySlot>,
-    ) -> Vec<TargetedEvent> {
-        let mut events = vec![TargetedEvent {
-            target: EventTarget::Player(player_id),
-            event: CoreEvent::InventoryContents {
-                window_id,
-                container,
-                contents: contents.clone(),
-            },
-        }];
+pub(in crate::core) fn window_resync_events(
+    player_id: PlayerId,
+    window_id: u8,
+    container: InventoryContainer,
+    contents: &InventoryWindowContents,
+    selected_hotbar_slot: u8,
+    cursor: Option<&ItemStack>,
+    slot: Option<InventorySlot>,
+) -> Vec<TargetedEvent> {
+    let mut events = vec![TargetedEvent {
+        target: EventTarget::Player(player_id),
+        event: CoreEvent::InventoryContents {
+            window_id,
+            container,
+            contents: contents.clone(),
+        },
+    }];
 
-        if let Some(slot) = slot {
-            events.push(TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::InventorySlotChanged {
-                    window_id,
-                    container,
-                    slot,
-                    stack: contents.get_slot(slot).cloned(),
-                },
-            });
-        }
-
-        if container == InventoryContainer::Player {
-            events.push(TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::SelectedHotbarSlotChanged {
-                    slot: selected_hotbar_slot,
-                },
-            });
-        }
+    if let Some(slot) = slot {
         events.push(TargetedEvent {
             target: EventTarget::Player(player_id),
-            event: CoreEvent::CursorChanged {
-                stack: cursor.cloned(),
+            event: CoreEvent::InventorySlotChanged {
+                window_id,
+                container,
+                slot,
+                stack: contents.get_slot(slot).cloned(),
             },
         });
-        events
     }
+
+    if container == InventoryContainer::Player {
+        events.push(TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::SelectedHotbarSlotChanged {
+                slot: selected_hotbar_slot,
+            },
+        });
+    }
+    events.push(TargetedEvent {
+        target: EventTarget::Player(player_id),
+        event: CoreEvent::CursorChanged {
+            stack: cursor.cloned(),
+        },
+    });
+    events
 }
 
 fn visible_slots(container: InventoryContainer) -> impl Iterator<Item = InventorySlot> {

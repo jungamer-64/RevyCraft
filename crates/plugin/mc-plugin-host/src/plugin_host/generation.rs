@@ -2,7 +2,7 @@ use super::{
     AdminRequest, AdminResponse, AdminUiCapabilitySet, AdminUiInput, AdminUiOutput,
     AdminUiPluginInvokeV1Fn, AdminUiProfileId, Arc, AuthCapabilitySet, AuthGenerationHandle,
     AuthMode, AuthProfileId, AuthRequest, AuthResponse, BedrockAuthResult,
-    BedrockListenerDescriptor, ByteSlice, GameplayCapabilitySet, GameplayPluginInvokeV2Fn,
+    BedrockListenerDescriptor, ByteSlice, GameplayCapabilitySet, GameplayPluginInvokeV3Fn,
     GameplayProfileId, GameplayRequest, GameplayResponse, Library, Mutex, OwnedBuffer, PlayerId,
     PluginBuildTag, PluginErrorCode, PluginFreeBufferFn, PluginGenerationId, PluginInvokeFn,
     ProtocolCapabilitySet, ProtocolDescriptor, ProtocolError, ProtocolRequest, ProtocolResponse,
@@ -129,7 +129,7 @@ pub(crate) struct GameplayGeneration {
     pub(crate) capabilities: GameplayCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) invoke: GameplayPluginInvokeV2Fn,
+    pub(crate) invoke: GameplayPluginInvokeV3Fn,
     pub(crate) free_buffer: PluginFreeBufferFn,
     pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
 }

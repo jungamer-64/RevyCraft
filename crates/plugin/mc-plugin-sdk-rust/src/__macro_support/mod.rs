@@ -8,7 +8,7 @@ use mc_plugin_api::codec::auth::{AuthRequest, AuthResponse};
 use mc_plugin_api::codec::gameplay::{GameplayRequest, GameplayResponse};
 use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse};
 use mc_plugin_api::codec::storage::{StorageRequest, StorageResponse};
-use mc_plugin_api::host_api::HostApiTableV1;
+use mc_plugin_api::host_api::{GameplayHostApiV2, HostApiTableV1};
 
 pub mod admin_ui;
 #[doc(hidden)]
@@ -59,7 +59,7 @@ pub fn handle_gameplay_request<P: RustGameplayPlugin>(
 pub fn handle_gameplay_request_with_host_api<P: RustGameplayPlugin>(
     plugin: &P,
     request: GameplayRequest,
-    host_api: Option<HostApiTableV1>,
+    host_api: Option<GameplayHostApiV2>,
 ) -> Result<GameplayResponse, String> {
     gameplay::handle_gameplay_request_with_host_api(plugin, request, host_api)
 }

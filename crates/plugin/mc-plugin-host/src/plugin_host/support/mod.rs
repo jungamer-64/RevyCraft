@@ -8,7 +8,7 @@ mod reload;
 use super::{
     AdminUiCapability, AdminUiDescriptor, AdminUiInput, AdminUiOutput, AdminUiPluginApiV1,
     AdminUiProfileId, Arc, AuthCapability, AuthPluginApiV1, AuthRequest, AuthResponse,
-    BedrockListenerDescriptor, GameplayCapability, GameplayGeneration, GameplayPluginApiV2,
+    BedrockListenerDescriptor, GameplayCapability, GameplayGeneration, GameplayPluginApiV3,
     GameplayProfileId, GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HashMap,
     HashSet, ManagedGameplayPlugin, ManagedProtocolPlugin, OwnedBuffer, PluginAbiVersion,
     PluginErrorCode, PluginFreeBufferFn, PluginKind, PluginManifestV1, ProtocolCapability,

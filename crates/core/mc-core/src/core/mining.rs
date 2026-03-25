@@ -1,88 +1,141 @@
+use super::canonical::{
+    BeginMiningDelta, ClearMiningDelta, CompleteMiningDelta, MiningProgressDelta,
+};
 use super::{ActiveMiningState, ServerCore};
 use crate::catalog;
-use crate::events::{CoreEvent, EventTarget, TargetedEvent};
 use crate::world::{BlockPos, BlockState, Vec3};
 use crate::{EntityId, PlayerId};
 
 impl ServerCore {
-    pub(super) fn apply_begin_mining_mutation(
+    pub(super) fn state_begin_mining(
         &mut self,
         player_id: PlayerId,
         position: BlockPos,
         duration_ms: u64,
         now_ms: u64,
-    ) -> Vec<TargetedEvent> {
-        let Some(player) = self.online_players.get(&player_id) else {
-            return Vec::new();
+    ) -> Option<BeginMiningDelta> {
+        let Some(entity_id) = self.player_entity_id(player_id) else {
+            return None;
         };
-        if player
-            .active_mining
-            .as_ref()
+        if self
+            .entities
+            .player_active_mining
+            .get(&entity_id)
             .is_some_and(|state| state.position == position)
         {
-            return Vec::new();
+            return None;
         }
 
-        let mut events = self.clear_active_mining(player_id);
-        let Some(player) = self.online_players.get_mut(&player_id) else {
-            return events;
+        let cleared = self.state_clear_active_mining(player_id);
+        let Some(inventory) = self.player_inventory(player_id) else {
+            return cleared.map(|cleared| BeginMiningDelta {
+                progress: cleared.progress.clone(),
+                cleared: Some(cleared),
+            });
         };
-        let entity_id = player.entity_id;
-        let tool_context = catalog::tool_spec_for_item(
-            player
-                .snapshot
-                .inventory
-                .selected_hotbar_stack(player.snapshot.selected_hotbar_slot),
+        let Some(selected_hotbar_slot) = self.player_selected_hotbar(player_id) else {
+            return cleared.map(|cleared| BeginMiningDelta {
+                progress: cleared.progress.clone(),
+                cleared: Some(cleared),
+            });
+        };
+        let tool_context =
+            catalog::tool_spec_for_item(inventory.selected_hotbar_stack(selected_hotbar_slot));
+        self.entities.player_active_mining.insert(
+            entity_id,
+            ActiveMiningState {
+                position,
+                started_at_ms: now_ms,
+                duration_ms,
+                last_stage: Some(0),
+                tool_context,
+            },
         );
-        player.active_mining = Some(ActiveMiningState {
-            position,
-            started_at_ms: now_ms,
-            duration_ms,
-            last_stage: Some(0),
-            tool_context,
-        });
-        let _ = player;
-        events.extend(self.block_break_progress_events(entity_id, position, Some(0), duration_ms));
-        events
+        Some(BeginMiningDelta {
+            cleared,
+            progress: MiningProgressDelta {
+                breaker_entity_id: entity_id,
+                position,
+                stage: Some(0),
+                duration_ms,
+            },
+        })
     }
 
-    pub(super) fn clear_active_mining(&mut self, player_id: PlayerId) -> Vec<TargetedEvent> {
-        let Some(player) = self.online_players.get_mut(&player_id) else {
-            return Vec::new();
+    pub(super) fn state_clear_active_mining(
+        &mut self,
+        player_id: PlayerId,
+    ) -> Option<ClearMiningDelta> {
+        let Some(entity_id) = self.player_entity_id(player_id) else {
+            return None;
         };
-        let entity_id = player.entity_id;
-        let Some(state) = player.active_mining.take() else {
-            return Vec::new();
+        let Some(state) = self.entities.player_active_mining.remove(&entity_id) else {
+            return None;
         };
-        let position = state.position;
-        let duration_ms = state.duration_ms;
-        let _ = player;
-        self.block_break_progress_events(entity_id, position, None, duration_ms)
+        Some(ClearMiningDelta {
+            progress: MiningProgressDelta {
+                breaker_entity_id: entity_id,
+                position: state.position,
+                stage: None,
+                duration_ms: state.duration_ms,
+            },
+        })
     }
 
-    pub(super) fn clear_active_mining_at(&mut self, position: BlockPos) -> Vec<TargetedEvent> {
+    pub(super) fn state_clear_active_mining_at(
+        &mut self,
+        position: BlockPos,
+    ) -> Vec<ClearMiningDelta> {
         let player_ids = self
-            .online_players
+            .entities
+            .players_by_player_id
             .iter()
-            .filter_map(|(player_id, player)| {
-                player
-                    .active_mining
-                    .as_ref()
+            .filter_map(|(player_id, entity_id)| {
+                self.entities
+                    .player_active_mining
+                    .get(entity_id)
                     .is_some_and(|state| state.position == position)
                     .then_some(*player_id)
             })
             .collect::<Vec<_>>();
-        let mut events = Vec::new();
-        for player_id in player_ids {
-            events.extend(self.clear_active_mining(player_id));
-        }
-        events
+        player_ids
+            .into_iter()
+            .filter_map(|player_id| self.state_clear_active_mining(player_id))
+            .collect()
     }
 
-    pub(super) fn tick_active_mining(&mut self, now_ms: u64) -> Vec<TargetedEvent> {
+    pub(super) fn state_advance_mining_stage(
+        &mut self,
+        player_id: PlayerId,
+        entity_id: EntityId,
+        position: BlockPos,
+        stage: u8,
+        duration_ms: u64,
+    ) -> Option<MiningProgressDelta> {
+        let current_entity_id = self.player_entity_id(player_id);
+        let Some(state) = self.entities.player_active_mining.get_mut(&entity_id) else {
+            return None;
+        };
+        if current_entity_id != Some(entity_id)
+            || state.position != position
+            || Some(stage) == state.last_stage
+        {
+            return None;
+        }
+        state.last_stage = Some(stage);
+        Some(MiningProgressDelta {
+            breaker_entity_id: entity_id,
+            position,
+            stage: Some(stage),
+            duration_ms,
+        })
+    }
+
+    pub(super) fn collect_active_mining_ops(&self, now_ms: u64) -> Vec<super::canonical::CoreOp> {
         enum Action {
             Stage {
                 player_id: PlayerId,
+                entity_id: EntityId,
                 position: BlockPos,
                 stage: u8,
                 duration_ms: u64,
@@ -94,21 +147,23 @@ impl ServerCore {
         }
 
         let actions = self
-            .online_players
+            .entities
+            .player_active_mining
             .iter()
-            .filter_map(|(player_id, player)| {
-                let state = player.active_mining.as_ref()?;
+            .filter_map(|(entity_id, state)| {
+                let player_id = self.entities.player_identity.get(entity_id)?.player_id;
                 let elapsed_ms = now_ms.saturating_sub(state.started_at_ms);
                 if elapsed_ms >= state.duration_ms {
                     return Some(Action::Complete {
-                        player_id: *player_id,
+                        player_id,
                         position: state.position,
                     });
                 }
                 let next_stage = ((elapsed_ms.saturating_mul(10)) / state.duration_ms) as u8;
                 if Some(next_stage) != state.last_stage {
                     return Some(Action::Stage {
-                        player_id: *player_id,
+                        player_id,
+                        entity_id: *entity_id,
                         position: state.position,
                         stage: next_stage.min(9),
                         duration_ms: state.duration_ms,
@@ -118,64 +173,51 @@ impl ServerCore {
             })
             .collect::<Vec<_>>();
 
-        let mut events = Vec::new();
-        for action in actions {
-            match action {
+        actions
+            .into_iter()
+            .map(|action| match action {
                 Action::Stage {
                     player_id,
+                    entity_id,
                     position,
                     stage,
                     duration_ms,
-                } => {
-                    let Some(player) = self.online_players.get_mut(&player_id) else {
-                        continue;
-                    };
-                    let entity_id = player.entity_id;
-                    let Some(state) = player.active_mining.as_mut() else {
-                        continue;
-                    };
-                    if state.position != position || Some(stage) == state.last_stage {
-                        continue;
-                    }
-                    state.last_stage = Some(stage);
-                    let _ = state;
-                    let _ = player;
-                    events.extend(self.block_break_progress_events(
-                        entity_id,
-                        position,
-                        Some(stage),
-                        duration_ms,
-                    ));
-                }
+                } => super::canonical::CoreOp::AdvanceMiningStage {
+                    player_id,
+                    entity_id,
+                    position,
+                    stage,
+                    duration_ms,
+                },
                 Action::Complete {
                     player_id,
                     position,
-                } => {
-                    events.extend(self.complete_survival_mining(player_id, position, now_ms));
-                }
-            }
-        }
-        events
+                } => super::canonical::CoreOp::CompleteMining {
+                    player_id,
+                    position,
+                },
+            })
+            .collect()
     }
 
-    fn complete_survival_mining(
+    pub(super) fn state_complete_survival_mining(
         &mut self,
         player_id: PlayerId,
         position: BlockPos,
         now_ms: u64,
-    ) -> Vec<TargetedEvent> {
-        let Some(player) = self.online_players.get(&player_id) else {
-            return Vec::new();
+    ) -> Option<CompleteMiningDelta> {
+        let Some(player) = self.compose_player_snapshot(player_id) else {
+            return None;
         };
-        let Some(state) = player.active_mining.as_ref() else {
-            return Vec::new();
+        let Some(state) = self.player_active_mining(player_id) else {
+            return None;
         };
         if state.position != position {
-            return Vec::new();
+            return None;
         }
 
         let current = self.block_at(position);
-        if !self.can_edit_block_for_snapshot(&player.snapshot, position)
+        if !self.can_edit_block_for_snapshot(&player, position)
             || current.is_air()
             || current.key.as_str() == catalog::BEDROCK
             || (matches!(current.key.as_str(), catalog::CHEST | catalog::FURNACE)
@@ -183,12 +225,15 @@ impl ServerCore {
                     .block_entity_at(position)
                     .is_some_and(|entity| entity.has_inventory_contents()))
         {
-            return self.clear_active_mining(player_id);
+            return self
+                .state_clear_active_mining(player_id)
+                .map(CompleteMiningDelta::Cleared);
         }
 
-        let mut events = self.apply_block_mutation(position, BlockState::air());
-        if let Some(item) = catalog::survival_drop_for_block(&current) {
-            events.extend(self.apply_dropped_item_mutation(
+        let block = self.state_set_block(position, BlockState::air());
+        let spawned_item = catalog::survival_drop_for_block(&current).and_then(|item| {
+            self.state_spawn_dropped_item(
+                None,
                 Vec3::new(
                     f64::from(position.x) + 0.5,
                     f64::from(position.y) + 0.5,
@@ -196,30 +241,11 @@ impl ServerCore {
                 ),
                 item,
                 now_ms,
-            ));
-        }
-        events
-    }
-
-    fn block_break_progress_events(
-        &self,
-        breaker_entity_id: EntityId,
-        position: BlockPos,
-        stage: Option<u8>,
-        duration_ms: u64,
-    ) -> Vec<TargetedEvent> {
-        self.online_players
-            .iter()
-            .filter(|(_, player)| player.view.loaded_chunks.contains(&position.chunk_pos()))
-            .map(|(player_id, _)| TargetedEvent {
-                target: EventTarget::Player(*player_id),
-                event: CoreEvent::BlockBreakingProgress {
-                    breaker_entity_id,
-                    position,
-                    stage,
-                    duration_ms,
-                },
-            })
-            .collect()
+            )
+        });
+        Some(CompleteMiningDelta::Completed {
+            block,
+            spawned_item,
+        })
     }
 }

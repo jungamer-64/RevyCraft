@@ -11,8 +11,8 @@ use crate::codec::__internal::inventory::{
 use mc_core::{
     BlockEntityState, BlockFace, BlockPos, BlockState, CapabilityAnnouncement, ChunkColumn,
     ChunkSection, ClosedCapability, ClosedCapabilitySet, ConnectionId, CoreCommand, CoreEvent,
-    DimensionId, DroppedItemSnapshot, EntityId, InteractionHand, PlayerId, PlayerSnapshot,
-    PluginBuildTag, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
+    DimensionId, DroppedItemSnapshot, EntityId, GameplayCommand, InteractionHand, PlayerId,
+    PlayerSnapshot, PluginBuildTag, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
 };
 use mc_proto_common::ConnectionPhase;
 use std::collections::BTreeMap;
@@ -43,6 +43,10 @@ pub(crate) fn decode_option<T>(
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "shared scalar decoder is retained for incremental codec evolution"
+)]
 pub(crate) fn decode_u8_value(decoder: &mut Decoder<'_>) -> Result<u8, ProtocolCodecError> {
     decoder.read_u8()
 }
@@ -778,6 +782,148 @@ pub(crate) fn decode_core_command(
             player_id: decode_player_id(decoder)?,
         }),
         _ => Err(ProtocolCodecError::InvalidValue("invalid core command tag")),
+    }
+}
+
+pub(crate) fn encode_gameplay_command(
+    encoder: &mut Encoder,
+    command: &GameplayCommand,
+) -> Result<(), ProtocolCodecError> {
+    match command {
+        GameplayCommand::MoveIntent {
+            player_id,
+            position,
+            yaw,
+            pitch,
+            on_ground,
+        } => {
+            encoder.write_u8(1);
+            encode_player_id(encoder, *player_id);
+            encode_option(encoder, position.as_ref(), |encoder, position| {
+                encode_vec3(encoder, *position);
+                Ok(())
+            })?;
+            encode_option(encoder, yaw.as_ref(), |encoder, value| {
+                encoder.write_f32(*value);
+                Ok(())
+            })?;
+            encode_option(encoder, pitch.as_ref(), |encoder, value| {
+                encoder.write_f32(*value);
+                Ok(())
+            })?;
+            encoder.write_bool(*on_ground);
+        }
+        GameplayCommand::SetHeldSlot { player_id, slot } => {
+            encoder.write_u8(2);
+            encode_player_id(encoder, *player_id);
+            encoder.write_i16(*slot);
+        }
+        GameplayCommand::CreativeInventorySet {
+            player_id,
+            slot,
+            stack,
+        } => {
+            encoder.write_u8(3);
+            encode_player_id(encoder, *player_id);
+            encode_inventory_slot(encoder, *slot);
+            encode_option(encoder, stack.as_ref(), encode_item_stack)?;
+        }
+        GameplayCommand::DigBlock {
+            player_id,
+            position,
+            status,
+            face,
+        } => {
+            encoder.write_u8(4);
+            encode_player_id(encoder, *player_id);
+            encode_block_pos(encoder, *position);
+            encoder.write_u8(*status);
+            encode_option(encoder, face.as_ref(), |encoder, face| {
+                encode_block_face(encoder, *face);
+                Ok(())
+            })?;
+        }
+        GameplayCommand::PlaceBlock {
+            player_id,
+            hand,
+            position,
+            face,
+            held_item,
+        } => {
+            encoder.write_u8(5);
+            encode_player_id(encoder, *player_id);
+            encode_interaction_hand(encoder, *hand);
+            encode_block_pos(encoder, *position);
+            encode_option(encoder, face.as_ref(), |encoder, face| {
+                encode_block_face(encoder, *face);
+                Ok(())
+            })?;
+            encode_option(encoder, held_item.as_ref(), encode_item_stack)?;
+        }
+        GameplayCommand::UseBlock {
+            player_id,
+            hand,
+            position,
+            face,
+            held_item,
+        } => {
+            encoder.write_u8(6);
+            encode_player_id(encoder, *player_id);
+            encode_interaction_hand(encoder, *hand);
+            encode_block_pos(encoder, *position);
+            encode_option(encoder, face.as_ref(), |encoder, face| {
+                encode_block_face(encoder, *face);
+                Ok(())
+            })?;
+            encode_option(encoder, held_item.as_ref(), encode_item_stack)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn decode_gameplay_command(
+    decoder: &mut Decoder<'_>,
+) -> Result<GameplayCommand, ProtocolCodecError> {
+    match decoder.read_u8()? {
+        1 => Ok(GameplayCommand::MoveIntent {
+            player_id: decode_player_id(decoder)?,
+            position: decode_option(decoder, decode_vec3)?,
+            yaw: decode_option(decoder, decode_f32_value)?,
+            pitch: decode_option(decoder, decode_f32_value)?,
+            on_ground: decoder.read_bool()?,
+        }),
+        2 => Ok(GameplayCommand::SetHeldSlot {
+            player_id: decode_player_id(decoder)?,
+            slot: decoder.read_i16()?,
+        }),
+        3 => Ok(GameplayCommand::CreativeInventorySet {
+            player_id: decode_player_id(decoder)?,
+            slot: decode_inventory_slot(decoder)?,
+            stack: decode_option(decoder, decode_item_stack)?,
+        }),
+        4 => Ok(GameplayCommand::DigBlock {
+            player_id: decode_player_id(decoder)?,
+            position: decode_block_pos(decoder)?,
+            status: decoder.read_u8()?,
+            face: decode_option(decoder, decode_block_face)?,
+        }),
+        5 => Ok(GameplayCommand::PlaceBlock {
+            player_id: decode_player_id(decoder)?,
+            hand: decode_interaction_hand(decoder)?,
+            position: decode_block_pos(decoder)?,
+            face: decode_option(decoder, decode_block_face)?,
+            held_item: decode_option(decoder, decode_item_stack)?,
+        }),
+        6 => Ok(GameplayCommand::UseBlock {
+            player_id: decode_player_id(decoder)?,
+            hand: decode_interaction_hand(decoder)?,
+            position: decode_block_pos(decoder)?,
+            face: decode_option(decoder, decode_block_face)?,
+            held_item: decode_option(decoder, decode_item_stack)?,
+        }),
+        _ => Err(ProtocolCodecError::InvalidValue(
+            "invalid gameplay command tag",
+        )),
     }
 }
 

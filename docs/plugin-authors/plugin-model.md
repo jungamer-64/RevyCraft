@@ -7,7 +7,7 @@
 | kind | 主な責務 | config との結びつき |
 | --- | --- | --- |
 | `protocol` | handshake routing、status / login / play packet の decode / encode | `live.topology` の adapter selection |
-| `gameplay` | semantic な `CoreCommand` を評価し、`GameplayEffect` を返す | `live.profiles.default_gameplay` / `gameplay_map` |
+| `gameplay` | semantic な `GameplayCommand` を評価し、host transaction API 経由で world / player を更新する | `live.profiles.default_gameplay` / `gameplay_map` |
 | `storage` | world snapshot の load / save / import / export | `static.bootstrap.storage_profile` |
 | `auth` | Java offline / online、Bedrock offline / XBL 認証 | `live.profiles.auth` / `bedrock_auth` |
 | `admin-ui` | local console line の parse / render | `live.admin.ui_profile` |
@@ -113,4 +113,4 @@ profile id を新しく増やす plugin は、manifest / descriptor / config の
 - `plugins/admin-ui/mc-plugin-admin-ui-console`
   `console-v1` admin-ui profile の例
 
-Rust からの実装方法、`StaticPluginManifest`、macro、ABI `3.5` の詳細は [`rust-sdk-and-manifest.md`](rust-sdk-and-manifest.md) を参照してください。
+Rust からの実装方法、`StaticPluginManifest`、macro、ABI `4.0` の詳細は [`rust-sdk-and-manifest.md`](rust-sdk-and-manifest.md) を参照してください。

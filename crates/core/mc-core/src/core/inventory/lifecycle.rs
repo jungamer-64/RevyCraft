@@ -1,4 +1,8 @@
-use super::super::{DroppedItemEntity, OnlinePlayer, ServerCore};
+use super::super::canonical::{
+    ApplyCoreOpsOptions, CloseContainerDelta, CoreOp, DroppedItemTickDelta, EntityDespawnDelta,
+    OpenContainerDelta, WindowDiffDelta, apply_core_ops,
+};
+use super::super::{DroppedItemState, PlayerSessionState, ServerCore};
 use super::crafting::{
     recompute_crafting_result_for_active_container, recompute_player_crafting_result,
 };
@@ -7,10 +11,9 @@ use super::state::{
     CHEST_LOCAL_SLOT_COUNT, CRAFTING_TABLE_LOCAL_SLOT_COUNT, ChestWindowState, FurnaceWindowState,
     OpenInventoryWindow, OpenInventoryWindowState,
 };
-use super::sync::{inventory_diff_events, property_diff_events, property_events};
 use super::util::merge_stack_into_player_inventory;
 use crate::catalog;
-use crate::events::{CoreEvent, EventTarget, TargetedEvent};
+use crate::events::TargetedEvent;
 use crate::inventory::{
     InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory,
 };
@@ -30,16 +33,21 @@ impl ServerCore {
         window_id: u8,
         title: impl Into<String>,
     ) -> Vec<TargetedEvent> {
-        self.open_non_player_window(
-            player_id,
-            OpenInventoryWindow {
-                window_id,
-                container: InventoryContainer::CraftingTable,
-                state: OpenInventoryWindowState::CraftingTable {
-                    slots: vec![None; CRAFTING_TABLE_LOCAL_SLOT_COUNT],
+        apply_core_ops(
+            self,
+            vec![CoreOp::OpenWindow {
+                player_id,
+                window: OpenInventoryWindow {
+                    window_id,
+                    container: InventoryContainer::CraftingTable,
+                    state: OpenInventoryWindowState::CraftingTable {
+                        slots: vec![None; CRAFTING_TABLE_LOCAL_SLOT_COUNT],
+                    },
                 },
-            },
-            title,
+                title: title.into(),
+            }],
+            0,
+            ApplyCoreOpsOptions::default(),
         )
     }
 
@@ -49,14 +57,19 @@ impl ServerCore {
         window_id: u8,
         title: impl Into<String>,
     ) -> Vec<TargetedEvent> {
-        self.open_non_player_window(
-            player_id,
-            OpenInventoryWindow {
-                window_id,
-                container: InventoryContainer::Furnace,
-                state: OpenInventoryWindowState::Furnace(FurnaceWindowState::new_virtual()),
-            },
-            title,
+        apply_core_ops(
+            self,
+            vec![CoreOp::OpenWindow {
+                player_id,
+                window: OpenInventoryWindow {
+                    window_id,
+                    container: InventoryContainer::Furnace,
+                    state: OpenInventoryWindowState::Furnace(FurnaceWindowState::new_virtual()),
+                },
+                title: title.into(),
+            }],
+            0,
+            ApplyCoreOpsOptions::default(),
         )
     }
 
@@ -66,28 +79,34 @@ impl ServerCore {
         window_id: u8,
         title: impl Into<String>,
     ) -> Vec<TargetedEvent> {
-        self.open_non_player_window(
-            player_id,
-            OpenInventoryWindow {
-                window_id,
-                container: InventoryContainer::Chest,
-                state: OpenInventoryWindowState::Chest(ChestWindowState::new_virtual(
-                    CHEST_LOCAL_SLOT_COUNT,
-                )),
-            },
-            title,
+        apply_core_ops(
+            self,
+            vec![CoreOp::OpenWindow {
+                player_id,
+                window: OpenInventoryWindow {
+                    window_id,
+                    container: InventoryContainer::Chest,
+                    state: OpenInventoryWindowState::Chest(ChestWindowState::new_virtual(
+                        CHEST_LOCAL_SLOT_COUNT,
+                    )),
+                },
+                title: title.into(),
+            }],
+            0,
+            ApplyCoreOpsOptions::default(),
         )
     }
 
-    pub(in crate::core) fn open_world_chest(
+    pub(in crate::core) fn state_open_world_chest(
         &mut self,
         player_id: PlayerId,
         position: BlockPos,
-    ) -> Vec<TargetedEvent> {
+    ) -> Option<OpenContainerDelta> {
         if self.block_at(position).key.as_str() != catalog::CHEST {
-            return Vec::new();
+            return None;
         }
         let slots = self
+            .world
             .block_entities
             .entry(position)
             .or_insert_with(|| BlockEntityState::chest(CHEST_LOCAL_SLOT_COUNT))
@@ -95,9 +114,9 @@ impl ServerCore {
             .expect("chest block entity should expose slots")
             .to_vec();
         let Some(window_id) = self.allocate_non_player_window_id(player_id) else {
-            return Vec::new();
+            return None;
         };
-        self.open_non_player_window(
+        self.state_open_non_player_window(
             player_id,
             OpenInventoryWindow {
                 window_id,
@@ -106,27 +125,28 @@ impl ServerCore {
                     position, slots,
                 )),
             },
-            "Chest",
+            "Chest".to_string(),
         )
     }
 
-    pub(in crate::core) fn open_world_furnace(
+    pub(in crate::core) fn state_open_world_furnace(
         &mut self,
         player_id: PlayerId,
         position: BlockPos,
-    ) -> Vec<TargetedEvent> {
+    ) -> Option<OpenContainerDelta> {
         if self.block_at(position).key.as_str() != catalog::FURNACE {
-            return Vec::new();
+            return None;
         }
         let block_entity = self
+            .world
             .block_entities
             .entry(position)
             .or_insert_with(BlockEntityState::furnace)
             .clone();
         let Some(window_id) = self.allocate_non_player_window_id(player_id) else {
-            return Vec::new();
+            return None;
         };
-        self.open_non_player_window(
+        self.state_open_non_player_window(
             player_id,
             OpenInventoryWindow {
                 window_id,
@@ -136,36 +156,43 @@ impl ServerCore {
                     &block_entity,
                 )),
             },
-            "Furnace",
+            "Furnace".to_string(),
         )
     }
 
-    pub(in crate::core) fn close_inventory_window(
+    pub(in crate::core) fn state_close_inventory_window(
         &mut self,
         player_id: PlayerId,
         window_id: u8,
-    ) -> Vec<TargetedEvent> {
+    ) -> Option<CloseContainerDelta> {
         if window_id == 0 {
-            return Vec::new();
+            return None;
         }
-        let Some(active_window_id) = self.online_players.get(&player_id).and_then(|player| {
-            player
+        let Some(active_window_id) = self.player_session(player_id).and_then(|session| {
+            session
                 .active_container
                 .as_ref()
                 .map(|window| window.window_id)
         }) else {
-            return Vec::new();
+            return None;
         };
         if active_window_id != window_id {
-            return Vec::new();
+            return None;
         }
-        self.close_player_active_container(player_id, true)
+        self.state_close_player_active_container(player_id, true)
     }
 
     pub(in crate::core) fn persisted_online_player_snapshot(
-        player: &OnlinePlayer,
-    ) -> PlayerSnapshot {
-        persist_online_window_state(player)
+        &self,
+        player_id: PlayerId,
+    ) -> Option<PlayerSnapshot> {
+        let snapshot = self.compose_player_snapshot(player_id)?;
+        let session = self.player_session(player_id)?;
+        Some(persist_live_player_state(
+            &snapshot,
+            session.cursor.as_ref(),
+            session.active_container.as_ref(),
+        ))
     }
 
     pub(in crate::core) fn recompute_crafting_result_for_inventory(
@@ -174,119 +201,55 @@ impl ServerCore {
         recompute_player_crafting_result(inventory);
     }
 
-    pub(in crate::core) fn tick_active_containers(&mut self) -> Vec<TargetedEvent> {
-        let mut events = Vec::new();
-        let player_ids = self.online_players.keys().copied().collect::<Vec<_>>();
-        for player_id in player_ids {
-            let Some(before_player) = self.online_players.get(&player_id) else {
-                continue;
-            };
-            let Some(before_window) = before_player.active_container.as_ref() else {
-                continue;
-            };
-            if before_window.container != InventoryContainer::Furnace {
-                continue;
-            }
-
-            let before_contents = before_window.contents(&before_player.snapshot.inventory);
-            let before_properties = before_window.property_entries();
-            let window_id = before_window.window_id;
-
-            let after = match self.online_players.get_mut(&player_id) {
-                Some(player) => match player.active_container.as_mut() {
-                    Some(window) if window.container == InventoryContainer::Furnace => {
-                        tick_furnace_window(window);
-                        Some((
-                            window.contents(&player.snapshot.inventory),
-                            window.property_entries(),
-                        ))
-                    }
-                    _ => None,
-                },
-                None => None,
-            };
-
-            let Some((after_contents, after_properties)) = after else {
-                continue;
-            };
-
-            if let Some((position, block_entity)) = self
-                .online_players
-                .get(&player_id)
-                .and_then(|player| player.active_container.as_ref())
-                .and_then(OpenInventoryWindow::world_block_entity)
-                && matches!(block_entity, BlockEntityState::Furnace { .. })
-                && self.block_at(position).key.as_str() == catalog::FURNACE
-            {
-                self.block_entities.insert(position, block_entity);
-            }
-
-            events.extend(inventory_diff_events(
-                window_id,
-                InventoryContainer::Furnace,
-                player_id,
-                &before_contents,
-                &after_contents,
-            ));
-            events.extend(property_diff_events(
-                window_id,
-                player_id,
-                &before_properties,
-                &after_properties,
-            ));
+    pub(in crate::core) fn state_tick_active_container(
+        &mut self,
+        player_id: PlayerId,
+    ) -> Option<WindowDiffDelta> {
+        let before_session = self.player_session(player_id)?;
+        let before_window = before_session.active_container.as_ref()?;
+        if before_window.container != InventoryContainer::Furnace {
+            return None;
         }
-        events
-    }
+        let before_inventory = self.player_inventory(player_id)?;
+        let before_contents = before_window.contents(before_inventory);
+        let before_properties = before_window.property_entries();
+        let window_id = before_window.window_id;
 
-    pub(in crate::core) fn tick_dropped_items(&mut self, now_ms: u64) -> Vec<TargetedEvent> {
-        let mut events = Vec::new();
-        let mut despawned = Vec::new();
-        let item_ids = self.dropped_items.keys().copied().collect::<Vec<_>>();
-
-        for entity_id in item_ids {
-            let Some(mut item) = self.dropped_items.remove(&entity_id) else {
-                continue;
-            };
-            self.advance_dropped_item_entity(&mut item, now_ms);
-            if now_ms >= item.despawn_at_ms {
-                despawned.push(entity_id);
-                continue;
-            }
-            if now_ms < item.pickup_allowed_at_ms {
-                self.dropped_items.insert(entity_id, item);
-                continue;
-            }
-            let Some(player_id) =
-                nearest_pickup_player(&self.online_players, item.snapshot.position)
-            else {
-                self.dropped_items.insert(entity_id, item);
-                continue;
-            };
-            let (pickup_events, leftover) = self
-                .merge_stack_into_online_player_inventory(player_id, item.snapshot.item.clone());
-            events.extend(pickup_events);
-            match leftover {
-                Some(leftover) => {
-                    item.snapshot.item = leftover;
-                    self.dropped_items.insert(entity_id, item);
+        let (after_contents, after_properties) = {
+            let entity_id = self.player_entity_id(player_id)?;
+            let session = self.sessions.player_sessions.get_mut(&player_id)?;
+            let inventory = self.entities.player_inventory.get_mut(&entity_id)?;
+            match session.active_container.as_mut() {
+                Some(window) if window.container == InventoryContainer::Furnace => {
+                    tick_furnace_window(window);
+                    (window.contents(inventory), window.property_entries())
                 }
-                None => despawned.push(entity_id),
+                _ => return None,
             }
+        };
+
+        if let Some((position, block_entity)) = self
+            .player_session(player_id)
+            .and_then(|session| session.active_container.as_ref())
+            .and_then(OpenInventoryWindow::world_block_entity)
+            && matches!(block_entity, BlockEntityState::Furnace { .. })
+            && self.block_at(position).key.as_str() == catalog::FURNACE
+        {
+            self.world.block_entities.insert(position, block_entity);
         }
 
-        if !despawned.is_empty() {
-            despawned.sort();
-            despawned.dedup();
-            for entity_id in &despawned {
-                self.dropped_items.remove(entity_id);
-            }
-            events.extend(self.broadcast_entity_despawn(&despawned));
-        }
-
-        events
+        Some(WindowDiffDelta {
+            player_id,
+            window_id,
+            container: InventoryContainer::Furnace,
+            before_contents,
+            after_contents,
+            before_properties,
+            after_properties,
+        })
     }
 
-    fn advance_dropped_item_entity(&self, item: &mut DroppedItemEntity, now_ms: u64) {
+    fn advance_dropped_item_entity(&self, item: &mut DroppedItemState, now_ms: u64) {
         let elapsed_ms = now_ms.saturating_sub(item.last_updated_at_ms);
         let step_count = elapsed_ms / DROPPED_ITEM_PHYSICS_STEP_MS;
         if step_count == 0 {
@@ -302,7 +265,7 @@ impl ServerCore {
             .saturating_add(step_count.saturating_mul(DROPPED_ITEM_PHYSICS_STEP_MS));
     }
 
-    fn advance_dropped_item_step(&self, item: &mut DroppedItemEntity) {
+    fn advance_dropped_item_step(&self, item: &mut DroppedItemState) {
         let next_velocity_y =
             (item.snapshot.velocity.y - DROPPED_ITEM_GRAVITY_PER_STEP) * DROPPED_ITEM_DRAG;
         let next_y = item.snapshot.position.y + next_velocity_y;
@@ -338,124 +301,113 @@ impl ServerCore {
         position: BlockPos,
         player_id: PlayerId,
     ) {
-        let Some(viewers) = self.chest_viewers.get_mut(&position) else {
+        let Some(viewers) = self.world.chest_viewers.get_mut(&position) else {
             return;
         };
         viewers.remove(&player_id);
         if viewers.is_empty() {
-            self.chest_viewers.remove(&position);
+            self.world.chest_viewers.remove(&position);
         }
     }
 
-    fn merge_stack_into_online_player_inventory(
+    fn state_merge_stack_into_online_player_inventory(
         &mut self,
         player_id: PlayerId,
         stack: ItemStack,
-    ) -> (Vec<TargetedEvent>, Option<ItemStack>) {
-        let Some(before_player) = self.online_players.get(&player_id) else {
-            return (Vec::new(), Some(stack));
+    ) -> (Option<WindowDiffDelta>, Option<ItemStack>) {
+        let Some(before_session) = self.player_session(player_id) else {
+            return (None, Some(stack));
         };
-        let (window_id, container) = before_player
+        let Some(before_inventory) = self.player_inventory(player_id) else {
+            return (None, Some(stack));
+        };
+        let (window_id, container) = before_session
             .active_container
             .as_ref()
             .map(|window| (window.window_id, window.container))
             .unwrap_or((0, InventoryContainer::Player));
-        let before_contents = before_player
+        let before_contents = before_session
             .active_container
             .as_ref()
-            .map(|window| window.contents(&before_player.snapshot.inventory))
-            .unwrap_or_else(|| {
-                InventoryWindowContents::player(before_player.snapshot.inventory.clone())
-            });
+            .map(|window| window.contents(before_inventory))
+            .unwrap_or_else(|| InventoryWindowContents::player(before_inventory.clone()));
 
         let leftover = {
-            let player = self
-                .online_players
-                .get_mut(&player_id)
-                .expect("online player should still exist");
-            let leftover = merge_stack_into_player_inventory(&mut player.snapshot.inventory, stack);
-            self.saved_players
-                .insert(player_id, player.snapshot.clone());
-            leftover
+            let Some(entity_id) = self.player_entity_id(player_id) else {
+                return (None, Some(stack));
+            };
+            let Some(inventory) = self.entities.player_inventory.get_mut(&entity_id) else {
+                return (None, Some(stack));
+            };
+            merge_stack_into_player_inventory(inventory, stack)
         };
 
-        let Some(after_player) = self.online_players.get(&player_id) else {
-            return (Vec::new(), leftover);
+        let Some(after_session) = self.player_session(player_id) else {
+            return (None, leftover);
         };
-        let after_contents = after_player
+        let Some(after_inventory) = self.player_inventory(player_id) else {
+            return (None, leftover);
+        };
+        let after_contents = after_session
             .active_container
             .as_ref()
-            .map(|window| window.contents(&after_player.snapshot.inventory))
-            .unwrap_or_else(|| {
-                InventoryWindowContents::player(after_player.snapshot.inventory.clone())
-            });
+            .map(|window| window.contents(after_inventory))
+            .unwrap_or_else(|| InventoryWindowContents::player(after_inventory.clone()));
 
         (
-            inventory_diff_events(
+            Some(WindowDiffDelta {
+                player_id,
                 window_id,
                 container,
-                player_id,
-                &before_contents,
-                &after_contents,
-            ),
+                before_contents,
+                after_contents,
+                before_properties: Vec::new(),
+                after_properties: Vec::new(),
+            }),
             leftover,
         )
     }
 
-    fn broadcast_entity_despawn(&self, entity_ids: &[EntityId]) -> Vec<TargetedEvent> {
-        self.online_players
-            .keys()
-            .copied()
-            .map(|player_id| TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::EntityDespawned {
-                    entity_ids: entity_ids.to_vec(),
-                },
-            })
-            .collect()
-    }
-
-    pub(in crate::core) fn close_world_container_if_invalid(
+    pub(in crate::core) fn state_close_world_container_if_invalid(
         &mut self,
         position: BlockPos,
         block: &BlockState,
-    ) -> Vec<TargetedEvent> {
-        let mut events = Vec::new();
+    ) -> Vec<CloseContainerDelta> {
+        let mut deltas = Vec::new();
 
         let had_chest_block_entity = matches!(
-            self.block_entities.get(&position),
+            self.world.block_entities.get(&position),
             Some(BlockEntityState::Chest { .. })
         );
         if block.key.as_str() != catalog::CHEST
-            && (had_chest_block_entity || self.chest_viewers.contains_key(&position))
+            && (had_chest_block_entity || self.world.chest_viewers.contains_key(&position))
         {
-            self.block_entities.remove(&position);
-            events.extend(self.close_world_chest_viewers(position));
+            self.world.block_entities.remove(&position);
+            deltas.extend(self.state_close_world_chest_viewers(position));
         }
 
         let had_furnace_block_entity = matches!(
-            self.block_entities.get(&position),
+            self.world.block_entities.get(&position),
             Some(BlockEntityState::Furnace { .. })
         );
         if block.key.as_str() != catalog::FURNACE
             && (had_furnace_block_entity || self.has_world_furnace_viewers(position))
         {
-            self.block_entities.remove(&position);
-            events.extend(self.close_world_furnace_viewers(position));
+            self.world.block_entities.remove(&position);
+            deltas.extend(self.state_close_world_furnace_viewers(position));
         }
 
-        events
+        deltas
     }
 
-    pub(super) fn sync_world_chest_viewers(
+    pub(super) fn state_sync_world_chest_viewers(
         &mut self,
         position: BlockPos,
         actor_player_id: PlayerId,
-    ) -> Vec<TargetedEvent> {
+    ) -> Vec<WindowDiffDelta> {
         let Some(slots) = self
-            .online_players
-            .get(&actor_player_id)
-            .and_then(|player| player.active_container.as_ref())
+            .player_session(actor_player_id)
+            .and_then(|session| session.active_container.as_ref())
             .and_then(|window| match &window.state {
                 OpenInventoryWindowState::Chest(chest)
                     if chest.world_position() == Some(position) =>
@@ -468,7 +420,7 @@ impl ServerCore {
             return Vec::new();
         };
 
-        self.block_entities.insert(
+        self.world.block_entities.insert(
             position,
             BlockEntityState::Chest {
                 slots: slots.clone(),
@@ -476,21 +428,53 @@ impl ServerCore {
         );
 
         let viewer_ids = self
+            .world
             .chest_viewers
             .get(&position)
             .map(|viewers| viewers.keys().copied().collect::<Vec<_>>())
             .unwrap_or_default();
         let mut stale_viewers = Vec::new();
-        let mut events = Vec::new();
+        let mut deltas = Vec::new();
         for viewer_id in viewer_ids {
             if viewer_id == actor_player_id {
                 continue;
             }
-            let Some(player) = self.online_players.get_mut(&viewer_id) else {
+            let Some(before_inventory) = self.player_inventory(viewer_id).cloned() else {
                 stale_viewers.push(viewer_id);
                 continue;
             };
-            let Some(window) = player.active_container.as_mut() else {
+            let Some(before_session) = self.player_session(viewer_id) else {
+                stale_viewers.push(viewer_id);
+                continue;
+            };
+            let Some(window) = before_session.active_container.as_ref() else {
+                stale_viewers.push(viewer_id);
+                continue;
+            };
+            let OpenInventoryWindowState::Chest(chest) = &window.state else {
+                stale_viewers.push(viewer_id);
+                continue;
+            };
+            if chest.world_position() != Some(position) {
+                stale_viewers.push(viewer_id);
+                continue;
+            }
+            let before_contents =
+                InventoryWindowContents::with_container(before_inventory, chest.slots.clone());
+
+            let Some(entity_id) = self.player_entity_id(viewer_id) else {
+                stale_viewers.push(viewer_id);
+                continue;
+            };
+            let Some(session) = self.sessions.player_sessions.get_mut(&viewer_id) else {
+                stale_viewers.push(viewer_id);
+                continue;
+            };
+            let Some(inventory) = self.entities.player_inventory.get(&entity_id) else {
+                stale_viewers.push(viewer_id);
+                continue;
+            };
+            let Some(window) = session.active_container.as_mut() else {
                 stale_viewers.push(viewer_id);
                 continue;
             };
@@ -505,54 +489,109 @@ impl ServerCore {
                 stale_viewers.push(viewer_id);
                 continue;
             };
-            let before_contents = InventoryWindowContents::with_container(
-                player.snapshot.inventory.clone(),
-                chest.slots.clone(),
-            );
             chest.slots = slots.clone();
-            let after_contents = window.contents(&player.snapshot.inventory);
-            events.extend(inventory_diff_events(
-                window.window_id,
-                InventoryContainer::Chest,
-                viewer_id,
-                &before_contents,
-                &after_contents,
-            ));
+            let after_contents = window.contents(inventory);
+            deltas.push(WindowDiffDelta {
+                player_id: viewer_id,
+                window_id: window.window_id,
+                container: InventoryContainer::Chest,
+                before_contents,
+                after_contents,
+                before_properties: Vec::new(),
+                after_properties: Vec::new(),
+            });
         }
 
         for stale_viewer in stale_viewers {
             self.unregister_world_chest_viewer(position, stale_viewer);
         }
-        events
+        deltas
     }
 
-    pub(super) fn sync_world_furnace_state(
+    pub(super) fn state_sync_world_furnace_state(
         &mut self,
         position: BlockPos,
         actor_player_id: PlayerId,
     ) {
         let Some((_, block_entity)) = self
-            .online_players
-            .get(&actor_player_id)
-            .and_then(|player| player.active_container.as_ref())
+            .player_session(actor_player_id)
+            .and_then(|session| session.active_container.as_ref())
             .and_then(OpenInventoryWindow::world_block_entity)
             .filter(|(window_position, _)| *window_position == position)
         else {
             return;
         };
         if self.block_at(position).key.as_str() == catalog::FURNACE {
-            self.block_entities.insert(position, block_entity);
+            self.world.block_entities.insert(position, block_entity);
         }
     }
 
-    fn open_non_player_window(
+    pub(in crate::core) fn state_tick_dropped_item(
+        &mut self,
+        entity_id: EntityId,
+        now_ms: u64,
+    ) -> DroppedItemTickDelta {
+        let Some(mut item) = self.entities.dropped_items.remove(&entity_id) else {
+            return DroppedItemTickDelta {
+                inventory_delta: None,
+                despawn: None,
+            };
+        };
+        self.advance_dropped_item_entity(&mut item, now_ms);
+        if now_ms >= item.despawn_at_ms {
+            self.entities.entity_kinds.remove(&entity_id);
+            return DroppedItemTickDelta {
+                inventory_delta: None,
+                despawn: Some(EntityDespawnDelta {
+                    entity_ids: vec![entity_id],
+                }),
+            };
+        }
+        if now_ms < item.pickup_allowed_at_ms {
+            self.entities.dropped_items.insert(entity_id, item);
+            return DroppedItemTickDelta {
+                inventory_delta: None,
+                despawn: None,
+            };
+        }
+        let Some(player_id) = nearest_pickup_player(self, item.snapshot.position) else {
+            self.entities.dropped_items.insert(entity_id, item);
+            return DroppedItemTickDelta {
+                inventory_delta: None,
+                despawn: None,
+            };
+        };
+        let (inventory_delta, leftover) =
+            self.state_merge_stack_into_online_player_inventory(player_id, item.snapshot.item);
+        match leftover {
+            Some(leftover) => {
+                item.snapshot.item = leftover;
+                self.entities.dropped_items.insert(entity_id, item);
+                DroppedItemTickDelta {
+                    inventory_delta,
+                    despawn: None,
+                }
+            }
+            None => {
+                self.entities.entity_kinds.remove(&entity_id);
+                DroppedItemTickDelta {
+                    inventory_delta,
+                    despawn: Some(EntityDespawnDelta {
+                        entity_ids: vec![entity_id],
+                    }),
+                }
+            }
+        }
+    }
+
+    pub(in crate::core) fn state_open_non_player_window(
         &mut self,
         player_id: PlayerId,
         mut window: OpenInventoryWindow,
-        title: impl Into<String>,
-    ) -> Vec<TargetedEvent> {
-        if !self.online_players.contains_key(&player_id) {
-            return Vec::new();
+        title: String,
+    ) -> Option<OpenContainerDelta> {
+        if !self.sessions.player_sessions.contains_key(&player_id) {
+            return None;
         }
 
         match window.container {
@@ -563,55 +602,49 @@ impl ServerCore {
             InventoryContainer::Chest | InventoryContainer::Player => {}
         }
 
-        let mut events = self.close_player_active_container(player_id, false);
-
-        let title = title.into();
+        let closed = self
+            .state_close_player_active_container(player_id, false)
+            .into_iter()
+            .collect::<Vec<_>>();
         let properties = window.property_entries();
         let window_id = window.window_id;
         let container = window.container;
         let world_chest_position = window.world_chest_position();
         let Some(contents) = ({
-            let Some(player) = self.online_players.get_mut(&player_id) else {
-                return events;
+            let Some(entity_id) = self.player_entity_id(player_id) else {
+                return None;
             };
-            let contents = window.contents(&player.snapshot.inventory);
-            player.active_container = Some(window);
-            self.saved_players
-                .insert(player_id, player.snapshot.clone());
+            let Some(session) = self.sessions.player_sessions.get_mut(&player_id) else {
+                return None;
+            };
+            let Some(inventory) = self.entities.player_inventory.get(&entity_id) else {
+                return None;
+            };
+            let contents = window.contents(inventory);
+            session.active_container = Some(window);
             Some(contents)
         }) else {
-            return events;
+            return None;
         };
         if let Some(position) = world_chest_position {
             self.register_world_chest_viewer(position, player_id, window_id);
         }
 
-        events.extend([
-            TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::ContainerOpened {
-                    window_id,
-                    container,
-                    title,
-                },
-            },
-            TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::InventoryContents {
-                    window_id,
-                    container,
-                    contents,
-                },
-            },
-        ]);
-        events.extend(property_events(window_id, player_id, &properties));
-        events
+        Some(OpenContainerDelta {
+            closed,
+            player_id,
+            window_id,
+            container,
+            title,
+            contents,
+            properties,
+        })
     }
 
     fn allocate_non_player_window_id(&mut self, player_id: PlayerId) -> Option<u8> {
-        let player = self.online_players.get_mut(&player_id)?;
-        let window_id = player.next_non_player_window_id.max(1);
-        player.next_non_player_window_id = if window_id == u8::MAX {
+        let session = self.sessions.player_sessions.get_mut(&player_id)?;
+        let window_id = session.next_non_player_window_id.max(1);
+        session.next_non_player_window_id = if window_id == u8::MAX {
             1
         } else {
             window_id + 1
@@ -625,29 +658,33 @@ impl ServerCore {
         player_id: PlayerId,
         window_id: u8,
     ) {
-        self.chest_viewers
+        self.world
+            .chest_viewers
             .entry(position)
             .or_default()
             .insert(player_id, window_id);
     }
 
-    fn close_world_chest_viewers(&mut self, position: BlockPos) -> Vec<TargetedEvent> {
+    fn state_close_world_chest_viewers(&mut self, position: BlockPos) -> Vec<CloseContainerDelta> {
         let viewer_ids = self
+            .world
             .chest_viewers
             .get(&position)
             .map(|viewers| viewers.keys().copied().collect::<Vec<_>>())
             .unwrap_or_default();
-        let mut events = Vec::new();
+        let mut deltas = Vec::new();
         for viewer_id in viewer_ids {
-            events.extend(self.close_player_active_container(viewer_id, true));
+            if let Some(delta) = self.state_close_player_active_container(viewer_id, true) {
+                deltas.push(delta);
+            }
         }
-        self.chest_viewers.remove(&position);
-        events
+        self.world.chest_viewers.remove(&position);
+        deltas
     }
 
     fn has_world_furnace_viewers(&self, position: BlockPos) -> bool {
-        self.online_players.values().any(|player| {
-            player
+        self.sessions.player_sessions.values().any(|session| {
+            session
                 .active_container
                 .as_ref()
                 .and_then(OpenInventoryWindow::world_furnace_position)
@@ -655,12 +692,16 @@ impl ServerCore {
         })
     }
 
-    fn close_world_furnace_viewers(&mut self, position: BlockPos) -> Vec<TargetedEvent> {
+    fn state_close_world_furnace_viewers(
+        &mut self,
+        position: BlockPos,
+    ) -> Vec<CloseContainerDelta> {
         let viewer_ids = self
-            .online_players
+            .sessions
+            .player_sessions
             .iter()
-            .filter_map(|(player_id, player)| {
-                (player
+            .filter_map(|(player_id, session)| {
+                (session
                     .active_container
                     .as_ref()
                     .and_then(OpenInventoryWindow::world_furnace_position)
@@ -668,30 +709,36 @@ impl ServerCore {
                 .then_some(*player_id)
             })
             .collect::<Vec<_>>();
-        let mut events = Vec::new();
+        let mut deltas = Vec::new();
         for viewer_id in viewer_ids {
-            events.extend(self.close_player_active_container(viewer_id, true));
+            if let Some(delta) = self.state_close_player_active_container(viewer_id, true) {
+                deltas.push(delta);
+            }
         }
-        events
+        deltas
     }
 
-    fn close_player_active_container(
+    pub(in crate::core) fn state_close_player_active_container(
         &mut self,
         player_id: PlayerId,
         include_player_contents: bool,
-    ) -> Vec<TargetedEvent> {
+    ) -> Option<CloseContainerDelta> {
         let Some((window_id, world_block_entity, world_chest_position, contents)) = ({
-            let Some(player) = self.online_players.get_mut(&player_id) else {
-                return Vec::new();
+            let Some(entity_id) = self.player_entity_id(player_id) else {
+                return None;
             };
-            let Some(window) = close_active_container_window(player) else {
-                return Vec::new();
+            let Some(session) = self.sessions.player_sessions.get_mut(&player_id) else {
+                return None;
+            };
+            let Some(inventory) = self.entities.player_inventory.get_mut(&entity_id) else {
+                return None;
+            };
+            let Some(window) = close_active_container_window(session, inventory) else {
+                return None;
             };
             let world_block_entity = window.world_block_entity();
-            let contents = include_player_contents
-                .then(|| InventoryWindowContents::player(player.snapshot.inventory.clone()));
-            self.saved_players
-                .insert(player_id, player.snapshot.clone());
+            let contents =
+                include_player_contents.then(|| InventoryWindowContents::player(inventory.clone()));
             Some((
                 window.window_id,
                 world_block_entity,
@@ -699,7 +746,7 @@ impl ServerCore {
                 contents,
             ))
         }) else {
-            return Vec::new();
+            return None;
         };
 
         if let Some((position, block_entity)) = world_block_entity {
@@ -708,28 +755,18 @@ impl ServerCore {
                 BlockEntityState::Furnace { .. } => catalog::FURNACE,
             };
             if self.block_at(position).key.as_str() == expected_block_key {
-                self.block_entities.insert(position, block_entity);
+                self.world.block_entities.insert(position, block_entity);
             }
         }
         if let Some(position) = world_chest_position {
             self.unregister_world_chest_viewer(position, player_id);
         }
 
-        let mut events = vec![TargetedEvent {
-            target: EventTarget::Player(player_id),
-            event: CoreEvent::ContainerClosed { window_id },
-        }];
-        if let Some(contents) = contents {
-            events.push(TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::InventoryContents {
-                    window_id: 0,
-                    container: InventoryContainer::Player,
-                    contents,
-                },
-            });
-        }
-        events
+        Some(CloseContainerDelta {
+            player_id,
+            window_id,
+            contents,
+        })
     }
 }
 
@@ -743,9 +780,13 @@ pub(crate) fn world_block_entity(
     window.world_block_entity()
 }
 
-fn persist_online_window_state(player: &OnlinePlayer) -> PlayerSnapshot {
-    let mut persisted = player.snapshot.clone();
-    if let Some(window) = player.active_container.as_ref() {
+fn persist_live_player_state(
+    snapshot: &PlayerSnapshot,
+    cursor: Option<&ItemStack>,
+    active_container: Option<&OpenInventoryWindow>,
+) -> PlayerSnapshot {
+    let mut persisted = snapshot.clone();
+    if let Some(window) = active_container {
         fold_active_container_items_into_player(&mut persisted.inventory, window);
     }
 
@@ -764,7 +805,7 @@ fn persist_online_window_state(player: &OnlinePlayer) -> PlayerSnapshot {
         .into_iter()
         .filter_map(|slot| persisted.inventory.get_slot(slot).cloned())
         .collect::<Vec<_>>();
-    if let Some(cursor) = player.cursor.clone() {
+    if let Some(cursor) = cursor.cloned() {
         overflow.push(cursor);
     }
     for slot in transient_slots {
@@ -777,9 +818,12 @@ fn persist_online_window_state(player: &OnlinePlayer) -> PlayerSnapshot {
     persisted
 }
 
-fn close_active_container_window(player: &mut OnlinePlayer) -> Option<OpenInventoryWindow> {
-    let window = player.active_container.take()?;
-    fold_active_container_items_into_player(&mut player.snapshot.inventory, &window);
+fn close_active_container_window(
+    session: &mut PlayerSessionState,
+    inventory: &mut PlayerInventory,
+) -> Option<OpenInventoryWindow> {
+    let window = session.active_container.take()?;
+    fold_active_container_items_into_player(inventory, &window);
     Some(window)
 }
 
@@ -812,19 +856,19 @@ fn fold_active_container_items_into_player(
     }
 }
 
-fn nearest_pickup_player(
-    players: &std::collections::BTreeMap<PlayerId, OnlinePlayer>,
-    position: Vec3,
-) -> Option<PlayerId> {
+fn nearest_pickup_player(core: &ServerCore, position: Vec3) -> Option<PlayerId> {
     let mut best = None;
-    for (player_id, player) in players {
-        let distance_squared = distance_squared(player.snapshot.position, position);
+    for player_id in core.sessions.player_sessions.keys().copied() {
+        let Some(transform) = core.player_transform(player_id) else {
+            continue;
+        };
+        let distance_squared = distance_squared(transform.position, position);
         if distance_squared > DROPPED_ITEM_PICKUP_RADIUS_SQUARED {
             continue;
         }
         match best {
             Some((_, best_distance_squared)) if distance_squared >= best_distance_squared => {}
-            _ => best = Some((*player_id, distance_squared)),
+            _ => best = Some((player_id, distance_squared)),
         }
     }
     best.map(|(player_id, _)| player_id)

@@ -10,10 +10,10 @@ use bytes::BytesMut;
 use libloading::Library;
 use mc_core::{
     AdminUiCapability, AdminUiCapabilitySet, AdminUiProfileId, AuthCapability, AuthCapabilitySet,
-    AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayEffect, GameplayJoinEffect,
-    GameplayPolicyResolver, GameplayProfileId, GameplayQuery, PlayerId, PlayerSnapshot,
-    PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet,
-    SessionCapabilitySet, StorageCapability, StorageCapabilitySet, StorageProfileId, WorldSnapshot,
+    AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId,
+    PlayerId, PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet,
+    ServerCore, SessionCapabilitySet, StorageCapability, StorageCapabilitySet, StorageProfileId,
+    TargetedEvent, WorldSnapshot,
 };
 use mc_plugin_api::abi::{
     ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind,
@@ -38,12 +38,12 @@ use mc_plugin_api::codec::storage::{
     StorageRequest, StorageResponse, decode_storage_response, encode_storage_request,
 };
 use mc_plugin_api::host_api::{
-    AdminUiPluginApiV1, AdminUiPluginInvokeV1Fn, AuthPluginApiV1, GameplayPluginApiV2,
-    GameplayPluginInvokeV2Fn, PluginFreeBufferFn, PluginInvokeFn, ProtocolPluginApiV2,
+    AdminUiPluginApiV1, AdminUiPluginInvokeV1Fn, AuthPluginApiV1, GameplayPluginApiV3,
+    GameplayPluginInvokeV3Fn, PluginFreeBufferFn, PluginInvokeFn, ProtocolPluginApiV2,
     StoragePluginApiV1,
 };
 use mc_plugin_api::manifest::{
-    PLUGIN_ADMIN_UI_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V2,
+    PLUGIN_ADMIN_UI_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V3,
     PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V2, PLUGIN_STORAGE_API_SYMBOL_V1,
     PluginManifestV1,
 };
@@ -83,10 +83,8 @@ mod support;
 mod topology;
 
 #[cfg(test)]
-pub(crate) use self::callbacks::with_current_gameplay_query;
-#[cfg(test)]
-pub(crate) use self::callbacks::with_gameplay_query;
-pub(crate) use self::callbacks::with_gameplay_query_and_limits;
+pub(crate) use self::callbacks::with_current_gameplay_transaction;
+pub(crate) use self::callbacks::with_gameplay_transaction_and_limits;
 use self::callbacks::{admin_ui_host_api, gameplay_host_api};
 pub(crate) use self::catalog::PluginCatalog;
 #[cfg(test)]

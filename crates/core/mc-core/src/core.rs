@@ -1,15 +1,16 @@
+mod canonical;
 mod command;
 mod inventory;
 mod login;
 mod mining;
 mod mutation;
-mod projection;
 mod tick;
+pub(crate) mod transaction;
 mod world;
 
 use crate::catalog::MiningToolSpec;
 use crate::events::PlayerSummary;
-use crate::inventory::ItemStack;
+use crate::inventory::{ItemStack, PlayerInventory};
 use crate::player::PlayerSnapshot;
 use crate::world::{
     BlockEntityState, BlockPos, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot, WorldMeta,
@@ -19,7 +20,7 @@ use crate::{DEFAULT_KEEPALIVE_INTERVAL_MS, DEFAULT_KEEPALIVE_TIMEOUT_MS, EntityI
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-use self::inventory::OpenInventoryWindow;
+pub(crate) use self::inventory::OpenInventoryWindow;
 #[cfg(test)]
 pub(crate) use self::inventory::OpenInventoryWindowState;
 
@@ -86,37 +87,90 @@ impl Default for CoreConfig {
 }
 
 #[derive(Clone, Debug)]
-pub struct ServerCore {
+pub struct WorldStore {
     pub(super) config: CoreConfig,
     pub(super) world_meta: WorldMeta,
     pub(super) chunks: BTreeMap<ChunkPos, ChunkColumn>,
     pub(super) block_entities: BTreeMap<BlockPos, BlockEntityState>,
     pub(super) chest_viewers: BTreeMap<BlockPos, BTreeMap<PlayerId, u8>>,
     pub(super) saved_players: BTreeMap<PlayerId, PlayerSnapshot>,
-    pub(super) online_players: BTreeMap<PlayerId, OnlinePlayer>,
-    pub(super) dropped_items: BTreeMap<EntityId, DroppedItemEntity>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EntityKind {
+    Player,
+    DroppedItem,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct PlayerIdentity {
+    pub(super) player_id: PlayerId,
+    pub(super) username: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PlayerTransform {
+    pub(super) position: crate::Vec3,
+    pub(super) yaw: f32,
+    pub(super) pitch: f32,
+    pub(super) on_ground: bool,
+    pub(super) dimension: DimensionId,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PlayerVitals {
+    pub(super) health: f32,
+    pub(super) food: i16,
+    pub(super) food_saturation: f32,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct EntityStore {
+    pub(super) entity_kinds: BTreeMap<EntityId, EntityKind>,
+    pub(super) players_by_player_id: BTreeMap<PlayerId, EntityId>,
+    pub(super) player_identity: BTreeMap<EntityId, PlayerIdentity>,
+    pub(super) player_transform: BTreeMap<EntityId, PlayerTransform>,
+    pub(super) player_vitals: BTreeMap<EntityId, PlayerVitals>,
+    pub(super) player_inventory: BTreeMap<EntityId, PlayerInventory>,
+    pub(super) player_selected_hotbar: BTreeMap<EntityId, u8>,
+    pub(super) player_active_mining: BTreeMap<EntityId, ActiveMiningState>,
+    pub(super) dropped_items: BTreeMap<EntityId, DroppedItemState>,
     pub(super) next_entity_id: i32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlayerSessionState {
+    pub(crate) entity_id: EntityId,
+    pub(crate) cursor: Option<ItemStack>,
+    pub(crate) active_container: Option<OpenInventoryWindow>,
+    pub(crate) next_non_player_window_id: u8,
+    pub(crate) view: ClientView,
+    pub(crate) pending_keep_alive_id: Option<i32>,
+    pub(crate) last_keep_alive_sent_at: Option<u64>,
+    pub(crate) next_keep_alive_at: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SessionStore {
+    pub(super) player_sessions: BTreeMap<PlayerId, PlayerSessionState>,
     pub(super) next_keep_alive_id: i32,
     pub(super) keepalive_interval_ms: u64,
     pub(super) keepalive_timeout_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemScheduler;
+
 #[derive(Clone, Debug)]
-pub struct OnlinePlayer {
-    pub(super) entity_id: EntityId,
-    pub(super) snapshot: PlayerSnapshot,
-    pub(super) cursor: Option<ItemStack>,
-    pub(super) active_container: Option<OpenInventoryWindow>,
-    pub(super) next_non_player_window_id: u8,
-    pub(super) view: ClientView,
-    pub(super) pending_keep_alive_id: Option<i32>,
-    pub(super) last_keep_alive_sent_at: Option<u64>,
-    pub(super) next_keep_alive_at: u64,
-    pub(super) active_mining: Option<ActiveMiningState>,
+pub struct ServerCore {
+    pub(super) world: WorldStore,
+    pub(super) entities: EntityStore,
+    pub(super) sessions: SessionStore,
+    pub(super) scheduler: SystemScheduler,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct DroppedItemEntity {
+pub(crate) struct DroppedItemState {
     pub(crate) snapshot: DroppedItemSnapshot,
     pub(crate) last_updated_at_ms: u64,
     pub(crate) pickup_allowed_at_ms: u64,
@@ -149,41 +203,58 @@ impl ServerCore {
             max_players: config.max_players,
         };
         Self {
-            config,
-            world_meta,
-            chunks: BTreeMap::new(),
-            block_entities: BTreeMap::new(),
-            chest_viewers: BTreeMap::new(),
-            saved_players: BTreeMap::new(),
-            online_players: BTreeMap::new(),
-            dropped_items: BTreeMap::new(),
-            next_entity_id: 1,
-            next_keep_alive_id: 1,
-            keepalive_interval_ms: DEFAULT_KEEPALIVE_INTERVAL_MS,
-            keepalive_timeout_ms: DEFAULT_KEEPALIVE_TIMEOUT_MS,
+            world: WorldStore {
+                config,
+                world_meta,
+                chunks: BTreeMap::new(),
+                block_entities: BTreeMap::new(),
+                chest_viewers: BTreeMap::new(),
+                saved_players: BTreeMap::new(),
+            },
+            entities: EntityStore {
+                entity_kinds: BTreeMap::new(),
+                players_by_player_id: BTreeMap::new(),
+                player_identity: BTreeMap::new(),
+                player_transform: BTreeMap::new(),
+                player_vitals: BTreeMap::new(),
+                player_inventory: BTreeMap::new(),
+                player_selected_hotbar: BTreeMap::new(),
+                player_active_mining: BTreeMap::new(),
+                dropped_items: BTreeMap::new(),
+                next_entity_id: 1,
+            },
+            sessions: SessionStore {
+                player_sessions: BTreeMap::new(),
+                next_keep_alive_id: 1,
+                keepalive_interval_ms: DEFAULT_KEEPALIVE_INTERVAL_MS,
+                keepalive_timeout_ms: DEFAULT_KEEPALIVE_TIMEOUT_MS,
+            },
+            scheduler: SystemScheduler,
         }
     }
 
     #[must_use]
     pub fn from_snapshot(config: CoreConfig, snapshot: crate::WorldSnapshot) -> Self {
         let mut core = Self::new(config);
-        core.world_meta = snapshot.meta;
-        core.chunks = snapshot.chunks;
-        core.block_entities = snapshot.block_entities;
-        core.saved_players = snapshot.players;
+        core.world.world_meta = snapshot.meta;
+        core.world.chunks = snapshot.chunks;
+        core.world.block_entities = snapshot.block_entities;
+        core.world.saved_players = snapshot.players;
         core
     }
 
     #[must_use]
     pub fn snapshot(&self) -> crate::WorldSnapshot {
-        let mut players = self.saved_players.clone();
-        for (player_id, player) in &self.online_players {
-            players.insert(*player_id, Self::persisted_online_player_snapshot(player));
+        let mut players = self.world.saved_players.clone();
+        for player_id in self.sessions.player_sessions.keys().copied() {
+            if let Some(snapshot) = self.persisted_online_player_snapshot(player_id) {
+                players.insert(player_id, snapshot);
+            }
         }
         crate::WorldSnapshot {
-            meta: self.world_meta.clone(),
-            chunks: self.chunks.clone(),
-            block_entities: self.block_entities.clone(),
+            meta: self.world.world_meta.clone(),
+            chunks: self.world.chunks.clone(),
+            block_entities: self.world.block_entities.clone(),
             players,
         }
     }
@@ -191,18 +262,182 @@ impl ServerCore {
     #[must_use]
     pub fn player_summary(&self) -> PlayerSummary {
         PlayerSummary {
-            online_players: self.online_players.len(),
-            max_players: self.config.max_players,
+            online_players: self.sessions.player_sessions.len(),
+            max_players: self.world.config.max_players,
         }
     }
 
-    pub const fn set_max_players(&mut self, max_players: u8) {
-        self.config.max_players = max_players;
-        self.world_meta.max_players = max_players;
+    pub fn set_max_players(&mut self, max_players: u8) {
+        self.world.config.max_players = max_players;
+        self.world.world_meta.max_players = max_players;
     }
 
     #[must_use]
-    pub const fn world_meta(&self) -> &WorldMeta {
-        &self.world_meta
+    pub fn world_meta(&self) -> &WorldMeta {
+        &self.world.world_meta
+    }
+
+    #[must_use]
+    pub(super) fn player_entity_id(&self, player_id: PlayerId) -> Option<EntityId> {
+        self.entities.players_by_player_id.get(&player_id).copied()
+    }
+
+    #[must_use]
+    pub(super) fn player_session(&self, player_id: PlayerId) -> Option<&PlayerSessionState> {
+        self.sessions.player_sessions.get(&player_id)
+    }
+
+    pub(super) fn player_session_mut(
+        &mut self,
+        player_id: PlayerId,
+    ) -> Option<&mut PlayerSessionState> {
+        self.sessions.player_sessions.get_mut(&player_id)
+    }
+
+    #[must_use]
+    pub(super) fn player_inventory(&self, player_id: PlayerId) -> Option<&PlayerInventory> {
+        let entity_id = self.player_entity_id(player_id)?;
+        self.entities.player_inventory.get(&entity_id)
+    }
+
+    pub(super) fn player_inventory_mut(
+        &mut self,
+        player_id: PlayerId,
+    ) -> Option<&mut PlayerInventory> {
+        let entity_id = self.player_entity_id(player_id)?;
+        self.entities.player_inventory.get_mut(&entity_id)
+    }
+
+    #[must_use]
+    pub(super) fn player_selected_hotbar(&self, player_id: PlayerId) -> Option<u8> {
+        let entity_id = self.player_entity_id(player_id)?;
+        self.entities
+            .player_selected_hotbar
+            .get(&entity_id)
+            .copied()
+    }
+
+    pub(super) fn player_selected_hotbar_mut(&mut self, player_id: PlayerId) -> Option<&mut u8> {
+        let entity_id = self.player_entity_id(player_id)?;
+        self.entities.player_selected_hotbar.get_mut(&entity_id)
+    }
+
+    #[must_use]
+    pub(super) fn player_transform(&self, player_id: PlayerId) -> Option<&PlayerTransform> {
+        let entity_id = self.player_entity_id(player_id)?;
+        self.entities.player_transform.get(&entity_id)
+    }
+
+    #[must_use]
+    pub(super) fn player_active_mining(&self, player_id: PlayerId) -> Option<&ActiveMiningState> {
+        let entity_id = self.player_entity_id(player_id)?;
+        self.entities.player_active_mining.get(&entity_id)
+    }
+
+    pub(super) fn compose_player_snapshot_by_entity(
+        &self,
+        entity_id: EntityId,
+    ) -> Option<PlayerSnapshot> {
+        let identity = self.entities.player_identity.get(&entity_id)?;
+        let transform = self.entities.player_transform.get(&entity_id)?;
+        let vitals = self.entities.player_vitals.get(&entity_id)?;
+        let inventory = self.entities.player_inventory.get(&entity_id)?;
+        let selected_hotbar_slot = *self.entities.player_selected_hotbar.get(&entity_id)?;
+        Some(PlayerSnapshot {
+            id: identity.player_id,
+            username: identity.username.clone(),
+            position: transform.position,
+            yaw: transform.yaw,
+            pitch: transform.pitch,
+            on_ground: transform.on_ground,
+            dimension: transform.dimension,
+            health: vitals.health,
+            food: vitals.food,
+            food_saturation: vitals.food_saturation,
+            inventory: inventory.clone(),
+            selected_hotbar_slot,
+        })
+    }
+
+    #[must_use]
+    pub(super) fn compose_player_snapshot(&self, player_id: PlayerId) -> Option<PlayerSnapshot> {
+        let entity_id = self.player_entity_id(player_id)?;
+        self.compose_player_snapshot_by_entity(entity_id)
+    }
+
+    pub(super) fn spawn_online_player(&mut self, player: PlayerSnapshot, now_ms: u64) -> EntityId {
+        let player_id = player.id;
+        let entity_id = EntityId(self.entities.next_entity_id);
+        self.entities.next_entity_id = self.entities.next_entity_id.saturating_add(1);
+        let view = ClientView::new(player.position.chunk_pos(), self.world.config.view_distance);
+        self.entities
+            .entity_kinds
+            .insert(entity_id, EntityKind::Player);
+        self.entities
+            .players_by_player_id
+            .insert(player_id, entity_id);
+        self.entities.player_identity.insert(
+            entity_id,
+            PlayerIdentity {
+                player_id,
+                username: player.username.clone(),
+            },
+        );
+        self.entities.player_transform.insert(
+            entity_id,
+            PlayerTransform {
+                position: player.position,
+                yaw: player.yaw,
+                pitch: player.pitch,
+                on_ground: player.on_ground,
+                dimension: player.dimension,
+            },
+        );
+        self.entities.player_vitals.insert(
+            entity_id,
+            PlayerVitals {
+                health: player.health,
+                food: player.food,
+                food_saturation: player.food_saturation,
+            },
+        );
+        self.entities
+            .player_inventory
+            .insert(entity_id, player.inventory);
+        self.entities
+            .player_selected_hotbar
+            .insert(entity_id, player.selected_hotbar_slot);
+        self.entities.player_active_mining.remove(&entity_id);
+        self.sessions.player_sessions.insert(
+            player_id,
+            PlayerSessionState {
+                entity_id,
+                cursor: None,
+                active_container: None,
+                next_non_player_window_id: 1,
+                view,
+                pending_keep_alive_id: None,
+                last_keep_alive_sent_at: None,
+                next_keep_alive_at: now_ms.saturating_add(self.sessions.keepalive_interval_ms),
+            },
+        );
+        entity_id
+    }
+
+    pub(super) fn remove_online_player(
+        &mut self,
+        player_id: PlayerId,
+    ) -> Option<PlayerSessionState> {
+        let session = self.sessions.player_sessions.remove(&player_id)?;
+        let entity_id = session.entity_id;
+        self.entities.players_by_player_id.remove(&player_id);
+        self.entities.entity_kinds.remove(&entity_id);
+        self.entities.player_identity.remove(&entity_id);
+        self.entities.player_transform.remove(&entity_id);
+        self.entities.player_vitals.remove(&entity_id);
+        self.entities.player_inventory.remove(&entity_id);
+        self.entities.player_selected_hotbar.remove(&entity_id);
+        self.entities.player_active_mining.remove(&entity_id);
+        Some(session)
     }
 }

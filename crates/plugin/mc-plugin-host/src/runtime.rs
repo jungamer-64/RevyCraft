@@ -4,9 +4,9 @@ use crate::host::{PluginFailureAction, PluginHostStatusSnapshot};
 use crate::plugin_host::PreparedProtocolTopology;
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_core::{
-    AdminUiCapabilitySet, AdminUiProfileId, AuthCapabilitySet, GameplayCapabilitySet,
-    GameplayPolicyResolver, GameplayProfileId, PlayerId, PluginGenerationId, StorageCapabilitySet,
-    WorldSnapshot,
+    AdminUiCapabilitySet, AdminUiProfileId, AuthCapabilitySet, ConnectionId, GameplayCapabilitySet,
+    GameplayCommand, GameplayProfileId, PlayerId, PluginGenerationId, ServerCore,
+    SessionCapabilitySet, StorageCapabilitySet, TargetedEvent, WorldSnapshot,
 };
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_api::codec::admin_ui::{AdminRequest, AdminResponse};
@@ -32,12 +32,38 @@ pub struct RuntimeReloadContext {
     pub world_dir: PathBuf,
 }
 
-pub trait GameplayProfileHandle: GameplayPolicyResolver + Send + Sync {
+pub trait GameplayProfileHandle: Send + Sync {
     fn profile_id(&self) -> GameplayProfileId;
 
     fn capability_set(&self) -> GameplayCapabilitySet;
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
+
+    fn handle_player_join(
+        &self,
+        core: &mut ServerCore,
+        session: &SessionCapabilitySet,
+        connection_id: ConnectionId,
+        username: String,
+        player_id: PlayerId,
+        now_ms: u64,
+    ) -> Result<Vec<TargetedEvent>, PluginHostError>;
+
+    fn handle_command(
+        &self,
+        core: &mut ServerCore,
+        session: &SessionCapabilitySet,
+        command: &GameplayCommand,
+        now_ms: u64,
+    ) -> Result<Vec<TargetedEvent>, PluginHostError>;
+
+    fn handle_tick(
+        &self,
+        core: &mut ServerCore,
+        session: &SessionCapabilitySet,
+        player_id: PlayerId,
+        now_ms: u64,
+    ) -> Result<Vec<TargetedEvent>, PluginHostError>;
 
     /// # Errors
     ///

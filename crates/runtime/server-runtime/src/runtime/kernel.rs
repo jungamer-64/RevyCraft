@@ -55,20 +55,58 @@ impl RuntimeKernel {
                 | CoreCommand::Disconnect { .. }
         );
         let mut state = self.state.lock().await;
-        let events = if let (Some(session_capabilities), Some(gameplay)) =
-            (session_capabilities.as_ref(), gameplay.as_ref())
-        {
-            state
-                .core
-                .apply_command_with_policy(
-                    command,
-                    now_ms,
-                    Some(session_capabilities),
-                    gameplay.as_ref(),
-                )
-                .map_err(RuntimeError::Config)?
-        } else {
-            state.core.apply_command(command, now_ms)
+        let events = match command {
+            CoreCommand::LoginStart {
+                connection_id,
+                username,
+                player_id,
+            } => {
+                if let (Some(session_capabilities), Some(gameplay)) =
+                    (session_capabilities.as_ref(), gameplay.as_ref())
+                {
+                    gameplay
+                        .handle_player_join(
+                            &mut state.core,
+                            session_capabilities,
+                            connection_id,
+                            username,
+                            player_id,
+                            now_ms,
+                        )
+                        .map_err(|error| RuntimeError::Config(error.to_string()))?
+                } else {
+                    state.core.apply_command(
+                        CoreCommand::LoginStart {
+                            connection_id,
+                            username,
+                            player_id,
+                        },
+                        now_ms,
+                    )
+                }
+            }
+            command => {
+                if let Ok(gameplay_command) = command.clone().into_gameplay() {
+                    if let (Some(session_capabilities), Some(gameplay)) =
+                        (session_capabilities.as_ref(), gameplay.as_ref())
+                    {
+                        gameplay
+                            .handle_command(
+                                &mut state.core,
+                                session_capabilities,
+                                &gameplay_command,
+                                now_ms,
+                            )
+                            .map_err(|error| RuntimeError::Config(error.to_string()))?
+                    } else {
+                        state
+                            .core
+                            .apply_builtin_gameplay_command(gameplay_command, now_ms)
+                    }
+                } else {
+                    state.core.apply_command(command, now_ms)
+                }
+            }
         };
         if should_persist {
             state.dirty = true;
@@ -103,15 +141,9 @@ impl RuntimeKernel {
         let mut events = state.core.tick(now_ms);
         for (player_id, session_capabilities, gameplay) in gameplay_sessions {
             events.extend(
-                state
-                    .core
-                    .tick_player_with_policy(
-                        *player_id,
-                        now_ms,
-                        session_capabilities,
-                        gameplay.as_ref(),
-                    )
-                    .map_err(RuntimeError::Config)?,
+                gameplay
+                    .handle_tick(&mut state.core, session_capabilities, *player_id, now_ms)
+                    .map_err(|error| RuntimeError::Config(error.to_string()))?,
             );
         }
         if events

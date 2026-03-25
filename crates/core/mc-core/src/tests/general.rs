@@ -125,61 +125,6 @@ fn login_emits_initial_chunks_and_existing_entities() {
 }
 
 #[test]
-fn canonical_policy_matches_default_apply_command() {
-    let config = CoreConfig {
-        game_mode: 1,
-        ..CoreConfig::default()
-    };
-    let mut default_core = ServerCore::new(config.clone());
-    let mut explicit_core = ServerCore::new(config);
-    let player = player_id("policy-parity");
-    let command = CoreCommand::LoginStart {
-        connection_id: ConnectionId(1),
-        username: "policy-parity".to_string(),
-        player_id: player,
-    };
-
-    let default_events = default_core.apply_command(command.clone(), 0);
-    let explicit_events = explicit_core
-        .apply_command_with_policy(
-            command,
-            0,
-            Some(&canonical_session_capabilities()),
-            &CanonicalGameplayPolicy,
-        )
-        .expect("canonical gameplay policy should succeed");
-
-    assert_eq!(default_events, explicit_events);
-    assert_eq!(default_core.snapshot(), explicit_core.snapshot());
-}
-
-#[test]
-fn readonly_policy_rejects_block_edit_without_mutation() {
-    let (core, player) = logged_in_creative_core("readonly");
-    let before = core.snapshot();
-    let mut readonly_capabilities = canonical_session_capabilities();
-    readonly_capabilities.gameplay_profile = GameplayProfileId::new("readonly");
-
-    let effect = ReadonlyGameplayPolicy
-        .handle_command(
-            &core,
-            &readonly_capabilities,
-            &CoreCommand::PlaceBlock {
-                player_id: player,
-                position: BlockPos::new(2, 3, 0),
-                hand: InteractionHand::Main,
-                face: Some(BlockFace::Top),
-                held_item: None,
-            },
-        )
-        .expect("readonly gameplay policy should handle place rejection");
-
-    assert!(effect.mutations.is_empty());
-    assert!(effect.emitted_events.is_empty());
-    assert_eq!(before, core.snapshot());
-}
-
-#[test]
 fn moving_player_updates_other_clients_and_view() {
     let mut core = ServerCore::new(CoreConfig {
         view_distance: 1,
@@ -217,6 +162,153 @@ fn keepalive_tick_emits_keepalive() {
     assert_player_event(&events, first, |event| {
         matches!(event, CoreEvent::KeepAliveRequested { .. })
     });
+}
+
+#[test]
+fn gameplay_move_direct_path_matches_manual_transaction_commit() {
+    let mut direct = ServerCore::new(CoreConfig {
+        view_distance: 1,
+        ..CoreConfig::default()
+    });
+    let (_first, _) = login_player(&mut direct, 1, "direct-first");
+    let (mover, _) = login_player(&mut direct, 2, "direct-mover");
+    let mut via_tx = direct.clone();
+
+    let direct_events = direct.apply_command(
+        CoreCommand::MoveIntent {
+            player_id: mover,
+            position: Some(Vec3::new(32.5, 4.0, 0.5)),
+            yaw: Some(90.0),
+            pitch: Some(-15.0),
+            on_ground: true,
+        },
+        50,
+    );
+    let tx_events = apply_test_transaction(&mut via_tx, 50, |tx| {
+        tx.set_player_pose(
+            mover,
+            Some(Vec3::new(32.5, 4.0, 0.5)),
+            Some(90.0),
+            Some(-15.0),
+            true,
+        );
+    });
+
+    assert_eq!(direct_events, tx_events);
+    assert_eq!(direct.snapshot(), via_tx.snapshot());
+}
+
+#[test]
+fn gameplay_inventory_direct_path_matches_manual_transaction_commit() {
+    let (mut direct, player_id) = logged_in_creative_core("inventory-parity");
+    let mut via_tx = direct.clone();
+
+    let direct_events = creative_inventory_set(
+        &mut direct,
+        player_id,
+        InventorySlot::Hotbar(1),
+        Some(item("minecraft:glass", 12)),
+    );
+    let tx_events = apply_test_transaction(&mut via_tx, 0, |tx| {
+        tx.set_inventory_slot(
+            player_id,
+            InventorySlot::Hotbar(1),
+            Some(item("minecraft:glass", 12)),
+        );
+    });
+
+    assert_eq!(direct_events, tx_events);
+    assert_eq!(direct.snapshot(), via_tx.snapshot());
+}
+
+#[test]
+fn tick_emits_scheduler_phases_in_canonical_order() {
+    let (mut core, player_id) = logged_in_core(CoreConfig::default(), 1, "tick-order");
+    let _ = core.open_furnace(player_id, 3, "Furnace");
+    {
+        let window = active_container_mut(&mut core, player_id);
+        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
+            panic!("expected furnace state");
+        };
+        furnace.input = Some(item("minecraft:sand", 1));
+        furnace.fuel = Some(item("minecraft:oak_planks", 1));
+    }
+    let player_position = core
+        .compose_player_snapshot(player_id)
+        .expect("player should stay online")
+        .position;
+    let _ = spawn_dropped_item_via_tx(&mut core, player_position, item("minecraft:oak_log", 1), 0);
+    let mining_pos = BlockPos::new(2, 1, 0);
+    let _ = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id,
+            position: mining_pos,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    core.player_session_mut(player_id)
+        .expect("player session should exist")
+        .next_keep_alive_at = 0;
+
+    let events = core.tick(500);
+    let furnace_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::ContainerPropertyChanged { window_id: 3, .. }
+                ) if *event_player_id == player_id
+            )
+        })
+        .expect("furnace maintenance events should be present");
+    let drop_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::EntityDespawned { entity_ids }
+                ) if *event_player_id == player_id && !entity_ids.is_empty()
+            )
+        })
+        .expect("dropped item phase should despawn the picked up entity");
+    let mining_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::BlockBreakingProgress {
+                        position,
+                        stage: Some(_),
+                        ..
+                    }
+                ) if *event_player_id == player_id && *position == mining_pos
+            )
+        })
+        .expect("mining phase should emit progress after the dropped-item phase");
+    let keep_alive_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::KeepAliveRequested { .. }
+                ) if *event_player_id == player_id
+            )
+        })
+        .expect("keepalive phase should run after gameplay systems");
+
+    assert!(furnace_index < drop_index);
+    assert!(drop_index < mining_index);
+    assert!(mining_index < keep_alive_index);
 }
 
 #[test]
@@ -662,13 +754,7 @@ fn use_block_places_ticks_closes_and_roundtrips_world_backed_furnace() {
     assert_container_property_changed(&open_events, first, 1, 3, 200);
 
     {
-        let window = core
-            .online_players
-            .get_mut(&first)
-            .expect("player should stay online")
-            .active_container
-            .as_mut()
-            .expect("furnace should stay open");
+        let window = active_container_mut(&mut core, first);
         let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
             panic!("expected furnace state");
         };
@@ -770,13 +856,7 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
     );
     assert_container_opened(&open_events, first, 1, InventoryContainer::Furnace);
     {
-        let window = core
-            .online_players
-            .get_mut(&first)
-            .expect("player should stay online")
-            .active_container
-            .as_mut()
-            .expect("furnace should stay open");
+        let window = active_container_mut(&mut core, first);
         let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
             panic!("expected furnace state");
         };
@@ -811,13 +891,7 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
     );
 
     {
-        let window = core
-            .online_players
-            .get_mut(&first)
-            .expect("player should stay online")
-            .active_container
-            .as_mut()
-            .expect("furnace should stay open");
+        let window = active_container_mut(&mut core, first);
         let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
             panic!("expected furnace state");
         };
@@ -946,16 +1020,7 @@ fn survival_break_drop_mapping_handles_grass_and_glass() {
     assert_player_dropped_item_spawned(&grass_finish, player, Some(("minecraft:dirt", 1)));
 
     let glass_pos = BlockPos::new(4, 4, 0);
-    let _ = core.apply_gameplay_effect(
-        GameplayEffect {
-            mutations: vec![GameplayMutation::Block {
-                position: glass_pos,
-                block: BlockState::glass(),
-            }],
-            emitted_events: Vec::new(),
-        },
-        0,
-    );
+    let _ = set_block_via_tx(&mut core, glass_pos, BlockState::glass(), 0);
     let glass_break = core.apply_command(
         CoreCommand::DigBlock {
             player_id: player,
@@ -987,13 +1052,7 @@ fn survival_mining_respects_exact_boundaries_for_dirt_sand_and_stone() {
     ] {
         let (mut core, player) = logged_in_core(CoreConfig::default(), 1, "boundary");
         if let Some(block) = placed_block.clone() {
-            let _ = core.apply_gameplay_effect(
-                GameplayEffect {
-                    mutations: vec![GameplayMutation::Block { position, block }],
-                    emitted_events: Vec::new(),
-                },
-                0,
-            );
+            let _ = set_block_via_tx(&mut core, position, block, 0);
         }
 
         let start = core.apply_command(
@@ -1109,16 +1168,7 @@ fn survival_successful_place_and_external_block_change_clear_active_mining() {
         },
         1_100,
     );
-    let external = core.apply_gameplay_effect(
-        GameplayEffect {
-            mutations: vec![GameplayMutation::Block {
-                position: mined_pos,
-                block: BlockState::sand(),
-            }],
-            emitted_events: Vec::new(),
-        },
-        1_200,
-    );
+    let external = set_block_via_tx(&mut core, mined_pos, BlockState::sand(), 1_200);
     assert!(block_break_progress_count(&external, player, mined_pos, None) >= 1);
     let after_external = core.tick(2_000);
     assert_eq!(snapshot_block(&core, mined_pos), BlockState::sand());
@@ -1216,14 +1266,10 @@ fn survival_pickup_delay_and_nearest_player_pickup_work() {
         0,
     );
 
-    let spawn_events = core.apply_gameplay_effect(
-        GameplayEffect {
-            mutations: vec![GameplayMutation::DroppedItem {
-                position: Vec3::new(1.5, 4.5, 0.5),
-                item: item("minecraft:cobblestone", 1),
-            }],
-            emitted_events: Vec::new(),
-        },
+    let spawn_events = spawn_dropped_item_via_tx(
+        &mut core,
+        Vec3::new(1.5, 4.5, 0.5),
+        item("minecraft:cobblestone", 1),
         0,
     );
     let entity_id = dropped_item_entity_id(&spawn_events, first);
@@ -1281,14 +1327,10 @@ fn survival_high_fall_drop_becomes_pickable_after_settling() {
         0,
     );
 
-    let spawn_events = core.apply_gameplay_effect(
-        GameplayEffect {
-            mutations: vec![GameplayMutation::DroppedItem {
-                position: Vec3::new(1.5, 24.5, 0.5),
-                item: item("minecraft:cobblestone", 1),
-            }],
-            emitted_events: Vec::new(),
-        },
+    let spawn_events = spawn_dropped_item_via_tx(
+        &mut core,
+        Vec3::new(1.5, 24.5, 0.5),
+        item("minecraft:cobblestone", 1),
         0,
     );
     let entity_id = dropped_item_entity_id(&spawn_events, player);
@@ -1300,13 +1342,7 @@ fn survival_high_fall_drop_becomes_pickable_after_settling() {
         }),
         0
     );
-    let falling_y = core
-        .dropped_items
-        .get(&entity_id)
-        .expect("high-fall dropped item should still exist")
-        .snapshot
-        .position
-        .y;
+    let falling_y = dropped_item_snapshot(&core, entity_id).position.y;
     assert!(falling_y < 24.5);
     assert!(falling_y > 4.25);
 
@@ -1334,41 +1370,30 @@ fn survival_partial_pickup_leaves_leftover_drop_for_late_joiners() {
         0,
     );
 
-    let mut fill_mutations = vec![
-        GameplayMutation::InventorySlot {
-            player_id: first,
-            slot: InventorySlot::MainInventory(0),
-            stack: Some(item("minecraft:cobblestone", 60)),
-        },
-        GameplayMutation::InventorySlot {
-            player_id: first,
-            slot: InventorySlot::Offhand,
-            stack: Some(item("minecraft:dirt", 64)),
-        },
-    ];
-    for slot in 1_u8..27 {
-        fill_mutations.push(GameplayMutation::InventorySlot {
-            player_id: first,
-            slot: InventorySlot::MainInventory(slot),
-            stack: Some(item("minecraft:dirt", 64)),
-        });
-    }
-    let _ = core.apply_gameplay_effect(
-        GameplayEffect {
-            mutations: fill_mutations,
-            emitted_events: Vec::new(),
-        },
-        0,
-    );
+    let _ = apply_test_transaction(&mut core, 0, |tx| {
+        tx.set_inventory_slot(
+            first,
+            InventorySlot::MainInventory(0),
+            Some(item("minecraft:cobblestone", 60)),
+        );
+        tx.set_inventory_slot(
+            first,
+            InventorySlot::Offhand,
+            Some(item("minecraft:dirt", 64)),
+        );
+        for slot in 1_u8..27 {
+            tx.set_inventory_slot(
+                first,
+                InventorySlot::MainInventory(slot),
+                Some(item("minecraft:dirt", 64)),
+            );
+        }
+    });
 
-    let _ = core.apply_gameplay_effect(
-        GameplayEffect {
-            mutations: vec![GameplayMutation::DroppedItem {
-                position: Vec3::new(1.5, 4.5, 0.5),
-                item: item("minecraft:cobblestone", 10),
-            }],
-            emitted_events: Vec::new(),
-        },
+    let _ = spawn_dropped_item_via_tx(
+        &mut core,
+        Vec3::new(1.5, 4.5, 0.5),
+        item("minecraft:cobblestone", 10),
         0,
     );
 
@@ -1408,33 +1433,15 @@ fn survival_pickup_prefers_leftmost_hotbar_slot_before_main_inventory() {
         0,
     );
 
-    let _ = core.apply_gameplay_effect(
-        GameplayEffect {
-            mutations: vec![
-                GameplayMutation::InventorySlot {
-                    player_id: first,
-                    slot: InventorySlot::Hotbar(0),
-                    stack: None,
-                },
-                GameplayMutation::InventorySlot {
-                    player_id: first,
-                    slot: InventorySlot::MainInventory(0),
-                    stack: None,
-                },
-            ],
-            emitted_events: Vec::new(),
-        },
-        0,
-    );
+    let _ = apply_test_transaction(&mut core, 0, |tx| {
+        tx.set_inventory_slot(first, InventorySlot::Hotbar(0), None);
+        tx.set_inventory_slot(first, InventorySlot::MainInventory(0), None);
+    });
 
-    let _ = core.apply_gameplay_effect(
-        GameplayEffect {
-            mutations: vec![GameplayMutation::DroppedItem {
-                position: Vec3::new(1.5, 4.5, 0.5),
-                item: item("minecraft:dirt", 1),
-            }],
-            emitted_events: Vec::new(),
-        },
+    let _ = spawn_dropped_item_via_tx(
+        &mut core,
+        Vec3::new(1.5, 4.5, 0.5),
+        item("minecraft:dirt", 1),
         0,
     );
 
@@ -1457,4 +1464,233 @@ fn survival_pickup_prefers_leftmost_hotbar_slot_before_main_inventory() {
         }),
         0
     );
+}
+
+#[test]
+fn player_entity_and_session_indexes_stay_in_sync() {
+    let mut core = ServerCore::new(CoreConfig::default());
+    let (player_id, _) = login_player(&mut core, 1, "ecs-sync");
+
+    let session = core
+        .player_session(player_id)
+        .expect("login should create a player session");
+    let entity_id = session.entity_id;
+    assert_eq!(
+        core.entities.players_by_player_id.get(&player_id),
+        Some(&entity_id)
+    );
+    assert!(core.entities.player_identity.contains_key(&entity_id));
+    assert!(core.entities.player_transform.contains_key(&entity_id));
+    assert!(core.entities.player_inventory.contains_key(&entity_id));
+
+    let spawn_events = spawn_dropped_item_via_tx(
+        &mut core,
+        Vec3::new(3.5, 4.5, 0.5),
+        item("minecraft:cobblestone", 1),
+        0,
+    );
+    let drop_entity_id = dropped_item_entity_id(&spawn_events, player_id);
+    assert!(core.entities.dropped_items.contains_key(&drop_entity_id));
+    assert!(
+        core.entities
+            .players_by_player_id
+            .values()
+            .all(|mapped| *mapped != drop_entity_id),
+        "dropped item entity should not appear in the player index"
+    );
+
+    let _ = core.apply_command(CoreCommand::Disconnect { player_id }, 0);
+    assert!(core.player_session(player_id).is_none());
+    assert!(!core.entities.players_by_player_id.contains_key(&player_id));
+    assert!(!core.entities.player_identity.contains_key(&entity_id));
+    assert!(!core.entities.player_transform.contains_key(&entity_id));
+    assert!(!core.entities.player_inventory.contains_key(&entity_id));
+}
+
+#[test]
+fn gameplay_transaction_rollback_discards_entity_and_session_changes() {
+    let (mut core, player_id) = logged_in_core(CoreConfig::default(), 1, "tx-rollback");
+    let before_snapshot = core
+        .compose_player_snapshot(player_id)
+        .expect("online player snapshot should compose");
+    let before_drop_count = core.entities.dropped_items.len();
+
+    {
+        let mut tx = core.begin_gameplay_transaction(0);
+        tx.set_player_pose(
+            player_id,
+            Some(Vec3::new(9.5, 10.0, 0.5)),
+            Some(45.0),
+            Some(-10.0),
+            true,
+        );
+        tx.spawn_dropped_item(Vec3::new(9.5, 10.5, 0.5), item("minecraft:stone", 1));
+        let draft_snapshot = tx
+            .player_snapshot(player_id)
+            .expect("transaction should expose read-after-write state");
+        assert_eq!(draft_snapshot.position, Vec3::new(9.5, 10.0, 0.5));
+        assert_eq!(draft_snapshot.yaw, 45.0);
+        assert_eq!(draft_snapshot.pitch, -10.0);
+    }
+
+    let after_snapshot = core
+        .compose_player_snapshot(player_id)
+        .expect("uncommitted transaction should leave base state intact");
+    assert_eq!(after_snapshot, before_snapshot);
+    assert_eq!(core.entities.dropped_items.len(), before_drop_count);
+}
+
+#[test]
+fn gameplay_transaction_prepare_login_is_overlay_only_until_finalize() {
+    let mut core = ServerCore::new(CoreConfig::default());
+    let joining = player_id("prepared-only");
+
+    let events = {
+        let mut tx = core.begin_gameplay_transaction(0);
+        let prepared = tx
+            .begin_login(ConnectionId(7), "prepared".to_string(), joining)
+            .expect("prepare should succeed");
+        assert!(prepared.is_none());
+        let snapshot = tx
+            .player_snapshot(joining)
+            .expect("prepared login should be visible inside the transaction");
+        assert_eq!(snapshot.username, "prepared");
+        tx.commit()
+    };
+
+    assert!(events.is_empty());
+    assert!(core.player_session(joining).is_none());
+    assert!(core.compose_player_snapshot(joining).is_none());
+    assert!(!core.world.saved_players.contains_key(&joining));
+}
+
+#[test]
+fn gameplay_transaction_finalize_uses_overlay_player_state_without_leaking_player_events() {
+    let mut core = ServerCore::new(CoreConfig::default());
+    let joining = player_id("overlay-join");
+    let events = {
+        let mut tx = core.begin_gameplay_transaction(0);
+        let prepared = tx
+            .begin_login(ConnectionId(8), "overlay-join".to_string(), joining)
+            .expect("prepare should succeed");
+        assert!(prepared.is_none());
+        tx.set_inventory_slot(
+            joining,
+            InventorySlot::Hotbar(0),
+            Some(item("minecraft:glass", 32)),
+        );
+        tx.set_selected_hotbar_slot(joining, 4);
+        tx.finalize_login(ConnectionId(8), joining)
+            .expect("finalize should succeed");
+        tx.commit()
+    };
+
+    assert_connection_inventory_contents(&events, ConnectionId(8));
+    assert_connection_selected_hotbar_slot(&events, ConnectionId(8), 4);
+    assert_eq!(
+        count_player_events(&events, joining, |_| true),
+        0,
+        "pre-finalize player-local mutations should fold into bootstrap, not leak player-targeted events",
+    );
+
+    let player = core
+        .compose_player_snapshot(joining)
+        .expect("finalized player should be online");
+    assert_eq!(player.selected_hotbar_slot, 4);
+    assert_eq!(
+        player
+            .inventory
+            .get_slot(InventorySlot::Hotbar(0))
+            .map(stack_summary),
+        Some(("minecraft:glass", 32)),
+    );
+}
+
+#[test]
+fn gameplay_transaction_finalize_includes_pre_finalize_drops_in_connection_sync() {
+    let mut core = ServerCore::new(CoreConfig::default());
+    let joining = player_id("join-with-drop");
+    let events = {
+        let mut tx = core.begin_gameplay_transaction(0);
+        let prepared = tx
+            .begin_login(ConnectionId(9), "join-with-drop".to_string(), joining)
+            .expect("prepare should succeed");
+        assert!(prepared.is_none());
+        tx.spawn_dropped_item(Vec3::new(2.5, 4.5, 0.5), item("minecraft:cobblestone", 3));
+        tx.finalize_login(ConnectionId(9), joining)
+            .expect("finalize should succeed");
+        tx.commit()
+    };
+
+    assert_connection_dropped_item_spawned(
+        &events,
+        ConnectionId(9),
+        Some(("minecraft:cobblestone", 3)),
+    );
+}
+
+#[test]
+fn gameplay_transaction_commit_preserves_emit_event_order() {
+    let (mut core, player_id) = logged_in_core(CoreConfig::default(), 1, "event-order");
+    let marker_pos = BlockPos::new(3, 4, 5);
+    let events = apply_test_transaction(&mut core, 0, |tx| {
+        tx.set_selected_hotbar_slot(player_id, 2);
+        tx.emit_event(
+            EventTarget::Player(player_id),
+            CoreEvent::BlockChanged {
+                position: marker_pos,
+                block: BlockState::glass(),
+            },
+        );
+        tx.set_inventory_slot(
+            player_id,
+            InventorySlot::Hotbar(0),
+            Some(item("minecraft:glass", 1)),
+        );
+    });
+
+    let selected_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::SelectedHotbarSlotChanged { slot: 2 }
+                ) if *event_player_id == player_id
+            )
+        })
+        .expect("selected-slot event should be present");
+    let marker_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::BlockChanged { position, block }
+                ) if *event_player_id == player_id
+                    && *position == marker_pos
+                    && block.key.as_str() == "minecraft:glass"
+            )
+        })
+        .expect("marker event should be present");
+    let inventory_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::InventorySlotChanged {
+                        slot: InventorySlot::Hotbar(0),
+                        ..
+                    }
+                ) if *event_player_id == player_id
+            )
+        })
+        .expect("inventory event should be present");
+
+    assert!(selected_index < marker_index);
+    assert!(marker_index < inventory_index);
 }

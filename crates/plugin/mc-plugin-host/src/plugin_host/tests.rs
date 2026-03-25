@@ -1,16 +1,15 @@
-use super::{current_artifact_key, with_current_gameplay_query, with_gameplay_query};
+use super::{
+    current_artifact_key, with_current_gameplay_transaction, with_gameplay_transaction_and_limits,
+};
 use crate::PluginHostError as RuntimeError;
-use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
+use crate::config::{BootstrapConfig, PluginBufferLimits, RuntimeSelectionConfig};
 use crate::host::{PluginAbiRange, PluginFailureAction, plugin_host_from_config};
 use crate::runtime::{ProtocolReloadSession, RuntimeReloadContext};
 use crate::test_support::{
     InProcessAdminUiPlugin, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
     InProcessStoragePlugin, PluginFailureMatrix, TestPluginHost, TestPluginHostBuilder,
 };
-use mc_core::{
-    BlockPos, BlockState, ConnectionId, CoreConfig, DimensionId, EntityId, GameplayQuery, PlayerId,
-    ServerCore, WorldMeta,
-};
+use mc_core::{ConnectionId, CoreConfig, EntityId, PlayerId, ServerCore};
 use mc_plugin_admin_ui_console::in_process_plugin_entrypoints as console_admin_ui_entrypoints;
 use mc_plugin_api::abi::{
     CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginAbiVersion, PluginKind, Utf8Slice,

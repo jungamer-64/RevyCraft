@@ -1,108 +1,70 @@
 use super::*;
-use mc_core::{
-    GameplayCapability, GameplayCapabilitySet, GameplayPolicyResolver, GameplayProfileId,
-    GameplayQuery, SessionCapabilitySet,
-};
-
-struct HostQuery<'a> {
-    host: &'a dyn GameplayHost,
-}
-
-impl GameplayQuery for HostQuery<'_> {
-    fn world_meta(&self) -> WorldMeta {
-        self.host
-            .read_world_meta()
-            .expect("gameplay host should provide world meta")
-    }
-
-    fn player_snapshot(&self, player_id: PlayerId) -> Option<PlayerSnapshot> {
-        self.host
-            .read_player_snapshot(player_id)
-            .expect("gameplay host should provide player snapshots")
-    }
-
-    fn block_state(&self, position: mc_core::BlockPos) -> mc_core::BlockState {
-        self.host
-            .read_block_state(position)
-            .expect("gameplay host should provide block states")
-    }
-
-    fn block_entity(&self, position: mc_core::BlockPos) -> Option<mc_core::BlockEntityState> {
-        self.host
-            .read_block_entity(position)
-            .expect("gameplay host should provide block entities")
-    }
-
-    fn can_edit_block(&self, player_id: PlayerId, position: mc_core::BlockPos) -> bool {
-        self.host
-            .can_edit_block(player_id, position)
-            .expect("gameplay host should provide can_edit_block")
-    }
-}
-
-fn session_capabilities(
-    plugin_capabilities: &GameplayCapabilitySet,
-    session: &GameplaySessionSnapshot,
-) -> SessionCapabilitySet {
-    SessionCapabilitySet {
-        protocol: session.protocol.clone(),
-        gameplay: plugin_capabilities.clone(),
-        gameplay_profile: session.gameplay_profile.clone(),
-        entity_id: session.entity_id,
-        protocol_generation: session.protocol_generation,
-        gameplay_generation: session.gameplay_generation,
-    }
-}
+use mc_core::{GameplayCapabilitySet, GameplayCommand, GameplayProfileId};
 
 pub trait GameplayHost {
-    /// Writes a diagnostic message through the host runtime.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the host rejects or cannot persist the log entry.
     fn log(&self, level: u32, message: &str) -> Result<(), String>;
 
-    /// Reads the latest snapshot for the given player.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the host query fails.
     fn read_player_snapshot(&self, player_id: PlayerId) -> Result<Option<PlayerSnapshot>, String>;
 
-    /// Reads world metadata from the host runtime.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the host query fails.
     fn read_world_meta(&self) -> Result<WorldMeta, String>;
 
-    /// Reads the current block state at the given position.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the host query fails.
     fn read_block_state(&self, position: mc_core::BlockPos) -> Result<mc_core::BlockState, String>;
 
-    /// Reads the current block entity state at the given position.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the host query fails.
     fn read_block_entity(
         &self,
         position: mc_core::BlockPos,
     ) -> Result<Option<mc_core::BlockEntityState>, String>;
 
-    /// Checks whether the given player is allowed to edit the given block.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the host query fails.
     fn can_edit_block(
         &self,
         player_id: PlayerId,
         position: mc_core::BlockPos,
     ) -> Result<bool, String>;
+
+    fn set_player_pose(
+        &self,
+        player_id: PlayerId,
+        position: Option<mc_core::Vec3>,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        on_ground: bool,
+    ) -> Result<(), String>;
+
+    fn set_selected_hotbar_slot(&self, player_id: PlayerId, slot: u8) -> Result<(), String>;
+
+    fn set_inventory_slot(
+        &self,
+        player_id: PlayerId,
+        slot: mc_core::InventorySlot,
+        stack: Option<mc_core::ItemStack>,
+    ) -> Result<(), String>;
+
+    fn clear_mining(&self, player_id: PlayerId) -> Result<(), String>;
+
+    fn begin_mining(
+        &self,
+        player_id: PlayerId,
+        position: mc_core::BlockPos,
+        duration_ms: u64,
+    ) -> Result<(), String>;
+
+    fn open_chest(&self, player_id: PlayerId, position: mc_core::BlockPos) -> Result<(), String>;
+
+    fn open_furnace(&self, player_id: PlayerId, position: mc_core::BlockPos) -> Result<(), String>;
+
+    fn set_block(
+        &self,
+        position: mc_core::BlockPos,
+        block: mc_core::BlockState,
+    ) -> Result<(), String>;
+
+    fn spawn_dropped_item(
+        &self,
+        position: mc_core::Vec3,
+        item: mc_core::ItemStack,
+    ) -> Result<(), String>;
+
+    fn emit_event(&self, event: mc_core::TargetedEvent) -> Result<(), String>;
 }
 
 pub trait RustGameplayPlugin: Send + Sync + 'static {
@@ -112,53 +74,33 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
         GameplayCapabilitySet::default()
     }
 
-    /// Handles a player joining the gameplay session.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the plugin cannot produce join-side effects.
     fn handle_player_join(
         &self,
         _host: &dyn GameplayHost,
         _session: &GameplaySessionSnapshot,
-        _player: &PlayerSnapshot,
-    ) -> Result<GameplayJoinEffect, String> {
-        Ok(GameplayJoinEffect::default())
+        _player_id: PlayerId,
+    ) -> Result<(), String> {
+        Ok(())
     }
 
-    /// Handles a gameplay command emitted by the runtime.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the plugin cannot produce command-side effects.
     fn handle_command(
         &self,
         _host: &dyn GameplayHost,
         _session: &GameplaySessionSnapshot,
-        _command: &CoreCommand,
-    ) -> Result<GameplayEffect, String> {
-        Ok(GameplayEffect::default())
+        _command: &GameplayCommand,
+    ) -> Result<(), String> {
+        Ok(())
     }
 
-    /// Handles a gameplay tick for the current session.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the plugin cannot produce tick-side effects.
     fn handle_tick(
         &self,
         _host: &dyn GameplayHost,
         _session: &GameplaySessionSnapshot,
         _now_ms: u64,
-    ) -> Result<GameplayEffect, String> {
-        Ok(GameplayEffect::default())
+    ) -> Result<(), String> {
+        Ok(())
     }
 
-    /// Notifies the plugin that the gameplay session has been closed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the plugin cannot clean up its session state.
     fn session_closed(
         &self,
         _host: &dyn GameplayHost,
@@ -167,11 +109,6 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Exports plugin-specific gameplay session state into an opaque blob.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the plugin cannot serialize its session state.
     fn export_session_state(
         &self,
         _host: &dyn GameplayHost,
@@ -180,11 +117,6 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
         Ok(Vec::new())
     }
 
-    /// Imports plugin-specific gameplay session state from an opaque blob.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the provided blob is invalid for the current plugin.
     fn import_session_state(
         &self,
         _host: &dyn GameplayHost,
@@ -195,99 +127,9 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
     }
 }
 
-pub trait PolicyGameplayPlugin: Send + Sync + 'static {
-    type Policy: GameplayPolicyResolver + Default;
-
-    const PROFILE_ID: &'static str;
-    const EXPORT_TAG: &'static str;
-    const IMPORT_REJECT_MESSAGE: &'static str;
-
-    fn capabilities() -> &'static [GameplayCapability];
-}
-
-impl<T> RustGameplayPlugin for T
-where
-    T: PolicyGameplayPlugin,
-{
-    fn descriptor(&self) -> GameplayDescriptor {
-        GameplayDescriptor {
-            profile: GameplayProfileId::new(T::PROFILE_ID),
-        }
-    }
-
-    fn capability_set(&self) -> GameplayCapabilitySet {
-        capabilities::gameplay_capabilities(T::capabilities())
-    }
-
-    fn handle_player_join(
-        &self,
-        host: &dyn GameplayHost,
-        session: &GameplaySessionSnapshot,
-        player: &PlayerSnapshot,
-    ) -> Result<GameplayJoinEffect, String> {
-        let query = HostQuery { host };
-        let capabilities = capabilities::gameplay_capabilities(T::capabilities());
-        T::Policy::default().handle_player_join(
-            &query,
-            &session_capabilities(&capabilities, session),
-            player,
-        )
-    }
-
-    fn handle_command(
-        &self,
-        host: &dyn GameplayHost,
-        session: &GameplaySessionSnapshot,
-        command: &CoreCommand,
-    ) -> Result<GameplayEffect, String> {
-        let query = HostQuery { host };
-        let capabilities = capabilities::gameplay_capabilities(T::capabilities());
-        T::Policy::default().handle_command(
-            &query,
-            &session_capabilities(&capabilities, session),
-            command,
-        )
-    }
-
-    fn handle_tick(
-        &self,
-        host: &dyn GameplayHost,
-        session: &GameplaySessionSnapshot,
-        now_ms: u64,
-    ) -> Result<GameplayEffect, String> {
-        let query = HostQuery { host };
-        let capabilities = capabilities::gameplay_capabilities(T::capabilities());
-        let Some(player_id) = session.player_id else {
-            return Ok(GameplayEffect::default());
-        };
-        T::Policy::default().handle_tick(
-            &query,
-            &session_capabilities(&capabilities, session),
-            player_id,
-            now_ms,
-        )
-    }
-
-    fn export_session_state(
-        &self,
-        _host: &dyn GameplayHost,
-        _session: &GameplaySessionSnapshot,
-    ) -> Result<Vec<u8>, String> {
-        Ok(option_env!("REVY_PLUGIN_BUILD_TAG")
-            .unwrap_or(T::EXPORT_TAG)
-            .as_bytes()
-            .to_vec())
-    }
-
-    fn import_session_state(
-        &self,
-        _host: &dyn GameplayHost,
-        _session: &GameplaySessionSnapshot,
-        _blob: &[u8],
-    ) -> Result<(), String> {
-        if capabilities::build_tag_contains("reload-fail") {
-            return Err(T::IMPORT_REJECT_MESSAGE.to_string());
-        }
-        Ok(())
+#[must_use]
+pub fn gameplay_descriptor(profile: impl Into<String>) -> GameplayDescriptor {
+    GameplayDescriptor {
+        profile: GameplayProfileId::new(profile.into()),
     }
 }

@@ -80,7 +80,7 @@ Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host 
 - protocol plugin
   handshake routing、status / login / play packet の decode / encode、transport/version 固有の session state を持ちます。
 - gameplay plugin
-  semantic な `CoreCommand` を評価し、`GameplayEffect` を返します。
+  semantic な `GameplayCommand` を評価し、invocation-scoped `GameplayTransaction` を通じて world / entity を直接更新します。
 - storage plugin
   world snapshot の load / save / import / export を担います。
 - auth plugin
@@ -124,9 +124,10 @@ Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host 
 play phase では次の流れになります。
 
 1. protocol plugin が wire packet を `CoreCommand` へ decode
-2. runtime が `ServerCore` へ command を適用
-3. gameplay plugin が必要なら `GameplayEffect` を返す
-4. `mc-core` が `CoreEvent` を生成
+2. runtime が command を direct-core と gameplay-owned に分岐する
+3. gameplay-owned command は `GameplayCommand` として gameplay plugin callback へ渡される
+4. gameplay plugin は `GameplayTransaction` 上で read / write し、`Ok(())` のときだけ commit される
+5. `mc-core` / commit 層が canonical `CoreEvent` を生成
 5. protocol plugin が `CoreEvent` を wire packet 群へ encode
 
 型の細かい流れは [`core-command-event-flow.md`](core-command-event-flow.md) を参照してください。

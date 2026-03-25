@@ -67,7 +67,7 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
 fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
 -> Result<(), RuntimeError> {
     use mc_core::{
-        CoreCommand, EntityId, GameplayCapabilitySet, GameplayProfileId, PlayerId,
+        EntityId, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
         ProtocolCapabilitySet, SessionCapabilitySet,
     };
     use uuid::Uuid;
@@ -116,10 +116,9 @@ fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
                 let profile = loaded
                     .resolve_gameplay_profile("canonical")
                     .expect("canonical gameplay profile should resolve");
+                let mut core = stub_server_core("world");
                 let result = profile.handle_command(
-                    &StubGameplayQuery {
-                        level_name: "world",
-                    },
+                    &mut core,
                     &SessionCapabilitySet {
                         protocol: ProtocolCapabilitySet::new(),
                         gameplay: GameplayCapabilitySet::new(),
@@ -128,10 +127,11 @@ fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
                         protocol_generation: None,
                         gameplay_generation: None,
                     },
-                    &CoreCommand::SetHeldSlot {
+                    &GameplayCommand::SetHeldSlot {
                         player_id: PlayerId(Uuid::from_u128(44)),
                         slot: 1,
                     },
+                    0,
                 );
                 assert!(
                     result.is_ok(),

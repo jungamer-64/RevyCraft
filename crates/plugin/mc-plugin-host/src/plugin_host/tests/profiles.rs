@@ -121,45 +121,9 @@ fn load_plugin_set_activates_runtime_profiles() {
 #[test]
 fn gameplay_command_snapshot_preserves_entity_id() {
     use mc_core::{
-        BlockPos, BlockState, CoreCommand, DimensionId, EntityId, GameplayCapabilitySet,
-        GameplayProfileId, GameplayQuery, PlayerId, ProtocolCapabilitySet, SessionCapabilitySet,
-        WorldMeta,
+        CoreConfig, EntityId, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
+        ProtocolCapabilitySet, ServerCore, SessionCapabilitySet,
     };
-
-    struct NoopQuery;
-
-    impl GameplayQuery for NoopQuery {
-        fn world_meta(&self) -> WorldMeta {
-            WorldMeta {
-                level_name: "world".to_string(),
-                seed: 0,
-                spawn: BlockPos::new(0, 64, 0),
-                dimension: DimensionId::Overworld,
-                age: 0,
-                time: 0,
-                level_type: "FLAT".to_string(),
-                game_mode: 0,
-                difficulty: 1,
-                max_players: 20,
-            }
-        }
-
-        fn player_snapshot(&self, _player_id: PlayerId) -> Option<mc_core::PlayerSnapshot> {
-            None
-        }
-
-        fn block_state(&self, _position: BlockPos) -> BlockState {
-            BlockState::air()
-        }
-
-        fn block_entity(&self, _position: BlockPos) -> Option<mc_core::BlockEntityState> {
-            None
-        }
-
-        fn can_edit_block(&self, _player_id: PlayerId, _position: BlockPos) -> bool {
-            true
-        }
-    }
 
     let _ = entity_id_probe_gameplay_plugin::take_recorded_session();
 
@@ -183,9 +147,10 @@ fn gameplay_command_snapshot_preserves_entity_id() {
         .resolve_gameplay_profile("entity-aware")
         .expect("entity-aware gameplay profile should resolve");
     let player_id = PlayerId(Uuid::from_u128(7));
+    let mut core = ServerCore::new(CoreConfig::default());
     profile
         .handle_command(
-            &NoopQuery,
+            &mut core,
             &SessionCapabilitySet {
                 protocol: ProtocolCapabilitySet::new(),
                 gameplay: GameplayCapabilitySet::new(),
@@ -194,7 +159,8 @@ fn gameplay_command_snapshot_preserves_entity_id() {
                 protocol_generation: None,
                 gameplay_generation: None,
             },
-            &CoreCommand::SetHeldSlot { player_id, slot: 0 },
+            &GameplayCommand::SetHeldSlot { player_id, slot: 0 },
+            0,
         )
         .expect("gameplay command should succeed");
 

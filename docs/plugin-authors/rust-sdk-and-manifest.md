@@ -1,12 +1,12 @@
 # Rust SDK と manifest
 
-この文書は、Rust で RevyCraft plugin を書くときの正本です。`mc-plugin-api` と `mc-plugin-sdk-rust` の役割分担、trait / macro、`StaticPluginManifest`、plugin ABI `3.5` を現在の実装に合わせて整理します。
+この文書は、Rust で RevyCraft plugin を書くときの正本です。`mc-plugin-api` と `mc-plugin-sdk-rust` の役割分担、trait / macro、`StaticPluginManifest`、plugin ABI `4.0` を現在の実装に合わせて整理します。
 
 ## crate の役割
 
 | crate | 役割 | 使いどころ |
 | --- | --- | --- |
-| `mc-plugin-api` | ABI `3.5`、manifest struct、host API、typed codec | host / runtime 実装、ABI 契約確認 |
+| `mc-plugin-api` | ABI `4.0`、manifest struct、host API、typed codec | host / runtime 実装、ABI 契約確認 |
 | `mc-plugin-sdk-rust` | Rust 向け trait、manifest helper、capability helper、export macro | 通常の Rust plugin authoring の正規入口 |
 
 通常の plugin 作者は `mc-plugin-sdk-rust` を使い、ABI の細部が必要なときだけ `mc-plugin-api` を読みます。
@@ -16,7 +16,7 @@
 | kind | trait / helper | export |
 | --- | --- | --- |
 | protocol | `RustProtocolPlugin`、`declare_protocol_plugin!`、`delegate_protocol_adapter!` | `declare_protocol_plugin!` または `export_plugin!(protocol, ...)` |
-| gameplay | `RustGameplayPlugin` または `PolicyGameplayPlugin` | `export_plugin!(gameplay, ...)` |
+| gameplay | `RustGameplayPlugin` | `export_plugin!(gameplay, ...)` |
 | storage | `RustStoragePlugin` | `export_plugin!(storage, ...)` |
 | auth | `RustAuthPlugin` | `export_plugin!(auth, ...)` |
 | admin-ui | `RustAdminUiPlugin` | `export_plugin!(admin_ui, ...)` |
@@ -44,7 +44,7 @@
 - `StaticPluginManifest::admin_ui(..., profile_id)`
   `admin-ui.profile:<profile_id>` と `runtime.reload.admin-ui`
 
-ABI はすべて `CURRENT_PLUGIN_ABI`、すなわち `3.5` に揃います。通常の Rust plugin ではこれを手で上書きする必要はありません。
+ABI はすべて `CURRENT_PLUGIN_ABI`、すなわち `4.0` に揃います。通常の Rust plugin ではこれを手で上書きする必要はありません。
 
 ## runtime capability set は別物
 
@@ -119,7 +119,9 @@ const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
 export_plugin!(gameplay, CanonicalGameplayPlugin, MANIFEST);
 ```
 
-`PolicyGameplayPlugin` を実装すると、`GameplayPolicyResolver` ベースの gameplay plugin をより薄く書けます。既存の canonical / readonly gameplay plugin はこの系統の実装例です。
+gameplay plugin は callback ごとに host から `GameplayHost` を受け取ります。plugin は `read_world_meta()` や `set_block()`、`set_inventory_slot()`、`emit_event()` などの domain-level API を呼び、`Ok(())` を返したときだけ host 側 transaction が commit されます。
+
+現在の gameplay export surface は `GameplayPluginApiV3`、exported symbol は `mc_plugin_gameplay_api_v3` です。通常は `export_plugin!(gameplay, ...)` に任せれば十分です。
 
 ## descriptor と manifest の整合
 

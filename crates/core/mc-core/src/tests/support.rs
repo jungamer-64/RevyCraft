@@ -96,30 +96,81 @@ pub(super) fn click_slot(
     )
 }
 
-pub(super) fn bedrock_session_capabilities() -> SessionCapabilitySet {
-    let mut session = canonical_session_capabilities();
-    session.protocol.insert(ProtocolCapability::Bedrock);
-    session.protocol.insert(ProtocolCapability::Bedrock924);
-    session
+pub(super) fn apply_test_transaction(
+    core: &mut ServerCore,
+    now_ms: u64,
+    f: impl FnOnce(&mut GameplayTransaction<'_>),
+) -> Vec<TargetedEvent> {
+    let mut tx = core.begin_gameplay_transaction(now_ms);
+    f(&mut tx);
+    tx.commit()
 }
 
-pub(super) fn apply_with_session(
+pub(super) fn set_block_via_tx(
     core: &mut ServerCore,
-    command: CoreCommand,
-    session: &SessionCapabilitySet,
+    position: BlockPos,
+    block: BlockState,
+    now_ms: u64,
 ) -> Vec<TargetedEvent> {
-    core.apply_command_with_policy(command, 0, Some(session), &CanonicalGameplayPolicy)
-        .expect("test command should apply with the provided session")
+    apply_test_transaction(core, now_ms, |tx| tx.set_block(position, block))
+}
+
+pub(super) fn spawn_dropped_item_via_tx(
+    core: &mut ServerCore,
+    position: Vec3,
+    item: ItemStack,
+    now_ms: u64,
+) -> Vec<TargetedEvent> {
+    apply_test_transaction(core, now_ms, |tx| tx.spawn_dropped_item(position, item))
 }
 
 pub(super) fn craft_input(index: u8) -> InventorySlot {
     InventorySlot::crafting_input(index).expect("craft input should exist")
 }
 
-pub(super) fn online_player(core: &ServerCore, player_id: PlayerId) -> &crate::core::OnlinePlayer {
-    core.online_players
-        .get(&player_id)
+#[derive(Clone, Debug)]
+pub(super) struct OnlinePlayerState {
+    pub(super) snapshot: PlayerSnapshot,
+    pub(super) cursor: Option<ItemStack>,
+    pub(super) active_container: Option<crate::core::OpenInventoryWindow>,
+    pub(super) active_mining: Option<crate::core::ActiveMiningState>,
+}
+
+pub(super) fn online_player(core: &ServerCore, player_id: PlayerId) -> OnlinePlayerState {
+    let session = core
+        .player_session(player_id)
         .expect("player should still be online")
+        .clone();
+    let snapshot = core
+        .compose_player_snapshot(player_id)
+        .expect("player snapshot should compose");
+    OnlinePlayerState {
+        snapshot,
+        cursor: session.cursor,
+        active_container: session.active_container,
+        active_mining: core.player_active_mining(player_id).cloned(),
+    }
+}
+
+pub(super) fn active_container_mut(
+    core: &mut ServerCore,
+    player_id: PlayerId,
+) -> &mut crate::core::OpenInventoryWindow {
+    core.player_session_mut(player_id)
+        .and_then(|session| session.active_container.as_mut())
+        .expect("player should have an active container")
+}
+
+pub(super) fn dropped_item_snapshot(
+    core: &ServerCore,
+    entity_id: EntityId,
+) -> crate::DroppedItemSnapshot {
+    core.entities
+        .dropped_items
+        .get(&entity_id)
+        .expect("dropped item should still exist")
+        .snapshot
+        .clone()
 }
 
 pub(super) fn stack_summary(stack: &ItemStack) -> (&str, u8) {

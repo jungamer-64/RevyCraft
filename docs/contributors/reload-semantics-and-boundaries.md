@@ -137,7 +137,7 @@ reload を読むときに重要なのは、protocol と gameplay が近いよう
 - protocol
   wire format、routing、transport 固有 session state、session transfer blob を持つ
 - gameplay
-  semantic command を評価し、`GameplayEffect` を返す
+  semantic `GameplayCommand` を評価し、callback 単位の `GameplayTransaction` を commit する
 
 この分離のおかげで、version 固有 inventory state や active window のようなものは protocol reload 側で扱い、semantic rule の差分は gameplay reload 側で扱えます。
 

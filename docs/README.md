@@ -20,13 +20,13 @@
   [`contributors/repository-overview.md`](contributors/repository-overview.md)
 - runtime / plugin host / session lifecycle の責務境界
   [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md)
-- `CoreCommand` / `GameplayEffect` / `CoreEvent` の流れ
+- `CoreCommand` / `GameplayCommand` / `GameplayTransaction` / `CoreEvent` の流れ
   [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md)
 - reload の内部意味論、failure policy、consistency gate
   [`contributors/reload-semantics-and-boundaries.md`](contributors/reload-semantics-and-boundaries.md)
 - plugin kind、packaged layout、discovery と activation
   [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md)
-- Rust SDK、macro、manifest、ABI `3.5`
+- Rust SDK、macro、manifest、ABI `4.0`
   [`plugin-authors/rust-sdk-and-manifest.md`](plugin-authors/rust-sdk-and-manifest.md)
 
 ## 共通用語

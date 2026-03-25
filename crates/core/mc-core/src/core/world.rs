@@ -1,5 +1,4 @@
-use super::ServerCore;
-use crate::events::{CoreEvent, EventTarget, TargetedEvent};
+use super::{PlayerTransform, ServerCore};
 use crate::player::PlayerSnapshot;
 use crate::world::{
     BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, generate_superflat_chunk,
@@ -20,7 +19,8 @@ impl ServerCore {
     }
 
     pub(super) fn ensure_chunk(&mut self, chunk_pos: ChunkPos) -> &ChunkColumn {
-        self.chunks
+        self.world
+            .chunks
             .entry(chunk_pos)
             .or_insert_with(|| generate_superflat_chunk(chunk_pos))
     }
@@ -31,7 +31,8 @@ impl ServerCore {
             .expect("local x should fit into u8");
         let local_z = u8::try_from(position.z.rem_euclid(crate::CHUNK_WIDTH))
             .expect("local z should fit into u8");
-        self.chunks
+        self.world
+            .chunks
             .get(&chunk_pos)
             .cloned()
             .unwrap_or_else(|| generate_superflat_chunk(chunk_pos))
@@ -45,6 +46,7 @@ impl ServerCore {
         let local_z = u8::try_from(position.z.rem_euclid(crate::CHUNK_WIDTH))
             .expect("local z should fit into u8");
         let chunk = self
+            .world
             .chunks
             .entry(chunk_pos)
             .or_insert_with(|| generate_superflat_chunk(chunk_pos));
@@ -52,22 +54,7 @@ impl ServerCore {
     }
 
     pub(super) fn block_entity_at(&self, position: BlockPos) -> Option<BlockEntityState> {
-        self.block_entities.get(&position).cloned()
-    }
-
-    pub(super) fn emit_block_change(&self, position: BlockPos) -> Vec<TargetedEvent> {
-        let block = self.block_at(position);
-        self.online_players
-            .iter()
-            .filter(|(_, player)| player.view.loaded_chunks.contains(&position.chunk_pos()))
-            .map(|(player_id, _)| TargetedEvent {
-                target: EventTarget::Player(*player_id),
-                event: CoreEvent::BlockChanged {
-                    position,
-                    block: block.clone(),
-                },
-            })
-            .collect()
+        self.world.block_entities.get(&position).cloned()
     }
 
     pub(super) fn can_edit_block_for_snapshot(
@@ -82,9 +69,10 @@ impl ServerCore {
             return false;
         }
         !self
-            .online_players
-            .iter()
-            .any(|(_, player)| block_intersects_player(position, &player.snapshot))
+            .entities
+            .player_transform
+            .values()
+            .any(|transform| block_intersects_player(position, transform))
     }
 }
 
@@ -101,7 +89,7 @@ fn distance_squared_to_block_center(position: crate::Vec3, block: BlockPos) -> f
     dx * dx + dy * dy + dz * dz
 }
 
-fn block_intersects_player(block: BlockPos, player: &PlayerSnapshot) -> bool {
+fn block_intersects_player(block: BlockPos, player: &PlayerTransform) -> bool {
     let half_width = PLAYER_WIDTH / 2.0;
     let player_min_x = player.position.x - half_width;
     let player_max_x = player.position.x + half_width;

@@ -127,6 +127,206 @@ impl CoreCommand {
             | Self::Disconnect { player_id, .. } => Some(*player_id),
         }
     }
+
+    #[must_use]
+    pub fn into_gameplay(self) -> Result<GameplayCommand, Self> {
+        GameplayCommand::try_from(self)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum GameplayCommand {
+    MoveIntent {
+        player_id: PlayerId,
+        position: Option<Vec3>,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        on_ground: bool,
+    },
+    SetHeldSlot {
+        player_id: PlayerId,
+        slot: i16,
+    },
+    CreativeInventorySet {
+        player_id: PlayerId,
+        slot: InventorySlot,
+        stack: Option<ItemStack>,
+    },
+    DigBlock {
+        player_id: PlayerId,
+        position: BlockPos,
+        status: u8,
+        face: Option<BlockFace>,
+    },
+    PlaceBlock {
+        player_id: PlayerId,
+        hand: InteractionHand,
+        position: BlockPos,
+        face: Option<BlockFace>,
+        held_item: Option<ItemStack>,
+    },
+    UseBlock {
+        player_id: PlayerId,
+        hand: InteractionHand,
+        position: BlockPos,
+        face: Option<BlockFace>,
+        held_item: Option<ItemStack>,
+    },
+}
+
+impl GameplayCommand {
+    #[must_use]
+    pub const fn player_id(&self) -> PlayerId {
+        match self {
+            Self::MoveIntent { player_id, .. }
+            | Self::SetHeldSlot { player_id, .. }
+            | Self::CreativeInventorySet { player_id, .. }
+            | Self::DigBlock { player_id, .. }
+            | Self::PlaceBlock { player_id, .. }
+            | Self::UseBlock { player_id, .. } => *player_id,
+        }
+    }
+}
+
+impl TryFrom<CoreCommand> for GameplayCommand {
+    type Error = CoreCommand;
+
+    fn try_from(command: CoreCommand) -> Result<Self, Self::Error> {
+        match command {
+            CoreCommand::MoveIntent {
+                player_id,
+                position,
+                yaw,
+                pitch,
+                on_ground,
+            } => Ok(Self::MoveIntent {
+                player_id,
+                position,
+                yaw,
+                pitch,
+                on_ground,
+            }),
+            CoreCommand::SetHeldSlot { player_id, slot } => {
+                Ok(Self::SetHeldSlot { player_id, slot })
+            }
+            CoreCommand::CreativeInventorySet {
+                player_id,
+                slot,
+                stack,
+            } => Ok(Self::CreativeInventorySet {
+                player_id,
+                slot,
+                stack,
+            }),
+            CoreCommand::DigBlock {
+                player_id,
+                position,
+                status,
+                face,
+            } => Ok(Self::DigBlock {
+                player_id,
+                position,
+                status,
+                face,
+            }),
+            CoreCommand::PlaceBlock {
+                player_id,
+                hand,
+                position,
+                face,
+                held_item,
+            } => Ok(Self::PlaceBlock {
+                player_id,
+                hand,
+                position,
+                face,
+                held_item,
+            }),
+            CoreCommand::UseBlock {
+                player_id,
+                hand,
+                position,
+                face,
+                held_item,
+            } => Ok(Self::UseBlock {
+                player_id,
+                hand,
+                position,
+                face,
+                held_item,
+            }),
+            other => Err(other),
+        }
+    }
+}
+
+impl From<GameplayCommand> for CoreCommand {
+    fn from(command: GameplayCommand) -> Self {
+        match command {
+            GameplayCommand::MoveIntent {
+                player_id,
+                position,
+                yaw,
+                pitch,
+                on_ground,
+            } => Self::MoveIntent {
+                player_id,
+                position,
+                yaw,
+                pitch,
+                on_ground,
+            },
+            GameplayCommand::SetHeldSlot { player_id, slot } => {
+                Self::SetHeldSlot { player_id, slot }
+            }
+            GameplayCommand::CreativeInventorySet {
+                player_id,
+                slot,
+                stack,
+            } => Self::CreativeInventorySet {
+                player_id,
+                slot,
+                stack,
+            },
+            GameplayCommand::DigBlock {
+                player_id,
+                position,
+                status,
+                face,
+            } => Self::DigBlock {
+                player_id,
+                position,
+                status,
+                face,
+            },
+            GameplayCommand::PlaceBlock {
+                player_id,
+                hand,
+                position,
+                face,
+                held_item,
+            } => Self::PlaceBlock {
+                player_id,
+                hand,
+                position,
+                face,
+                held_item,
+            },
+            GameplayCommand::UseBlock {
+                player_id,
+                hand,
+                position,
+                face,
+                held_item,
+            } => Self::UseBlock {
+                player_id,
+                hand,
+                position,
+                face,
+                held_item,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

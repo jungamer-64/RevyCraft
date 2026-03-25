@@ -1,7 +1,6 @@
 pub(super) mod entity_id_probe_gameplay_plugin {
     use mc_core::{
-        CoreCommand, GameplayCapability, GameplayCapabilitySet, GameplayEffect, GameplayProfileId,
-        PlayerSnapshot,
+        GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
     };
     use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
     use mc_plugin_sdk_rust::export_plugin;
@@ -41,22 +40,22 @@ pub(super) mod entity_id_probe_gameplay_plugin {
             &self,
             _host: &dyn GameplayHost,
             session: &GameplaySessionSnapshot,
-            _command: &CoreCommand,
-        ) -> Result<GameplayEffect, String> {
+            _command: &GameplayCommand,
+        ) -> Result<(), String> {
             *recorded_session_slot()
                 .lock()
                 .expect("recorded gameplay session mutex should not be poisoned") =
                 Some(session.clone());
-            Ok(GameplayEffect::default())
+            Ok(())
         }
 
         fn handle_player_join(
             &self,
             _host: &dyn GameplayHost,
             _session: &GameplaySessionSnapshot,
-            _player: &PlayerSnapshot,
-        ) -> Result<mc_core::GameplayJoinEffect, String> {
-            Ok(mc_core::GameplayJoinEffect::default())
+            _player: PlayerId,
+        ) -> Result<(), String> {
+            Ok(())
         }
     }
 
@@ -371,8 +370,7 @@ pub(super) mod failing_protocol_plugin {
 
 pub(super) mod failing_gameplay_plugin {
     use mc_core::{
-        CoreCommand, GameplayCapability, GameplayCapabilitySet, GameplayEffect, GameplayProfileId,
-        PlayerSnapshot,
+        GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
     };
     use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
     use mc_plugin_sdk_rust::export_plugin;
@@ -399,8 +397,8 @@ pub(super) mod failing_gameplay_plugin {
             &self,
             _host: &dyn GameplayHost,
             _session: &GameplaySessionSnapshot,
-            _command: &CoreCommand,
-        ) -> Result<GameplayEffect, String> {
+            _command: &GameplayCommand,
+        ) -> Result<(), String> {
             Err("gameplay runtime failure".to_string())
         }
 
@@ -408,9 +406,9 @@ pub(super) mod failing_gameplay_plugin {
             &self,
             _host: &dyn GameplayHost,
             _session: &GameplaySessionSnapshot,
-            _player: &PlayerSnapshot,
-        ) -> Result<mc_core::GameplayJoinEffect, String> {
-            Ok(mc_core::GameplayJoinEffect::default())
+            _player: PlayerId,
+        ) -> Result<(), String> {
+            Ok(())
         }
     }
 

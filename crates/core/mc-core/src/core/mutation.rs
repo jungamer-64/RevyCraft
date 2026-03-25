@@ -1,280 +1,172 @@
-use super::{DroppedItemEntity, ServerCore};
+use super::canonical::{
+    BlockDelta, DroppedItemSpawnDelta, InventorySlotDelta, PlayerPoseDelta, SelectedHotbarDelta,
+};
+use super::{DroppedItemState, EntityKind, ServerCore};
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
-use crate::gameplay::{GameplayEffect, GameplayMutation};
 use crate::inventory::{InventoryContainer, InventorySlot, ItemStack};
-use crate::player::{InteractionHand, PlayerSnapshot};
-use crate::world::{BlockPos, BlockState, DroppedItemSnapshot, Vec3};
-use crate::{ConnectionId, EntityId, HOTBAR_SLOT_COUNT, PlayerId};
+use crate::player::InteractionHand;
+use crate::world::{BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, Vec3};
+use crate::{EntityId, HOTBAR_SLOT_COUNT, PlayerId};
 
 const DROPPED_ITEM_PICKUP_DELAY_MS: u64 = 500;
 const DROPPED_ITEM_DESPAWN_MS: u64 = 5 * 60 * 1000;
 
 impl ServerCore {
-    pub fn apply_gameplay_effect(
-        &mut self,
-        effect: GameplayEffect,
-        now_ms: u64,
-    ) -> Vec<TargetedEvent> {
-        let mut events = Vec::new();
-        for mutation in effect.mutations {
-            match mutation {
-                GameplayMutation::PlayerPose {
-                    player_id,
-                    position,
-                    yaw,
-                    pitch,
-                    on_ground,
-                } => {
-                    events.extend(
-                        self.apply_player_pose_mutation(player_id, position, yaw, pitch, on_ground),
-                    );
-                }
-                GameplayMutation::SelectedHotbarSlot { player_id, slot } => {
-                    events.extend(self.apply_selected_hotbar_slot_mutation(player_id, slot));
-                }
-                GameplayMutation::InventorySlot {
-                    player_id,
-                    slot,
-                    stack,
-                } => {
-                    events.extend(self.apply_inventory_slot_mutation(player_id, slot, stack));
-                }
-                GameplayMutation::ClearMining { player_id } => {
-                    events.extend(self.clear_active_mining(player_id));
-                }
-                GameplayMutation::BeginMining {
-                    player_id,
-                    position,
-                    duration_ms,
-                } => {
-                    events.extend(self.apply_begin_mining_mutation(
-                        player_id,
-                        position,
-                        duration_ms,
-                        now_ms,
-                    ));
-                }
-                GameplayMutation::OpenChest {
-                    player_id,
-                    position,
-                } => {
-                    events.extend(self.open_world_chest(player_id, position));
-                }
-                GameplayMutation::OpenFurnace {
-                    player_id,
-                    position,
-                } => {
-                    events.extend(self.open_world_furnace(player_id, position));
-                }
-                GameplayMutation::Block { position, block } => {
-                    events.extend(self.apply_block_mutation(position, block));
-                }
-                GameplayMutation::DroppedItem { position, item } => {
-                    events.extend(self.apply_dropped_item_mutation(position, item, now_ms));
-                }
-            }
-        }
-        events.extend(effect.emitted_events);
-        events
-    }
-
-    pub(super) fn apply_player_pose_mutation(
+    pub(super) fn state_player_pose(
         &mut self,
         player_id: PlayerId,
         position: Option<Vec3>,
         yaw: Option<f32>,
         pitch: Option<f32>,
         on_ground: bool,
-    ) -> Vec<TargetedEvent> {
-        let Some(player) = self.online_players.get_mut(&player_id) else {
-            return Vec::new();
+    ) -> Option<PlayerPoseDelta> {
+        let Some(entity_id) = self.player_entity_id(player_id) else {
+            return None;
         };
 
-        if let Some(position) = position {
-            player.snapshot.position = position;
-        }
-        if let Some(yaw) = yaw {
-            player.snapshot.yaw = yaw;
-        }
-        if let Some(pitch) = pitch {
-            player.snapshot.pitch = pitch;
-        }
-        player.snapshot.on_ground = on_ground;
+        let current_chunk = {
+            let Some(transform) = self.entities.player_transform.get_mut(&entity_id) else {
+                return None;
+            };
+            if let Some(position) = position {
+                transform.position = position;
+            }
+            if let Some(yaw) = yaw {
+                transform.yaw = yaw;
+            }
+            if let Some(pitch) = pitch {
+                transform.pitch = pitch;
+            }
+            transform.on_ground = on_ground;
+            transform.position.chunk_pos()
+        };
 
-        let delta = player.view.retarget(
-            player.snapshot.position.chunk_pos(),
-            player.view.view_distance,
-        );
-        let snapshot = player.snapshot.clone();
-        let entity_id = player.entity_id;
-        let added_chunks = delta.added;
-        self.saved_players.insert(player_id, snapshot.clone());
+        let added_chunks = {
+            let Some(session) = self.sessions.player_sessions.get_mut(&player_id) else {
+                return None;
+            };
+            session
+                .view
+                .retarget(current_chunk, session.view.view_distance)
+                .added
+        };
 
-        let mut events = Vec::new();
-        for chunk_pos in added_chunks {
-            events.push(TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::ChunkBatch {
-                    chunks: vec![self.ensure_chunk(chunk_pos).clone()],
-                },
-            });
-        }
+        let Some(snapshot) = self.compose_player_snapshot(player_id) else {
+            return None;
+        };
 
-        events.push(TargetedEvent {
-            target: EventTarget::EveryoneExcept(player_id),
-            event: CoreEvent::EntityMoved {
-                entity_id,
-                player: snapshot,
-            },
-        });
-        events
+        Some(PlayerPoseDelta {
+            player_id,
+            entity_id,
+            player: snapshot,
+            chunks: added_chunks
+                .into_iter()
+                .map(|chunk_pos| self.ensure_chunk(chunk_pos).clone())
+                .collect::<Vec<ChunkColumn>>(),
+        })
     }
 
-    pub(super) fn apply_selected_hotbar_slot_mutation(
+    pub(super) fn state_selected_hotbar_slot(
         &mut self,
         player_id: PlayerId,
         slot: u8,
-    ) -> Vec<TargetedEvent> {
-        let Some(player) = self.online_players.get_mut(&player_id) else {
-            return Vec::new();
+    ) -> Option<SelectedHotbarDelta> {
+        let Some(selected_hotbar_slot) = self.player_selected_hotbar_mut(player_id) else {
+            return None;
         };
         if slot >= HOTBAR_SLOT_COUNT {
-            return Vec::new();
+            return None;
         }
-        player.snapshot.selected_hotbar_slot = slot;
-        self.saved_players
-            .insert(player_id, player.snapshot.clone());
-        vec![TargetedEvent {
-            target: EventTarget::Player(player_id),
-            event: CoreEvent::SelectedHotbarSlotChanged { slot },
-        }]
+        *selected_hotbar_slot = slot;
+        Some(SelectedHotbarDelta { player_id, slot })
     }
 
-    pub(super) fn apply_inventory_slot_mutation(
+    pub(super) fn state_inventory_slot(
         &mut self,
         player_id: PlayerId,
         slot: InventorySlot,
         stack: Option<ItemStack>,
-    ) -> Vec<TargetedEvent> {
-        let Some(player) = self.online_players.get_mut(&player_id) else {
-            return Vec::new();
+    ) -> Option<InventorySlotDelta> {
+        let Some(inventory) = self.player_inventory_mut(player_id) else {
+            return None;
         };
-        let before_result = player.snapshot.inventory.crafting_result().cloned();
-        let _ = player.snapshot.inventory.set_slot(slot, stack.clone());
+        let before_result = inventory.crafting_result().cloned();
+        let _ = inventory.set_slot(slot, stack.clone());
         if slot.is_crafting_result() || slot.crafting_input_index().is_some() {
-            Self::recompute_crafting_result_for_inventory(&mut player.snapshot.inventory);
+            Self::recompute_crafting_result_for_inventory(inventory);
         }
-        let after_result = player.snapshot.inventory.crafting_result().cloned();
-        self.saved_players
-            .insert(player_id, player.snapshot.clone());
-        let mut events = vec![TargetedEvent {
-            target: EventTarget::Player(player_id),
-            event: CoreEvent::InventorySlotChanged {
-                window_id: 0,
-                container: InventoryContainer::Player,
-                slot,
-                stack,
-            },
-        }];
-        if before_result != after_result && !slot.is_crafting_result() {
-            events.push(TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::InventorySlotChanged {
-                    window_id: 0,
-                    container: InventoryContainer::Player,
-                    slot: InventorySlot::crafting_result(),
-                    stack: after_result,
-                },
-            });
-        }
-        events
+        let after_result = inventory.crafting_result().cloned();
+        Some(InventorySlotDelta {
+            player_id,
+            slot,
+            stack,
+            crafting_result: (before_result != after_result && !slot.is_crafting_result())
+                .then_some(after_result),
+        })
     }
 
-    pub(super) fn apply_block_mutation(
-        &mut self,
-        position: BlockPos,
-        block: BlockState,
-    ) -> Vec<TargetedEvent> {
-        let mut events = self.clear_active_mining_at(position);
+    pub(super) fn state_set_block(&mut self, position: BlockPos, block: BlockState) -> BlockDelta {
+        let cleared_mining = self.state_clear_active_mining_at(position);
         self.set_block_at(position, block.clone());
-        events.extend(self.close_world_container_if_invalid(position, &block));
+        let closed_containers = self.state_close_world_container_if_invalid(position, &block);
         if block.key.as_str() == crate::catalog::CHEST {
-            self.block_entities
+            self.world
+                .block_entities
                 .entry(position)
                 .or_insert_with(|| crate::BlockEntityState::chest(27));
         }
         if block.key.as_str() == crate::catalog::FURNACE {
-            self.block_entities
+            self.world
+                .block_entities
                 .entry(position)
                 .or_insert_with(crate::BlockEntityState::furnace);
         }
-        events.extend(self.emit_block_change(position));
-        events
+        BlockDelta {
+            position,
+            cleared_mining,
+            closed_containers,
+        }
     }
 
-    pub(super) fn apply_dropped_item_mutation(
+    pub(super) fn state_spawn_dropped_item(
         &mut self,
+        expected_entity_id: Option<EntityId>,
         position: Vec3,
         item: ItemStack,
         now_ms: u64,
-    ) -> Vec<TargetedEvent> {
-        let entity_id = EntityId(self.next_entity_id);
-        self.next_entity_id = self.next_entity_id.saturating_add(1);
+    ) -> Option<DroppedItemSpawnDelta> {
+        let entity_id = EntityId(self.entities.next_entity_id);
+        self.entities.next_entity_id = self.entities.next_entity_id.saturating_add(1);
         let snapshot = DroppedItemSnapshot {
             item,
             position,
             velocity: Vec3::new(0.0, 0.0, 0.0),
         };
-        self.dropped_items.insert(
+        self.entities
+            .entity_kinds
+            .insert(entity_id, EntityKind::DroppedItem);
+        self.entities.dropped_items.insert(
             entity_id,
-            DroppedItemEntity {
+            DroppedItemState {
                 snapshot: snapshot.clone(),
                 last_updated_at_ms: now_ms,
                 pickup_allowed_at_ms: now_ms.saturating_add(DROPPED_ITEM_PICKUP_DELAY_MS),
                 despawn_at_ms: now_ms.saturating_add(DROPPED_ITEM_DESPAWN_MS),
             },
         );
-        self.dropped_item_spawn_events(entity_id, &snapshot)
-    }
-
-    pub(super) fn dropped_item_spawn_events(
-        &self,
-        entity_id: EntityId,
-        item: &DroppedItemSnapshot,
-    ) -> Vec<TargetedEvent> {
-        self.online_players
-            .keys()
-            .copied()
-            .map(|player_id| TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::DroppedItemSpawned {
-                    entity_id,
-                    item: item.clone(),
-                },
-            })
-            .collect()
-    }
-
-    pub(super) fn dropped_item_spawn_events_for_connection(
-        &self,
-        connection_id: ConnectionId,
-    ) -> Vec<TargetedEvent> {
-        self.dropped_items
-            .iter()
-            .map(|(entity_id, item)| TargetedEvent {
-                target: EventTarget::Connection(connection_id),
-                event: CoreEvent::DroppedItemSpawned {
-                    entity_id: *entity_id,
-                    item: item.snapshot.clone(),
-                },
-            })
-            .collect()
+        if let Some(expected_entity_id) = expected_entity_id {
+            debug_assert_eq!(entity_id, expected_entity_id);
+        }
+        Some(DroppedItemSpawnDelta {
+            entity_id,
+            item: snapshot,
+        })
     }
 
     pub(crate) fn place_inventory_correction(
         player_id: PlayerId,
         hand: InteractionHand,
-        player: &PlayerSnapshot,
+        player: &crate::player::PlayerSnapshot,
     ) -> Vec<TargetedEvent> {
         let selected_slot = match hand {
             InteractionHand::Main => InventorySlot::Hotbar(player.selected_hotbar_slot),

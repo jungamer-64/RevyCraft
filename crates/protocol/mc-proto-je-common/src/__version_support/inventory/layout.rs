@@ -192,7 +192,9 @@ pub(super) const fn container_descriptor(container: InventoryContainer) -> Conta
 
 const fn legacy_player_window_index(slot: InventorySlot) -> Option<u8> {
     match slot {
-        InventorySlot::Auxiliary(index) if index < LEGACY_PLAYER_AUXILIARY_SLOT_COUNT => Some(index),
+        InventorySlot::Auxiliary(index) if index < LEGACY_PLAYER_AUXILIARY_SLOT_COUNT => {
+            Some(index)
+        }
         InventorySlot::MainInventory(index) if index < 27 => {
             Some(LEGACY_PLAYER_AUXILIARY_SLOT_COUNT + index)
         }
@@ -211,7 +213,9 @@ const fn legacy_player_inventory_slot(index: u8) -> Option<InventorySlot> {
             index - LEGACY_PLAYER_AUXILIARY_SLOT_COUNT,
         ))
     } else if index < LEGACY_PLAYER_HOTBAR_START_SLOT + LEGACY_PLAYER_HOTBAR_SLOT_COUNT {
-        Some(InventorySlot::Hotbar(index - LEGACY_PLAYER_HOTBAR_START_SLOT))
+        Some(InventorySlot::Hotbar(
+            index - LEGACY_PLAYER_HOTBAR_START_SLOT,
+        ))
     } else {
         None
     }

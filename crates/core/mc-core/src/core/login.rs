@@ -1,103 +1,12 @@
-use super::{ClientView, OnlinePlayer, ServerCore};
+use super::ServerCore;
+use super::canonical::{LoginFinalizeDelta, ViewUpdateDelta};
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
-use crate::gameplay::{GameplayJoinEffect, GameplayPolicyResolver};
-use crate::inventory::{InventoryContainer, InventoryWindowContents, PlayerInventory};
+use crate::inventory::PlayerInventory;
 use crate::player::PlayerSnapshot;
-use crate::world::{BlockPos, ChunkColumn, DimensionId, Vec3};
-use crate::{ConnectionId, EntityId, PlayerId, SessionCapabilitySet};
+use crate::world::{BlockPos, DimensionId, Vec3};
+use crate::{ConnectionId, PlayerId};
 
 impl ServerCore {
-    pub(super) fn login_player_with_policy<R: GameplayPolicyResolver + ?Sized>(
-        &mut self,
-        connection_id: ConnectionId,
-        username: String,
-        player_id: PlayerId,
-        now_ms: u64,
-        session: &SessionCapabilitySet,
-        resolver: &R,
-    ) -> Result<Vec<TargetedEvent>, String> {
-        if username.is_empty() || username.len() > 16 {
-            return Ok(Self::reject_connection(connection_id, "Invalid username"));
-        }
-        if self.online_players.len() >= usize::from(self.config.max_players) {
-            return Ok(Self::reject_connection(connection_id, "Server is full"));
-        }
-        if self.online_players.contains_key(&player_id) {
-            return Ok(Self::reject_connection(
-                connection_id,
-                "Player is already online",
-            ));
-        }
-
-        let mut player = self
-            .saved_players
-            .get(&player_id)
-            .cloned()
-            .unwrap_or_else(|| default_player(player_id, username.clone(), self.config.spawn));
-        player.username = username;
-        Self::recompute_crafting_result_for_inventory(&mut player.inventory);
-        let join_effect = resolver.handle_player_join(self, session, &player)?;
-        let join_events = Self::apply_gameplay_join_effect(&mut player, join_effect);
-        Self::recompute_crafting_result_for_inventory(&mut player.inventory);
-
-        let entity_id = EntityId(self.next_entity_id);
-        self.next_entity_id = self.next_entity_id.saturating_add(1);
-
-        let existing_players = self
-            .online_players
-            .values()
-            .map(|online| (online.entity_id, online.snapshot.clone()))
-            .collect::<Vec<_>>();
-
-        let visible_chunks =
-            self.initial_visible_chunks(player.position.chunk_pos(), self.config.view_distance);
-        let view = ClientView::new(player.position.chunk_pos(), self.config.view_distance);
-
-        self.online_players.insert(
-            player_id,
-            OnlinePlayer {
-                entity_id,
-                snapshot: player.clone(),
-                cursor: None,
-                active_container: None,
-                next_non_player_window_id: 1,
-                view,
-                pending_keep_alive_id: None,
-                last_keep_alive_sent_at: None,
-                next_keep_alive_at: now_ms.saturating_add(self.keepalive_interval_ms),
-                active_mining: None,
-            },
-        );
-
-        let mut events =
-            self.login_initial_events(connection_id, player_id, entity_id, &player, visible_chunks);
-        events.extend(Self::existing_player_spawn_events(
-            connection_id,
-            existing_players,
-        ));
-        events.extend(self.dropped_item_spawn_events_for_connection(connection_id));
-        events.extend(join_events);
-
-        events.push(TargetedEvent {
-            target: EventTarget::EveryoneExcept(player_id),
-            event: CoreEvent::EntitySpawned { entity_id, player },
-        });
-        Ok(events)
-    }
-
-    pub(super) fn apply_gameplay_join_effect(
-        player: &mut PlayerSnapshot,
-        effect: GameplayJoinEffect,
-    ) -> Vec<TargetedEvent> {
-        if let Some(inventory) = effect.inventory {
-            player.inventory = inventory;
-        }
-        if let Some(selected_hotbar_slot) = effect.selected_hotbar_slot {
-            player.selected_hotbar_slot = selected_hotbar_slot;
-        }
-        effect.emitted_events
-    }
-
     pub(super) fn reject_connection(
         connection_id: ConnectionId,
         reason: &str,
@@ -110,94 +19,78 @@ impl ServerCore {
         }]
     }
 
-    pub(super) fn login_initial_events(
-        &self,
-        connection_id: ConnectionId,
-        player_id: PlayerId,
-        entity_id: EntityId,
-        player: &PlayerSnapshot,
-        visible_chunks: Vec<ChunkColumn>,
-    ) -> Vec<TargetedEvent> {
-        vec![
-            TargetedEvent {
-                target: EventTarget::Connection(connection_id),
-                event: CoreEvent::LoginAccepted {
-                    player_id,
-                    entity_id,
-                    player: player.clone(),
-                },
-            },
-            TargetedEvent {
-                target: EventTarget::Connection(connection_id),
-                event: CoreEvent::PlayBootstrap {
-                    player: player.clone(),
-                    entity_id,
-                    world_meta: self.world_meta.clone(),
-                    view_distance: self.config.view_distance,
-                },
-            },
-            TargetedEvent {
-                target: EventTarget::Connection(connection_id),
-                event: CoreEvent::ChunkBatch {
-                    chunks: visible_chunks,
-                },
-            },
-            TargetedEvent {
-                target: EventTarget::Connection(connection_id),
-                event: CoreEvent::InventoryContents {
-                    window_id: 0,
-                    container: InventoryContainer::Player,
-                    contents: InventoryWindowContents::player(player.inventory.clone()),
-                },
-            },
-            TargetedEvent {
-                target: EventTarget::Connection(connection_id),
-                event: CoreEvent::SelectedHotbarSlotChanged {
-                    slot: player.selected_hotbar_slot,
-                },
-            },
-        ]
-    }
-
-    pub(super) fn existing_player_spawn_events(
-        connection_id: ConnectionId,
-        existing_players: Vec<(EntityId, PlayerSnapshot)>,
-    ) -> Vec<TargetedEvent> {
-        existing_players
-            .into_iter()
-            .map(|(entity_id, player)| TargetedEvent {
-                target: EventTarget::Connection(connection_id),
-                event: CoreEvent::EntitySpawned { entity_id, player },
-            })
-            .collect()
-    }
-
-    pub(super) fn update_client_settings(
+    pub(super) fn state_update_client_settings(
         &mut self,
         player_id: PlayerId,
         view_distance: u8,
-    ) -> Vec<TargetedEvent> {
-        let Some(player) = self.online_players.get_mut(&player_id) else {
-            return Vec::new();
+    ) -> Option<ViewUpdateDelta> {
+        let capped_view_distance = view_distance.min(self.world.config.view_distance).max(1);
+        let Some(position) = self
+            .compose_player_snapshot(player_id)
+            .map(|player| player.position)
+        else {
+            return None;
         };
-        let capped_view_distance = view_distance.min(self.config.view_distance).max(1);
-        let delta = player
+        let Some(session) = self.player_session_mut(player_id) else {
+            return None;
+        };
+        let delta = session
             .view
-            .retarget(player.snapshot.position.chunk_pos(), capped_view_distance);
-        delta
-            .added
-            .into_iter()
-            .map(|chunk_pos| TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::ChunkBatch {
-                    chunks: vec![self.ensure_chunk(chunk_pos).clone()],
-                },
+            .retarget(position.chunk_pos(), capped_view_distance);
+        Some(ViewUpdateDelta {
+            player_id,
+            chunks: delta
+                .added
+                .into_iter()
+                .map(|chunk_pos| self.ensure_chunk(chunk_pos).clone())
+                .collect(),
+        })
+    }
+
+    pub(super) fn finalize_login_delta(
+        &mut self,
+        connection_id: ConnectionId,
+        player_id: PlayerId,
+    ) -> Option<LoginFinalizeDelta> {
+        let player = self.compose_player_snapshot(player_id)?;
+        let (entity_id, session_view_distance) = self
+            .player_session(player_id)
+            .map(|session| (session.entity_id, session.view.view_distance))?;
+        let visible_chunks =
+            self.initial_visible_chunks(player.position.chunk_pos(), session_view_distance);
+        let existing_players = self
+            .sessions
+            .player_sessions
+            .iter()
+            .filter(|(other_id, _)| **other_id != player_id)
+            .filter_map(|(other_id, other_session)| {
+                self.compose_player_snapshot(*other_id)
+                    .map(|snapshot| (other_session.entity_id, snapshot))
             })
-            .collect()
+            .collect::<Vec<_>>();
+        let dropped_items = self
+            .entities
+            .dropped_items
+            .iter()
+            .map(|(entity_id, item)| (*entity_id, item.snapshot.clone()))
+            .collect::<Vec<_>>();
+        Some(LoginFinalizeDelta {
+            connection_id,
+            player_id,
+            entity_id,
+            player,
+            visible_chunks,
+            existing_players,
+            dropped_items,
+        })
     }
 }
 
-fn default_player(player_id: PlayerId, username: String, spawn: BlockPos) -> PlayerSnapshot {
+pub(super) fn default_player(
+    player_id: PlayerId,
+    username: String,
+    spawn: BlockPos,
+) -> PlayerSnapshot {
     PlayerSnapshot {
         id: player_id,
         username,

@@ -13,9 +13,8 @@ use crate::codec::__internal::shared::{
     encode_player_snapshot, encode_world_meta,
 };
 use mc_core::{
-    CapabilityAnnouncement, CoreCommand, GameplayCapability, GameplayEffect, GameplayJoinEffect,
-    GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet,
-    WorldMeta,
+    CapabilityAnnouncement, GameplayCapability, GameplayCommand, GameplayProfileId, PlayerId,
+    PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet, WorldMeta,
 };
 use mc_proto_common::ConnectionPhase;
 
@@ -72,11 +71,11 @@ pub enum GameplayRequest {
     CapabilitySet,
     HandlePlayerJoin {
         session: GameplaySessionSnapshot,
-        player: PlayerSnapshot,
+        player_id: PlayerId,
     },
     HandleCommand {
         session: GameplaySessionSnapshot,
-        command: CoreCommand,
+        command: GameplayCommand,
     },
     HandleTick {
         session: GameplaySessionSnapshot,
@@ -114,8 +113,6 @@ impl GameplayRequest {
 pub enum GameplayResponse {
     Descriptor(GameplayDescriptor),
     CapabilitySet(CapabilityAnnouncement<GameplayCapability>),
-    JoinEffect(GameplayJoinEffect),
-    Effect(GameplayEffect),
     SessionTransferBlob(Vec<u8>),
     Empty,
 }
@@ -228,7 +225,13 @@ pub fn decode_gameplay_response(
 
 pub mod host_blob {
     use super::*;
-    use crate::codec::__internal::shared::{decode_block_entity_state, encode_block_entity_state};
+    use crate::codec::__internal::gameplay_semantic::{
+        decode_targeted_event, encode_targeted_event,
+    };
+    use crate::codec::__internal::shared::{
+        decode_block_entity_state, decode_f32_value, decode_vec3, encode_block_entity_state,
+        encode_vec3,
+    };
 
     #[must_use]
     pub fn encode_player_id(player_id: PlayerId) -> Vec<u8> {
@@ -392,6 +395,222 @@ pub mod host_blob {
         decoder.finish()?;
         Ok(block_entity)
     }
+
+    #[must_use]
+    pub fn encode_player_pose_update(
+        player_id: PlayerId,
+        position: Option<mc_core::Vec3>,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        on_ground: bool,
+    ) -> Vec<u8> {
+        let mut encoder = Encoder::default();
+        super::encode_player_id(&mut encoder, player_id);
+        let _ = encode_option(&mut encoder, position.as_ref(), |encoder, position| {
+            encode_vec3(encoder, *position);
+            Ok(())
+        });
+        let _ = encode_option(&mut encoder, yaw.as_ref(), |encoder, yaw| {
+            encoder.write_f32(*yaw);
+            Ok(())
+        });
+        let _ = encode_option(&mut encoder, pitch.as_ref(), |encoder, pitch| {
+            encoder.write_f32(*pitch);
+            Ok(())
+        });
+        encoder.write_bool(on_ground);
+        encoder.into_inner()
+    }
+
+    pub fn decode_player_pose_update(
+        bytes: &[u8],
+    ) -> Result<
+        (
+            PlayerId,
+            Option<mc_core::Vec3>,
+            Option<f32>,
+            Option<f32>,
+            bool,
+        ),
+        ProtocolCodecError,
+    > {
+        let mut decoder = Decoder::new(bytes);
+        let player_id = super::decode_player_id(&mut decoder)?;
+        let position = decode_option(&mut decoder, decode_vec3)?;
+        let yaw = decode_option(&mut decoder, decode_f32_value)?;
+        let pitch = decode_option(&mut decoder, decode_f32_value)?;
+        let on_ground = decoder.read_bool()?;
+        decoder.finish()?;
+        Ok((player_id, position, yaw, pitch, on_ground))
+    }
+
+    #[must_use]
+    pub fn encode_selected_hotbar_slot_update(player_id: PlayerId, slot: u8) -> Vec<u8> {
+        let mut encoder = Encoder::default();
+        super::encode_player_id(&mut encoder, player_id);
+        encoder.write_u8(slot);
+        encoder.into_inner()
+    }
+
+    pub fn decode_selected_hotbar_slot_update(
+        bytes: &[u8],
+    ) -> Result<(PlayerId, u8), ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let player_id = super::decode_player_id(&mut decoder)?;
+        let slot = decoder.read_u8()?;
+        decoder.finish()?;
+        Ok((player_id, slot))
+    }
+
+    pub fn encode_inventory_slot_update(
+        player_id: PlayerId,
+        slot: mc_core::InventorySlot,
+        stack: Option<&mc_core::ItemStack>,
+    ) -> Result<Vec<u8>, ProtocolCodecError> {
+        let mut encoder = Encoder::default();
+        super::encode_player_id(&mut encoder, player_id);
+        crate::codec::__internal::inventory::encode_inventory_slot(&mut encoder, slot);
+        encode_option(
+            &mut encoder,
+            stack,
+            crate::codec::__internal::inventory::encode_item_stack,
+        )?;
+        Ok(encoder.into_inner())
+    }
+
+    pub fn decode_inventory_slot_update(
+        bytes: &[u8],
+    ) -> Result<(PlayerId, mc_core::InventorySlot, Option<mc_core::ItemStack>), ProtocolCodecError>
+    {
+        let mut decoder = Decoder::new(bytes);
+        let player_id = super::decode_player_id(&mut decoder)?;
+        let slot = crate::codec::__internal::inventory::decode_inventory_slot(&mut decoder)?;
+        let stack = decode_option(
+            &mut decoder,
+            crate::codec::__internal::inventory::decode_item_stack,
+        )?;
+        decoder.finish()?;
+        Ok((player_id, slot, stack))
+    }
+
+    #[must_use]
+    pub fn encode_clear_mining(player_id: PlayerId) -> Vec<u8> {
+        encode_player_id(player_id)
+    }
+
+    pub fn decode_clear_mining(bytes: &[u8]) -> Result<PlayerId, ProtocolCodecError> {
+        decode_player_id(bytes)
+    }
+
+    #[must_use]
+    pub fn encode_begin_mining(
+        player_id: PlayerId,
+        position: mc_core::BlockPos,
+        duration_ms: u64,
+    ) -> Vec<u8> {
+        let mut encoder = Encoder::default();
+        super::encode_player_id(&mut encoder, player_id);
+        super::encode_block_pos(&mut encoder, position);
+        encoder.write_u64(duration_ms);
+        encoder.into_inner()
+    }
+
+    pub fn decode_begin_mining(
+        bytes: &[u8],
+    ) -> Result<(PlayerId, mc_core::BlockPos, u64), ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let player_id = super::decode_player_id(&mut decoder)?;
+        let position = super::decode_block_pos(&mut decoder)?;
+        let duration_ms = decoder.read_u64()?;
+        decoder.finish()?;
+        Ok((player_id, position, duration_ms))
+    }
+
+    #[must_use]
+    pub fn encode_open_chest(player_id: PlayerId, position: mc_core::BlockPos) -> Vec<u8> {
+        let mut encoder = Encoder::default();
+        super::encode_player_id(&mut encoder, player_id);
+        super::encode_block_pos(&mut encoder, position);
+        encoder.into_inner()
+    }
+
+    pub fn decode_open_chest(
+        bytes: &[u8],
+    ) -> Result<(PlayerId, mc_core::BlockPos), ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let player_id = super::decode_player_id(&mut decoder)?;
+        let position = super::decode_block_pos(&mut decoder)?;
+        decoder.finish()?;
+        Ok((player_id, position))
+    }
+
+    #[must_use]
+    pub fn encode_open_furnace(player_id: PlayerId, position: mc_core::BlockPos) -> Vec<u8> {
+        encode_open_chest(player_id, position)
+    }
+
+    pub fn decode_open_furnace(
+        bytes: &[u8],
+    ) -> Result<(PlayerId, mc_core::BlockPos), ProtocolCodecError> {
+        decode_open_chest(bytes)
+    }
+
+    pub fn encode_set_block(
+        position: mc_core::BlockPos,
+        block: &mc_core::BlockState,
+    ) -> Result<Vec<u8>, ProtocolCodecError> {
+        let mut encoder = Encoder::default();
+        super::encode_block_pos(&mut encoder, position);
+        super::encode_block_state(&mut encoder, block)?;
+        Ok(encoder.into_inner())
+    }
+
+    pub fn decode_set_block(
+        bytes: &[u8],
+    ) -> Result<(mc_core::BlockPos, mc_core::BlockState), ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let position = super::decode_block_pos(&mut decoder)?;
+        let block = super::decode_block_state(&mut decoder)?;
+        decoder.finish()?;
+        Ok((position, block))
+    }
+
+    pub fn encode_spawn_dropped_item(
+        position: mc_core::Vec3,
+        item: &mc_core::ItemStack,
+    ) -> Result<Vec<u8>, ProtocolCodecError> {
+        let mut encoder = Encoder::default();
+        encode_vec3(&mut encoder, position);
+        crate::codec::__internal::inventory::encode_item_stack(&mut encoder, item)?;
+        Ok(encoder.into_inner())
+    }
+
+    pub fn decode_spawn_dropped_item(
+        bytes: &[u8],
+    ) -> Result<(mc_core::Vec3, mc_core::ItemStack), ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let position = decode_vec3(&mut decoder)?;
+        let item = crate::codec::__internal::inventory::decode_item_stack(&mut decoder)?;
+        decoder.finish()?;
+        Ok((position, item))
+    }
+
+    pub fn encode_targeted_event_blob(
+        event: &mc_core::TargetedEvent,
+    ) -> Result<Vec<u8>, ProtocolCodecError> {
+        let mut encoder = Encoder::default();
+        encode_targeted_event(&mut encoder, event)?;
+        Ok(encoder.into_inner())
+    }
+
+    pub fn decode_targeted_event_blob(
+        bytes: &[u8],
+    ) -> Result<mc_core::TargetedEvent, ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let event = decode_targeted_event(&mut decoder)?;
+        decoder.finish()?;
+        Ok(event)
+    }
 }
 
 #[cfg(test)]
@@ -408,11 +627,9 @@ mod tests {
         },
     };
     use mc_core::{
-        BlockEntityState, BlockPos, BlockState, CapabilityAnnouncement, CoreCommand, CoreEvent,
-        GameplayCapability, GameplayCapabilitySet, GameplayEffect, GameplayJoinEffect,
-        GameplayMutation, GameplayProfileId, InventoryContainer, InventorySlot, ItemStack,
-        PlayerId, PlayerInventory, PlayerSnapshot, ProtocolCapabilitySet, TargetedEvent, Vec3,
-        WorldMeta,
+        BlockEntityState, BlockPos, BlockState, CapabilityAnnouncement, GameplayCapability,
+        GameplayCapabilitySet, GameplayCommand, GameplayProfileId, ItemStack, PlayerId,
+        PlayerInventory, PlayerSnapshot, ProtocolCapabilitySet, Vec3, WorldMeta,
     };
     use mc_proto_common::ConnectionPhase;
     use uuid::Uuid;
@@ -485,21 +702,14 @@ mod tests {
             (
                 GameplayRequest::HandlePlayerJoin {
                     session: sample_session(),
-                    player: sample_player(),
+                    player_id: sample_player_id(),
                 },
-                GameplayResponse::JoinEffect(GameplayJoinEffect {
-                    inventory: None,
-                    selected_hotbar_slot: Some(2),
-                    emitted_events: vec![TargetedEvent {
-                        target: mc_core::EventTarget::Player(sample_player_id()),
-                        event: CoreEvent::SelectedHotbarSlotChanged { slot: 2 },
-                    }],
-                }),
+                GameplayResponse::Empty,
             ),
             (
                 GameplayRequest::HandleCommand {
                     session: sample_session(),
-                    command: CoreCommand::UseBlock {
+                    command: GameplayCommand::UseBlock {
                         player_id: sample_player_id(),
                         hand: mc_core::InteractionHand::Main,
                         position: BlockPos::new(0, 64, 0),
@@ -507,34 +717,14 @@ mod tests {
                         held_item: Some(ItemStack::new("minecraft:stone", 64, 0)),
                     },
                 },
-                GameplayResponse::Effect(GameplayEffect {
-                    mutations: vec![
-                        GameplayMutation::OpenChest {
-                            player_id: sample_player_id(),
-                            position: BlockPos::new(0, 65, 0),
-                        },
-                        GameplayMutation::Block {
-                            position: BlockPos::new(0, 65, 0),
-                            block: BlockState::stone(),
-                        },
-                    ],
-                    emitted_events: vec![TargetedEvent {
-                        target: mc_core::EventTarget::Player(sample_player_id()),
-                        event: CoreEvent::InventorySlotChanged {
-                            window_id: 0,
-                            container: InventoryContainer::Player,
-                            slot: InventorySlot::Hotbar(0),
-                            stack: Some(ItemStack::new("minecraft:stone", 63, 0)),
-                        },
-                    }],
-                }),
+                GameplayResponse::Empty,
             ),
             (
                 GameplayRequest::HandleTick {
                     session: sample_session(),
                     now_ms: 42,
                 },
-                GameplayResponse::Effect(GameplayEffect::default()),
+                GameplayResponse::Empty,
             ),
             (
                 GameplayRequest::SessionClosed {

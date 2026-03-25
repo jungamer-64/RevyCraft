@@ -127,16 +127,16 @@ macro_rules! __export_plugin_gameplay {
             std::sync::OnceLock::new();
         static MC_GAMEPLAY_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
-        static MC_GAMEPLAY_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::host_api::GameplayPluginApiV2> =
+        static MC_GAMEPLAY_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::host_api::GameplayPluginApiV3> =
             std::sync::OnceLock::new();
 
         fn mc_gameplay_plugin_instance() -> &'static $plugin_ty {
             MC_GAMEPLAY_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
         }
 
-        unsafe extern "C" fn mc_gameplay_plugin_invoke_v2(
+        unsafe extern "C" fn mc_gameplay_plugin_invoke_v3(
             request: mc_plugin_api::abi::ByteSlice,
-            host_api: *const mc_plugin_api::host_api::HostApiTableV1,
+            host_api: *const mc_plugin_api::host_api::GameplayHostApiV2,
             output: *mut mc_plugin_api::abi::OwnedBuffer,
             error_out: *mut mc_plugin_api::abi::OwnedBuffer,
         ) -> mc_plugin_api::abi::PluginErrorCode {
@@ -241,10 +241,10 @@ macro_rules! __export_plugin_gameplay {
             all(not(test), not(feature = "disable-exported-symbols")),
             unsafe(no_mangle)
         )]
-        pub extern "C" fn mc_plugin_gameplay_api_v2() -> *const mc_plugin_api::host_api::GameplayPluginApiV2 {
+        pub extern "C" fn mc_plugin_gameplay_api_v3() -> *const mc_plugin_api::host_api::GameplayPluginApiV3 {
             std::ptr::from_ref(MC_GAMEPLAY_PLUGIN_API.get_or_init(|| {
-                mc_plugin_api::host_api::GameplayPluginApiV2 {
-                    invoke: mc_gameplay_plugin_invoke_v2,
+                mc_plugin_api::host_api::GameplayPluginApiV3 {
+                    invoke: mc_gameplay_plugin_invoke_v3,
                     free_buffer: mc_gameplay_plugin_free_buffer,
                 }
             }))
@@ -253,11 +253,11 @@ macro_rules! __export_plugin_gameplay {
         #[cfg(any(test, feature = "in-process-testing"))]
         #[must_use]
         pub fn in_process_plugin_entrypoints()
-        -> $crate::test_support::InProcessPluginEntrypoints<mc_plugin_api::host_api::GameplayPluginApiV2>
+        -> $crate::test_support::InProcessPluginEntrypoints<mc_plugin_api::host_api::GameplayPluginApiV3>
         {
             $crate::test_support::InProcessPluginEntrypoints::new(
                 unsafe { &*mc_plugin_manifest_v1() },
-                unsafe { &*mc_plugin_gameplay_api_v2() },
+                unsafe { &*mc_plugin_gameplay_api_v3() },
             )
         }
     };

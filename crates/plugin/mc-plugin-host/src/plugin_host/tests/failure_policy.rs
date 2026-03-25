@@ -60,7 +60,7 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
 #[test]
 fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
     use mc_core::{
-        CoreCommand, EntityId, GameplayCapabilitySet, GameplayProfileId, PlayerId,
+        EntityId, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
         ProtocolCapabilitySet, SessionCapabilitySet,
     };
 
@@ -93,10 +93,9 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
         let profile = host
             .resolve_gameplay_profile("failing")
             .expect("failing gameplay profile should resolve");
+        let mut core = stub_server_core("world");
         let result = profile.handle_command(
-            &StubGameplayQuery {
-                level_name: "world",
-            },
+            &mut core,
             &SessionCapabilitySet {
                 protocol: ProtocolCapabilitySet::new(),
                 gameplay: GameplayCapabilitySet::new(),
@@ -105,10 +104,11 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
                 protocol_generation: None,
                 gameplay_generation: None,
             },
-            &CoreCommand::SetHeldSlot {
+            &GameplayCommand::SetHeldSlot {
                 player_id: PlayerId(Uuid::from_u128(77)),
                 slot: 0,
             },
+            0,
         );
         match action {
             PluginFailureAction::Skip | PluginFailureAction::Quarantine => {
@@ -119,7 +119,7 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
             }
             PluginFailureAction::FailFast => {
                 assert!(
-                    matches!(result, Err(message) if message.contains("gameplay runtime failure"))
+                    matches!(result, Err(RuntimeError::Config(message)) if message.contains("gameplay runtime failure"))
                 );
             }
         }
@@ -136,9 +136,7 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
             assert!(
                 profile
                     .handle_command(
-                        &StubGameplayQuery {
-                            level_name: "world",
-                        },
+                        &mut core,
                         &SessionCapabilitySet {
                             protocol: ProtocolCapabilitySet::new(),
                             gameplay: GameplayCapabilitySet::new(),
@@ -147,10 +145,11 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
                             protocol_generation: None,
                             gameplay_generation: None,
                         },
-                        &CoreCommand::SetHeldSlot {
+                        &GameplayCommand::SetHeldSlot {
                             player_id: PlayerId(Uuid::from_u128(77)),
                             slot: 1,
                         },
+                        0,
                     )
                     .is_ok(),
                 "quarantined gameplay profile should no-op future hooks"

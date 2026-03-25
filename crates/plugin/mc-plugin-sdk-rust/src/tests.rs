@@ -2,8 +2,7 @@ use super::{__macro_support, admin_ui, capabilities, gameplay, manifest, protoco
 use bytes::BytesMut;
 use mc_core::{
     BlockPos, CapabilityAnnouncement, CoreCommand, CoreEvent, DimensionId, GameplayCapability,
-    GameplayEffect, GameplayJoinEffect, GameplayPolicyResolver, GameplayProfileId, GameplayQuery,
-    PlayerId, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet, SessionCapabilitySet,
+    GameplayProfileId, PlayerId, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet,
     WorldMeta,
 };
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
@@ -16,7 +15,7 @@ use mc_plugin_api::codec::gameplay::{
     decode_gameplay_response, encode_gameplay_request, host_blob::encode_world_meta,
 };
 use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse, WireFrameDecodeResult};
-use mc_plugin_api::host_api::HostApiTableV1;
+use mc_plugin_api::host_api::{GameplayHostApiV2, GameplayPluginApiV3, HostApiTableV1};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest, PlayEncodingContext,
     ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
@@ -70,7 +69,30 @@ unsafe extern "C" fn host_read_world_meta(
     PluginErrorCode::Ok
 }
 
-fn host_api_for(context: &TestHostContext) -> HostApiTableV1 {
+fn gameplay_host_api_for(context: &TestHostContext) -> GameplayHostApiV2 {
+    GameplayHostApiV2 {
+        abi: CURRENT_PLUGIN_ABI,
+        context: std::ptr::from_ref(context).cast_mut().cast(),
+        log: None,
+        read_player_snapshot: None,
+        read_world_meta: Some(host_read_world_meta),
+        read_block_state: None,
+        read_block_entity: None,
+        can_edit_block: None,
+        set_player_pose: None,
+        set_selected_hotbar_slot: None,
+        set_inventory_slot: None,
+        clear_mining: None,
+        begin_mining: None,
+        open_chest: None,
+        open_furnace: None,
+        set_block: None,
+        spawn_dropped_item: None,
+        emit_event: None,
+    }
+}
+
+fn admin_ui_host_api_for(context: &TestHostContext) -> HostApiTableV1 {
     HostApiTableV1 {
         abi: CURRENT_PLUGIN_ABI,
         context: std::ptr::from_ref(context).cast_mut().cast(),
@@ -98,12 +120,12 @@ impl gameplay::RustGameplayPlugin for DirectProbePlugin {
         host: &dyn gameplay::GameplayHost,
         _session: &GameplaySessionSnapshot,
         _now_ms: u64,
-    ) -> Result<GameplayEffect, String> {
+    ) -> Result<(), String> {
         let world_meta = host.read_world_meta()?;
         if world_meta.level_name.is_empty() {
             return Err("world meta should not be empty".to_string());
         }
-        Ok(GameplayEffect::default())
+        Ok(())
     }
 }
 
@@ -368,52 +390,26 @@ mod plugin_a {
             .take()
     }
 
-    #[derive(Default)]
-    pub struct PolicyA;
-
-    impl GameplayPolicyResolver for PolicyA {
-        fn handle_player_join(
-            &self,
-            _query: &dyn GameplayQuery,
-            _session: &SessionCapabilitySet,
-            _player: &PlayerSnapshot,
-        ) -> Result<GameplayJoinEffect, String> {
-            Ok(GameplayJoinEffect::default())
+    impl gameplay::RustGameplayPlugin for PluginA {
+        fn descriptor(&self) -> GameplayDescriptor {
+            gameplay::gameplay_descriptor("plugin-a")
         }
 
-        fn handle_command(
-            &self,
-            _query: &dyn GameplayQuery,
-            _session: &SessionCapabilitySet,
-            _command: &CoreCommand,
-        ) -> Result<GameplayEffect, String> {
-            Ok(GameplayEffect::default())
+        fn capability_set(&self) -> mc_core::GameplayCapabilitySet {
+            capabilities::gameplay_capabilities(&[GameplayCapability::RuntimeReload])
         }
 
         fn handle_tick(
             &self,
-            query: &dyn GameplayQuery,
-            _session: &SessionCapabilitySet,
-            _player_id: PlayerId,
+            host: &dyn gameplay::GameplayHost,
+            _session: &GameplaySessionSnapshot,
             _now_ms: u64,
-        ) -> Result<GameplayEffect, String> {
+        ) -> Result<(), String> {
             *recorded_slot()
                 .lock()
                 .expect("recorded level name mutex should not be poisoned") =
-                Some(query.world_meta().level_name);
-            Ok(GameplayEffect::default())
-        }
-    }
-
-    impl gameplay::PolicyGameplayPlugin for PluginA {
-        type Policy = PolicyA;
-
-        const PROFILE_ID: &'static str = "plugin-a";
-        const EXPORT_TAG: &'static str = "plugin-a";
-        const IMPORT_REJECT_MESSAGE: &'static str = "plugin-a refused session import";
-
-        fn capabilities() -> &'static [GameplayCapability] {
-            &[GameplayCapability::RuntimeReload]
+                Some(host.read_world_meta()?.level_name);
+            Ok(())
         }
     }
 
@@ -443,52 +439,26 @@ mod plugin_b {
             .take()
     }
 
-    #[derive(Default)]
-    pub struct PolicyB;
-
-    impl GameplayPolicyResolver for PolicyB {
-        fn handle_player_join(
-            &self,
-            _query: &dyn GameplayQuery,
-            _session: &SessionCapabilitySet,
-            _player: &PlayerSnapshot,
-        ) -> Result<GameplayJoinEffect, String> {
-            Ok(GameplayJoinEffect::default())
+    impl gameplay::RustGameplayPlugin for PluginB {
+        fn descriptor(&self) -> GameplayDescriptor {
+            gameplay::gameplay_descriptor("plugin-b")
         }
 
-        fn handle_command(
-            &self,
-            _query: &dyn GameplayQuery,
-            _session: &SessionCapabilitySet,
-            _command: &CoreCommand,
-        ) -> Result<GameplayEffect, String> {
-            Ok(GameplayEffect::default())
+        fn capability_set(&self) -> mc_core::GameplayCapabilitySet {
+            capabilities::gameplay_capabilities(&[GameplayCapability::RuntimeReload])
         }
 
         fn handle_tick(
             &self,
-            query: &dyn GameplayQuery,
-            _session: &SessionCapabilitySet,
-            _player_id: PlayerId,
+            host: &dyn gameplay::GameplayHost,
+            _session: &GameplaySessionSnapshot,
             _now_ms: u64,
-        ) -> Result<GameplayEffect, String> {
+        ) -> Result<(), String> {
             *recorded_slot()
                 .lock()
                 .expect("recorded level name mutex should not be poisoned") =
-                Some(query.world_meta().level_name);
-            Ok(GameplayEffect::default())
-        }
-    }
-
-    impl gameplay::PolicyGameplayPlugin for PluginB {
-        type Policy = PolicyB;
-
-        const PROFILE_ID: &'static str = "plugin-b";
-        const EXPORT_TAG: &'static str = "plugin-b";
-        const IMPORT_REJECT_MESSAGE: &'static str = "plugin-b refused session import";
-
-        fn capabilities() -> &'static [GameplayCapability] {
-            &[GameplayCapability::RuntimeReload]
+                Some(host.read_world_meta()?.level_name);
+            Ok(())
         }
     }
 
@@ -685,8 +655,8 @@ mod declared_protocol_plugin {
 }
 
 unsafe fn invoke_gameplay(
-    api: &mc_plugin_api::host_api::GameplayPluginApiV2,
-    host_api: Option<&HostApiTableV1>,
+    api: &GameplayPluginApiV3,
+    host_api: Option<&GameplayHostApiV2>,
     request: &GameplayRequest,
 ) -> GameplayResponse {
     let payload = encode_gameplay_request(request).expect("gameplay request should encode");
@@ -768,8 +738,8 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
     let context_b = TestHostContext {
         level_name: "host-b",
     };
-    let host_api_a = host_api_for(&context_a);
-    let host_api_b = host_api_for(&context_b);
+    let host_api_a = gameplay_host_api_for(&context_a);
+    let host_api_b = gameplay_host_api_for(&context_b);
 
     let entrypoints_a = plugin_a::in_process_plugin_entrypoints();
     let entrypoints_b = plugin_b::in_process_plugin_entrypoints();
@@ -785,11 +755,11 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
 
     assert_eq!(
         unsafe { invoke_gameplay(entrypoints_a.api, Some(&host_api_a), &request_a) },
-        GameplayResponse::Effect(GameplayEffect::default())
+        GameplayResponse::Empty
     );
     assert_eq!(
         unsafe { invoke_gameplay(entrypoints_b.api, Some(&host_api_b), &request_b) },
-        GameplayResponse::Effect(GameplayEffect::default())
+        GameplayResponse::Empty
     );
     assert_eq!(
         plugin_a::take_recorded_level_name().as_deref(),
@@ -838,7 +808,7 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     let context = TestHostContext {
         level_name: "host-a",
     };
-    let mut host_api = host_api_for(&context);
+    let mut host_api = gameplay_host_api_for(&context);
     host_api.abi = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
     let entrypoints = plugin_a::in_process_plugin_entrypoints();
     let request = GameplayRequest::HandleTick {
@@ -866,7 +836,7 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
-        "gameplay host api ABI 2.0 did not match plugin ABI 3.5"
+        "gameplay host api ABI 2.0 did not match plugin ABI 4.0"
     );
 }
 
@@ -878,8 +848,8 @@ fn exported_admin_ui_plugins_parse_and_render_round_trip() {
     let context_b = TestHostContext {
         level_name: "host-b",
     };
-    let host_api_a = host_api_for(&context_a);
-    let host_api_b = host_api_for(&context_b);
+    let host_api_a = admin_ui_host_api_for(&context_a);
+    let host_api_b = admin_ui_host_api_for(&context_b);
     let entrypoints = console_admin_ui_plugin::in_process_plugin_entrypoints();
 
     assert_eq!(
@@ -949,7 +919,7 @@ fn exported_admin_ui_plugins_reject_mismatched_host_api_abi() {
     let context = TestHostContext {
         level_name: "host-a",
     };
-    let mut host_api = host_api_for(&context);
+    let mut host_api = admin_ui_host_api_for(&context);
     host_api.abi = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
     let entrypoints = console_admin_ui_plugin::in_process_plugin_entrypoints();
     let request = AdminUiInput::ParseLine {
@@ -976,7 +946,7 @@ fn exported_admin_ui_plugins_reject_mismatched_host_api_abi() {
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
-        "admin-ui host api ABI 2.0 did not match plugin ABI 3.5"
+        "admin-ui host api ABI 2.0 did not match plugin ABI 4.0"
     );
 }
 
