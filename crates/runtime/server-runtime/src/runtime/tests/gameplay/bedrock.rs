@@ -406,3 +406,108 @@ async fn survival_world_drop_is_visible_to_bedrock_observers_and_despawns_after_
 
     server.shutdown().await
 }
+
+#[tokio::test]
+async fn survival_dropped_items_do_not_persist_across_restart_for_bedrock_late_joiners()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let world_dir = temp_dir.path().join("world");
+    let mut config = survival_server_config(world_dir.clone());
+    config.topology.be_enabled = true;
+    config.topology.default_adapter = JE_340_ADAPTER_ID.into();
+    config.topology.enabled_adapters = Some(vec![JE_340_ADAPTER_ID.into()]);
+    config.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.into();
+    config.topology.enabled_bedrock_adapters = Some(vec![BE_924_ADAPTER_ID.into()]);
+    config.profiles.bedrock_auth = BEDROCK_OFFLINE_AUTH_PROFILE_ID.into();
+
+    let server = build_test_server(
+        config.clone(),
+        plugin_test_registries_with_allowlist(&[JE_340_ADAPTER_ID, BE_924_ADAPTER_ID])?,
+    )
+    .await?;
+    let udp_addr = udp_listener_addr(&server);
+    let tcp_addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let (mut actor, mut actor_buffer, _) = login_modern_1_12(tcp_addr, "alpha").await?;
+    let mut watcher = BedrockTestClient::connect(udp_addr).await?;
+    watcher.login("watcher").await?;
+    let _ = read_until_bedrock_packet(&mut watcher, TestBedrockPacket::StartGame, 32).await?;
+    let _ = read_until_bedrock_packet(&mut watcher, TestBedrockPacket::LevelChunk, 64).await?;
+
+    write_packet(
+        &mut actor,
+        &codec,
+        &player_block_placement_1_12(4, 3, 0, 1, 0),
+    )
+    .await?;
+    let set_slot = read_until_java_packet(
+        &mut actor,
+        &codec,
+        &mut actor_buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::SetSlot,
+    )
+    .await?;
+    assert_eq!(
+        decode_set_slot(TestJavaProtocol::Je340, &set_slot)?,
+        (0, 36, Some((1, 63, 0)))
+    );
+
+    write_packet(&mut actor, &codec, &player_digging_1_12(0, 4, 4, 0, 1)).await?;
+    let add_item =
+        read_until_bedrock_packet(&mut watcher, TestBedrockPacket::AddItemActor, 64).await?;
+    match add_item {
+        V924::AddItemActorPacket(packet) => {
+            let (item_id, count, _aux) = bedrock_stack_descriptor_summary(&packet.item)?;
+            assert_ne!(item_id, 0);
+            assert_eq!(count, 1);
+            assert_eq!(packet.position.x, 4.5);
+            assert_eq!(packet.position.y, 4.5);
+            assert_eq!(packet.position.z, 0.5);
+        }
+        other => panic!("expected add item actor packet, got {other:?}"),
+    }
+
+    watcher.disconnect().await?;
+    drop(watcher);
+    actor.shutdown().await?;
+    drop(actor);
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let udp_sessions = server
+                .session_status()
+                .await
+                .into_iter()
+                .filter(|session| session.transport == TransportKind::Udp)
+                .count();
+            if udp_sessions == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| RuntimeError::Config("bedrock session did not drain before shutdown".into()))?;
+
+    tokio::time::timeout(Duration::from_secs(1), server.shutdown())
+        .await
+        .map_err(|_| RuntimeError::Config("shutdown timed out before restart".into()))??;
+
+    let restarted = build_test_server(
+        config,
+        plugin_test_registries_with_allowlist(&[JE_340_ADAPTER_ID, BE_924_ADAPTER_ID])?,
+    )
+    .await?;
+    let udp_addr = udp_listener_addr(&restarted);
+    let mut late_joiner = BedrockTestClient::connect(udp_addr).await?;
+    late_joiner.login("late").await?;
+    let _ = read_until_bedrock_packet(&mut late_joiner, TestBedrockPacket::StartGame, 32).await?;
+    let _ = read_until_bedrock_packet(&mut late_joiner, TestBedrockPacket::LevelChunk, 64).await?;
+
+    assert_no_bedrock_packet(&mut late_joiner, TestBedrockPacket::AddItemActor).await?;
+    assert_no_bedrock_packet(&mut late_joiner, TestBedrockPacket::RemoveActor).await?;
+
+    restarted.shutdown().await
+}

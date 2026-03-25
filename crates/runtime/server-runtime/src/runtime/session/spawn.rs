@@ -151,77 +151,84 @@ impl RuntimeServer {
     ) -> Result<(), RuntimeError> {
         let mut read_buffer = BytesMut::with_capacity(8192);
 
-        loop {
-            tokio::select! {
-                read = transport_io.read_into(&mut read_buffer) => {
-                    let bytes_read = read?;
-                    if bytes_read == 0 {
-                        break;
-                    }
-                    loop {
-                        let codec: &dyn WireCodec = match session.adapter.as_ref() {
-                            Some(current) => current.wire_codec(),
-                            None => default_wire_codec(session.transport)?,
-                        };
-                        let Some(frame) = codec.try_decode_frame(&mut read_buffer)? else {
+        let result = async {
+            loop {
+                tokio::select! {
+                    read = transport_io.read_into(&mut read_buffer) => {
+                        let bytes_read = read?;
+                        if bytes_read == 0 {
                             break;
-                        };
-                        let should_close = self
-                            .handle_incoming_frame(
-                                connection_id,
-                                &mut transport_io,
-                                &mut session,
-                                frame,
-                            )
-                            .await?;
-                        if should_close {
-                            self.unregister_session(connection_id, &session).await?;
-                            return Ok(());
+                        }
+                        loop {
+                            let codec: &dyn WireCodec = match session.adapter.as_ref() {
+                                Some(current) => current.wire_codec(),
+                                None => default_wire_codec(session.transport)?,
+                            };
+                            let Some(frame) = codec.try_decode_frame(&mut read_buffer)? else {
+                                break;
+                            };
+                            let should_close = self
+                                .handle_incoming_frame(
+                                    connection_id,
+                                    &mut transport_io,
+                                    &mut session,
+                                    frame,
+                                )
+                                .await?;
+                            if should_close {
+                                return Ok(());
+                            }
                         }
                     }
-                }
-                control = control_rx.changed() => {
-                    if control.is_err() {
-                        break;
+                    control = control_rx.changed() => {
+                        if control.is_err() {
+                            break;
+                        }
+                        let reason = { control_rx.borrow().clone() };
+                        if let Some(reason) = reason {
+                            let should_close = self
+                                .handle_outgoing_message(
+                                    connection_id,
+                                    &mut transport_io,
+                                    &mut session,
+                                    SessionMessage::Terminate { reason },
+                                )
+                                .await?;
+                            if should_close {
+                                return Ok(());
+                            }
+                        }
                     }
-                    let reason = { control_rx.borrow().clone() };
-                    if let Some(reason) = reason {
+                    maybe_message = rx.recv() => {
+                        let Some(message) = maybe_message else {
+                            break;
+                        };
                         let should_close = self
                             .handle_outgoing_message(
                                 connection_id,
                                 &mut transport_io,
                                 &mut session,
-                                SessionMessage::Terminate { reason },
+                                message,
                             )
                             .await?;
                         if should_close {
-                            self.unregister_session(connection_id, &session).await?;
                             return Ok(());
                         }
                     }
                 }
-                maybe_message = rx.recv() => {
-                    let Some(message) = maybe_message else {
-                        break;
-                    };
-                    let should_close = self
-                        .handle_outgoing_message(
-                            connection_id,
-                            &mut transport_io,
-                            &mut session,
-                            message,
-                        )
-                        .await?;
-                    if should_close {
-                        self.unregister_session(connection_id, &session).await?;
-                        return Ok(());
-                    }
-                }
             }
+            Ok(())
         }
+        .await;
 
-        self.unregister_session(connection_id, &session).await?;
-        Ok(())
+        let cleanup = self.unregister_session(connection_id, &session).await;
+        match (result, cleanup) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(error)) | (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(cleanup_error)) => Err(RuntimeError::Config(format!(
+                "session {connection_id:?} ended with error: {error}; cleanup failed: {cleanup_error}"
+            ))),
+        }
     }
 
     pub(in crate::runtime) async fn reap_completed_session_tasks(&self) {

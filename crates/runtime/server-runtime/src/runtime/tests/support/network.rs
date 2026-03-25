@@ -405,6 +405,13 @@ impl BedrockTestClient {
             .await
     }
 
+    pub(crate) async fn disconnect(&mut self) -> Result<(), RuntimeError> {
+        self.send_queue
+            .send_packet(Disconnect {}.into(), RakReliability::Reliable, true)
+            .await
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
     async fn perform_mtu_discovery(
         socket: &Arc<tokio::net::UdpSocket>,
     ) -> Result<u16, RuntimeError> {
@@ -640,6 +647,39 @@ pub(crate) async fn read_until_bedrock_packet(
     Err(RuntimeError::Config(format!(
         "did not receive bedrock packet {wanted_packet:?}; last_decode_error={last_decode_error:?}"
     )))
+}
+
+pub(crate) async fn assert_no_bedrock_packet(
+    client: &mut BedrockTestClient,
+    wanted_packet: TestBedrockPacket,
+) -> Result<(), RuntimeError> {
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(200);
+    while let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now()) {
+        if remaining.is_zero() {
+            break;
+        }
+        let payload = match tokio::time::timeout(remaining, client.recv_bedrock_payload()).await {
+            Err(_) => break,
+            Ok(result) => result?,
+        };
+        let packets =
+            decode_bedrock_packets(&payload, client.compression.as_ref()).map_err(|error| {
+                RuntimeError::Config(format!(
+                    "{error}; wanted_absent={wanted_packet:?}; compression={:?}; payload_len={}; payload_prefix={:02x?}",
+                    client.compression,
+                    payload.len(),
+                    &payload.iter().take(24).copied().collect::<Vec<_>>(),
+                ))
+            })?;
+        for packet in packets {
+            if test_bedrock_packet(&packet) == Some(wanted_packet) {
+                return Err(RuntimeError::Config(format!(
+                    "unexpected bedrock packet {wanted_packet:?}: {packet:?}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn epoch_seconds_i64() -> i64 {
