@@ -15,7 +15,7 @@ use crate::events::{
     InventoryTransactionContext, TargetedEvent,
 };
 use crate::inventory::{InventoryContainer, InventorySlot, ItemStack, PlayerInventory};
-use crate::{PlayerId, SessionCapabilitySet};
+use crate::{PlayerId, ProtocolCapability, SessionCapabilitySet};
 
 impl ServerCore {
     pub(in crate::core) fn apply_inventory_click(
@@ -62,11 +62,17 @@ impl ServerCore {
                 .get_mut(&player_id)
                 .expect("online player should still exist");
             let applied = match transaction.window_id {
-                0 => apply_player_window_click(player, resolved_slot, button),
+                0 => match target {
+                    InventoryClickTarget::Outside => {
+                        apply_outside_click(&mut player.cursor, button)
+                    }
+                    _ => apply_player_window_click(player, resolved_slot, button),
+                },
                 _ => apply_active_container_click(
                     player,
                     transaction.window_id,
                     resolved_slot,
+                    &target,
                     button,
                 ),
             };
@@ -95,8 +101,13 @@ impl ServerCore {
 
         let clicked_slot_stack =
             resolved_slot.and_then(|slot| after_contents.get_slot(slot).cloned());
-        let accepted =
-            applied && resolved_slot.is_some() && clicked_item == clicked_slot_stack.as_ref();
+        let bedrock_authoritative = session
+            .is_some_and(|session| session.protocol.contains(&ProtocolCapability::Bedrock));
+        let accepted = if bedrock_authoritative {
+            applied
+        } else {
+            applied && resolved_slot.is_some() && clicked_item == clicked_slot_stack.as_ref()
+        };
 
         let mut events = vec![TargetedEvent {
             target: EventTarget::Player(player_id),
@@ -200,8 +211,12 @@ fn apply_active_container_click(
     player: &mut OnlinePlayer,
     window_id: u8,
     slot: Option<InventorySlot>,
+    target: &InventoryClickTarget,
     button: InventoryClickButton,
 ) -> bool {
+    if matches!(target, InventoryClickTarget::Outside) {
+        return apply_outside_click(&mut player.cursor, button);
+    }
     let Some(slot) = slot else {
         return false;
     };
@@ -343,6 +358,19 @@ fn apply_furnace_click(
         }
         InventorySlot::Auxiliary(_) | InventorySlot::Offhand => false,
         InventorySlot::Container(_) => false,
+    }
+}
+
+fn apply_outside_click(cursor: &mut Option<ItemStack>, button: InventoryClickButton) -> bool {
+    match button {
+        InventoryClickButton::Left => {
+            *cursor = None;
+            true
+        }
+        InventoryClickButton::Right => {
+            decrement_cursor(cursor);
+            true
+        }
     }
 }
 

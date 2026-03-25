@@ -356,6 +356,80 @@ fn clicked_item_mismatch_rejects_but_keeps_authoritative_mutation() {
 }
 
 #[test]
+fn bedrock_authoritative_click_accepts_without_clicked_item_echo() {
+    let mut session = WindowZeroSession::with_action("be-auth-click", 80);
+    let bedrock = bedrock_session_capabilities();
+    session.seed_hotbar0("minecraft:oak_log", 1);
+    let _ = session.pickup_hotbar0();
+
+    let action_number = session.next_action_number;
+    session.next_action_number += 1;
+    let events = apply_with_session(
+        &mut session.core,
+        CoreCommand::InventoryClick {
+            player_id: session.player,
+            transaction: InventoryTransactionContext {
+                window_id: 0,
+                action_number,
+            },
+            target: InventoryClickTarget::Slot(InventorySlot::Hotbar(1)),
+            button: InventoryClickButton::Left,
+            clicked_item: None,
+        },
+        &bedrock,
+    );
+
+    assert_transaction_processed(&events, session.player, 0, action_number, true);
+    assert_inventory_slot_changed_to(
+        &events,
+        session.player,
+        InventorySlot::Hotbar(1),
+        Some(("minecraft:oak_log", 1)),
+    );
+    assert_eq!(
+        count_player_events(
+            &events,
+            session.player,
+            |event| matches!(event, CoreEvent::InventoryContents { .. }),
+        ),
+        0,
+    );
+}
+
+#[test]
+fn bedrock_outside_click_drops_cursor_authoritatively() {
+    let mut session = WindowZeroSession::with_action("be-out-drop", 81);
+    let bedrock = bedrock_session_capabilities();
+    session.seed_hotbar0("minecraft:stone", 1);
+    let _ = session.pickup_hotbar0();
+
+    let action_number = session.next_action_number;
+    session.next_action_number += 1;
+    let events = apply_with_session(
+        &mut session.core,
+        CoreCommand::InventoryClick {
+            player_id: session.player,
+            transaction: InventoryTransactionContext {
+                window_id: 0,
+                action_number,
+            },
+            target: InventoryClickTarget::Outside,
+            button: InventoryClickButton::Left,
+            clicked_item: None,
+        },
+        &bedrock,
+    );
+
+    assert_transaction_processed(&events, session.player, 0, action_number, true);
+    assert_player_event(
+        &events,
+        session.player,
+        |event| matches!(event, CoreEvent::CursorChanged { stack } if stack.is_none()),
+    );
+    assert!(session.online().cursor.is_none());
+}
+
+#[test]
 fn non_zero_window_click_rejects_without_mutation_or_resync() {
     let mut session = WindowZeroSession::with_action("reject-window-id", 9);
     session.seed_hotbar0("minecraft:oak_log", 1);

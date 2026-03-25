@@ -8,11 +8,38 @@ use crate::runtime_ids::{
 use crate::{BE_924_PROTOCOL_NUMBER, Bedrock924Adapter};
 use base64::Engine;
 use bedrockrs_proto::V924;
-use bedrockrs_proto::codec::encode_packets;
-use bedrockrs_proto::v662::packets::{LoginPacket, RequestNetworkSettingsPacket};
-use mc_core::BlockState;
-use mc_proto_common::{HandshakeProbe, LoginRequest, SessionAdapter};
+use bedrockrs_proto::codec::{decode_packets, encode_packets};
+use bedrockrs_proto::v662::enums::{
+    ContainerEnumName, ComplexInventoryTransactionType, InputMode,
+    ItemUseInventoryTransactionType, NewInteractionModel, TextProcessingEventOrigin,
+};
+use bedrockrs_proto::v662::packets::{
+    ItemStackRequestPacket, LegacySetItemSlotsEntry, LoginPacket, RequestNetworkSettingsPacket,
+    RequestsEntry,
+};
+use bedrockrs_proto::v662::types::{NetworkBlockPosition, NetworkItemStackDescriptor};
+use bedrockrs_proto::v712::enums::ItemStackRequestActionType;
+use bedrockrs_proto::v712::types::{
+    ItemStackRequestSlotInfo, PackedItemUseLegacyInventoryTransaction, PredictedResult,
+    TriggerType,
+};
+use bedrockrs_proto::v729::types::FullContainerName;
+use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
+use bedrockrs_proto::v766::packets::ClientPlayMode;
+use bedrockrs_proto::v766::packets::player_auth_input_packet::{
+    PlayerAuthInputFlags,
+};
+use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
+use mc_core::{
+    BlockPos, BlockState, ChunkColumn, ChunkPos, CoreCommand, CoreEvent, EntityId,
+    InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerInventory,
+};
+use mc_proto_common::{HandshakeProbe, LoginRequest, PlayEncodingContext, PlaySyncAdapter, SessionAdapter};
 use serde_json::json;
+use std::io::Cursor;
+use uuid::Uuid;
+use vek::{Vec2, Vec3};
 
 fn test_jwt(payload: &serde_json::Value) -> String {
     let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
@@ -138,4 +165,403 @@ fn supported_block_runtime_ids_match_bedrock_1_26_0_palette() {
         block_runtime_id(&BlockState::oak_planks()),
         BEDROCK_26_3_RUNTIME_ID_OAK_PLANKS
     );
+}
+
+#[test]
+fn encodes_chunk_and_block_packets() {
+    let adapter = Bedrock924Adapter::new();
+    let mut chunk = ChunkColumn::new(ChunkPos::new(0, 0));
+    chunk.set_block(1, 4, 2, BlockState::bricks());
+
+    let frames = adapter
+        .encode_play_event(&CoreEvent::ChunkBatch { chunks: vec![chunk] }, &play_context())
+        .expect("chunk batch should encode");
+    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        .expect("chunk packet should decode");
+    match packets.as_slice() {
+        [V924::LevelChunkPacket(packet)] => {
+            assert_eq!(packet.chunk_position.x, 0);
+            assert_eq!(packet.chunk_position.z, 0);
+            assert!(!packet.serialized_chunk_data.is_empty());
+        }
+        other => panic!("unexpected chunk packets: {other:?}"),
+    }
+
+    let frames = adapter
+        .encode_play_event(
+            &CoreEvent::BlockChanged {
+                position: BlockPos::new(2, 3, 4),
+                block: BlockState::glass(),
+            },
+            &play_context(),
+        )
+        .expect("block change should encode");
+    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        .expect("block packet should decode");
+    match packets.as_slice() {
+        [V924::UpdateBlockPacket(packet)] => {
+            assert_eq!(packet.block_position.x, 2);
+            assert_eq!(packet.block_position.y, 3);
+            assert_eq!(packet.block_position.z, 4);
+            assert_eq!(packet.block_runtime_id, block_runtime_id(&BlockState::glass()));
+        }
+        other => panic!("unexpected block packets: {other:?}"),
+    }
+}
+
+#[test]
+fn encodes_inventory_and_container_packets() {
+    let adapter = Bedrock924Adapter::new();
+    let mut inventory = PlayerInventory::creative_starter();
+    let _ = inventory.set_slot(InventorySlot::Offhand, Some(item("minecraft:stick", 1)));
+    let contents = InventoryWindowContents::with_container(
+        inventory,
+        vec![Some(item("minecraft:chest", 1)); 27],
+    );
+
+    let frames = adapter
+        .encode_play_event(
+            &CoreEvent::InventoryContents {
+                window_id: 2,
+                container: InventoryContainer::Chest,
+                contents,
+            },
+            &play_context(),
+        )
+        .expect("inventory contents should encode");
+    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        .expect("inventory contents packet should decode");
+    assert!(
+        packets.iter().any(|packet| matches!(
+            packet,
+            V924::InventoryContentPacket(content) if content.inventory_id == 1 && content.slots.len() == 27
+        )),
+        "active container inventory should be present",
+    );
+    assert!(
+        packets.iter().any(|packet| matches!(
+            packet,
+            V924::InventoryContentPacket(content) if content.inventory_id == 0 && content.slots.len() == 36
+        )),
+        "player storage inventory should be present",
+    );
+    assert!(
+        packets.iter().any(|packet| matches!(
+            packet,
+            V924::InventoryContentPacket(content) if content.inventory_id == 119 && content.slots.len() == 1
+        )),
+        "offhand inventory should be present",
+    );
+
+    let frames = adapter
+        .encode_play_event(
+            &CoreEvent::InventorySlotChanged {
+                window_id: 2,
+                container: InventoryContainer::Chest,
+                slot: InventorySlot::Container(0),
+                stack: Some(item("minecraft:chest", 1)),
+            },
+            &play_context(),
+        )
+        .expect("inventory slot change should encode");
+    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        .expect("inventory slot packet should decode");
+    match packets.as_slice() {
+        [V924::InventorySlotPacket(packet)] => {
+            assert_eq!(packet.container_id, 1);
+            assert_eq!(packet.slot, 0);
+        }
+        other => panic!("unexpected slot packets: {other:?}"),
+    }
+
+    let frames = adapter
+        .encode_play_event(
+            &CoreEvent::SelectedHotbarSlotChanged { slot: 4 },
+            &play_context(),
+        )
+        .expect("selected hotbar slot should encode");
+    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        .expect("hotbar packet should decode");
+    assert!(matches!(
+        packets.as_slice(),
+        [V924::PlayerHotbarPacket(packet)] if packet.selected_slot == 4
+    ));
+
+    let frames = adapter
+        .encode_play_event(
+            &CoreEvent::ContainerOpened {
+                window_id: 2,
+                container: InventoryContainer::CraftingTable,
+                title: "Crafting".to_string(),
+            },
+            &play_context(),
+        )
+        .expect("container open should encode");
+    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        .expect("open packet should decode");
+    assert!(matches!(
+        packets.as_slice(),
+        [V924::ContainerOpenPacket(packet)]
+            if matches!(packet.container_id, bedrockrs_proto::v662::enums::ContainerID::First)
+                && matches!(packet.container_type, bedrockrs_proto::v662::enums::ContainerType::Workbench)
+    ));
+
+    let frames = adapter
+        .encode_play_event(
+            &CoreEvent::ContainerClosed { window_id: 2 },
+            &play_context(),
+        )
+        .expect("container close should encode");
+    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        .expect("close packet should decode");
+    assert!(matches!(
+        packets.as_slice(),
+        [V924::ContainerClosePacket(packet)] if packet.server_initiated_close
+    ));
+
+    let frames = adapter
+        .encode_play_event(
+            &CoreEvent::ContainerPropertyChanged {
+                window_id: 2,
+                property_id: 1,
+                value: 200,
+            },
+            &play_context(),
+        )
+        .expect("container property should encode");
+    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        .expect("property packet should decode");
+    assert!(matches!(
+        packets.as_slice(),
+        [V924::ContainerSetDataPacket(packet)] if packet.id == 1 && packet.value == 200
+    ));
+}
+
+#[test]
+fn decodes_legacy_inventory_transaction_item_use() {
+    let adapter = Bedrock924Adapter::new();
+    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"bedrock-legacy-item-use"));
+    let frame = encode_legacy_item_use_transaction(sample_item_use_transaction(
+        ItemUseInventoryTransactionType::Place,
+        BlockPos::new(2, 3, 4),
+        1,
+    ));
+
+    let command = adapter
+        .decode_play(player_id, &frame)
+        .expect("legacy inventory transaction should decode")
+        .expect("legacy inventory transaction should produce a command");
+    assert!(matches!(
+        command,
+        CoreCommand::PlaceBlock {
+            player_id: decoded_player,
+            position,
+            face: Some(mc_core::BlockFace::Top),
+            ..
+        } if decoded_player == player_id && position == BlockPos::new(2, 3, 4)
+    ));
+}
+
+#[test]
+fn decodes_player_auth_input_item_use() {
+    let adapter = Bedrock924Adapter::new();
+    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"bedrock-auth-item-use"));
+    let frame = encode_player_auth_input(PlayerAuthInputPacket {
+        player_rotation: Vec2::new(0.0, 0.0),
+        player_position: Vec3::new(0.0, 0.0, 0.0),
+        move_vector: Vec3::new(0.0, 0.0, 0.0),
+        player_head_rotation: 0.0,
+        input_data: PlayerAuthInputFlags::PerformItemInteraction as u128,
+        input_mode: InputMode::Mouse,
+        play_mode: ClientPlayMode::Normal,
+        new_interaction_model: NewInteractionModel::Crosshair,
+        interact_rotation: Vec3::new(0.0, 0.0, 0.0),
+        client_tick: 0,
+        velocity: Vec3::new(0.0, 0.0, 0.0),
+        item_use_transaction: Some(sample_item_use_transaction(
+            ItemUseInventoryTransactionType::Destroy,
+            BlockPos::new(5, 6, 7),
+            4,
+        )),
+        item_stack_request: None,
+        player_block_actions: None,
+        client_predicted_vehicle: None,
+        analog_move_vector: Vec2::new(0.0, 0.0),
+        camera_orientation: Vec3::new(0.0, 0.0, 0.0),
+        raw_move_vector: Vec2::new(0.0, 0.0),
+    });
+
+    let command = adapter
+        .decode_play(player_id, &frame)
+        .expect("player auth input should decode")
+        .expect("player auth input should produce a command");
+    assert!(matches!(
+        command,
+        CoreCommand::DigBlock {
+            player_id: decoded_player,
+            position,
+            face: Some(mc_core::BlockFace::West),
+            ..
+        } if decoded_player == player_id && position == BlockPos::new(5, 6, 7)
+    ));
+}
+
+#[test]
+fn decodes_item_stack_request_take_action() {
+    let adapter = Bedrock924Adapter::new();
+    let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"bedrock-stack-request"));
+    let frame = encode_packets(
+        &[V924::ItemStackRequestPacket(ItemStackRequestPacket {
+            requests: vec![RequestsEntry {
+                client_request_id: 12,
+                actions: vec![ItemStackRequestActionType::Take {
+                    amount: 64,
+                    source: request_slot(ContainerEnumName::HotbarContainer, 0),
+                    destination: request_slot(ContainerEnumName::CursorContainer, 0),
+                }],
+                strings_to_filter: Vec::new(),
+                strings_to_filter_origin: TextProcessingEventOrigin::Unknown,
+            }],
+        })],
+        None,
+        None,
+    )
+    .expect("item stack request should encode");
+
+    let command = adapter
+        .decode_play(player_id, &frame)
+        .expect("item stack request should decode")
+        .expect("item stack request should produce a command");
+    assert!(matches!(
+        command,
+        CoreCommand::InventoryClick {
+            player_id: decoded_player,
+            transaction: InventoryTransactionContext {
+                window_id: 0,
+                action_number: 12,
+            },
+            target: InventoryClickTarget::Slot(InventorySlot::Hotbar(0)),
+            button: InventoryClickButton::Left,
+            clicked_item: None,
+        } if decoded_player == player_id
+    ));
+}
+
+fn play_context() -> PlayEncodingContext {
+    PlayEncodingContext {
+        player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"bedrock-encode-context")),
+        entity_id: EntityId(1),
+    }
+}
+
+fn item(key: &str, count: u8) -> ItemStack {
+    ItemStack::new(key, count, 0)
+}
+
+fn request_slot(container: ContainerEnumName, slot: i8) -> ItemStackRequestSlotInfo<V924> {
+    ItemStackRequestSlotInfo {
+        container_name: full_container_name(container),
+        slot,
+        raw_id: 0,
+    }
+}
+
+fn full_container_name(container: ContainerEnumName) -> FullContainerName<V924> {
+    let mut bytes = Vec::new();
+    container
+        .serialize(&mut bytes)
+        .expect("container enum should serialize");
+    <Option<i32> as ProtoCodecLE>::serialize(&None, &mut bytes)
+        .expect("dynamic id should serialize");
+    FullContainerName::deserialize(&mut Cursor::new(bytes))
+        .expect("full container name should deserialize")
+}
+
+fn empty_item_stack_descriptor() -> NetworkItemStackDescriptor {
+    let mut bytes = Vec::new();
+    <i32 as ProtoCodecVAR>::serialize(&0, &mut bytes).expect("empty item id should serialize");
+    NetworkItemStackDescriptor::deserialize(&mut Cursor::new(bytes))
+        .expect("empty item descriptor should deserialize")
+}
+
+fn sample_item_use_transaction(
+    action_type: ItemUseInventoryTransactionType,
+    position: BlockPos,
+    face: i32,
+) -> PackedItemUseLegacyInventoryTransaction<V924> {
+    PackedItemUseLegacyInventoryTransaction {
+        id: 0,
+        container_slots: None,
+        action: bedrockrs_proto::v662::types::InventoryTransaction { action: Vec::new() },
+        action_type,
+        trigger_type: TriggerType::PlayerInput,
+        position: NetworkBlockPosition {
+            x: position.x,
+            y: u32::try_from(position.y).expect("test block y should fit into u32"),
+            z: position.z,
+        },
+        face,
+        slot: 0,
+        item: empty_item_stack_descriptor(),
+        from_position: Vec3::new(0.0, 0.0, 0.0),
+        click_position: Vec3::new(0.5, 0.5, 0.5),
+        target_block_id: 0,
+        predicted_result: PredictedResult::Success,
+    }
+}
+
+fn encode_legacy_item_use_transaction(
+    transaction: PackedItemUseLegacyInventoryTransaction<V924>,
+) -> Vec<u8> {
+    let mut packet = Vec::new();
+    PacketHeader {
+        packet_id: 30,
+        sender_sub_client_id: 0,
+        target_sub_client_id: 0,
+    }
+    .serialize(&mut packet)
+    .expect("packet header should serialize");
+    <i32 as ProtoCodecVAR>::serialize(&0, &mut packet).expect("legacy request id should serialize");
+    <Vec<LegacySetItemSlotsEntry> as ProtoCodec>::serialize(&Vec::new(), &mut packet)
+        .expect("legacy slots should serialize");
+    ComplexInventoryTransactionType::ItemUseTransaction
+        .serialize(&mut packet)
+        .expect("transaction type should serialize");
+    transaction
+        .serialize(&mut packet)
+        .expect("item use transaction should serialize");
+
+    let mut frame = Vec::new();
+    <u32 as ProtoCodecVAR>::serialize(
+        &u32::try_from(packet.len()).expect("packet length should fit into u32"),
+        &mut frame,
+    )
+    .expect("frame length should serialize");
+    frame.extend_from_slice(&packet);
+    frame
+}
+
+fn encode_player_auth_input(packet: PlayerAuthInputPacket<V924>) -> Vec<u8> {
+    let mut body = Vec::new();
+    PacketHeader {
+        packet_id: 144,
+        sender_sub_client_id: 0,
+        target_sub_client_id: 0,
+    }
+    .serialize(&mut body)
+    .expect("packet header should serialize");
+    packet
+        .serialize(&mut body)
+        .expect("player auth input should serialize");
+    <Vec2<f32> as ProtoCodecLE>::serialize(&packet.raw_move_vector, &mut body)
+        .expect("raw move vector should serialize");
+
+    let mut frame = Vec::new();
+    <u32 as ProtoCodecVAR>::serialize(
+        &u32::try_from(body.len()).expect("packet length should fit into u32"),
+        &mut frame,
+    )
+    .expect("frame length should serialize");
+    frame.extend_from_slice(&body);
+    frame
 }

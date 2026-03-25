@@ -1,4 +1,12 @@
 use super::*;
+use base64::Engine;
+use bedrockrs_proto::info::RAKNET_GAMEPACKET_ID;
+use bedrockrs_proto::V924;
+use bedrockrs_proto::codec::{decode_packets, encode_packets};
+use bedrockrs_proto::compression::Compression as BedrockCompression;
+use bedrockrs_proto::v662::packets::{LoginPacket, RequestNetworkSettingsPacket};
+use mc_proto_be_924::BE_924_PROTOCOL_NUMBER;
+use serde_json::json;
 
 pub(crate) fn encode_handshake(
     protocol_version: i32,
@@ -242,6 +250,102 @@ pub(crate) fn decode_window_property(
     packet: &[u8],
 ) -> Result<(u8, i16, i16), RuntimeError> {
     Ok(protocol.decode_window_property(packet)?)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TestBedrockPacket {
+    NetworkSettings,
+    PlayStatus,
+    StartGame,
+    LevelChunk,
+    UpdateBlock,
+    InventoryContent,
+    InventorySlot,
+    PlayerHotbar,
+    ContainerOpen,
+    ContainerClose,
+    ContainerSetData,
+}
+
+pub(crate) fn bedrock_network_settings_request() -> Result<Vec<u8>, RuntimeError> {
+    encode_packets(
+        &[V924::RequestNetworkSettingsPacket(RequestNetworkSettingsPacket {
+            client_network_version: BE_924_PROTOCOL_NUMBER,
+        })],
+        None,
+        None,
+    )
+    .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+pub(crate) fn bedrock_login_packet(
+    username: &str,
+    compression: Option<&BedrockCompression>,
+) -> Result<Vec<u8>, RuntimeError> {
+    let chain_entry = bedrock_test_jwt(&json!({"extraData":{"displayName":username}}));
+    let chain = json!({ "chain": [chain_entry] }).to_string();
+    let client_jwt = bedrock_test_jwt(&json!({"DisplayName":username}));
+    let mut connection_request = Vec::new();
+    let chain_len = u32::try_from(chain.len()).expect("test chain jwt should fit in u32");
+    connection_request.extend_from_slice(&chain_len.to_le_bytes());
+    connection_request.extend_from_slice(chain.as_bytes());
+    let client_jwt_len =
+        u32::try_from(client_jwt.len()).expect("test client jwt should fit in u32");
+    connection_request.extend_from_slice(&client_jwt_len.to_le_bytes());
+    connection_request.extend_from_slice(client_jwt.as_bytes());
+
+    encode_packets(
+        &[V924::LoginPacket(LoginPacket {
+            client_network_version: BE_924_PROTOCOL_NUMBER,
+            connection_request,
+        })],
+        compression,
+        None,
+    )
+    .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+pub(crate) fn decode_bedrock_packets(
+    payload: &[u8],
+    compression: Option<&BedrockCompression>,
+) -> Result<Vec<V924>, RuntimeError> {
+    let payload = match payload.first().copied() {
+        Some(RAKNET_GAMEPACKET_ID) => &payload[1..],
+        _ => payload,
+    };
+    decode_packets::<V924>(payload.to_vec(), compression, None)
+        .map_err(|error| RuntimeError::Config(error.to_string()))
+}
+
+pub(crate) fn bedrock_transport_payload(payload: &[u8]) -> Vec<u8> {
+    let mut framed = Vec::with_capacity(payload.len() + 1);
+    framed.push(RAKNET_GAMEPACKET_ID);
+    framed.extend_from_slice(payload);
+    framed
+}
+
+pub(crate) fn test_bedrock_packet(packet: &V924) -> Option<TestBedrockPacket> {
+    Some(match packet {
+        V924::NetworkSettingsPacket(_) => TestBedrockPacket::NetworkSettings,
+        V924::PlayStatusPacket(_) => TestBedrockPacket::PlayStatus,
+        V924::StartGamePacket(_) => TestBedrockPacket::StartGame,
+        V924::LevelChunkPacket(_) => TestBedrockPacket::LevelChunk,
+        V924::UpdateBlockPacket(_) => TestBedrockPacket::UpdateBlock,
+        V924::InventoryContentPacket(_) => TestBedrockPacket::InventoryContent,
+        V924::InventorySlotPacket(_) => TestBedrockPacket::InventorySlot,
+        V924::PlayerHotbarPacket(_) => TestBedrockPacket::PlayerHotbar,
+        V924::ContainerOpenPacket(_) => TestBedrockPacket::ContainerOpen,
+        V924::ContainerClosePacket(_) => TestBedrockPacket::ContainerClose,
+        V924::ContainerSetDataPacket(_) => TestBedrockPacket::ContainerSetData,
+        _ => return None,
+    })
+}
+
+fn bedrock_test_jwt(payload: &serde_json::Value) -> String {
+    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+    let payload =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
+    format!("{header}.{payload}.")
 }
 
 pub(crate) fn decode_close_window(

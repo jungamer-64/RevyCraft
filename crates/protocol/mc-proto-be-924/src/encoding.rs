@@ -1,4 +1,13 @@
 use crate::codec::encode_v924;
+use crate::chunk::level_chunk_packet;
+use crate::inventory::{
+    encode_container_closed_packets as encode_bedrock_container_closed_packets,
+    encode_container_opened_packets as encode_bedrock_container_opened_packets,
+    encode_container_property_changed_packets as encode_bedrock_container_property_changed_packets,
+    encode_creative_content_packet, encode_inventory_contents_packets as encode_bedrock_inventory_contents_packets,
+    encode_inventory_slot_changed_packets as encode_bedrock_inventory_slot_changed_packets,
+    encode_selected_hotbar_slot_changed_packets as encode_bedrock_selected_hotbar_slot_changed_packets,
+};
 use crate::runtime_ids::block_runtime_id;
 use bedrockrs_proto::ProtoVersion;
 use bedrockrs_proto::V924;
@@ -19,7 +28,10 @@ use bedrockrs_proto::v818::types::SyncedPlayerMovementSettings;
 use bedrockrs_proto::v898::packets::ResourcePackStackPacket;
 use bedrockrs_proto::v924::packets::StartGamePacket;
 use bedrockrs_proto::v924::types::LevelSettings;
-use mc_core::{BlockPos, BlockState, EntityId, PlayerSnapshot, WorldMeta};
+use mc_core::{
+    BlockPos, BlockState, ChunkColumn, EntityId, InventoryContainer, InventorySlot,
+    InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
+};
 use mc_proto_be_common::__version_support::world::{
     bedrock_actor_id, block_pos_to_network, vec3_to_bedrock,
 };
@@ -183,12 +195,14 @@ pub(crate) fn encode_play_bootstrap_packets(
         scenario_id: String::new(),
         owner_id: String::new(),
     };
-    Ok(vec![
+    let mut packets = vec![
         encode_v924(&[V924::StartGamePacket(start_game)])?,
         encode_v924(&[V924::PlayStatusPacket(PlayStatusPacket {
             status: PlayStatus::PlayerSpawn,
         })])?,
-    ])
+    ];
+    packets.extend(encode_creative_content_packet()?);
+    Ok(packets)
 }
 
 pub(crate) fn encode_entity_moved_packets(
@@ -209,6 +223,17 @@ pub(crate) fn encode_entity_moved_packets(
     )])?])
 }
 
+pub(crate) fn encode_chunk_batch_packets(
+    chunks: &[ChunkColumn],
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    chunks
+        .iter()
+        .map(level_chunk_packet)
+        .map(|packet| packet.and_then(|packet| encode_v924(&[packet]).map(|payload| vec![payload])))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|packets| packets.into_iter().flatten().collect())
+}
+
 pub(crate) fn encode_block_changed_packets(
     position: BlockPos,
     block: &BlockState,
@@ -221,6 +246,49 @@ pub(crate) fn encode_block_changed_packets(
             layer: 0,
         },
     )])?])
+}
+
+pub(crate) fn encode_inventory_contents_packets(
+    window_id: u8,
+    container: InventoryContainer,
+    contents: &InventoryWindowContents,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    encode_bedrock_inventory_contents_packets(window_id, container, contents)
+}
+
+pub(crate) fn encode_container_opened_packets(
+    window_id: u8,
+    container: InventoryContainer,
+    _title: &str,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    encode_bedrock_container_opened_packets(window_id, container)
+}
+
+pub(crate) fn encode_container_closed_packets(window_id: u8) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    encode_bedrock_container_closed_packets(window_id)
+}
+
+pub(crate) fn encode_container_property_changed_packets(
+    window_id: u8,
+    property_id: u8,
+    value: i16,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    encode_bedrock_container_property_changed_packets(window_id, property_id, value)
+}
+
+pub(crate) fn encode_inventory_slot_changed_packets(
+    window_id: u8,
+    container: InventoryContainer,
+    slot: InventorySlot,
+    stack: Option<&ItemStack>,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    encode_bedrock_inventory_slot_changed_packets(window_id, container, slot, stack)
+}
+
+pub(crate) fn encode_selected_hotbar_slot_changed_packets(
+    slot: u8,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    encode_bedrock_selected_hotbar_slot_changed_packets(slot)
 }
 
 fn play_status(status: PlayStatus) -> Result<Vec<u8>, ProtocolError> {

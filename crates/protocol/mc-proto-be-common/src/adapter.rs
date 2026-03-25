@@ -1,6 +1,7 @@
 use crate::probe::{bedrock_probe_intent, detects_bedrock_datagram};
 use mc_core::{
-    BlockPos, BlockState, CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot, WorldMeta,
+    BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, EntityId, InventoryContainer,
+    InventorySlot, InventoryWindowContents, ItemStack, PlayerId, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest,
@@ -43,10 +44,45 @@ pub trait BedrockProfile: Default + Send + Sync {
         entity_id: EntityId,
         player: &PlayerSnapshot,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_chunk_batch_packets(
+        &self,
+        chunks: &[ChunkColumn],
+    ) -> Result<Vec<Vec<u8>>, ProtocolError>;
     fn encode_block_changed_packets(
         &self,
         position: BlockPos,
         block: &BlockState,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_inventory_contents_packets(
+        &self,
+        window_id: u8,
+        container: InventoryContainer,
+        contents: &InventoryWindowContents,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_container_opened_packets(
+        &self,
+        window_id: u8,
+        container: InventoryContainer,
+        title: &str,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_container_closed_packets(&self, window_id: u8)
+    -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_container_property_changed_packets(
+        &self,
+        window_id: u8,
+        property_id: u8,
+        value: i16,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_inventory_slot_changed_packets(
+        &self,
+        window_id: u8,
+        container: InventoryContainer,
+        slot: InventorySlot,
+        stack: Option<&ItemStack>,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError>;
+    fn encode_selected_hotbar_slot_changed_packets(
+        &self,
+        slot: u8,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
 }
 
@@ -166,21 +202,55 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
             CoreEvent::EntityMoved { entity_id, player } => {
                 self.profile.encode_entity_moved_packets(*entity_id, player)
             }
+            CoreEvent::ChunkBatch { chunks } => self.profile.encode_chunk_batch_packets(chunks),
             CoreEvent::BlockChanged { position, block } => {
                 self.profile.encode_block_changed_packets(*position, block)
             }
+            CoreEvent::InventoryContents {
+                window_id,
+                container,
+                contents,
+            } => self
+                .profile
+                .encode_inventory_contents_packets(*window_id, *container, contents),
+            CoreEvent::ContainerOpened {
+                window_id,
+                container,
+                title,
+            } => self
+                .profile
+                .encode_container_opened_packets(*window_id, *container, title),
+            CoreEvent::ContainerClosed { window_id } => {
+                self.profile.encode_container_closed_packets(*window_id)
+            }
+            CoreEvent::ContainerPropertyChanged {
+                window_id,
+                property_id,
+                value,
+            } => self.profile.encode_container_property_changed_packets(
+                *window_id,
+                *property_id,
+                *value,
+            ),
+            CoreEvent::InventorySlotChanged {
+                window_id,
+                container,
+                slot,
+                stack,
+            } => self.profile.encode_inventory_slot_changed_packets(
+                *window_id,
+                *container,
+                *slot,
+                stack.as_ref(),
+            ),
+            CoreEvent::SelectedHotbarSlotChanged { slot } => self
+                .profile
+                .encode_selected_hotbar_slot_changed_packets(*slot),
             CoreEvent::KeepAliveRequested { .. }
-            | CoreEvent::ChunkBatch { .. }
             | CoreEvent::EntitySpawned { .. }
             | CoreEvent::EntityDespawned { .. }
-            | CoreEvent::InventoryContents { .. }
-            | CoreEvent::ContainerOpened { .. }
-            | CoreEvent::ContainerClosed { .. }
-            | CoreEvent::ContainerPropertyChanged { .. }
-            | CoreEvent::InventorySlotChanged { .. }
             | CoreEvent::InventoryTransactionProcessed { .. }
             | CoreEvent::CursorChanged { .. }
-            | CoreEvent::SelectedHotbarSlotChanged { .. }
             | CoreEvent::LoginAccepted { .. }
             | CoreEvent::Disconnect { .. } => Ok(Vec::new()),
         }

@@ -3,6 +3,10 @@ use crate::{ListenerBinding, RuntimeError};
 use aes::Aes128;
 use aes::cipher::{BlockEncrypt, KeyInit};
 use bedrockrs_network::connection::Connection as BedrockConnection;
+use bedrockrs_network::error::{
+    ConnectionError as BedrockConnectionError, RakNetError as BedrockRakNetError,
+    TransportLayerError as BedrockTransportLayerError,
+};
 use bedrockrs_network::listener::Listener as BedrockListener;
 use bedrockrs_proto::Unknown as BedrockUnknown;
 use bedrockrs_proto::compression::Compression as BedrockCompression;
@@ -69,8 +73,22 @@ impl TransportSessionIo {
                 connection,
                 compression,
             } => {
-                let mut packet_stream =
-                    connection.recv_raw().await.map_err(std::io::Error::other)?;
+                let mut packet_stream = loop {
+                    match connection.recv_raw().await {
+                        Ok(packet_stream) => break packet_stream,
+                        Err(BedrockConnectionError::TransportError(
+                            BedrockTransportLayerError::RakNetError(
+                                BedrockRakNetError::InvalidRakNetHeader(header),
+                            ),
+                        )) if header == 0x13 => {
+                            // RakNet sessions are accepted before the final online handshake fully
+                            // drains, so early reads can still observe control packets like
+                            // `NewConnection` instead of a 0xfe-prefixed Bedrock game payload.
+                            continue;
+                        }
+                        Err(error) => return Err(std::io::Error::other(error)),
+                    }
+                };
                 if let Some(compression) = compression.as_ref() {
                     packet_stream = compression
                         .decompress(packet_stream)

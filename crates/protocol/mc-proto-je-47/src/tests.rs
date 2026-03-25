@@ -10,6 +10,7 @@ use mc_proto_common::{
     PlaySyncAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter, StatusRequest,
     TransportKind, WireFormatKind,
 };
+use mc_proto_je_common::__version_support::blocks::legacy_block_state_id;
 use mc_proto_je_common::__version_support::positions::pack_block_position;
 use uuid::Uuid;
 
@@ -347,6 +348,34 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2f);
     assert_eq!(reader.read_i8().expect("window id should decode"), -1);
     assert_eq!(reader.read_i16().expect("slot should decode"), -1);
+}
+
+#[test]
+fn encodes_block_change_packets() {
+    let adapter = Je47Adapter::new();
+    let packet = adapter
+        .encode_play_event(
+            &CoreEvent::BlockChanged {
+                position: mc_core::BlockPos::new(2, 3, 4),
+                block: mc_core::BlockState::glass(),
+            },
+            &PlayEncodingContext {
+                player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"block-change-18")),
+                entity_id: mc_core::EntityId(1),
+            },
+        )
+        .expect("block change should encode");
+
+    let mut reader = PacketReader::new(&packet[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x23);
+    assert_eq!(
+        reader.read_i64().expect("position should decode"),
+        pack_block_position(mc_core::BlockPos::new(2, 3, 4))
+    );
+    assert_eq!(
+        reader.read_varint().expect("state id should decode"),
+        legacy_block_state_id(&mc_core::BlockState::glass())
+    );
 }
 
 #[test]

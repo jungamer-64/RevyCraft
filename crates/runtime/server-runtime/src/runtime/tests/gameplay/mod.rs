@@ -1,6 +1,7 @@
 use super::*;
 
 mod container_windows;
+mod bedrock;
 mod furnace;
 mod general;
 mod player_window;

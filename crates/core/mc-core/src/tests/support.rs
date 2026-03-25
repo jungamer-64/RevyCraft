@@ -96,6 +96,22 @@ pub(super) fn click_slot(
     )
 }
 
+pub(super) fn bedrock_session_capabilities() -> SessionCapabilitySet {
+    let mut session = canonical_session_capabilities();
+    session.protocol.insert(ProtocolCapability::Bedrock);
+    session.protocol.insert(ProtocolCapability::Bedrock924);
+    session
+}
+
+pub(super) fn apply_with_session(
+    core: &mut ServerCore,
+    command: CoreCommand,
+    session: &SessionCapabilitySet,
+) -> Vec<TargetedEvent> {
+    core.apply_command_with_policy(command, 0, Some(session), &CanonicalGameplayPolicy)
+        .expect("test command should apply with the provided session")
+}
+
 pub(super) fn craft_input(index: u8) -> InventorySlot {
     InventorySlot::crafting_input(index).expect("craft input should exist")
 }

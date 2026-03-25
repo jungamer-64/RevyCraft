@@ -1,14 +1,19 @@
 #![allow(clippy::multiple_crate_versions)]
 mod codec;
+mod chunk;
 mod decoding;
 mod encoding;
+mod inventory;
 mod runtime_ids;
 
 #[cfg(test)]
 mod tests;
 
 use bedrockrs_proto::ProtoVersion;
-use mc_core::{BlockState, CoreCommand, EntityId, PlayerId, PlayerSnapshot, WorldMeta};
+use mc_core::{
+    BlockState, ChunkColumn, CoreCommand, EntityId, InventoryContainer, InventorySlot,
+    InventoryWindowContents, ItemStack, PlayerId, PlayerSnapshot, WorldMeta,
+};
 use mc_proto_be_common::{BedrockAdapter, BedrockProfile};
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, LoginRequest, ProtocolDescriptor,
@@ -98,11 +103,69 @@ impl BedrockProfile for Bedrock924Profile {
         encoding::encode_entity_moved_packets(entity_id, player)
     }
 
+    fn encode_chunk_batch_packets(
+        &self,
+        chunks: &[ChunkColumn],
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        encoding::encode_chunk_batch_packets(chunks)
+    }
+
     fn encode_block_changed_packets(
         &self,
         position: mc_core::BlockPos,
         block: &BlockState,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         encoding::encode_block_changed_packets(position, block)
+    }
+
+    fn encode_inventory_contents_packets(
+        &self,
+        window_id: u8,
+        container: InventoryContainer,
+        contents: &InventoryWindowContents,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        encoding::encode_inventory_contents_packets(window_id, container, contents)
+    }
+
+    fn encode_container_opened_packets(
+        &self,
+        window_id: u8,
+        container: InventoryContainer,
+        title: &str,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        encoding::encode_container_opened_packets(window_id, container, title)
+    }
+
+    fn encode_container_closed_packets(
+        &self,
+        window_id: u8,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        encoding::encode_container_closed_packets(window_id)
+    }
+
+    fn encode_container_property_changed_packets(
+        &self,
+        window_id: u8,
+        property_id: u8,
+        value: i16,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        encoding::encode_container_property_changed_packets(window_id, property_id, value)
+    }
+
+    fn encode_inventory_slot_changed_packets(
+        &self,
+        window_id: u8,
+        container: InventoryContainer,
+        slot: InventorySlot,
+        stack: Option<&ItemStack>,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        encoding::encode_inventory_slot_changed_packets(window_id, container, slot, stack)
+    }
+
+    fn encode_selected_hotbar_slot_changed_packets(
+        &self,
+        slot: u8,
+    ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+        encoding::encode_selected_hotbar_slot_changed_packets(slot)
     }
 }

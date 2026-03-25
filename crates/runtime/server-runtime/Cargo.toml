@@ -57,6 +57,10 @@ mc-proto-je-common = { path = "../../protocol/mc-proto-je-common" }
 mc-proto-je-340 = { path = "../../protocol/mc-proto-je-340" }
 mc-proto-je-5 = { path = "../../protocol/mc-proto-je-5" }
 mc-proto-je-47 = { path = "../../protocol/mc-proto-je-47" }
+binary-util = "0.3.4"
+rak-rs = { version = "0.3.3", default-features = false, features = ["async_tokio", "mcpe"] }
+base64.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true
 toml.workspace = true
 

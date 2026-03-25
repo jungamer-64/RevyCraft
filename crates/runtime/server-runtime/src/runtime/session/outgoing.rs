@@ -1,7 +1,7 @@
 use crate::RuntimeError;
 use crate::runtime::{RuntimeServer, SessionMessage, SessionState};
 use crate::transport::{TransportSessionIo, write_payload};
-use mc_core::{CoreEvent, InventoryContainer};
+use mc_core::{CoreEvent, InventoryContainer, ProtocolCapability};
 use mc_proto_common::{ConnectionPhase, PlayEncodingContext};
 
 impl RuntimeServer {
@@ -56,6 +56,9 @@ impl RuntimeServer {
                     accepted,
                 } = event
                     && !accepted
+                    && !session.session_capabilities.as_ref().is_some_and(|capabilities| {
+                        capabilities.protocol.contains(&ProtocolCapability::Bedrock)
+                    })
                 {
                     session.pending_rejected_inventory_transaction = Some(*transaction);
                 }

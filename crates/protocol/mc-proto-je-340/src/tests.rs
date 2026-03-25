@@ -9,6 +9,7 @@ use mc_proto_common::{
     PlaySyncAdapter, ProtocolDescriptor, ServerListStatus, SessionAdapter, StatusRequest,
     TransportKind, WireFormatKind,
 };
+use mc_proto_je_common::__version_support::blocks::legacy_block_state_id;
 use uuid::Uuid;
 
 fn player_snapshot(name: &str) -> PlayerSnapshot {
@@ -289,6 +290,34 @@ fn pack_block_position(position: mc_core::BlockPos) -> i64 {
     let y = i64::from(position.y) & 0xfff;
     let z = i64::from(position.z) & 0x3ff_ffff;
     (x << 38) | (y << 26) | z
+}
+
+#[test]
+fn encodes_block_change_packets() {
+    let adapter = Je340Adapter::new();
+    let packet = adapter
+        .encode_play_event(
+            &CoreEvent::BlockChanged {
+                position: mc_core::BlockPos::new(2, 3, 4),
+                block: mc_core::BlockState::glass(),
+            },
+            &PlayEncodingContext {
+                player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"block-change-1122")),
+                entity_id: mc_core::EntityId(1),
+            },
+        )
+        .expect("block change should encode");
+
+    let mut reader = PacketReader::new(&packet[0]);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x0b);
+    assert_eq!(
+        reader.read_i64().expect("position should decode"),
+        pack_block_position(mc_core::BlockPos::new(2, 3, 4))
+    );
+    assert_eq!(
+        reader.read_varint().expect("state id should decode"),
+        legacy_block_state_id(&mc_core::BlockState::glass())
+    );
 }
 
 #[test]
