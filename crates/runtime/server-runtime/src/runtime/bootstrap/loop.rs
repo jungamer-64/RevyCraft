@@ -33,7 +33,10 @@ pub(super) fn spawn_runtime_loop(
                         let Some(accepted) = maybe_accepted else {
                             continue;
                         };
-                        run_server.queued_accepts.decrement(accepted.generation_id);
+                        run_server
+                            .sessions
+                            .queued_accepts()
+                            .decrement(accepted.generation_id);
                         run_server
                             .spawn_transport_session(accepted.generation_id, accepted.session)
                             .await;
@@ -46,8 +49,8 @@ pub(super) fn spawn_runtime_loop(
                             return run_server.finish_with_runtime_error(error, true).await;
                         }
                     }
-                    _ = config_reload_interval.tick(), if run_server.reload_host.is_some() => {
-                        if let Some(reload_host) = run_server.reload_host.as_ref() {
+                    _ = config_reload_interval.tick(), if run_server.reload.reload_host().is_some() => {
+                        if let Some(reload_host) = run_server.reload.reload_host() {
                             let previous_generation = run_server.active_generation_id();
                             match run_server.maybe_reload_config_watch(reload_host.as_ref()).await {
                                 Ok(Some(result)) => {

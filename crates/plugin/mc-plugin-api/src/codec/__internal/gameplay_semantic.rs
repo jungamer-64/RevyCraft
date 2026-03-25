@@ -319,6 +319,15 @@ fn encode_gameplay_mutation(
             encode_block_pos(encoder, *position);
             Ok(())
         }
+        GameplayMutation::OpenFurnace {
+            player_id,
+            position,
+        } => {
+            encoder.write_u8(9);
+            encode_player_id(encoder, *player_id);
+            encode_block_pos(encoder, *position);
+            Ok(())
+        }
         GameplayMutation::DroppedItem { position, item } => {
             encoder.write_u8(6);
             encode_vec3(encoder, *position);
@@ -366,6 +375,10 @@ fn decode_gameplay_mutation(
             block: decode_block_state(decoder)?,
         }),
         5 => Ok(GameplayMutation::OpenChest {
+            player_id: decode_player_id(decoder)?,
+            position: decode_block_pos(decoder)?,
+        }),
+        9 => Ok(GameplayMutation::OpenFurnace {
             player_id: decode_player_id(decoder)?,
             position: decode_block_pos(decoder)?,
         }),

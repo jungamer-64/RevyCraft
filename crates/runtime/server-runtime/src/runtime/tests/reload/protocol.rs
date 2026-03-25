@@ -67,7 +67,7 @@ async fn manual_protocol_reload_waits_for_consistency_readers() -> Result<(), Ru
     let temp_dir = tempdir()?;
     let (server, dist_dir, target_dir, before_generation) =
         spawn_protocol_reload_server(&temp_dir, "protocol-reload-consistency-manual").await?;
-    let consistency_guard = server.runtime.consistency_gate.read().await;
+    let consistency_guard = server.runtime.reload.read_consistency().await;
 
     std::thread::sleep(Duration::from_secs(1));
     PackagedPluginHarness::shared()
@@ -130,7 +130,7 @@ async fn consistency_gate_write_lock_blocks_session_commands() -> Result<(), Run
     )
     .await?;
 
-    let consistency_guard = server.runtime.consistency_gate.write().await;
+    let consistency_guard = server.runtime.reload.write_consistency().await;
     write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
     assert_no_java_packet(
         &mut alpha,
@@ -247,7 +247,7 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
         .and_then(|adapter| adapter.plugin_generation_id())
         .expect("watch server should report a protocol generation");
 
-    let consistency_guard = server.runtime.consistency_gate.read().await;
+    let consistency_guard = server.runtime.reload.read_consistency().await;
     std::thread::sleep(Duration::from_secs(1));
     harness
         .install_protocol_plugin(

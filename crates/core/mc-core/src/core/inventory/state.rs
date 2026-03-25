@@ -1,5 +1,5 @@
 use crate::inventory::{InventoryContainer, InventoryWindowContents, ItemStack, PlayerInventory};
-use crate::world::BlockPos;
+use crate::world::{BlockEntityState, BlockPos};
 
 pub(super) const CRAFTING_TABLE_LOCAL_SLOT_COUNT: usize = 10;
 pub(super) const CHEST_LOCAL_SLOT_COUNT: usize = 27;
@@ -42,8 +42,15 @@ pub(crate) enum ChestWindowBinding {
     Block(BlockPos),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FurnaceWindowBinding {
+    Virtual,
+    Block(BlockPos),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FurnaceWindowState {
+    pub(crate) binding: FurnaceWindowBinding,
     pub(crate) input: Option<ItemStack>,
     pub(crate) fuel: Option<ItemStack>,
     pub(crate) output: Option<ItemStack>,
@@ -89,6 +96,32 @@ impl OpenInventoryWindow {
             | OpenInventoryWindowState::Furnace(_) => None,
         }
     }
+
+    pub(super) fn world_furnace_position(&self) -> Option<BlockPos> {
+        match &self.state {
+            OpenInventoryWindowState::Furnace(furnace) => furnace.world_position(),
+            OpenInventoryWindowState::CraftingTable { .. } | OpenInventoryWindowState::Chest(_) => {
+                None
+            }
+        }
+    }
+
+    pub(super) fn world_block_entity(&self) -> Option<(BlockPos, BlockEntityState)> {
+        match &self.state {
+            OpenInventoryWindowState::Chest(chest) => chest.world_position().map(|position| {
+                (
+                    position,
+                    BlockEntityState::Chest {
+                        slots: chest.slots.clone(),
+                    },
+                )
+            }),
+            OpenInventoryWindowState::Furnace(furnace) => furnace
+                .world_position()
+                .map(|position| (position, furnace.block_entity_state())),
+            OpenInventoryWindowState::CraftingTable { .. } => None,
+        }
+    }
 }
 
 impl ChestWindowState {
@@ -115,8 +148,9 @@ impl ChestWindowState {
 }
 
 impl FurnaceWindowState {
-    pub(super) const fn new() -> Self {
+    pub(super) const fn new_virtual() -> Self {
         Self {
+            binding: FurnaceWindowBinding::Virtual,
             input: None,
             fuel: None,
             output: None,
@@ -124,6 +158,33 @@ impl FurnaceWindowState {
             burn_max: 0,
             cook_progress: 0,
             cook_total: FURNACE_COOK_TOTAL,
+        }
+    }
+
+    pub(super) fn new_block(position: BlockPos, block_entity: &BlockEntityState) -> Self {
+        match block_entity {
+            BlockEntityState::Furnace {
+                input,
+                fuel,
+                output,
+                burn_left,
+                burn_max,
+                cook_progress,
+                cook_total,
+            } => Self {
+                binding: FurnaceWindowBinding::Block(position),
+                input: input.clone(),
+                fuel: fuel.clone(),
+                output: output.clone(),
+                burn_left: *burn_left,
+                burn_max: *burn_max,
+                cook_progress: *cook_progress,
+                cook_total: *cook_total,
+            },
+            BlockEntityState::Chest { .. } => Self {
+                binding: FurnaceWindowBinding::Block(position),
+                ..Self::new_virtual()
+            },
         }
     }
 
@@ -147,5 +208,24 @@ impl FurnaceWindowState {
             (FURNACE_PROPERTY_COOK_PROGRESS, self.cook_progress),
             (FURNACE_PROPERTY_COOK_TOTAL, self.cook_total),
         ]
+    }
+
+    pub(super) fn world_position(&self) -> Option<BlockPos> {
+        match self.binding {
+            FurnaceWindowBinding::Virtual => None,
+            FurnaceWindowBinding::Block(position) => Some(position),
+        }
+    }
+
+    pub(super) fn block_entity_state(&self) -> BlockEntityState {
+        BlockEntityState::Furnace {
+            input: self.input.clone(),
+            fuel: self.fuel.clone(),
+            output: self.output.clone(),
+            burn_left: self.burn_left,
+            burn_max: self.burn_max,
+            cook_progress: self.cook_progress,
+            cook_total: self.cook_total,
+        }
     }
 }

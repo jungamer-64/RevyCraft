@@ -249,10 +249,7 @@ async fn runtime_loop_storage_error_shuts_down_listeners_and_sessions() -> Resul
         RuntimeError::Config("session did not become visible before save failure".into())
     })?;
 
-    {
-        let mut state = server.runtime.state.lock().await;
-        state.dirty = true;
-    }
+    server.runtime.kernel.set_dirty(true).await;
 
     tokio::time::timeout(Duration::from_secs(3), server.wait_for_runtime_completion())
         .await

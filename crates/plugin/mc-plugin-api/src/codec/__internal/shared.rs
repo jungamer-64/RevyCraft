@@ -303,6 +303,24 @@ pub(crate) fn encode_block_entity_state(
                 encode_option(encoder, slot.as_ref(), encode_item_stack)?;
             }
         }
+        BlockEntityState::Furnace {
+            input,
+            fuel,
+            output,
+            burn_left,
+            burn_max,
+            cook_progress,
+            cook_total,
+        } => {
+            encoder.write_u8(2);
+            encode_option(encoder, input.as_ref(), encode_item_stack)?;
+            encode_option(encoder, fuel.as_ref(), encode_item_stack)?;
+            encode_option(encoder, output.as_ref(), encode_item_stack)?;
+            encoder.write_i16(*burn_left);
+            encoder.write_i16(*burn_max);
+            encoder.write_i16(*cook_progress);
+            encoder.write_i16(*cook_total);
+        }
     }
     Ok(())
 }
@@ -319,6 +337,15 @@ pub(crate) fn decode_block_entity_state(
             }
             Ok(BlockEntityState::Chest { slots })
         }
+        2 => Ok(BlockEntityState::Furnace {
+            input: decode_option(decoder, decode_item_stack)?,
+            fuel: decode_option(decoder, decode_item_stack)?,
+            output: decode_option(decoder, decode_item_stack)?,
+            burn_left: decoder.read_i16()?,
+            burn_max: decoder.read_i16()?,
+            cook_progress: decoder.read_i16()?,
+            cook_total: decoder.read_i16()?,
+        }),
         _ => Err(ProtocolCodecError::InvalidValue(
             "invalid block entity state",
         )),

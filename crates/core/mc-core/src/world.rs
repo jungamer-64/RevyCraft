@@ -96,6 +96,11 @@ impl BlockState {
     }
 
     #[must_use]
+    pub fn furnace() -> Self {
+        Self::new("minecraft:furnace")
+    }
+
+    #[must_use]
     pub fn is_air(&self) -> bool {
         self.key.as_str() == "minecraft:air"
     }
@@ -103,7 +108,18 @@ impl BlockState {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockEntityState {
-    Chest { slots: Vec<Option<ItemStack>> },
+    Chest {
+        slots: Vec<Option<ItemStack>>,
+    },
+    Furnace {
+        input: Option<ItemStack>,
+        fuel: Option<ItemStack>,
+        output: Option<ItemStack>,
+        burn_left: i16,
+        burn_max: i16,
+        cook_progress: i16,
+        cook_total: i16,
+    },
 }
 
 impl BlockEntityState {
@@ -115,9 +131,23 @@ impl BlockEntityState {
     }
 
     #[must_use]
+    pub const fn furnace() -> Self {
+        Self::Furnace {
+            input: None,
+            fuel: None,
+            output: None,
+            burn_left: 0,
+            burn_max: 0,
+            cook_progress: 0,
+            cook_total: 200,
+        }
+    }
+
+    #[must_use]
     pub fn chest_slots(&self) -> Option<&[Option<ItemStack>]> {
         match self {
             Self::Chest { slots } => Some(slots),
+            Self::Furnace { .. } => None,
         }
     }
 
@@ -125,6 +155,54 @@ impl BlockEntityState {
     pub fn chest_slots_mut(&mut self) -> Option<&mut Vec<Option<ItemStack>>> {
         match self {
             Self::Chest { slots } => Some(slots),
+            Self::Furnace { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn furnace_state(
+        &self,
+    ) -> Option<(
+        Option<&ItemStack>,
+        Option<&ItemStack>,
+        Option<&ItemStack>,
+        i16,
+        i16,
+        i16,
+        i16,
+    )> {
+        match self {
+            Self::Chest { .. } => None,
+            Self::Furnace {
+                input,
+                fuel,
+                output,
+                burn_left,
+                burn_max,
+                cook_progress,
+                cook_total,
+            } => Some((
+                input.as_ref(),
+                fuel.as_ref(),
+                output.as_ref(),
+                *burn_left,
+                *burn_max,
+                *cook_progress,
+                *cook_total,
+            )),
+        }
+    }
+
+    #[must_use]
+    pub fn has_inventory_contents(&self) -> bool {
+        match self {
+            Self::Chest { slots } => slots.iter().any(Option::is_some),
+            Self::Furnace {
+                input,
+                fuel,
+                output,
+                ..
+            } => input.is_some() || fuel.is_some() || output.is_some(),
         }
     }
 }

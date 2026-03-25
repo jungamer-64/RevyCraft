@@ -6,10 +6,8 @@ use super::{
     AdminTransportCountView, ReloadResult, ReloadScope, RuntimeServer,
 };
 use crate::RuntimeError;
+use crate::runtime::selection::AdminCredentialTag;
 use mc_plugin_api::codec::admin_ui as plugin_admin;
-use mc_plugin_host::runtime::AdminUiProfileHandle;
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use thiserror::Error;
@@ -80,47 +78,6 @@ struct RemoteAdminSubject {
     principal_id: String,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct AdminCredentialTag([u8; 32]);
-
-impl AdminCredentialTag {
-    #[must_use]
-    fn from_token(token: &str) -> Self {
-        let digest = Sha256::digest(token.as_bytes());
-        let mut bytes = [0_u8; 32];
-        bytes.copy_from_slice(&digest);
-        Self(bytes)
-    }
-}
-
-impl Debug for AdminCredentialTag {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("***redacted***")
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RemoteAdminPrincipal {
-    principal_id: String,
-    credential_tag: AdminCredentialTag,
-    permissions: Vec<AdminPermission>,
-}
-
-impl RemoteAdminPrincipal {
-    #[must_use]
-    fn new(
-        principal_id: impl Into<String>,
-        token: &str,
-        permissions: Vec<AdminPermission>,
-    ) -> Self {
-        Self {
-            principal_id: principal_id.into(),
-            credential_tag: AdminCredentialTag::from_token(token),
-            permissions,
-        }
-    }
-}
-
 impl Display for AdminSubject {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.principal_id())
@@ -150,150 +107,94 @@ pub enum AdminCommandError {
 
 #[derive(Clone)]
 pub struct AdminControlPlaneHandle {
+    service: AdminService,
+    ui_adapter: AdminUiAdapter,
+}
+
+#[derive(Clone)]
+struct AdminService {
+    runtime: Arc<RuntimeServer>,
+}
+
+#[derive(Clone)]
+struct AdminUiAdapter {
     runtime: Arc<RuntimeServer>,
 }
 
 impl AdminControlPlaneHandle {
-    pub(crate) const fn new(runtime: Arc<RuntimeServer>) -> Self {
-        Self { runtime }
+    pub(crate) fn new(runtime: Arc<RuntimeServer>) -> Self {
+        Self {
+            service: AdminService {
+                runtime: Arc::clone(&runtime),
+            },
+            ui_adapter: AdminUiAdapter { runtime },
+        }
     }
 
     pub async fn authenticate_remote_token(
         &self,
         token: &str,
     ) -> Result<AdminSubject, AdminAuthError> {
-        self.runtime.authenticate_remote_token(token).await
+        self.service.authenticate_remote_token(token).await
     }
 
     pub async fn status(
         &self,
         subject: &AdminSubject,
     ) -> Result<AdminStatusView, AdminCommandError> {
-        self.runtime
-            .authorize(subject, AdminPermission::Status)
-            .await?;
-        Ok(self.runtime.admin_status_view().await)
+        self.service.status(subject).await
     }
 
     pub async fn sessions(
         &self,
         subject: &AdminSubject,
     ) -> Result<AdminSessionsView, AdminCommandError> {
-        self.runtime
-            .authorize(subject, AdminPermission::Sessions)
-            .await?;
-        Ok(self.runtime.admin_sessions_view().await)
+        self.service.sessions(subject).await
     }
 
     pub async fn reload_config(
         &self,
         subject: &AdminSubject,
     ) -> Result<AdminConfigReloadView, AdminCommandError> {
-        self.runtime
-            .authorize(subject, AdminPermission::ReloadConfig)
-            .await?;
-        self.runtime
-            .admin_reload_config_view()
-            .await
-            .map_err(Into::into)
+        self.service.reload_config(subject).await
     }
 
     pub async fn reload_plugins(
         &self,
         subject: &AdminSubject,
     ) -> Result<AdminPluginsReloadView, AdminCommandError> {
-        self.runtime
-            .authorize(subject, AdminPermission::ReloadPlugins)
-            .await?;
-        self.runtime
-            .admin_reload_plugins_view()
-            .await
-            .map_err(Into::into)
+        self.service.reload_plugins(subject).await
     }
 
     pub async fn reload_generation(
         &self,
         subject: &AdminSubject,
     ) -> Result<AdminGenerationReloadView, AdminCommandError> {
-        self.runtime
-            .authorize(subject, AdminPermission::ReloadGeneration)
-            .await?;
-        self.runtime
-            .admin_reload_generation_view()
-            .await
-            .map_err(Into::into)
+        self.service.reload_generation(subject).await
     }
 
     pub async fn shutdown(&self, subject: &AdminSubject) -> Result<(), AdminCommandError> {
-        self.runtime
-            .authorize(subject, AdminPermission::Shutdown)
-            .await?;
-        let _ = self.runtime.request_shutdown();
-        Ok(())
+        self.service.shutdown(subject).await
     }
 
     pub async fn parse_local_command(&self, line: &str) -> Result<AdminRequest, String> {
-        if let Some(ui) = self.runtime.current_admin_ui().await {
-            return ui
-                .parse_line(line)
-                .map(runtime_request_from_plugin_request)
-                .map_err(|error| error.to_string());
-        }
-        parse_builtin_local_command(line)
+        self.ui_adapter.parse_local_command(line).await
     }
 
     pub async fn render_local_response(&self, response: &AdminResponse) -> Result<String, String> {
-        if let Some(ui) = self.runtime.current_admin_ui().await {
-            return ui
-                .render_response(&plugin_response_from_runtime_response(response))
-                .map_err(|error| error.to_string());
-        }
-        Ok(render_builtin_local_response(response))
+        self.ui_adapter.render_local_response(response).await
     }
 
     pub async fn execute_local_console(&self, request: AdminRequest) -> AdminResponse {
-        let subject = AdminSubject::local_console();
-        match request {
-            AdminRequest::Help => AdminResponse::Help,
-            AdminRequest::Status => self
-                .status(&subject)
-                .await
-                .map(AdminResponse::Status)
-                .unwrap_or_else(Self::local_response_from_error),
-            AdminRequest::Sessions => self
-                .sessions(&subject)
-                .await
-                .map(AdminResponse::Sessions)
-                .unwrap_or_else(Self::local_response_from_error),
-            AdminRequest::ReloadConfig => self
-                .reload_config(&subject)
-                .await
-                .map(AdminResponse::ReloadConfig)
-                .unwrap_or_else(Self::local_response_from_error),
-            AdminRequest::ReloadPlugins => self
-                .reload_plugins(&subject)
-                .await
-                .map(AdminResponse::ReloadPlugins)
-                .unwrap_or_else(Self::local_response_from_error),
-            AdminRequest::ReloadGeneration => self
-                .reload_generation(&subject)
-                .await
-                .map(AdminResponse::ReloadGeneration)
-                .unwrap_or_else(Self::local_response_from_error),
-            AdminRequest::Shutdown => self
-                .shutdown(&subject)
-                .await
-                .map(|()| AdminResponse::ShutdownScheduled)
-                .unwrap_or_else(Self::local_response_from_error),
-        }
+        self.service.execute_local_console(request).await
     }
 
     pub async fn execute(&self, principal: AdminPrincipal, request: AdminRequest) -> AdminResponse {
-        match principal {
-            AdminPrincipal::LocalConsole => self.execute_local_console(request).await,
-        }
+        self.service.execute(principal, request).await
     }
+}
 
+impl AdminControlPlaneHandle {
     fn local_response_from_error(error: AdminCommandError) -> AdminResponse {
         match error {
             AdminCommandError::PermissionDenied { permission, .. } => {
@@ -312,19 +213,149 @@ impl AdminControlPlaneHandle {
     }
 }
 
+impl AdminService {
+    async fn authenticate_remote_token(&self, token: &str) -> Result<AdminSubject, AdminAuthError> {
+        self.runtime.authenticate_remote_token(token).await
+    }
+
+    async fn status(&self, subject: &AdminSubject) -> Result<AdminStatusView, AdminCommandError> {
+        self.runtime
+            .authorize(subject, AdminPermission::Status)
+            .await?;
+        Ok(self.runtime.admin_status_view().await)
+    }
+
+    async fn sessions(
+        &self,
+        subject: &AdminSubject,
+    ) -> Result<AdminSessionsView, AdminCommandError> {
+        self.runtime
+            .authorize(subject, AdminPermission::Sessions)
+            .await?;
+        Ok(self.runtime.admin_sessions_view().await)
+    }
+
+    async fn reload_config(
+        &self,
+        subject: &AdminSubject,
+    ) -> Result<AdminConfigReloadView, AdminCommandError> {
+        self.runtime
+            .authorize(subject, AdminPermission::ReloadConfig)
+            .await?;
+        self.runtime
+            .admin_reload_config_view()
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn reload_plugins(
+        &self,
+        subject: &AdminSubject,
+    ) -> Result<AdminPluginsReloadView, AdminCommandError> {
+        self.runtime
+            .authorize(subject, AdminPermission::ReloadPlugins)
+            .await?;
+        self.runtime
+            .admin_reload_plugins_view()
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn reload_generation(
+        &self,
+        subject: &AdminSubject,
+    ) -> Result<AdminGenerationReloadView, AdminCommandError> {
+        self.runtime
+            .authorize(subject, AdminPermission::ReloadGeneration)
+            .await?;
+        self.runtime
+            .admin_reload_generation_view()
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn shutdown(&self, subject: &AdminSubject) -> Result<(), AdminCommandError> {
+        self.runtime
+            .authorize(subject, AdminPermission::Shutdown)
+            .await?;
+        let _ = self.runtime.request_shutdown();
+        Ok(())
+    }
+
+    async fn execute_local_console(&self, request: AdminRequest) -> AdminResponse {
+        let subject = AdminSubject::local_console();
+        match request {
+            AdminRequest::Help => AdminResponse::Help,
+            AdminRequest::Status => self
+                .status(&subject)
+                .await
+                .map(AdminResponse::Status)
+                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
+            AdminRequest::Sessions => self
+                .sessions(&subject)
+                .await
+                .map(AdminResponse::Sessions)
+                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
+            AdminRequest::ReloadConfig => self
+                .reload_config(&subject)
+                .await
+                .map(AdminResponse::ReloadConfig)
+                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
+            AdminRequest::ReloadPlugins => self
+                .reload_plugins(&subject)
+                .await
+                .map(AdminResponse::ReloadPlugins)
+                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
+            AdminRequest::ReloadGeneration => self
+                .reload_generation(&subject)
+                .await
+                .map(AdminResponse::ReloadGeneration)
+                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
+            AdminRequest::Shutdown => self
+                .shutdown(&subject)
+                .await
+                .map(|()| AdminResponse::ShutdownScheduled)
+                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
+        }
+    }
+
+    async fn execute(&self, principal: AdminPrincipal, request: AdminRequest) -> AdminResponse {
+        match principal {
+            AdminPrincipal::LocalConsole => self.execute_local_console(request).await,
+        }
+    }
+}
+
+impl AdminUiAdapter {
+    async fn parse_local_command(&self, line: &str) -> Result<AdminRequest, String> {
+        if let Some(ui) = self.runtime.current_admin_ui().await {
+            return ui
+                .parse_line(line)
+                .map(runtime_request_from_plugin_request)
+                .map_err(|error| error.to_string());
+        }
+        parse_builtin_local_command(line)
+    }
+
+    async fn render_local_response(&self, response: &AdminResponse) -> Result<String, String> {
+        if let Some(ui) = self.runtime.current_admin_ui().await {
+            return ui
+                .render_response(&plugin_response_from_runtime_response(response))
+                .map_err(|error| error.to_string());
+        }
+        Ok(render_builtin_local_response(response))
+    }
+}
+
 impl RuntimeServer {
-    pub(crate) async fn current_admin_ui(&self) -> Option<Arc<dyn AdminUiProfileHandle>> {
-        self.selection_state().await.admin_ui
+    pub(crate) async fn current_admin_ui(
+        &self,
+    ) -> Option<Arc<dyn mc_plugin_host::runtime::AdminUiProfileHandle>> {
+        self.selection.current_admin_ui().await
     }
 
     pub(crate) fn request_shutdown(&self) -> bool {
-        self.shutting_down
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        self.shutdown_tx
-            .lock()
-            .expect("shutdown mutex should not be poisoned")
-            .take()
-            .is_some_and(|shutdown_tx| shutdown_tx.send(()).is_ok())
+        self.reload.request_shutdown()
     }
 
     pub(crate) async fn authenticate_remote_token(
@@ -548,7 +579,7 @@ impl RuntimeServer {
     }
 
     async fn admin_reload_plugins_view(&self) -> Result<AdminPluginsReloadView, RuntimeError> {
-        let Some(reload_host) = self.reload_host.as_ref() else {
+        let Some(reload_host) = self.reload.reload_host() else {
             return Err(RuntimeError::Config(
                 "plugin reload is unavailable without a reload-capable host".to_string(),
             ));
@@ -569,7 +600,7 @@ impl RuntimeServer {
     async fn admin_reload_generation_view(
         &self,
     ) -> Result<AdminGenerationReloadView, RuntimeError> {
-        let Some(reload_host) = self.reload_host.as_ref() else {
+        let Some(reload_host) = self.reload.reload_host() else {
             return Err(RuntimeError::Config(
                 "generation reload is unavailable without a reload-capable host".to_string(),
             ));
@@ -595,7 +626,7 @@ impl RuntimeServer {
     }
 
     async fn admin_reload_config_view(&self) -> Result<AdminConfigReloadView, RuntimeError> {
-        let Some(reload_host) = self.reload_host.as_ref() else {
+        let Some(reload_host) = self.reload.reload_host() else {
             return Err(RuntimeError::Config(
                 "config reload is unavailable without a reload-capable host".to_string(),
             ));
@@ -900,32 +931,6 @@ fn plugin_config_reload_view_from_runtime(
         reloaded_plugin_ids: result.reloaded_plugin_ids.clone(),
         generation: plugin_generation_reload_view_from_runtime(&result.generation),
     }
-}
-
-pub(crate) fn remote_admin_subjects_from_config(
-    config: &crate::config::ServerConfig,
-) -> HashMap<String, RemoteAdminPrincipal> {
-    config
-        .admin
-        .grpc
-        .principals
-        .iter()
-        .map(|(principal_id, principal)| {
-            (
-                principal.token.trim().to_string(),
-                RemoteAdminPrincipal::new(
-                    principal_id.clone(),
-                    &principal.token,
-                    principal
-                        .permissions
-                        .iter()
-                        .copied()
-                        .map(runtime_permission_from_config)
-                        .collect(),
-                ),
-            )
-        })
-        .collect()
 }
 
 const fn runtime_permission_from_config(

@@ -12,12 +12,9 @@ async fn storage_skip_keeps_dirty_state_after_runtime_save_failure() -> Result<(
     )
     .await?;
 
-    {
-        let mut state = server.runtime.state.lock().await;
-        state.dirty = true;
-    }
+    server.runtime.kernel.set_dirty(true).await;
     server.runtime.maybe_save().await?;
-    assert!(server.runtime.state.lock().await.dirty);
+    assert!(server.runtime.kernel.dirty().await);
 
     server.shutdown().await
 }
@@ -69,10 +66,7 @@ async fn reloadable_server_builder_applies_reload_host_failure_policy() -> Resul
     )
     .await?;
 
-    {
-        let mut state = server.runtime.state.lock().await;
-        state.dirty = true;
-    }
+    server.runtime.kernel.set_dirty(true).await;
     let error = server
         .runtime
         .maybe_save()
@@ -105,10 +99,7 @@ async fn storage_fail_fast_returns_plugin_fatal_on_runtime_save_failure() -> Res
     )
     .await?;
 
-    {
-        let mut state = server.runtime.state.lock().await;
-        state.dirty = true;
-    }
+    server.runtime.kernel.set_dirty(true).await;
     let error = server
         .runtime
         .maybe_save()
@@ -118,10 +109,7 @@ async fn storage_fail_fast_returns_plugin_fatal_on_runtime_save_failure() -> Res
         error,
         RuntimeError::PluginFatal(message) if message.contains("storage plugin")
     ));
-    {
-        let mut state = server.runtime.state.lock().await;
-        state.dirty = false;
-    }
+    server.runtime.kernel.set_dirty(false).await;
 
     server.shutdown().await
 }

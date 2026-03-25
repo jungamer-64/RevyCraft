@@ -151,6 +151,37 @@ fn encode_tile_entity(position: BlockPos, block_entity: &BlockEntityState) -> Op
             );
             Some(NbtTag::Compound(compound))
         }
+        BlockEntityState::Furnace {
+            input,
+            fuel,
+            output,
+            burn_left,
+            burn_max,
+            cook_progress,
+            cook_total,
+        } => {
+            let mut compound = BTreeMap::new();
+            compound.insert("id".to_string(), NbtTag::String("Furnace".to_string()));
+            compound.insert("x".to_string(), NbtTag::Int(position.x));
+            compound.insert("y".to_string(), NbtTag::Int(position.y));
+            compound.insert("z".to_string(), NbtTag::Int(position.z));
+            compound.insert("BurnTime".to_string(), NbtTag::Short(*burn_left));
+            compound.insert("BurnTimeMax".to_string(), NbtTag::Short(*burn_max));
+            compound.insert("CookTime".to_string(), NbtTag::Short(*cook_progress));
+            compound.insert("CookTimeTotal".to_string(), NbtTag::Short(*cook_total));
+            compound.insert(
+                "Items".to_string(),
+                NbtTag::List(
+                    10,
+                    [input.as_ref(), fuel.as_ref(), output.as_ref()]
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(index, stack)| encode_item_slot(index, stack))
+                        .collect(),
+                ),
+            );
+            Some(NbtTag::Compound(compound))
+        }
     }
 }
 
@@ -178,20 +209,27 @@ fn decode_tile_entity(
     tile_entity: &NbtTag,
 ) -> Result<Option<(BlockPos, BlockEntityState)>, StorageError> {
     let compound = as_compound(tile_entity)?;
-    if string_field(compound, "id").ok().as_deref() != Some("Chest") {
+    let Ok(kind) = string_field(compound, "id") else {
         return Ok(None);
-    }
+    };
     let position = BlockPos::new(
         int_field(compound, "x")?,
         int_field(compound, "y")?,
         int_field(compound, "z")?,
     );
-    let mut slots = vec![None; 27];
+    let mut slots = if kind == "Chest" {
+        vec![None; 27]
+    } else if kind == "Furnace" {
+        vec![None; 3]
+    } else {
+        return Ok(None);
+    };
     if let Ok(items) = list_field(compound, "Items") {
         for item in items {
             let item_compound = as_compound(item)?;
-            let slot = usize::try_from(byte_field(item_compound, "Slot")?)
-                .map_err(|_| StorageError::InvalidData("negative chest slot index".to_string()))?;
+            let slot = usize::try_from(byte_field(item_compound, "Slot")?).map_err(|_| {
+                StorageError::InvalidData("negative tile-entity slot index".to_string())
+            })?;
             if slot >= slots.len() {
                 continue;
             }
@@ -205,5 +243,19 @@ fn decode_tile_entity(
             slots[slot] = Some(semantic_item(item_id, damage, count));
         }
     }
-    Ok(Some((position, BlockEntityState::Chest { slots })))
+    let block_entity = if kind == "Chest" {
+        BlockEntityState::Chest { slots }
+    } else {
+        let mut iter = slots.into_iter();
+        BlockEntityState::Furnace {
+            input: iter.next().flatten(),
+            fuel: iter.next().flatten(),
+            output: iter.next().flatten(),
+            burn_left: short_field(compound, "BurnTime").unwrap_or(0),
+            burn_max: short_field(compound, "BurnTimeMax").unwrap_or(0),
+            cook_progress: short_field(compound, "CookTime").unwrap_or(0),
+            cook_total: short_field(compound, "CookTimeTotal").unwrap_or(200),
+        }
+    };
+    Ok(Some((position, block_entity)))
 }

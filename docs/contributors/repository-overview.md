@@ -38,6 +38,9 @@
 - `runtime/server.toml.example`
 - `apps/server/src/main.rs`
 - `crates/runtime/server-runtime/src/runtime/mod.rs`
+- `crates/runtime/server-runtime/src/runtime/selection.rs`
+- `crates/runtime/server-runtime/src/runtime/topology_manager.rs`
+- `crates/runtime/server-runtime/src/runtime/kernel.rs`
 - `crates/runtime/server-runtime/src/runtime/bootstrap/builder.rs`
 - `crates/plugin/mc-plugin-host/src/lib.rs`
 - `crates/plugin/mc-plugin-host/src/registry.rs`
@@ -102,6 +105,8 @@
 ### `server-runtime`
 
 `server-runtime` は orchestration 層です。config、listener、session、tick / save loop、reload、status snapshot、admin control plane を束ねます。
+
+読み順は `RuntimeServer` façade から始めて、次に `selection`、`topology_manager`、`kernel`、その後に `session/*` と `admin.rs` を追うと責務が混ざりにくいです。`RuntimeServer` 自体は manager 群を束ねる薄い入口として扱い、selection / topology / kernel の内部 state を直接読む時間を増やすと設計意図を掴みやすくなります。
 
 ### `mc-plugin-api` と `mc-plugin-sdk-rust`
 

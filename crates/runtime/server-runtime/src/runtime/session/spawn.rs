@@ -1,7 +1,7 @@
 use crate::RuntimeError;
 use crate::runtime::{
-    GenerationAdmission, RuntimeServer, SESSION_OUTBOUND_QUEUE_CAPACITY, SessionHandle,
-    SessionMessage, SessionState,
+    GenerationAdmission, RuntimeServer, SESSION_OUTBOUND_QUEUE_CAPACITY, SessionMessage,
+    SessionState,
 };
 use crate::transport::{AcceptedTransportSession, TransportSessionIo, default_wire_codec};
 use bytes::BytesMut;
@@ -16,10 +16,10 @@ impl RuntimeServer {
         generation_id: crate::runtime::GenerationId,
         transport_session: AcceptedTransportSession,
     ) {
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        if self.reload.is_shutting_down() {
             return;
         }
-        let _consistency_guard = self.consistency_gate.read().await;
+        let _consistency_guard = self.reload.read_consistency().await;
         let generation = match self.generation_admission(generation_id) {
             GenerationAdmission::Active(generation) | GenerationAdmission::Draining(generation) => {
                 generation
@@ -98,47 +98,25 @@ impl RuntimeServer {
         transport_session: AcceptedTransportSession,
         session: SessionState,
     ) {
-        let connection_id = {
-            let mut next_connection_id = self.next_connection_id.lock().await;
-            let connection_id = ConnectionId(*next_connection_id);
-            *next_connection_id = next_connection_id.saturating_add(1);
-            connection_id
-        };
+        let connection_id = self.sessions.next_connection_id().await;
 
         let (tx, rx) = mpsc::channel(SESSION_OUTBOUND_QUEUE_CAPACITY);
         let (control_tx, control_rx) = watch::channel(None);
-        self.sessions.lock().await.insert(
-            connection_id,
-            SessionHandle {
-                tx,
-                control_tx,
-                generation: Arc::clone(&session.generation),
-                transport: session.transport,
-                phase: session.phase,
-                adapter_id: session
-                    .adapter
-                    .as_ref()
-                    .map(|adapter| adapter.descriptor().adapter_id),
-                player_id: session.player_id,
-                entity_id: session.entity_id,
-                gameplay_profile: session
-                    .session_capabilities
-                    .as_ref()
-                    .map(|capabilities| capabilities.gameplay_profile.clone()),
-                gameplay: session.gameplay.clone(),
-                session_capabilities: session.session_capabilities.clone(),
-            },
-        );
+        self.sessions
+            .insert(connection_id, tx, control_tx, &session)
+            .await;
 
         let server = Arc::clone(self);
-        self.session_tasks.lock().await.spawn(async move {
-            (
-                connection_id,
-                server
-                    .run_session(connection_id, transport_session.io, session, rx, control_rx)
-                    .await,
-            )
-        });
+        self.sessions
+            .spawn_task(async move {
+                (
+                    connection_id,
+                    server
+                        .run_session(connection_id, transport_session.io, session, rx, control_rx)
+                        .await,
+                )
+            })
+            .await;
     }
 
     async fn run_session(
@@ -232,39 +210,10 @@ impl RuntimeServer {
     }
 
     pub(in crate::runtime) async fn reap_completed_session_tasks(&self) {
-        let mut session_tasks = self.session_tasks.lock().await;
-        while let Some(result) = session_tasks.try_join_next() {
-            match result {
-                Ok((connection_id, Ok(()))) => {
-                    let _ = connection_id;
-                }
-                Ok((connection_id, Err(error))) => {
-                    eprintln!("session {connection_id:?} ended with error: {error}");
-                }
-                Err(error) => {
-                    eprintln!("session task join failed: {error}");
-                }
-            }
-        }
+        self.sessions.reap_completed_tasks().await;
     }
 
     pub(in crate::runtime) async fn join_all_session_tasks(&self) {
-        let mut session_tasks = {
-            let mut guard = self.session_tasks.lock().await;
-            std::mem::replace(&mut *guard, tokio::task::JoinSet::new())
-        };
-        while let Some(result) = session_tasks.join_next().await {
-            match result {
-                Ok((connection_id, Ok(()))) => {
-                    let _ = connection_id;
-                }
-                Ok((connection_id, Err(error))) => {
-                    eprintln!("session {connection_id:?} ended with error: {error}");
-                }
-                Err(error) => {
-                    eprintln!("session task join failed: {error}");
-                }
-            }
-        }
+        self.sessions.join_all_tasks().await;
     }
 }

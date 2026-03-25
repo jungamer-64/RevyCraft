@@ -315,6 +315,11 @@ pub struct ServerConfig {
 
 pub type ValidatedServerConfig = ServerConfig;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NormalizedServerConfig {
+    server: ServerConfig,
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -328,175 +333,79 @@ impl Default for ServerConfig {
     }
 }
 
+impl From<ServerConfig> for NormalizedServerConfig {
+    fn from(server: ServerConfig) -> Self {
+        Self { server }
+    }
+}
+
+impl NormalizedServerConfig {
+    fn into_validated(self) -> Result<ServerConfig, ServerConfigError> {
+        self.server.validate()?;
+        Ok(self.server)
+    }
+
+    fn static_config(&self) -> StaticConfig {
+        StaticConfig {
+            bootstrap: self.server.bootstrap.clone(),
+            admin_grpc: AdminGrpcTransportConfig {
+                enabled: self.server.admin.grpc.enabled,
+                bind_addr: self.server.admin.grpc.bind_addr,
+                allow_non_loopback: self.server.admin.grpc.allow_non_loopback,
+            },
+        }
+    }
+
+    fn live_config(&self) -> LiveConfig {
+        LiveConfig {
+            network: self.server.network.clone(),
+            topology: self.server.topology.clone(),
+            plugins: self.server.plugins.clone(),
+            profiles: self.server.profiles.clone(),
+            admin: self.server.admin.clone(),
+        }
+    }
+
+    fn plugin_host_bootstrap_config(&self) -> PluginHostBootstrapConfig {
+        PluginHostBootstrapConfig {
+            storage_profile: self.server.bootstrap.storage_profile.clone(),
+            plugins_dir: self.server.bootstrap.plugins_dir.clone(),
+            plugin_abi_min: self.server.bootstrap.plugin_abi_min,
+            plugin_abi_max: self.server.bootstrap.plugin_abi_max,
+        }
+    }
+
+    fn plugin_host_runtime_selection_config(&self) -> PluginHostRuntimeSelectionConfig {
+        PluginHostRuntimeSelectionConfig {
+            be_enabled: self.server.topology.be_enabled,
+            auth_profile: self.server.profiles.auth.clone(),
+            bedrock_auth_profile: self.server.profiles.bedrock_auth.clone(),
+            default_gameplay_profile: self.server.profiles.default_gameplay.clone(),
+            gameplay_profile_map: self.server.profiles.gameplay_map.clone(),
+            admin_ui_profile: self.server.admin.ui_profile.clone(),
+            plugin_allowlist: self.server.plugins.allowlist.clone(),
+            buffer_limits: self.server.plugins.buffer_limits,
+            plugin_failure_policy_protocol: self.server.plugins.failure_policy.protocol,
+            plugin_failure_policy_gameplay: self.server.plugins.failure_policy.gameplay,
+            plugin_failure_policy_storage: self.server.plugins.failure_policy.storage,
+            plugin_failure_policy_auth: self.server.plugins.failure_policy.auth,
+            plugin_failure_policy_admin_ui: self.server.plugins.failure_policy.admin_ui,
+        }
+    }
+}
+
 impl ServerConfig {
     /// # Errors
     ///
     /// Returns [`ServerConfigError`] when `server.toml` cannot be read or parsed.
     pub fn from_toml(path: &Path) -> Result<Self, ServerConfigError> {
         if !path.exists() {
-            let config = Self::default();
-            config.validate()?;
-            return Ok(config);
+            return NormalizedServerConfig::from(Self::default()).into_validated();
         }
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
-        let document: ServerConfigDocument =
-            toml::from_str(&fs::read_to_string(path)?).map_err(|error| {
-                ServerConfigError::Config(format!(
-                    "failed to parse config {}: {error}",
-                    path.display()
-                ))
-            })?;
-        let level_name = document
-            .static_config
-            .bootstrap
-            .level_name
-            .clone()
-            .unwrap_or_else(|| "world".to_string());
-        let config = Self {
-            bootstrap: BootstrapConfig {
-                online_mode: document
-                    .static_config
-                    .bootstrap
-                    .online_mode
-                    .unwrap_or(false),
-                level_name: level_name.clone(),
-                level_type: LevelType::parse(
-                    document
-                        .static_config
-                        .bootstrap
-                        .level_type
-                        .as_deref()
-                        .unwrap_or("flat"),
-                )?,
-                game_mode: document.static_config.bootstrap.game_mode.unwrap_or(0),
-                difficulty: document.static_config.bootstrap.difficulty.unwrap_or(1),
-                view_distance: document.static_config.bootstrap.view_distance.unwrap_or(2),
-                world_dir: resolve_world_dir(
-                    parent,
-                    document.static_config.bootstrap.world_dir.as_deref(),
-                    Some(level_name.as_str()),
-                ),
-                storage_profile: document
-                    .static_config
-                    .bootstrap
-                    .storage_profile
-                    .unwrap_or_else(|| StorageProfileId::new("je-anvil-1_7_10")),
-                plugins_dir: resolve_config_path(
-                    parent,
-                    document.static_config.plugins.plugins_dir.as_deref(),
-                    Path::new("plugins"),
-                ),
-                plugin_abi_min: parse_plugin_abi(
-                    document.static_config.plugins.plugin_abi_min.as_deref(),
-                    "static.plugins.plugin_abi_min",
-                )?
-                .unwrap_or(CURRENT_PLUGIN_ABI),
-                plugin_abi_max: parse_plugin_abi(
-                    document.static_config.plugins.plugin_abi_max.as_deref(),
-                    "static.plugins.plugin_abi_max",
-                )?
-                .unwrap_or(CURRENT_PLUGIN_ABI),
-            },
-            network: NetworkConfig {
-                server_ip: parse_server_ip(document.live.network.server_ip.as_deref())?,
-                server_port: document.live.network.server_port.unwrap_or(25565),
-                motd: document
-                    .live
-                    .network
-                    .motd
-                    .unwrap_or_else(|| "Multi-version Rust server".to_string()),
-                max_players: document.live.network.max_players.unwrap_or(20),
-            },
-            topology: TopologyConfig {
-                be_enabled: document.live.topology.be_enabled.unwrap_or(false),
-                default_adapter: document
-                    .live
-                    .topology
-                    .default_adapter
-                    .unwrap_or_else(|| AdapterId::new("je-5")),
-                enabled_adapters: normalize_optional_vec(document.live.topology.enabled_adapters),
-                default_bedrock_adapter: document
-                    .live
-                    .topology
-                    .default_bedrock_adapter
-                    .unwrap_or_else(|| AdapterId::new(BEDROCK_BASELINE_ADAPTER_ID)),
-                enabled_bedrock_adapters: normalize_optional_vec(
-                    document.live.topology.enabled_bedrock_adapters,
-                ),
-                reload_watch: document.live.topology.reload_watch.unwrap_or(false),
-                drain_grace_secs: document
-                    .live
-                    .topology
-                    .drain_grace_secs
-                    .unwrap_or(DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS),
-            },
-            plugins: PluginsConfig {
-                allowlist: normalize_optional_vec(document.live.plugins.allowlist),
-                reload_watch: document.live.plugins.reload_watch.unwrap_or(false),
-                buffer_limits: parse_plugin_buffer_limits(document.live.plugins.buffer_limits),
-                failure_policy: PluginFailureMatrix {
-                    protocol: parse_failure_policy(
-                        document.live.plugins.failure_policy.protocol.as_deref(),
-                        PluginFailureMatrix::parse_protocol,
-                        PluginFailureMatrix::default().protocol,
-                    )?,
-                    gameplay: parse_failure_policy(
-                        document.live.plugins.failure_policy.gameplay.as_deref(),
-                        PluginFailureMatrix::parse_gameplay,
-                        PluginFailureMatrix::default().gameplay,
-                    )?,
-                    storage: parse_failure_policy(
-                        document.live.plugins.failure_policy.storage.as_deref(),
-                        PluginFailureMatrix::parse_storage,
-                        PluginFailureMatrix::default().storage,
-                    )?,
-                    auth: parse_failure_policy(
-                        document.live.plugins.failure_policy.auth.as_deref(),
-                        PluginFailureMatrix::parse_auth,
-                        PluginFailureMatrix::default().auth,
-                    )?,
-                    admin_ui: parse_failure_policy(
-                        document.live.plugins.failure_policy.admin_ui.as_deref(),
-                        PluginFailureMatrix::parse_admin_ui,
-                        PluginFailureMatrix::default().admin_ui,
-                    )?,
-                },
-            },
-            profiles: ProfilesConfig {
-                auth: document
-                    .live
-                    .profiles
-                    .auth
-                    .unwrap_or_else(|| AuthProfileId::new("offline-v1")),
-                bedrock_auth: document
-                    .live
-                    .profiles
-                    .bedrock_auth
-                    .unwrap_or_else(|| AuthProfileId::new(BEDROCK_OFFLINE_AUTH_PROFILE_ID)),
-                default_gameplay: document
-                    .live
-                    .profiles
-                    .default_gameplay
-                    .unwrap_or_else(|| GameplayProfileId::new("canonical")),
-                gameplay_map: document.live.profiles.gameplay_map,
-            },
-            admin: AdminConfig {
-                ui_profile: document
-                    .live
-                    .admin
-                    .ui_profile
-                    .unwrap_or_else(|| AdminUiProfileId::new("console-v1")),
-                local_console_permissions: parse_admin_permissions(
-                    document.live.admin.local_console_permissions,
-                    "live.admin.local_console_permissions",
-                    Some(all_admin_permissions().to_vec()),
-                    false,
-                )?,
-                grpc: parse_admin_grpc_config(parent, document.static_config.admin.grpc)?,
-            },
-        };
-        config.validate()?;
-        Ok(config)
+        ServerConfigDocument::from_path(path)?
+            .normalize(parent)?
+            .into_validated()
     }
 
     #[must_use]
@@ -537,54 +446,22 @@ impl ServerConfig {
 
     #[must_use]
     pub fn live_config(&self) -> LiveConfig {
-        LiveConfig {
-            network: self.network.clone(),
-            topology: self.topology.clone(),
-            plugins: self.plugins.clone(),
-            profiles: self.profiles.clone(),
-            admin: self.admin.clone(),
-        }
+        NormalizedServerConfig::from(self.clone()).live_config()
     }
 
     #[must_use]
     pub fn static_config(&self) -> StaticConfig {
-        StaticConfig {
-            bootstrap: self.bootstrap.clone(),
-            admin_grpc: AdminGrpcTransportConfig {
-                enabled: self.admin.grpc.enabled,
-                bind_addr: self.admin.grpc.bind_addr,
-                allow_non_loopback: self.admin.grpc.allow_non_loopback,
-            },
-        }
+        NormalizedServerConfig::from(self.clone()).static_config()
     }
 
     #[must_use]
     pub fn plugin_host_bootstrap_config(&self) -> PluginHostBootstrapConfig {
-        PluginHostBootstrapConfig {
-            storage_profile: self.bootstrap.storage_profile.clone(),
-            plugins_dir: self.bootstrap.plugins_dir.clone(),
-            plugin_abi_min: self.bootstrap.plugin_abi_min,
-            plugin_abi_max: self.bootstrap.plugin_abi_max,
-        }
+        NormalizedServerConfig::from(self.clone()).plugin_host_bootstrap_config()
     }
 
     #[must_use]
     pub fn plugin_host_runtime_selection_config(&self) -> PluginHostRuntimeSelectionConfig {
-        PluginHostRuntimeSelectionConfig {
-            be_enabled: self.topology.be_enabled,
-            auth_profile: self.profiles.auth.clone(),
-            bedrock_auth_profile: self.profiles.bedrock_auth.clone(),
-            default_gameplay_profile: self.profiles.default_gameplay.clone(),
-            gameplay_profile_map: self.profiles.gameplay_map.clone(),
-            admin_ui_profile: self.admin.ui_profile.clone(),
-            plugin_allowlist: self.plugins.allowlist.clone(),
-            buffer_limits: self.plugins.buffer_limits,
-            plugin_failure_policy_protocol: self.plugins.failure_policy.protocol,
-            plugin_failure_policy_gameplay: self.plugins.failure_policy.gameplay,
-            plugin_failure_policy_storage: self.plugins.failure_policy.storage,
-            plugin_failure_policy_auth: self.plugins.failure_policy.auth,
-            plugin_failure_policy_admin_ui: self.plugins.failure_policy.admin_ui,
-        }
+        NormalizedServerConfig::from(self.clone()).plugin_host_runtime_selection_config()
     }
 
     /// # Errors
@@ -730,6 +607,164 @@ struct AdminGrpcDocument {
 struct AdminGrpcPrincipalDocument {
     token_file: Option<PathBuf>,
     permissions: Option<Vec<String>>,
+}
+
+impl ServerConfigDocument {
+    fn from_path(path: &Path) -> Result<Self, ServerConfigError> {
+        toml::from_str(&fs::read_to_string(path)?).map_err(|error| {
+            ServerConfigError::Config(format!(
+                "failed to parse config {}: {error}",
+                path.display()
+            ))
+        })
+    }
+
+    fn normalize(self, parent: &Path) -> Result<NormalizedServerConfig, ServerConfigError> {
+        let level_name = self
+            .static_config
+            .bootstrap
+            .level_name
+            .clone()
+            .unwrap_or_else(|| "world".to_string());
+        Ok(NormalizedServerConfig::from(ServerConfig {
+            bootstrap: BootstrapConfig {
+                online_mode: self.static_config.bootstrap.online_mode.unwrap_or(false),
+                level_name: level_name.clone(),
+                level_type: LevelType::parse(
+                    self.static_config
+                        .bootstrap
+                        .level_type
+                        .as_deref()
+                        .unwrap_or("flat"),
+                )?,
+                game_mode: self.static_config.bootstrap.game_mode.unwrap_or(0),
+                difficulty: self.static_config.bootstrap.difficulty.unwrap_or(1),
+                view_distance: self.static_config.bootstrap.view_distance.unwrap_or(2),
+                world_dir: resolve_world_dir(
+                    parent,
+                    self.static_config.bootstrap.world_dir.as_deref(),
+                    Some(level_name.as_str()),
+                ),
+                storage_profile: self
+                    .static_config
+                    .bootstrap
+                    .storage_profile
+                    .unwrap_or_else(|| StorageProfileId::new("je-anvil-1_7_10")),
+                plugins_dir: resolve_config_path(
+                    parent,
+                    self.static_config.plugins.plugins_dir.as_deref(),
+                    Path::new("plugins"),
+                ),
+                plugin_abi_min: parse_plugin_abi(
+                    self.static_config.plugins.plugin_abi_min.as_deref(),
+                    "static.plugins.plugin_abi_min",
+                )?
+                .unwrap_or(CURRENT_PLUGIN_ABI),
+                plugin_abi_max: parse_plugin_abi(
+                    self.static_config.plugins.plugin_abi_max.as_deref(),
+                    "static.plugins.plugin_abi_max",
+                )?
+                .unwrap_or(CURRENT_PLUGIN_ABI),
+            },
+            network: NetworkConfig {
+                server_ip: parse_server_ip(self.live.network.server_ip.as_deref())?,
+                server_port: self.live.network.server_port.unwrap_or(25565),
+                motd: self
+                    .live
+                    .network
+                    .motd
+                    .unwrap_or_else(|| "Multi-version Rust server".to_string()),
+                max_players: self.live.network.max_players.unwrap_or(20),
+            },
+            topology: TopologyConfig {
+                be_enabled: self.live.topology.be_enabled.unwrap_or(false),
+                default_adapter: self
+                    .live
+                    .topology
+                    .default_adapter
+                    .unwrap_or_else(|| AdapterId::new("je-5")),
+                enabled_adapters: normalize_optional_vec(self.live.topology.enabled_adapters),
+                default_bedrock_adapter: self
+                    .live
+                    .topology
+                    .default_bedrock_adapter
+                    .unwrap_or_else(|| AdapterId::new(BEDROCK_BASELINE_ADAPTER_ID)),
+                enabled_bedrock_adapters: normalize_optional_vec(
+                    self.live.topology.enabled_bedrock_adapters,
+                ),
+                reload_watch: self.live.topology.reload_watch.unwrap_or(false),
+                drain_grace_secs: self
+                    .live
+                    .topology
+                    .drain_grace_secs
+                    .unwrap_or(DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS),
+            },
+            plugins: PluginsConfig {
+                allowlist: normalize_optional_vec(self.live.plugins.allowlist),
+                reload_watch: self.live.plugins.reload_watch.unwrap_or(false),
+                buffer_limits: parse_plugin_buffer_limits(self.live.plugins.buffer_limits),
+                failure_policy: PluginFailureMatrix {
+                    protocol: parse_failure_policy(
+                        self.live.plugins.failure_policy.protocol.as_deref(),
+                        PluginFailureMatrix::parse_protocol,
+                        PluginFailureMatrix::default().protocol,
+                    )?,
+                    gameplay: parse_failure_policy(
+                        self.live.plugins.failure_policy.gameplay.as_deref(),
+                        PluginFailureMatrix::parse_gameplay,
+                        PluginFailureMatrix::default().gameplay,
+                    )?,
+                    storage: parse_failure_policy(
+                        self.live.plugins.failure_policy.storage.as_deref(),
+                        PluginFailureMatrix::parse_storage,
+                        PluginFailureMatrix::default().storage,
+                    )?,
+                    auth: parse_failure_policy(
+                        self.live.plugins.failure_policy.auth.as_deref(),
+                        PluginFailureMatrix::parse_auth,
+                        PluginFailureMatrix::default().auth,
+                    )?,
+                    admin_ui: parse_failure_policy(
+                        self.live.plugins.failure_policy.admin_ui.as_deref(),
+                        PluginFailureMatrix::parse_admin_ui,
+                        PluginFailureMatrix::default().admin_ui,
+                    )?,
+                },
+            },
+            profiles: ProfilesConfig {
+                auth: self
+                    .live
+                    .profiles
+                    .auth
+                    .unwrap_or_else(|| AuthProfileId::new("offline-v1")),
+                bedrock_auth: self
+                    .live
+                    .profiles
+                    .bedrock_auth
+                    .unwrap_or_else(|| AuthProfileId::new(BEDROCK_OFFLINE_AUTH_PROFILE_ID)),
+                default_gameplay: self
+                    .live
+                    .profiles
+                    .default_gameplay
+                    .unwrap_or_else(|| GameplayProfileId::new("canonical")),
+                gameplay_map: self.live.profiles.gameplay_map,
+            },
+            admin: AdminConfig {
+                ui_profile: self
+                    .live
+                    .admin
+                    .ui_profile
+                    .unwrap_or_else(|| AdminUiProfileId::new("console-v1")),
+                local_console_permissions: parse_admin_permissions(
+                    self.live.admin.local_console_permissions,
+                    "live.admin.local_console_permissions",
+                    Some(all_admin_permissions().to_vec()),
+                    false,
+                )?,
+                grpc: parse_admin_grpc_config(parent, self.static_config.admin.grpc)?,
+            },
+        }))
+    }
 }
 
 fn parse_admin_grpc_config(

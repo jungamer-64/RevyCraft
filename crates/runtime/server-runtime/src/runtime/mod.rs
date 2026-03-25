@@ -1,14 +1,23 @@
 mod admin;
 mod bootstrap;
 mod core_loop;
+mod kernel;
+mod reload_coordinator;
+mod selection;
 mod session;
+mod session_registry;
 mod status;
 #[cfg(test)]
 mod tests;
+mod topology_manager;
 
-use self::admin::RemoteAdminPrincipal;
+use self::kernel::RuntimeKernel;
+use self::reload_coordinator::ReloadCoordinator;
+use self::selection::{ResolvedRuntimeSelection, SelectionManager};
+use self::session_registry::SessionRegistry;
+use self::topology_manager::TopologyManager;
 use crate::RuntimeError;
-use crate::config::{ServerConfig, ServerConfigSource, StaticConfig};
+use crate::config::{ServerConfig, ServerConfigSource};
 use crate::transport::AcceptedTransportSession;
 pub use crate::{
     AdminConfigReloadView, AdminGenerationCountView, AdminGenerationReloadView,
@@ -19,23 +28,19 @@ pub use crate::{
     PluginHostStatusSnapshot,
 };
 use mc_core::{
-    ConnectionId, CoreEvent, EntityId, GameplayProfileId, InventoryContainer,
-    InventoryTransactionContext, PlayerId, ServerCore, SessionCapabilitySet,
+    CoreEvent, EntityId, GameplayProfileId, InventoryContainer, InventoryTransactionContext,
+    PlayerId, SessionCapabilitySet,
 };
-use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
-use mc_plugin_host::runtime::{
-    AdminUiProfileHandle, AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle,
-    RuntimePluginHost, RuntimeReloadContext, StorageProfileHandle,
-};
+use mc_plugin_host::registry::ProtocolRegistry;
+use mc_plugin_host::runtime::{AuthGenerationHandle, GameplayProfileHandle, RuntimeReloadContext};
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex as StdMutex, RwLock};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, RwLock as AsyncRwLock, mpsc, oneshot, watch};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::sync::{mpsc, oneshot, watch};
+use tokio::task::JoinHandle;
 
 pub use self::admin::{AdminAuthError, AdminCommandError, AdminControlPlaneHandle, AdminSubject};
 pub use self::status::{
@@ -208,7 +213,7 @@ impl RunningServer {
     ///
     /// Returns [`RuntimeError`] when the requested reload scope cannot be applied.
     pub async fn reload(&self, scope: ReloadScope) -> Result<ReloadResult, RuntimeError> {
-        let reload_host = self.runtime.reload_host.as_ref().ok_or_else(|| {
+        let reload_host = self.runtime.reload.reload_host().ok_or_else(|| {
             RuntimeError::Config(
                 "reload is unavailable without a reload-capable supervisor boot".into(),
             )
@@ -268,20 +273,17 @@ impl RunningServer {
 impl RuntimeServer {
     #[must_use]
     pub(crate) fn admin_grpc_bind_addr(&self) -> Option<SocketAddr> {
-        self.static_config
-            .admin_grpc
-            .enabled
-            .then_some(self.static_config.admin_grpc.bind_addr)
+        self.reload.admin_grpc_bind_addr()
     }
 
-    pub(crate) async fn selection_state(&self) -> RuntimeSelectionState {
-        self.selection_state.read().await.clone()
+    pub(crate) async fn selection_state(&self) -> ResolvedRuntimeSelection {
+        self.selection.current().await
     }
 
     pub(crate) async fn update_generation_config(&self, candidate_config: &ServerConfig) {
-        let mut selection_state = self.selection_state.write().await;
-        selection_state.config.network = candidate_config.network.clone();
-        selection_state.config.topology = candidate_config.topology.clone();
+        self.selection
+            .update_generation_config(candidate_config)
+            .await;
     }
 }
 
@@ -318,11 +320,6 @@ pub(crate) struct SessionState {
     pub(crate) session_capabilities: Option<SessionCapabilitySet>,
     pub(crate) active_non_player_window: Option<(u8, InventoryContainer)>,
     pub(crate) pending_rejected_inventory_transaction: Option<InventoryTransactionContext>,
-}
-
-pub(crate) struct RuntimeState {
-    pub(crate) core: ServerCore,
-    pub(crate) dirty: bool,
 }
 
 pub(crate) struct AcceptedGenerationSession {
@@ -365,15 +362,6 @@ pub enum ReloadResult {
 }
 
 #[derive(Clone)]
-pub(crate) struct RuntimeSelectionState {
-    pub(crate) config: ServerConfig,
-    pub(crate) loaded_plugins: LoadedPluginSet,
-    pub(crate) auth_profile: Arc<dyn AuthProfileHandle>,
-    pub(crate) bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,
-    pub(crate) admin_ui: Option<Arc<dyn AdminUiProfileHandle>>,
-    pub(crate) remote_admin_subjects: HashMap<String, RemoteAdminPrincipal>,
-}
-
 pub(crate) struct ActiveGeneration {
     pub(crate) generation_id: GenerationId,
     pub(crate) config: ServerConfig,
@@ -383,6 +371,7 @@ pub(crate) struct ActiveGeneration {
     pub(crate) listener_bindings: Vec<ListenerBinding>,
 }
 
+#[derive(Clone)]
 pub(crate) struct DrainingGeneration {
     pub(crate) generation: Arc<ActiveGeneration>,
     pub(crate) drain_deadline_ms: u64,
@@ -410,22 +399,11 @@ pub(crate) struct RuntimeGenerationState {
 }
 
 pub(crate) struct RuntimeServer {
-    pub(crate) static_config: StaticConfig,
-    pub(crate) config_source: ServerConfigSource,
-    pub(crate) reload_host: Option<Arc<dyn RuntimePluginHost>>,
-    pub(crate) selection_state: AsyncRwLock<RuntimeSelectionState>,
-    pub(crate) consistency_gate: AsyncRwLock<()>,
-    pub(crate) generation_state: RwLock<RuntimeGenerationState>,
-    pub(crate) online_auth_keys: Option<Arc<OnlineAuthKeys>>,
-    pub(crate) storage_profile: Arc<dyn StorageProfileHandle>,
-    pub(crate) state: Mutex<RuntimeState>,
-    pub(crate) sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
-    pub(crate) session_tasks: Mutex<JoinSet<(ConnectionId, Result<(), RuntimeError>)>>,
-    pub(crate) next_connection_id: Mutex<u64>,
-    pub(crate) accepted_tx: mpsc::Sender<AcceptedGenerationSession>,
-    pub(crate) queued_accepts: QueuedAcceptTracker,
-    pub(crate) shutting_down: AtomicBool,
-    pub(crate) shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    pub(crate) reload: ReloadCoordinator,
+    pub(crate) selection: SelectionManager,
+    pub(crate) topology: TopologyManager,
+    pub(crate) kernel: RuntimeKernel,
+    pub(crate) sessions: SessionRegistry,
 }
 
 pub(crate) struct OnlineAuthKeys {

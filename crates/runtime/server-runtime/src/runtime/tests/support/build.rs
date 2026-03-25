@@ -96,38 +96,3 @@ pub(crate) async fn open_test_crafting_table(
         .open_test_crafting_table(player_id, window_id, title)
         .await
 }
-
-pub(crate) async fn close_test_container(
-    server: &RunningServer,
-    player_id: PlayerId,
-    window_id: u8,
-) -> Result<(), RuntimeError> {
-    server
-        .runtime
-        .close_test_container(player_id, window_id)
-        .await
-}
-
-pub(crate) async fn open_test_furnace(
-    server: &RunningServer,
-    player_id: PlayerId,
-    window_id: u8,
-    title: &str,
-) -> Result<(), RuntimeError> {
-    server
-        .runtime
-        .open_test_furnace(player_id, window_id, title)
-        .await
-}
-
-pub(crate) async fn open_test_chest(
-    server: &RunningServer,
-    player_id: PlayerId,
-    window_id: u8,
-    title: &str,
-) -> Result<(), RuntimeError> {
-    server
-        .runtime
-        .open_test_chest(player_id, window_id, title)
-        .await
-}

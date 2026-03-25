@@ -138,6 +138,10 @@ pub(crate) fn confirm_transaction_ack(
     protocol.encode_confirm_transaction_ack(window_id, action_number, accepted)
 }
 
+pub(crate) fn close_window(protocol: TestJavaProtocol, window_id: u8) -> Vec<u8> {
+    protocol.encode_close_window(window_id)
+}
+
 pub(crate) fn player_block_placement(
     x: i32,
     y: u8,

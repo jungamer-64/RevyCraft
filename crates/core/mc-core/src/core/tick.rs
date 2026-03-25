@@ -1,6 +1,6 @@
 use super::{
     ServerCore,
-    inventory::{OpenInventoryWindowState, world_chest_position},
+    inventory::{world_block_entity, world_chest_position},
 };
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
 use crate::gameplay::GameplayPolicyResolver;
@@ -70,15 +70,16 @@ impl ServerCore {
             return events;
         };
         if let Some(window) = player.active_container.as_ref() {
-            if let Some(position) = world_chest_position(window) {
-                if let OpenInventoryWindowState::Chest(chest) = &window.state {
-                    self.block_entities.insert(
-                        position,
-                        BlockEntityState::Chest {
-                            slots: chest.slots.clone(),
-                        },
-                    );
+            if let Some((position, block_entity)) = world_block_entity(window) {
+                let expected_block_key = match &block_entity {
+                    BlockEntityState::Chest { .. } => crate::catalog::CHEST,
+                    BlockEntityState::Furnace { .. } => crate::catalog::FURNACE,
+                };
+                if self.block_at(position).key.as_str() == expected_block_key {
+                    self.block_entities.insert(position, block_entity);
                 }
+            }
+            if let Some(position) = world_chest_position(window) {
                 self.unregister_world_chest_viewer(position, player_id);
             }
         }

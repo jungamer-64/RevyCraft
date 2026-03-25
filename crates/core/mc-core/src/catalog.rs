@@ -13,6 +13,7 @@ pub const BRICKS: &str = "minecraft:bricks";
 pub const OAK_LOG: &str = "minecraft:oak_log";
 pub const STICK: &str = "minecraft:stick";
 pub const CHEST: &str = "minecraft:chest";
+pub const FURNACE: &str = "minecraft:furnace";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolClass {
@@ -61,6 +62,7 @@ pub fn placeable_block_state_from_item_key(key: &str) -> Option<BlockState> {
         GLASS => Some(BlockState::glass()),
         BRICKS => Some(BlockState::bricks()),
         CHEST => Some(BlockState::chest()),
+        FURNACE => Some(BlockState::furnace()),
         _ => None,
     }
 }
@@ -72,7 +74,7 @@ pub fn is_supported_placeable_item(key: &str) -> bool {
 
 #[must_use]
 pub fn is_supported_inventory_item(key: &str) -> bool {
-    matches!(key, OAK_LOG | STICK | CHEST) || is_supported_placeable_item(key)
+    matches!(key, OAK_LOG | STICK | CHEST | FURNACE) || is_supported_placeable_item(key)
 }
 
 #[must_use]
@@ -87,6 +89,7 @@ pub fn survival_drop_for_block(block: &BlockState) -> Option<crate::ItemStack> {
         SANDSTONE => SANDSTONE,
         BRICKS => BRICKS,
         CHEST => CHEST,
+        FURNACE => FURNACE,
         GLASS => return None,
         _ => return None,
     };
@@ -135,6 +138,10 @@ pub fn mining_spec_for_block(block: &BlockState) -> Option<MiningBlockSpec> {
         CHEST => MiningBlockSpec {
             hardness: 2.5,
             preferred_tool: Some(ToolClass::Axe),
+        },
+        FURNACE => MiningBlockSpec {
+            hardness: 3.5,
+            preferred_tool: Some(ToolClass::Pickaxe),
         },
         BEDROCK => return None,
         _ => return None,

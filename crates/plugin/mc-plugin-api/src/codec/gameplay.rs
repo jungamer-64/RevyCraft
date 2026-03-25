@@ -600,6 +600,29 @@ mod tests {
             })
         );
 
+        let furnace_blob = encode_block_entity(Some(&BlockEntityState::Furnace {
+            input: Some(ItemStack::new("minecraft:sand", 1, 0)),
+            fuel: Some(ItemStack::new("minecraft:oak_planks", 1, 0)),
+            output: Some(ItemStack::new("minecraft:glass", 1, 0)),
+            burn_left: 120,
+            burn_max: 300,
+            cook_progress: 42,
+            cook_total: 200,
+        }))
+        .expect("furnace block entity encodes");
+        assert_eq!(
+            decode_block_entity(&furnace_blob).expect("furnace block entity decodes"),
+            Some(BlockEntityState::Furnace {
+                input: Some(ItemStack::new("minecraft:sand", 1, 0)),
+                fuel: Some(ItemStack::new("minecraft:oak_planks", 1, 0)),
+                output: Some(ItemStack::new("minecraft:glass", 1, 0)),
+                burn_left: 120,
+                burn_max: 300,
+                cook_progress: 42,
+                cook_total: 200,
+            })
+        );
+
         let key = encode_can_edit_block_key(sample_player_id(), BlockPos::new(1, 2, 3));
         assert_eq!(
             decode_can_edit_block_key(&key).expect("key decodes"),

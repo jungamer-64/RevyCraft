@@ -1,0 +1,316 @@
+use super::{AdminPermission, OnlineAuthKeys};
+use crate::RuntimeError;
+use crate::config::ServerConfig;
+use mc_core::{AdapterId, GameplayProfileId, ServerCore};
+use mc_plugin_api::codec::auth::AuthMode;
+use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+use mc_plugin_host::registry::LoadedPluginSet;
+use mc_plugin_host::runtime::{
+    AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
+};
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+use tokio::sync::RwLock as AsyncRwLock;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AdminCredentialTag([u8; 32]);
+
+impl AdminCredentialTag {
+    #[must_use]
+    pub(crate) fn from_token(token: &str) -> Self {
+        let digest = Sha256::digest(token.as_bytes());
+        let mut bytes = [0_u8; 32];
+        bytes.copy_from_slice(&digest);
+        Self(bytes)
+    }
+}
+
+impl Debug for AdminCredentialTag {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("***redacted***")
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RemoteAdminPrincipal {
+    pub(crate) principal_id: String,
+    pub(crate) credential_tag: AdminCredentialTag,
+    pub(crate) permissions: Vec<AdminPermission>,
+}
+
+impl RemoteAdminPrincipal {
+    #[must_use]
+    pub(crate) fn new(
+        principal_id: impl Into<String>,
+        token: &str,
+        permissions: Vec<AdminPermission>,
+    ) -> Self {
+        Self {
+            principal_id: principal_id.into(),
+            credential_tag: AdminCredentialTag::from_token(token),
+            permissions,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ResolvedRuntimeSelection {
+    pub(crate) config: ServerConfig,
+    pub(crate) loaded_plugins: LoadedPluginSet,
+    pub(crate) auth_profile: Arc<dyn AuthProfileHandle>,
+    pub(crate) bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,
+    pub(crate) admin_ui: Option<Arc<dyn AdminUiProfileHandle>>,
+    pub(crate) remote_admin_subjects: HashMap<String, RemoteAdminPrincipal>,
+}
+
+pub(crate) struct BootstrapSelectionResolution {
+    pub(crate) selection: ResolvedRuntimeSelection,
+    pub(crate) storage_profile: Arc<dyn StorageProfileHandle>,
+    pub(crate) online_auth_keys: Option<Arc<OnlineAuthKeys>>,
+    pub(crate) core: ServerCore,
+}
+
+pub(crate) struct SelectionManager {
+    state: AsyncRwLock<ResolvedRuntimeSelection>,
+    online_auth_keys: Option<Arc<OnlineAuthKeys>>,
+}
+
+impl SelectionManager {
+    pub(crate) fn new(
+        state: ResolvedRuntimeSelection,
+        online_auth_keys: Option<Arc<OnlineAuthKeys>>,
+    ) -> Self {
+        Self {
+            state: AsyncRwLock::new(state),
+            online_auth_keys,
+        }
+    }
+
+    pub(crate) async fn current(&self) -> ResolvedRuntimeSelection {
+        self.state.read().await.clone()
+    }
+
+    pub(crate) async fn replace(&self, selection: ResolvedRuntimeSelection) {
+        *self.state.write().await = selection;
+    }
+
+    pub(crate) async fn update_generation_config(&self, candidate_config: &ServerConfig) {
+        let mut selection_state = self.state.write().await;
+        selection_state.config.network = candidate_config.network.clone();
+        selection_state.config.topology = candidate_config.topology.clone();
+    }
+
+    pub(crate) async fn current_admin_ui(&self) -> Option<Arc<dyn AdminUiProfileHandle>> {
+        self.current().await.admin_ui
+    }
+
+    pub(crate) async fn auth_profile(&self) -> Arc<dyn AuthProfileHandle> {
+        self.state.read().await.auth_profile.clone()
+    }
+
+    pub(crate) async fn bedrock_auth_profile(&self) -> Option<Arc<dyn AuthProfileHandle>> {
+        self.state.read().await.bedrock_auth_profile.clone()
+    }
+
+    pub(crate) fn online_auth_keys(&self) -> Option<Arc<OnlineAuthKeys>> {
+        self.online_auth_keys.clone()
+    }
+
+    async fn gameplay_profile_for_adapter(&self, adapter_id: &str) -> GameplayProfileId {
+        let selection_state = self.state.read().await;
+        selection_state
+            .config
+            .profiles
+            .gameplay_map
+            .get(&AdapterId::new(adapter_id))
+            .cloned()
+            .unwrap_or_else(|| selection_state.config.profiles.default_gameplay.clone())
+    }
+
+    pub(crate) async fn resolve_gameplay_for_adapter(
+        &self,
+        adapter_id: &str,
+    ) -> Result<Arc<dyn GameplayProfileHandle>, RuntimeError> {
+        let profile_id = self.gameplay_profile_for_adapter(adapter_id).await;
+        self.state
+            .read()
+            .await
+            .loaded_plugins
+            .resolve_gameplay_profile(profile_id.as_str())
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "gameplay profile `{}` for adapter `{adapter_id}` is not active",
+                    profile_id.as_str()
+                ))
+            })
+    }
+}
+
+pub(crate) struct SelectionResolver;
+
+impl SelectionResolver {
+    pub(crate) fn resolve_bootstrap(
+        config: &ServerConfig,
+        loaded_plugins: LoadedPluginSet,
+    ) -> Result<BootstrapSelectionResolution, RuntimeError> {
+        let storage_profile = Self::resolve_storage_profile(config, &loaded_plugins)?;
+        let selection = Self::resolve(config.clone(), loaded_plugins, &[])?;
+        let online_auth_keys = if config.bootstrap.online_mode {
+            Some(Arc::new(OnlineAuthKeys::generate()?))
+        } else {
+            None
+        };
+        let snapshot = storage_profile.load_snapshot(&config.bootstrap.world_dir)?;
+        let core_config = mc_core::CoreConfig {
+            level_name: config.bootstrap.level_name.clone(),
+            seed: 0,
+            max_players: config.network.max_players,
+            view_distance: config.bootstrap.view_distance,
+            game_mode: config.bootstrap.game_mode,
+            difficulty: config.bootstrap.difficulty,
+            ..mc_core::CoreConfig::default()
+        };
+        let core = match snapshot {
+            Some(snapshot) => ServerCore::from_snapshot(core_config, snapshot),
+            None => ServerCore::new(core_config),
+        };
+        Ok(BootstrapSelectionResolution {
+            selection,
+            storage_profile,
+            online_auth_keys,
+            core,
+        })
+    }
+
+    pub(crate) fn resolve(
+        config: ServerConfig,
+        loaded_plugins: LoadedPluginSet,
+        active_gameplay_sessions: &[GameplaySessionSnapshot],
+    ) -> Result<ResolvedRuntimeSelection, RuntimeError> {
+        Self::ensure_candidate_gameplay_profiles_active(&config, active_gameplay_sessions)?;
+        let auth_profile = loaded_plugins
+            .resolve_auth_profile(config.profiles.auth.as_str())
+            .ok_or_else(|| {
+                RuntimeError::Config(format!("unknown auth-profile `{}`", config.profiles.auth))
+            })?;
+        match (config.bootstrap.online_mode, auth_profile.mode()?) {
+            (true, AuthMode::Online) | (false, AuthMode::Offline) => {}
+            (true, mode) => {
+                return Err(RuntimeError::Config(format!(
+                    "online-mode=true requires an online auth profile, got {mode:?}"
+                )));
+            }
+            (false, mode) => {
+                return Err(RuntimeError::Config(format!(
+                    "online-mode=false requires an offline auth profile, got {mode:?}"
+                )));
+            }
+        }
+
+        let bedrock_auth_profile = if config.topology.be_enabled {
+            let profile = loaded_plugins
+                .resolve_auth_profile(config.profiles.bedrock_auth.as_str())
+                .ok_or_else(|| {
+                    RuntimeError::Config(format!(
+                        "unknown bedrock-auth-profile `{}`",
+                        config.profiles.bedrock_auth
+                    ))
+                })?;
+            match profile.mode()? {
+                AuthMode::BedrockOffline | AuthMode::BedrockXbl => {}
+                mode => {
+                    return Err(RuntimeError::Config(format!(
+                        "bedrock-auth-profile requires a bedrock auth mode, got {mode:?}"
+                    )));
+                }
+            }
+            Some(profile)
+        } else {
+            None
+        };
+        let admin_ui = loaded_plugins.resolve_admin_ui_profile(config.admin.ui_profile.as_str());
+        let remote_admin_subjects = Self::materialize_remote_admin_subjects(&config);
+
+        Ok(ResolvedRuntimeSelection {
+            config,
+            loaded_plugins,
+            auth_profile,
+            bedrock_auth_profile,
+            admin_ui,
+            remote_admin_subjects,
+        })
+    }
+
+    pub(crate) fn materialize_remote_admin_subjects(
+        config: &ServerConfig,
+    ) -> HashMap<String, RemoteAdminPrincipal> {
+        config
+            .admin
+            .grpc
+            .principals
+            .iter()
+            .map(|(principal_id, principal)| {
+                (
+                    principal.token.trim().to_string(),
+                    RemoteAdminPrincipal::new(
+                        principal_id.clone(),
+                        &principal.token,
+                        principal
+                            .permissions
+                            .iter()
+                            .copied()
+                            .map(runtime_permission_from_config)
+                            .collect(),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    pub(crate) fn ensure_candidate_gameplay_profiles_active(
+        candidate: &ServerConfig,
+        active_gameplay_sessions: &[GameplaySessionSnapshot],
+    ) -> Result<(), RuntimeError> {
+        let mut active_profiles = HashSet::new();
+        let _ = active_profiles.insert(candidate.profiles.default_gameplay.clone());
+        active_profiles.extend(candidate.profiles.gameplay_map.values().cloned());
+        for session in active_gameplay_sessions {
+            if !active_profiles.contains(&session.gameplay_profile) {
+                return Err(RuntimeError::Config(format!(
+                    "cannot remove gameplay profile `{}` while sessions are still using it",
+                    session.gameplay_profile.as_str()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_storage_profile(
+        config: &ServerConfig,
+        loaded_plugins: &LoadedPluginSet,
+    ) -> Result<Arc<dyn StorageProfileHandle>, RuntimeError> {
+        loaded_plugins
+            .resolve_storage_profile(config.bootstrap.storage_profile.as_str())
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "unknown storage-profile `{}`",
+                    config.bootstrap.storage_profile.as_str()
+                ))
+            })
+    }
+}
+
+const fn runtime_permission_from_config(
+    permission: crate::config::AdminPermission,
+) -> AdminPermission {
+    match permission {
+        crate::config::AdminPermission::Status => AdminPermission::Status,
+        crate::config::AdminPermission::Sessions => AdminPermission::Sessions,
+        crate::config::AdminPermission::ReloadConfig => AdminPermission::ReloadConfig,
+        crate::config::AdminPermission::ReloadPlugins => AdminPermission::ReloadPlugins,
+        crate::config::AdminPermission::ReloadGeneration => AdminPermission::ReloadGeneration,
+        crate::config::AdminPermission::Shutdown => AdminPermission::Shutdown,
+    }
+}

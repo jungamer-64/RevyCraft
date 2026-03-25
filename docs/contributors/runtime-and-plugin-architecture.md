@@ -44,6 +44,23 @@
 5. `plugins/*`
    protocol / gameplay / storage / auth / admin-ui の concrete plugin 実装です。
 
+## runtime の内部構造
+
+`server-runtime` の中心は `RuntimeServer` ですが、実際の state owner は次の manager に分かれています。
+
+- `SelectionManager`
+  active config、loaded plugin snapshot、auth/admin selection、remote principal snapshot を持ちます。
+- `TopologyManager`
+  active / draining generation、listener worker、generation swap と drain を持ちます。
+- `RuntimeKernel`
+  `ServerCore`、dirty flag、tick / save、command 適用を持ちます。
+- `SessionRegistry`
+  live session handle、session task、accepted queue accounting、connection id 採番を持ちます。
+- `ReloadCoordinator`
+  config source、reload host、consistency gate、shutdown request を持ちます。
+
+コードを読むときは `RuntimeServer` façade -> `selection.rs` -> `topology_manager.rs` -> `kernel.rs` -> `session/*` / `admin.rs` の順が、現在の責務分離に最も沿っています。
+
 ## package と discovery
 
 ### package の作り方

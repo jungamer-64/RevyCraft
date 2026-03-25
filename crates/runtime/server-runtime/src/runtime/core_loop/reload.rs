@@ -1,21 +1,15 @@
 use crate::RuntimeError;
-use crate::runtime::admin::remote_admin_subjects_from_config;
+use crate::runtime::selection::{ResolvedRuntimeSelection, SelectionResolver};
 use crate::runtime::{
-    ConfigReloadResult, ReloadResult, ReloadScope, RuntimeReloadContext, RuntimeSelectionState,
-    RuntimeServer,
+    ConfigReloadResult, ReloadResult, ReloadScope, RuntimeReloadContext, RuntimeServer,
 };
-use mc_plugin_api::codec::auth::AuthMode;
-use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
-use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
-use mc_plugin_host::registry::LoadedPluginSet;
-use mc_plugin_host::runtime::{ProtocolReloadSession, RuntimePluginHost};
-use std::collections::HashSet;
+use mc_plugin_host::runtime::RuntimePluginHost;
 use tokio::sync::RwLockWriteGuard;
 
 struct PreparedSelectionReload {
     context: RuntimeReloadContext,
-    previous_selection: RuntimeSelectionState,
-    candidate_selection: RuntimeSelectionState,
+    previous_selection: ResolvedRuntimeSelection,
+    candidate_selection: ResolvedRuntimeSelection,
     reloaded_plugins: Vec<String>,
 }
 
@@ -25,94 +19,15 @@ impl RuntimeServer {
         candidate: &crate::config::ServerConfig,
     ) -> Result<(), RuntimeError> {
         Ok(self
-            .static_config
+            .reload
+            .static_config()
             .validate_reload_compatibility(&candidate.static_config())?)
-    }
-
-    fn ensure_candidate_gameplay_profiles_active(
-        &self,
-        candidate: &crate::config::ServerConfig,
-        context: &RuntimeReloadContext,
-    ) -> Result<(), RuntimeError> {
-        let mut active_profiles = HashSet::new();
-        let _ = active_profiles.insert(candidate.profiles.default_gameplay.clone());
-        active_profiles.extend(candidate.profiles.gameplay_map.values().cloned());
-        for session in &context.gameplay_sessions {
-            if !active_profiles.contains(&session.gameplay_profile) {
-                return Err(RuntimeError::Config(format!(
-                    "cannot remove gameplay profile `{}` while sessions are still using it",
-                    session.gameplay_profile.as_str()
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn resolve_selection_state(
-        &self,
-        config: crate::config::ServerConfig,
-        loaded_plugins: LoadedPluginSet,
-    ) -> Result<RuntimeSelectionState, RuntimeError> {
-        let auth_profile = loaded_plugins
-            .resolve_auth_profile(config.profiles.auth.as_str())
-            .ok_or_else(|| {
-                RuntimeError::Config(format!("unknown auth-profile `{}`", config.profiles.auth))
-            })?;
-        match (
-            self.static_config.bootstrap.online_mode,
-            auth_profile.mode()?,
-        ) {
-            (true, AuthMode::Online) | (false, AuthMode::Offline) => {}
-            (true, mode) => {
-                return Err(RuntimeError::Config(format!(
-                    "online-mode=true requires an online auth profile, got {mode:?}"
-                )));
-            }
-            (false, mode) => {
-                return Err(RuntimeError::Config(format!(
-                    "online-mode=false requires an offline auth profile, got {mode:?}"
-                )));
-            }
-        }
-
-        let bedrock_auth_profile = if config.topology.be_enabled {
-            let profile = loaded_plugins
-                .resolve_auth_profile(config.profiles.bedrock_auth.as_str())
-                .ok_or_else(|| {
-                    RuntimeError::Config(format!(
-                        "unknown bedrock-auth-profile `{}`",
-                        config.profiles.bedrock_auth
-                    ))
-                })?;
-            match profile.mode()? {
-                AuthMode::BedrockOffline | AuthMode::BedrockXbl => {}
-                mode => {
-                    return Err(RuntimeError::Config(format!(
-                        "bedrock-auth-profile requires a bedrock auth mode, got {mode:?}"
-                    )));
-                }
-            }
-            Some(profile)
-        } else {
-            None
-        };
-        let admin_ui = loaded_plugins.resolve_admin_ui_profile(config.admin.ui_profile.as_str());
-        let remote_admin_subjects = remote_admin_subjects_from_config(&config);
-
-        Ok(RuntimeSelectionState {
-            config,
-            loaded_plugins,
-            auth_profile,
-            bedrock_auth_profile,
-            admin_ui,
-            remote_admin_subjects,
-        })
     }
 
     async fn restore_runtime_selection(
         &self,
         reload_host: &dyn RuntimePluginHost,
-        previous_selection: &RuntimeSelectionState,
+        previous_selection: &ResolvedRuntimeSelection,
         context: &RuntimeReloadContext,
     ) {
         if let Err(error) = reload_host.reconcile_runtime_selection(
@@ -126,7 +41,7 @@ impl RuntimeServer {
     }
 
     pub(in crate::runtime) fn take_pending_plugin_fatal_error(&self) -> Option<RuntimeError> {
-        self.reload_host.as_ref().and_then(|reload_host| {
+        self.reload.reload_host().and_then(|reload_host| {
             reload_host
                 .take_pending_fatal_error()
                 .map(RuntimeError::from)
@@ -138,8 +53,7 @@ impl RuntimeServer {
         error: RuntimeError,
         attempt_best_effort_save: bool,
     ) -> Result<(), RuntimeError> {
-        self.shutting_down
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.reload.mark_shutting_down();
         self.shutdown_listener_workers().await;
         self.terminate_all_sessions("Server stopping due to runtime failure")
             .await;
@@ -156,47 +70,14 @@ impl RuntimeServer {
         &self,
         _consistency_guard: &RwLockWriteGuard<'_, ()>,
     ) -> RuntimeReloadContext {
-        let sessions = self.sessions.lock().await;
-        let protocol_sessions = sessions
-            .iter()
-            .filter_map(|(connection_id, handle)| {
-                let adapter_id = handle.adapter_id.clone()?;
-                if !matches!(
-                    handle.phase,
-                    mc_proto_common::ConnectionPhase::Status
-                        | mc_proto_common::ConnectionPhase::Login
-                        | mc_proto_common::ConnectionPhase::Play
-                ) {
-                    return None;
-                }
-                Some(ProtocolReloadSession {
-                    adapter_id,
-                    session: ProtocolSessionSnapshot {
-                        connection_id: *connection_id,
-                        phase: handle.phase,
-                        player_id: handle.player_id,
-                        entity_id: handle.entity_id,
-                    },
-                })
-            })
-            .collect::<Vec<_>>();
-        let gameplay_sessions = sessions
-            .values()
-            .filter_map(|handle| {
-                Some(GameplaySessionSnapshot {
-                    phase: handle.phase,
-                    player_id: Some(handle.player_id?),
-                    entity_id: handle.entity_id,
-                    gameplay_profile: handle.gameplay_profile.clone()?,
-                })
-            })
-            .collect::<Vec<_>>();
-        let snapshot = { self.state.lock().await.core.snapshot() };
+        let protocol_sessions = self.sessions.protocol_reload_sessions().await;
+        let gameplay_sessions = self.sessions.gameplay_reload_sessions().await;
+        let snapshot = self.kernel.snapshot().await;
         RuntimeReloadContext {
             protocol_sessions,
             gameplay_sessions,
             snapshot,
-            world_dir: self.static_config.bootstrap.world_dir.clone(),
+            world_dir: self.kernel.world_dir().to_path_buf(),
         }
     }
 
@@ -211,7 +92,7 @@ impl RuntimeServer {
                 .await
                 .map(ReloadResult::Plugins),
             ReloadScope::Config | ReloadScope::Generation => {
-                let loaded_config = self.config_source.load()?;
+                let loaded_config = self.reload.config_source().load()?;
                 self.reload_scope_with_loaded(reload_host, loaded_config, scope)
                     .await
             }
@@ -222,7 +103,7 @@ impl RuntimeServer {
         &self,
         reload_host: &dyn RuntimePluginHost,
     ) -> Result<Option<ConfigReloadResult>, RuntimeError> {
-        let loaded_config = self.config_source.load()?;
+        let loaded_config = self.reload.config_source().load()?;
         let active_config = self.selection_state().await.config;
         if !loaded_config.topology.reload_watch
             && !loaded_config.plugins.reload_watch
@@ -249,7 +130,6 @@ impl RuntimeServer {
     ) -> Result<PreparedSelectionReload, RuntimeError> {
         self.validate_static_reload_candidate(&loaded_config)?;
         let context = self.reload_context(consistency_guard).await;
-        self.ensure_candidate_gameplay_profiles_active(&loaded_config, &context)?;
         let previous_selection = self.selection_state().await;
         let selection_result = reload_host.reconcile_runtime_selection(
             &loaded_config.plugin_host_runtime_selection_config(),
@@ -259,15 +139,18 @@ impl RuntimeServer {
             loaded_plugins,
             reloaded: reloaded_plugins,
         } = selection_result;
-        let candidate_selection =
-            match self.resolve_selection_state(loaded_config.clone(), loaded_plugins) {
-                Ok(candidate_selection) => candidate_selection,
-                Err(error) => {
-                    self.restore_runtime_selection(reload_host, &previous_selection, &context)
-                        .await;
-                    return Err(error);
-                }
-            };
+        let candidate_selection = match SelectionResolver::resolve(
+            loaded_config.clone(),
+            loaded_plugins,
+            &context.gameplay_sessions,
+        ) {
+            Ok(candidate_selection) => candidate_selection,
+            Err(error) => {
+                self.restore_runtime_selection(reload_host, &previous_selection, &context)
+                    .await;
+                return Err(error);
+            }
+        };
         Ok(PreparedSelectionReload {
             context,
             previous_selection,
@@ -280,7 +163,7 @@ impl RuntimeServer {
         &self,
         reload_host: &dyn RuntimePluginHost,
     ) -> Result<Vec<String>, RuntimeError> {
-        let consistency_guard = self.consistency_gate.write().await;
+        let consistency_guard = self.reload.write_consistency().await;
         let context = self.reload_context(&consistency_guard).await;
         let previous_selection = self.selection_state().await;
         let selection_result = reload_host.reconcile_runtime_selection(
@@ -293,16 +176,19 @@ impl RuntimeServer {
             loaded_plugins,
             reloaded,
         } = selection_result;
-        let candidate_selection =
-            match self.resolve_selection_state(previous_selection.config.clone(), loaded_plugins) {
-                Ok(candidate_selection) => candidate_selection,
-                Err(error) => {
-                    self.restore_runtime_selection(reload_host, &previous_selection, &context)
-                        .await;
-                    return Err(error);
-                }
-            };
-        *self.selection_state.write().await = candidate_selection;
+        let candidate_selection = match SelectionResolver::resolve(
+            previous_selection.config.clone(),
+            loaded_plugins,
+            &context.gameplay_sessions,
+        ) {
+            Ok(candidate_selection) => candidate_selection,
+            Err(error) => {
+                self.restore_runtime_selection(reload_host, &previous_selection, &context)
+                    .await;
+                return Err(error);
+            }
+        };
+        self.selection.replace(candidate_selection).await;
         Ok(reloaded)
     }
 
@@ -325,7 +211,7 @@ impl RuntimeServer {
             return Ok(result);
         }
 
-        let consistency_guard = self.consistency_gate.write().await;
+        let consistency_guard = self.reload.write_consistency().await;
         let prepared = self
             .prepare_selection_reload(reload_host, loaded_config.clone(), &consistency_guard)
             .await?;
@@ -344,7 +230,7 @@ impl RuntimeServer {
                 return Err(error);
             }
         };
-        *self.selection_state.write().await = prepared.candidate_selection;
+        self.selection.replace(prepared.candidate_selection).await;
         Ok(ReloadResult::Config(ConfigReloadResult {
             reloaded_plugins: prepared.reloaded_plugins,
             generation: generation_result,

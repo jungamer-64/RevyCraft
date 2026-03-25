@@ -65,6 +65,24 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
             ],
         },
     );
+    let furnace_pos = BlockPos::new(65, 4, 80);
+    snapshot
+        .chunks
+        .entry(furnace_pos.chunk_pos())
+        .or_insert_with(|| ChunkColumn::new(furnace_pos.chunk_pos()))
+        .set_block(1, 4, 0, BlockState::furnace());
+    snapshot.block_entities.insert(
+        furnace_pos,
+        BlockEntityState::Furnace {
+            input: Some(ItemStack::new("minecraft:sand", 1, 0)),
+            fuel: Some(ItemStack::new("minecraft:oak_planks", 2, 0)),
+            output: Some(ItemStack::new("minecraft:glass", 3, 0)),
+            burn_left: 120,
+            burn_max: 300,
+            cook_progress: 42,
+            cook_total: 200,
+        },
+    );
     snapshot
         .players
         .get_mut(&player_id)
@@ -110,6 +128,10 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
     assert_eq!(
         loaded.block_entities.get(&chest_pos),
         snapshot.block_entities.get(&chest_pos)
+    );
+    assert_eq!(
+        loaded.block_entities.get(&furnace_pos),
+        snapshot.block_entities.get(&furnace_pos)
     );
 }
 

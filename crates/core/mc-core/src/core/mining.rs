@@ -178,11 +178,10 @@ impl ServerCore {
         if !self.can_edit_block_for_snapshot(&player.snapshot, position)
             || current.is_air()
             || current.key.as_str() == catalog::BEDROCK
-            || (current.key.as_str() == catalog::CHEST
+            || (matches!(current.key.as_str(), catalog::CHEST | catalog::FURNACE)
                 && self
                     .block_entity_at(position)
-                    .and_then(|entity| entity.chest_slots().map(|slots| slots.to_vec()))
-                    .is_some_and(|slots| slots.iter().any(Option::is_some)))
+                    .is_some_and(|entity| entity.has_inventory_contents()))
         {
             return self.clear_active_mining(player_id);
         }

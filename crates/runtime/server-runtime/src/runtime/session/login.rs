@@ -118,7 +118,7 @@ impl RuntimeServer {
         current: &Arc<dyn mc_proto_common::ProtocolAdapter>,
         username: String,
     ) -> Result<bool, RuntimeError> {
-        if self.static_config.bootstrap.online_mode {
+        if self.reload.static_config().bootstrap.online_mode {
             if session.login_challenge.is_some() {
                 return Self::disconnect_login(
                     transport_io,
@@ -127,13 +127,13 @@ impl RuntimeServer {
                 )
                 .await;
             }
-            let Some(online_auth_keys) = self.online_auth_keys.as_ref() else {
+            let Some(online_auth_keys) = self.selection.online_auth_keys() else {
                 return Err(RuntimeError::Config(
                     "online-mode=true requires generated auth keys".to_string(),
                 ));
             };
             let verify_token = random_verify_token();
-            let auth_profile = self.selection_state.read().await.auth_profile.clone();
+            let auth_profile = self.selection.auth_profile().await;
             let auth_generation = auth_profile.capture_generation()?;
             let encryption_request = current.encode_encryption_request(
                 LOGIN_SERVER_ID,
@@ -149,7 +149,7 @@ impl RuntimeServer {
             return Ok(false);
         }
 
-        let auth_profile = self.selection_state.read().await.auth_profile.clone();
+        let auth_profile = self.selection.auth_profile().await;
         let authenticated = auth_profile.authenticate_offline(&username)?;
         self.apply_command(
             CoreCommand::LoginStart {
@@ -172,7 +172,7 @@ impl RuntimeServer {
         shared_secret_encrypted: Vec<u8>,
         verify_token_encrypted: Vec<u8>,
     ) -> Result<bool, RuntimeError> {
-        if !self.static_config.bootstrap.online_mode {
+        if !self.reload.static_config().bootstrap.online_mode {
             return Self::disconnect_login(
                 transport_io,
                 current,
@@ -185,7 +185,7 @@ impl RuntimeServer {
             return Self::disconnect_login(transport_io, current, "Unexpected encryption response")
                 .await;
         };
-        let Some(online_auth_keys) = self.online_auth_keys.as_ref() else {
+        let Some(online_auth_keys) = self.selection.online_auth_keys() else {
             return Err(RuntimeError::Config(
                 "online-mode=true requires generated auth keys".to_string(),
             ));
@@ -220,7 +220,7 @@ impl RuntimeServer {
         let login_username = challenge.username;
         let auth_generation = Arc::clone(&challenge.auth_generation);
         let captured_generation_id = auth_generation.generation_id();
-        let auth_profile = self.selection_state.read().await.auth_profile.clone();
+        let auth_profile = self.selection.auth_profile().await;
         let authenticated = match tokio::task::spawn_blocking(move || {
             let current_generation_id = auth_profile
                 .plugin_generation_id()

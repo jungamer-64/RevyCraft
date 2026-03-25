@@ -30,7 +30,11 @@ async fn reload_server_with_queued_old_accept(
     )
     .await?;
     let old_generation = server.runtime.active_generation().generation_id;
-    server.runtime.queued_accepts.increment(old_generation);
+    server
+        .runtime
+        .sessions
+        .queued_accepts()
+        .increment(old_generation);
 
     std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
@@ -488,7 +492,7 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
     let codec = MinecraftWireCodec;
     let (_stream, _buffer) =
         connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "topodrain").await?;
-    assert_eq!(server.runtime.sessions.lock().await.len(), 1);
+    assert_eq!(server.runtime.sessions.len().await, 1);
 
     std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
@@ -498,7 +502,7 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
 
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if server.runtime.sessions.lock().await.is_empty() {
+            if server.runtime.sessions.is_empty().await {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -524,7 +528,11 @@ async fn topology_reload_retains_draining_generation_while_old_accepts_remain_qu
             .any(|generation| generation.generation_id == old_generation)
     );
 
-    server.runtime.queued_accepts.decrement(old_generation);
+    server
+        .runtime
+        .sessions
+        .queued_accepts()
+        .decrement(old_generation);
     let retired = server.runtime.retire_drained_generations().await;
     assert_eq!(retired, vec![old_generation]);
 
@@ -536,7 +544,11 @@ async fn topology_reload_admits_old_generation_accept_during_drain_grace()
 -> Result<(), RuntimeError> {
     let (_temp_dir, server, old_generation) = reload_server_with_queued_old_accept(30).await?;
 
-    server.runtime.queued_accepts.decrement(old_generation);
+    server
+        .runtime
+        .sessions
+        .queued_accepts()
+        .decrement(old_generation);
     let (_client, accepted_session) = synthetic_tcp_transport_session().await?;
     server
         .runtime
@@ -567,7 +579,11 @@ async fn topology_reload_drops_old_generation_accept_after_drain_deadline()
 -> Result<(), RuntimeError> {
     let (_temp_dir, server, old_generation) = reload_server_with_queued_old_accept(0).await?;
 
-    server.runtime.queued_accepts.decrement(old_generation);
+    server
+        .runtime
+        .sessions
+        .queued_accepts()
+        .decrement(old_generation);
     let (_client, accepted_session) = synthetic_tcp_transport_session().await?;
     server
         .runtime

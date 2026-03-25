@@ -1,6 +1,6 @@
 use mc_core::catalog::{
-    BEDROCK, BRICKS, CHEST, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_LOG, OAK_PLANKS, SAND,
-    SANDSTONE, STICK, STONE,
+    BEDROCK, BRICKS, CHEST, COBBLESTONE, DIRT, FURNACE, GLASS, GRASS_BLOCK, OAK_LOG, OAK_PLANKS,
+    SAND, SANDSTONE, STICK, STONE,
 };
 use mc_core::{BlockState, ItemStack};
 
@@ -18,6 +18,7 @@ pub fn legacy_block(state: &BlockState) -> (u16, u8) {
         SANDSTONE => (24, 0),
         BRICKS => (45, 0),
         CHEST => (54, 0),
+        FURNACE => (61, 0),
         _ => (0, 0),
     }
 }
@@ -42,6 +43,7 @@ pub fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
         24 if metadata == 0 => BlockState::sandstone(),
         45 => BlockState::bricks(),
         54 => BlockState::chest(),
+        61 => BlockState::furnace(),
         _ => BlockState::air(),
     }
 }
@@ -61,6 +63,7 @@ pub fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
         SANDSTONE => Some((24, damage)),
         BRICKS => Some((45, damage)),
         CHEST => Some((54, damage)),
+        FURNACE => Some((61, damage)),
         STICK => Some((280, damage)),
         _ => None,
     }
@@ -80,6 +83,7 @@ pub fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
         24 if damage == 0 => SANDSTONE,
         45 => BRICKS,
         54 if damage == 0 => CHEST,
+        61 if damage == 0 => FURNACE,
         280 if damage == 0 => STICK,
         _ => return ItemStack::unsupported(count, damage),
     };
@@ -98,5 +102,15 @@ mod tests {
         let chest_stack = ItemStack::new(CHEST, 3, 0);
         assert_eq!(legacy_item(&chest_stack), Some((54, 0)));
         assert_eq!(semantic_item(54, 0, 3), chest_stack);
+    }
+
+    #[test]
+    fn furnace_block_and_item_round_trip_through_legacy_ids() {
+        assert_eq!(legacy_block(&BlockState::furnace()), (61, 0));
+        assert_eq!(semantic_block(61, 0), BlockState::furnace());
+
+        let furnace_stack = ItemStack::new(FURNACE, 2, 0);
+        assert_eq!(legacy_item(&furnace_stack), Some((61, 0)));
+        assert_eq!(semantic_item(61, 0, 2), furnace_stack);
     }
 }

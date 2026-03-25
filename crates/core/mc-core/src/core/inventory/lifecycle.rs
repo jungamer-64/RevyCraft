@@ -54,7 +54,7 @@ impl ServerCore {
             OpenInventoryWindow {
                 window_id,
                 container: InventoryContainer::Furnace,
-                state: OpenInventoryWindowState::Furnace(FurnaceWindowState::new()),
+                state: OpenInventoryWindowState::Furnace(FurnaceWindowState::new_virtual()),
             },
             title,
         )
@@ -107,6 +107,36 @@ impl ServerCore {
                 )),
             },
             "Chest",
+        )
+    }
+
+    pub(in crate::core) fn open_world_furnace(
+        &mut self,
+        player_id: PlayerId,
+        position: BlockPos,
+    ) -> Vec<TargetedEvent> {
+        if self.block_at(position).key.as_str() != catalog::FURNACE {
+            return Vec::new();
+        }
+        let block_entity = self
+            .block_entities
+            .entry(position)
+            .or_insert_with(BlockEntityState::furnace)
+            .clone();
+        let Some(window_id) = self.allocate_non_player_window_id(player_id) else {
+            return Vec::new();
+        };
+        self.open_non_player_window(
+            player_id,
+            OpenInventoryWindow {
+                window_id,
+                container: InventoryContainer::Furnace,
+                state: OpenInventoryWindowState::Furnace(FurnaceWindowState::new_block(
+                    position,
+                    &block_entity,
+                )),
+            },
+            "Furnace",
         )
     }
 
@@ -179,6 +209,17 @@ impl ServerCore {
             let Some((after_contents, after_properties)) = after else {
                 continue;
             };
+
+            if let Some((position, block_entity)) = self
+                .online_players
+                .get(&player_id)
+                .and_then(|player| player.active_container.as_ref())
+                .and_then(OpenInventoryWindow::world_block_entity)
+                && matches!(block_entity, BlockEntityState::Furnace { .. })
+                && self.block_at(position).key.as_str() == catalog::FURNACE
+            {
+                self.block_entities.insert(position, block_entity);
+            }
 
             events.extend(inventory_diff_events(
                 window_id,
@@ -374,21 +415,36 @@ impl ServerCore {
             .collect()
     }
 
-    pub(in crate::core) fn close_world_chest_if_invalid(
+    pub(in crate::core) fn close_world_container_if_invalid(
         &mut self,
         position: BlockPos,
         block: &BlockState,
     ) -> Vec<TargetedEvent> {
-        if block.key.as_str() == catalog::CHEST {
-            return Vec::new();
+        let mut events = Vec::new();
+
+        let had_chest_block_entity = matches!(
+            self.block_entities.get(&position),
+            Some(BlockEntityState::Chest { .. })
+        );
+        if block.key.as_str() != catalog::CHEST
+            && (had_chest_block_entity || self.chest_viewers.contains_key(&position))
+        {
+            self.block_entities.remove(&position);
+            events.extend(self.close_world_chest_viewers(position));
         }
-        let had_block_entity = self.block_entities.remove(&position).is_some();
-        let had_viewers = self.chest_viewers.contains_key(&position);
-        if had_block_entity || had_viewers {
-            self.close_world_chest_viewers(position)
-        } else {
-            Vec::new()
+
+        let had_furnace_block_entity = matches!(
+            self.block_entities.get(&position),
+            Some(BlockEntityState::Furnace { .. })
+        );
+        if block.key.as_str() != catalog::FURNACE
+            && (had_furnace_block_entity || self.has_world_furnace_viewers(position))
+        {
+            self.block_entities.remove(&position);
+            events.extend(self.close_world_furnace_viewers(position));
         }
+
+        events
     }
 
     pub(super) fn sync_world_chest_viewers(
@@ -468,6 +524,25 @@ impl ServerCore {
             self.unregister_world_chest_viewer(position, stale_viewer);
         }
         events
+    }
+
+    pub(super) fn sync_world_furnace_state(
+        &mut self,
+        position: BlockPos,
+        actor_player_id: PlayerId,
+    ) {
+        let Some((_, block_entity)) = self
+            .online_players
+            .get(&actor_player_id)
+            .and_then(|player| player.active_container.as_ref())
+            .and_then(OpenInventoryWindow::world_block_entity)
+            .filter(|(window_position, _)| *window_position == position)
+        else {
+            return;
+        };
+        if self.block_at(position).key.as_str() == catalog::FURNACE {
+            self.block_entities.insert(position, block_entity);
+        }
     }
 
     fn open_non_player_window(
@@ -570,46 +645,73 @@ impl ServerCore {
         events
     }
 
+    fn has_world_furnace_viewers(&self, position: BlockPos) -> bool {
+        self.online_players.values().any(|player| {
+            player
+                .active_container
+                .as_ref()
+                .and_then(OpenInventoryWindow::world_furnace_position)
+                == Some(position)
+        })
+    }
+
+    fn close_world_furnace_viewers(&mut self, position: BlockPos) -> Vec<TargetedEvent> {
+        let viewer_ids = self
+            .online_players
+            .iter()
+            .filter_map(|(player_id, player)| {
+                (player
+                    .active_container
+                    .as_ref()
+                    .and_then(OpenInventoryWindow::world_furnace_position)
+                    == Some(position))
+                .then_some(*player_id)
+            })
+            .collect::<Vec<_>>();
+        let mut events = Vec::new();
+        for viewer_id in viewer_ids {
+            events.extend(self.close_player_active_container(viewer_id, true));
+        }
+        events
+    }
+
     fn close_player_active_container(
         &mut self,
         player_id: PlayerId,
         include_player_contents: bool,
     ) -> Vec<TargetedEvent> {
-        let Some((window_id, world_chest_position, world_chest_slots, contents)) = ({
+        let Some((window_id, world_block_entity, world_chest_position, contents)) = ({
             let Some(player) = self.online_players.get_mut(&player_id) else {
                 return Vec::new();
             };
             let Some(window) = close_active_container_window(player) else {
                 return Vec::new();
             };
-            let world_chest_slots = match &window.state {
-                OpenInventoryWindowState::Chest(chest) => {
-                    chest.world_position().map(|_| chest.slots.clone())
-                }
-                OpenInventoryWindowState::CraftingTable { .. }
-                | OpenInventoryWindowState::Furnace(_) => None,
-            };
+            let world_block_entity = window.world_block_entity();
             let contents = include_player_contents
                 .then(|| InventoryWindowContents::player(player.snapshot.inventory.clone()));
             self.saved_players
                 .insert(player_id, player.snapshot.clone());
             Some((
                 window.window_id,
+                world_block_entity,
                 window.world_chest_position(),
-                world_chest_slots,
                 contents,
             ))
         }) else {
             return Vec::new();
         };
 
-        if let Some(position) = world_chest_position {
-            if self.block_at(position).key.as_str() == catalog::CHEST
-                && let Some(slots) = world_chest_slots
-            {
-                self.block_entities
-                    .insert(position, BlockEntityState::Chest { slots });
+        if let Some((position, block_entity)) = world_block_entity {
+            let expected_block_key = match &block_entity {
+                BlockEntityState::Chest { .. } => catalog::CHEST,
+                BlockEntityState::Furnace { .. } => catalog::FURNACE,
+            };
+            if self.block_at(position).key.as_str() == expected_block_key {
+                self.block_entities.insert(position, block_entity);
             }
+        }
+        if let Some(position) = world_chest_position {
             self.unregister_world_chest_viewer(position, player_id);
         }
 
@@ -633,6 +735,12 @@ impl ServerCore {
 
 pub(crate) fn world_chest_position(window: &OpenInventoryWindow) -> Option<BlockPos> {
     window.world_chest_position()
+}
+
+pub(crate) fn world_block_entity(
+    window: &OpenInventoryWindow,
+) -> Option<(BlockPos, BlockEntityState)> {
+    window.world_block_entity()
 }
 
 fn persist_online_window_state(player: &OnlinePlayer) -> PlayerSnapshot {
@@ -694,6 +802,9 @@ fn fold_active_container_items_into_player(
             }
         }
         OpenInventoryWindowState::Furnace(furnace) => {
+            if furnace.world_position().is_some() {
+                return;
+            }
             for stack in furnace.local_slots().into_iter().flatten() {
                 let _ = merge_stack_into_player_inventory(inventory, stack);
             }

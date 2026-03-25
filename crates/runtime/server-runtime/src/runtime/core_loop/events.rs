@@ -9,7 +9,7 @@ impl RuntimeServer {
         command: CoreCommand,
         session: Option<&SessionState>,
     ) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.consistency_gate.read().await;
+        let _consistency_guard = self.reload.read_consistency().await;
         self.apply_command_guarded(command, session).await
     }
 
@@ -18,52 +18,22 @@ impl RuntimeServer {
         command: CoreCommand,
         session: Option<&SessionState>,
     ) -> Result<(), RuntimeError> {
-        let should_persist = matches!(
-            command,
-            CoreCommand::LoginStart { .. }
-                | CoreCommand::MoveIntent { .. }
-                | CoreCommand::SetHeldSlot { .. }
-                | CoreCommand::CreativeInventorySet { .. }
-                | CoreCommand::InventoryClick { .. }
-                | CoreCommand::CloseContainer { .. }
-                | CoreCommand::DigBlock { .. }
-                | CoreCommand::PlaceBlock { .. }
-                | CoreCommand::UseBlock { .. }
-                | CoreCommand::Disconnect { .. }
-        );
         let session_capabilities = session.and_then(|session| session.session_capabilities.clone());
         let gameplay = session.and_then(|session| session.gameplay.clone());
-        let events = {
-            let mut state = self.state.lock().await;
-            let now = now_ms();
-            let events = if let (Some(session_capabilities), Some(gameplay)) =
-                (session_capabilities.as_ref(), gameplay.as_ref())
-            {
-                state
-                    .core
-                    .apply_command_with_policy(
-                        command,
-                        now,
-                        Some(session_capabilities),
-                        gameplay.as_ref(),
-                    )
-                    .map_err(RuntimeError::Config)?
-            } else {
-                debug_assert!(
-                    session.is_none()
-                        || matches!(
-                            &command,
-                            CoreCommand::LoginStart { .. } | CoreCommand::Disconnect { .. }
-                        ),
-                    "session-backed command reached core loop without session capabilities"
-                );
-                state.core.apply_command(command, now)
-            };
-            if should_persist {
-                state.dirty = true;
-            }
-            events
-        };
+        if session.is_some() {
+            debug_assert!(
+                session_capabilities.is_some() == gameplay.is_some()
+                    || matches!(
+                        &command,
+                        CoreCommand::LoginStart { .. } | CoreCommand::Disconnect { .. }
+                    ),
+                "session-backed command reached core loop without matching session context"
+            );
+        }
+        let events = self
+            .kernel
+            .apply_command(command, session_capabilities, gameplay, now_ms())
+            .await?;
         self.dispatch_events(events).await;
         Ok(())
     }
@@ -75,107 +45,23 @@ impl RuntimeServer {
         window_id: u8,
         title: &str,
     ) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.consistency_gate.read().await;
-        let events = {
-            let mut state = self.state.lock().await;
-            state.core.open_crafting_table(player_id, window_id, title)
-        };
+        let _consistency_guard = self.reload.read_consistency().await;
+        let events = self
+            .kernel
+            .open_crafting_table(player_id, window_id, title)
+            .await;
         self.dispatch_events(events).await;
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn open_test_furnace(
-        &self,
-        player_id: mc_core::PlayerId,
-        window_id: u8,
-        title: &str,
-    ) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.consistency_gate.read().await;
-        let events = {
-            let mut state = self.state.lock().await;
-            state.core.open_furnace(player_id, window_id, title)
-        };
-        self.dispatch_events(events).await;
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn open_test_chest(
-        &self,
-        player_id: mc_core::PlayerId,
-        window_id: u8,
-        title: &str,
-    ) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.consistency_gate.read().await;
-        let events = {
-            let mut state = self.state.lock().await;
-            state.core.open_chest(player_id, window_id, title)
-        };
-        self.dispatch_events(events).await;
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn close_test_container(
-        &self,
-        player_id: mc_core::PlayerId,
-        window_id: u8,
-    ) -> Result<(), RuntimeError> {
-        self.apply_command(
-            CoreCommand::CloseContainer {
-                player_id,
-                window_id,
-            },
-            None,
-        )
-        .await
     }
 
     pub(in crate::runtime) async fn tick(&self) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.consistency_gate.read().await;
+        let _consistency_guard = self.reload.read_consistency().await;
         self.tick_guarded().await
     }
 
     async fn tick_guarded(&self) -> Result<(), RuntimeError> {
-        let gameplay_sessions = {
-            self.sessions
-                .lock()
-                .await
-                .values()
-                .filter_map(|handle| {
-                    let player_id = handle.player_id?;
-                    let session_capabilities = handle.session_capabilities.clone()?;
-                    let gameplay = handle.gameplay.clone()?;
-                    Some((player_id, session_capabilities, gameplay))
-                })
-                .collect::<Vec<_>>()
-        };
-        let events = {
-            let mut state = self.state.lock().await;
-            let now = now_ms();
-            let mut events = state.core.tick(now);
-            for (player_id, session_capabilities, gameplay) in &gameplay_sessions {
-                events.extend(
-                    state
-                        .core
-                        .tick_player_with_policy(
-                            *player_id,
-                            now,
-                            session_capabilities,
-                            gameplay.as_ref(),
-                        )
-                        .map_err(RuntimeError::Config)?,
-                );
-            }
-            if events
-                .iter()
-                .any(|event| !matches!(event.event, CoreEvent::KeepAliveRequested { .. }))
-            {
-                state.dirty = true;
-            }
-            events
-        };
+        let gameplay_sessions = self.sessions.gameplay_sessions_for_tick().await;
+        let events = self.kernel.tick(&gameplay_sessions, now_ms()).await?;
         self.dispatch_events(events).await;
         Ok(())
     }
@@ -190,35 +76,14 @@ impl RuntimeServer {
                 EventTarget::Connection(connection_id),
                 CoreEvent::LoginAccepted { player_id, .. },
             ) = (&target, &payload)
-                && let Some(session) = self.sessions.lock().await.get_mut(connection_id)
             {
-                session.player_id = Some(*player_id);
+                self.sessions
+                    .set_login_player(*connection_id, *player_id)
+                    .await;
             }
             let payload = std::sync::Arc::new(payload);
 
-            let recipients = {
-                let sessions = self.sessions.lock().await;
-                match target {
-                    EventTarget::Connection(connection_id) => sessions
-                        .get(&connection_id)
-                        .into_iter()
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                    EventTarget::Player(target_player_id) => sessions
-                        .values()
-                        .filter(|session| session.player_id == Some(target_player_id))
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                    EventTarget::EveryoneExcept(excluded_player_id) => sessions
-                        .values()
-                        .filter(|session| {
-                            session.player_id.is_some()
-                                && session.player_id != Some(excluded_player_id)
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                }
-            };
+            let recipients = self.sessions.recipients_for_target(target).await;
 
             let mut backpressured_sessions = Vec::new();
             for recipient in recipients {
@@ -243,7 +108,7 @@ impl RuntimeServer {
         connection_id: mc_core::ConnectionId,
         session: &SessionState,
     ) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.consistency_gate.read().await;
+        let _consistency_guard = self.reload.read_consistency().await;
         self.unregister_session_guarded(connection_id, session)
             .await
     }
@@ -268,16 +133,19 @@ impl RuntimeServer {
                 gameplay_profile,
             })?;
         }
-        self.sessions.lock().await.remove(&connection_id);
+        self.sessions.remove(connection_id).await;
         if let Some(player_id) = session.player_id {
             self.apply_command_guarded(CoreCommand::Disconnect { player_id }, None)
                 .await?;
         }
-        let _ = self.retire_drained_generations().await;
+        let _ = self
+            .topology
+            .retire_drained_generations(&self.sessions)
+            .await;
         Ok(())
     }
 
     pub(in crate::runtime) async fn player_summary(&self) -> PlayerSummary {
-        self.state.lock().await.core.player_summary()
+        self.kernel.player_summary().await
     }
 }

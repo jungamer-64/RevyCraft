@@ -60,6 +60,12 @@ impl ServerCore {
                 } => {
                     events.extend(self.open_world_chest(player_id, position));
                 }
+                GameplayMutation::OpenFurnace {
+                    player_id,
+                    position,
+                } => {
+                    events.extend(self.open_world_furnace(player_id, position));
+                }
                 GameplayMutation::Block { position, block } => {
                     events.extend(self.apply_block_mutation(position, block));
                 }
@@ -191,11 +197,16 @@ impl ServerCore {
     ) -> Vec<TargetedEvent> {
         let mut events = self.clear_active_mining_at(position);
         self.set_block_at(position, block.clone());
-        events.extend(self.close_world_chest_if_invalid(position, &block));
+        events.extend(self.close_world_container_if_invalid(position, &block));
         if block.key.as_str() == crate::catalog::CHEST {
             self.block_entities
                 .entry(position)
                 .or_insert_with(|| crate::BlockEntityState::chest(27));
+        }
+        if block.key.as_str() == crate::catalog::FURNACE {
+            self.block_entities
+                .entry(position)
+                .or_insert_with(crate::BlockEntityState::furnace);
         }
         events.extend(self.emit_block_change(position));
         events

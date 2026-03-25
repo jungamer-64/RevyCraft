@@ -53,6 +53,11 @@ impl ServerCore {
             .as_ref()
             .filter(|window| window.window_id == transaction.window_id)
             .and_then(OpenInventoryWindow::world_chest_position);
+        let world_furnace_position = before_player
+            .active_container
+            .as_ref()
+            .filter(|window| window.window_id == transaction.window_id)
+            .and_then(OpenInventoryWindow::world_furnace_position);
         let resolved_slot =
             resolve_inventory_target(&target, transaction.window_id, container, session);
 
@@ -169,6 +174,9 @@ impl ServerCore {
         }
         if let Some(position) = world_chest_position {
             events.extend(self.sync_world_chest_viewers(position, player_id));
+        }
+        if let Some(position) = world_furnace_position {
+            self.sync_world_furnace_state(position, player_id);
         }
         events
     }

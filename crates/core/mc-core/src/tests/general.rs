@@ -614,6 +614,232 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
 }
 
 #[test]
+fn use_block_places_ticks_closes_and_roundtrips_world_backed_furnace() {
+    let (mut core, first) = logged_in_creative_core("world-furn-open");
+    let furnace_pos = BlockPos::new(2, 4, 0);
+
+    let _ = creative_inventory_set(
+        &mut core,
+        first,
+        InventorySlot::Hotbar(0),
+        Some(item("minecraft:furnace", 1)),
+    );
+    let place_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: BlockPos::new(2, 3, 0),
+            face: Some(BlockFace::Top),
+            held_item: Some(item("minecraft:furnace", 1)),
+        },
+        0,
+    );
+    assert!(
+        block_change_count(&place_events, furnace_pos, |block| {
+            block.key.as_str() == "minecraft:furnace"
+        }) >= 1
+    );
+    assert_eq!(
+        core.snapshot().block_entities.get(&furnace_pos),
+        Some(&BlockEntityState::furnace())
+    );
+
+    let open_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: furnace_pos,
+            face: Some(BlockFace::Top),
+            held_item: None,
+        },
+        0,
+    );
+    assert_container_opened(&open_events, first, 1, InventoryContainer::Furnace);
+    assert_player_window_contents(&open_events, first, 1, InventoryContainer::Furnace);
+    assert_container_property_changed(&open_events, first, 1, 0, 0);
+    assert_container_property_changed(&open_events, first, 1, 1, 0);
+    assert_container_property_changed(&open_events, first, 1, 2, 0);
+    assert_container_property_changed(&open_events, first, 1, 3, 200);
+
+    {
+        let window = core
+            .online_players
+            .get_mut(&first)
+            .expect("player should stay online")
+            .active_container
+            .as_mut()
+            .expect("furnace should stay open");
+        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
+            panic!("expected furnace state");
+        };
+        furnace.input = Some(item("minecraft:sand", 1));
+        furnace.fuel = Some(item("minecraft:oak_planks", 1));
+    }
+
+    let tick_events = core.tick(50);
+    assert_container_property_changed(&tick_events, first, 1, 0, 300);
+    assert_container_property_changed(&tick_events, first, 1, 1, 300);
+    assert_container_property_changed(&tick_events, first, 1, 2, 1);
+    assert_eq!(
+        core.snapshot().block_entities.get(&furnace_pos),
+        Some(&BlockEntityState::Furnace {
+            input: Some(item("minecraft:sand", 1)),
+            fuel: None,
+            output: None,
+            burn_left: 300,
+            burn_max: 300,
+            cook_progress: 1,
+            cook_total: 200,
+        })
+    );
+
+    let close_events = core.apply_command(
+        CoreCommand::CloseContainer {
+            player_id: first,
+            window_id: 1,
+        },
+        0,
+    );
+    assert_container_closed(&close_events, first, 1);
+    assert_eq!(
+        core.snapshot().block_entities.get(&furnace_pos),
+        Some(&BlockEntityState::Furnace {
+            input: Some(item("minecraft:sand", 1)),
+            fuel: None,
+            output: None,
+            burn_left: 300,
+            burn_max: 300,
+            cook_progress: 1,
+            cook_total: 200,
+        })
+    );
+
+    let reopen_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: furnace_pos,
+            face: Some(BlockFace::Top),
+            held_item: None,
+        },
+        0,
+    );
+    assert_container_opened(&reopen_events, first, 2, InventoryContainer::Furnace);
+
+    let snapshot = core.snapshot();
+    let restored = ServerCore::from_snapshot(
+        CoreConfig {
+            game_mode: 1,
+            ..CoreConfig::default()
+        },
+        snapshot.clone(),
+    );
+    assert_eq!(restored.snapshot().block_entities, snapshot.block_entities);
+}
+
+#[test]
+fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_removed() {
+    let (mut core, first) = logged_in_creative_core("world-furn-break");
+    let furnace_pos = BlockPos::new(2, 4, 0);
+
+    let _ = creative_inventory_set(
+        &mut core,
+        first,
+        InventorySlot::Hotbar(0),
+        Some(item("minecraft:furnace", 1)),
+    );
+    let _ = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: BlockPos::new(2, 3, 0),
+            face: Some(BlockFace::Top),
+            held_item: Some(item("minecraft:furnace", 1)),
+        },
+        0,
+    );
+    let open_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: furnace_pos,
+            face: Some(BlockFace::Top),
+            held_item: None,
+        },
+        0,
+    );
+    assert_container_opened(&open_events, first, 1, InventoryContainer::Furnace);
+    {
+        let window = core
+            .online_players
+            .get_mut(&first)
+            .expect("player should stay online")
+            .active_container
+            .as_mut()
+            .expect("furnace should stay open");
+        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
+            panic!("expected furnace state");
+        };
+        furnace.output = Some(item("minecraft:glass", 1));
+    }
+    let _ = core.tick(0);
+
+    let reject_break = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: first,
+            position: furnace_pos,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    assert_eq!(
+        block_change_count(&reject_break, furnace_pos, BlockState::is_air),
+        0
+    );
+    assert_eq!(
+        core.snapshot().block_entities.get(&furnace_pos),
+        Some(&BlockEntityState::Furnace {
+            input: None,
+            fuel: None,
+            output: Some(item("minecraft:glass", 1)),
+            burn_left: 0,
+            burn_max: 0,
+            cook_progress: 0,
+            cook_total: 200,
+        })
+    );
+
+    {
+        let window = core
+            .online_players
+            .get_mut(&first)
+            .expect("player should stay online")
+            .active_container
+            .as_mut()
+            .expect("furnace should stay open");
+        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
+            panic!("expected furnace state");
+        };
+        furnace.output = None;
+    }
+    let _ = core.tick(100);
+
+    let break_events = core.apply_command(
+        CoreCommand::DigBlock {
+            player_id: first,
+            position: furnace_pos,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    assert!(block_change_count(&break_events, furnace_pos, BlockState::is_air) >= 1);
+    assert_container_closed(&break_events, first, 1);
+    assert!(!core.snapshot().block_entities.contains_key(&furnace_pos));
+}
+
+#[test]
 fn survival_place_consumes_selected_stack_and_updates_world() {
     let (mut survival, lone) = logged_in_core(CoreConfig::default(), 3, "lone");
     let place_events = survival.apply_command(

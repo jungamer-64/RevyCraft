@@ -52,6 +52,10 @@ pub enum GameplayMutation {
         player_id: PlayerId,
         position: BlockPos,
     },
+    OpenFurnace {
+        player_id: PlayerId,
+        position: BlockPos,
+    },
     Block {
         position: BlockPos,
         block: BlockState,
@@ -216,11 +220,10 @@ impl CanonicalGameplayPolicy {
         if current.is_air() || current.key.as_str() == catalog::BEDROCK {
             return Self::dig_rejection_effect(player_id, position, current);
         }
-        if current.key.as_str() == catalog::CHEST
+        if matches!(current.key.as_str(), catalog::CHEST | catalog::FURNACE)
             && query
                 .block_entity(position)
-                .and_then(|entity| entity.chest_slots().map(|slots| slots.to_vec()))
-                .is_some_and(|slots| slots.iter().any(Option::is_some))
+                .is_some_and(|entity| entity.has_inventory_contents())
         {
             return Self::dig_rejection_effect(player_id, position, current);
         }
@@ -328,6 +331,21 @@ impl CanonicalGameplayPolicy {
                 mutations: vec![
                     GameplayMutation::ClearMining { player_id },
                     GameplayMutation::OpenChest {
+                        player_id,
+                        position,
+                    },
+                ],
+                emitted_events: Vec::new(),
+            };
+        }
+        if target_block.key.as_str() == catalog::FURNACE {
+            if !query.can_edit_block(player_id, position) {
+                return Self::block_changed_effect(player_id, position, target_block);
+            }
+            return GameplayEffect {
+                mutations: vec![
+                    GameplayMutation::ClearMining { player_id },
+                    GameplayMutation::OpenFurnace {
                         player_id,
                         position,
                     },

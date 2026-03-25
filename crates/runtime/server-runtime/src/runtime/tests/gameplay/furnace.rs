@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<(), RuntimeError> {
+async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
@@ -12,17 +12,10 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
     let codec = MinecraftWireCodec;
 
     let (mut stream, mut buffer, _) = login_modern_1_12(addr, "alpha").await?;
-    let player_id = server
-        .session_status()
-        .await
-        .into_iter()
-        .find_map(|session| session.player_id)
-        .expect("logged-in player should have a player id");
-
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(TestJavaProtocol::Je340, 36, 12, 1, 0),
+        &creative_inventory_action(TestJavaProtocol::Je340, 36, 61, 1, 0),
     )
     .await?;
     let _ = read_until_set_slot(
@@ -38,7 +31,7 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(TestJavaProtocol::Je340, 37, 5, 1, 0),
+        &creative_inventory_action(TestJavaProtocol::Je340, 37, 12, 1, 0),
     )
     .await?;
     let _ = read_until_set_slot(
@@ -51,8 +44,34 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
         16,
     )
     .await?;
-
-    open_test_furnace(&server, player_id, 3, "Furnace").await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &creative_inventory_action(TestJavaProtocol::Je340, 38, 5, 1, 0),
+    )
+    .await?;
+    let _ = read_until_set_slot(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        0,
+        38,
+        16,
+    )
+    .await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &player_block_placement_1_12(2, 3, 0, 1, 0),
+    )
+    .await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &player_block_placement_1_12(2, 4, 0, 1, 0),
+    )
+    .await?;
 
     let open_window = read_until_java_packet(
         &mut stream,
@@ -65,7 +84,7 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
     assert_eq!(
         decode_open_window(TestJavaProtocol::Je340, &open_window)?,
         (
-            3,
+            1,
             "minecraft:furnace".to_string(),
             "{\"text\":\"Furnace\"}".to_string(),
             3,
@@ -82,11 +101,11 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
     )
     .await?;
     assert_eq!(
-        window_items_slot(TestJavaProtocol::Je340, &open_contents, 30)?,
+        window_items_slot(TestJavaProtocol::Je340, &open_contents, 31)?,
         Some((12, 1, 0))
     );
     assert_eq!(
-        window_items_slot(TestJavaProtocol::Je340, &open_contents, 31)?,
+        window_items_slot(TestJavaProtocol::Je340, &open_contents, 32)?,
         Some((5, 1, 0))
     );
 
@@ -99,26 +118,26 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
                     &codec,
                     &mut buffer,
                     TestJavaProtocol::Je340,
-                    3,
+                    1,
                     property_id,
                     16,
                 )
                 .await?,
             )?,
-            (3, property_id, value)
+            (1, property_id, value)
         );
     }
 
     for (slot, action, clicked) in [
-        (30, 1, None),
+        (31, 1, None),
         (0, 2, Some((12, 1, 0))),
-        (31, 3, None),
+        (32, 3, None),
         (1, 4, Some((5, 1, 0))),
     ] {
         write_packet(
             &mut stream,
             &codec,
-            &click_window_in_window(TestJavaProtocol::Je340, 3, slot, 0, action, clicked),
+            &click_window_in_window(TestJavaProtocol::Je340, 1, slot, 0, action, clicked),
         )
         .await?;
         let _ = read_until_confirm_transaction(
@@ -126,7 +145,7 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
             &codec,
             &mut buffer,
             TestJavaProtocol::Je340,
-            3,
+            1,
             action,
             16,
         )
@@ -143,13 +162,13 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
-                3,
+                1,
                 0,
                 16,
             )
             .await?,
         )?,
-        (3, 0, 300)
+        (1, 0, 300)
     );
     assert_eq!(
         decode_window_property(
@@ -159,13 +178,13 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
-                3,
+                1,
                 1,
                 16,
             )
             .await?,
         )?,
-        (3, 1, 300)
+        (1, 1, 300)
     );
     assert_eq!(
         decode_window_property(
@@ -175,13 +194,13 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
-                3,
+                1,
                 2,
                 16,
             )
             .await?,
         )?,
-        (3, 2, 1)
+        (1, 2, 1)
     );
 
     for _ in 2..200 {
@@ -191,7 +210,7 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
             &codec,
             &mut buffer,
             TestJavaProtocol::Je340,
-            3,
+            1,
             0,
             16,
         )
@@ -201,7 +220,7 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
             &codec,
             &mut buffer,
             TestJavaProtocol::Je340,
-            3,
+            1,
             2,
             16,
         )
@@ -218,13 +237,13 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
-                3,
+                1,
                 0,
                 16,
             )
             .await?,
         )?,
-        (3, 0, None)
+        (1, 0, None)
     );
     assert_eq!(
         decode_set_slot(
@@ -234,16 +253,21 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
-                3,
+                1,
                 2,
                 16,
             )
             .await?,
         )?,
-        (3, 2, Some((20, 1, 0)))
+        (1, 2, Some((20, 1, 0)))
     );
 
-    close_test_container(&server, player_id, 3).await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &close_window(TestJavaProtocol::Je340, 1),
+    )
+    .await?;
     let close_window = read_until_java_packet(
         &mut stream,
         &codec,
@@ -254,14 +278,14 @@ async fn runtime_test_helper_opens_smelts_and_closes_furnace_window() -> Result<
     .await?;
     assert_eq!(
         decode_close_window(TestJavaProtocol::Je340, &close_window)?,
-        3
+        1
     );
 
     server.shutdown().await
 }
 
 #[tokio::test]
-async fn furnace_output_persists_across_restart_via_fold_back() -> Result<(), RuntimeError> {
+async fn world_backed_furnace_output_persists_across_restart() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let world_dir = temp_dir.path().join("world");
     let server = build_test_server(
@@ -273,17 +297,10 @@ async fn furnace_output_persists_across_restart_via_fold_back() -> Result<(), Ru
     let codec = MinecraftWireCodec;
 
     let (mut stream, mut buffer, _) = login_modern_1_12(addr, "alpha").await?;
-    let player_id = server
-        .session_status()
-        .await
-        .into_iter()
-        .find_map(|session| session.player_id)
-        .expect("logged-in player should have a player id");
-
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(TestJavaProtocol::Je340, 36, 12, 1, 0),
+        &creative_inventory_action(TestJavaProtocol::Je340, 36, 61, 1, 0),
     )
     .await?;
     let _ = read_until_set_slot(
@@ -299,7 +316,7 @@ async fn furnace_output_persists_across_restart_via_fold_back() -> Result<(), Ru
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(TestJavaProtocol::Je340, 37, 5, 1, 0),
+        &creative_inventory_action(TestJavaProtocol::Je340, 37, 12, 1, 0),
     )
     .await?;
     let _ = read_until_set_slot(
@@ -312,8 +329,34 @@ async fn furnace_output_persists_across_restart_via_fold_back() -> Result<(), Ru
         16,
     )
     .await?;
-
-    open_test_furnace(&server, player_id, 3, "Furnace").await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &creative_inventory_action(TestJavaProtocol::Je340, 38, 5, 1, 0),
+    )
+    .await?;
+    let _ = read_until_set_slot(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        0,
+        38,
+        16,
+    )
+    .await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &player_block_placement_1_12(2, 3, 0, 1, 0),
+    )
+    .await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &player_block_placement_1_12(2, 4, 0, 1, 0),
+    )
+    .await?;
     let _ = read_until_java_packet(
         &mut stream,
         &codec,
@@ -336,7 +379,7 @@ async fn furnace_output_persists_across_restart_via_fold_back() -> Result<(), Ru
             &codec,
             &mut buffer,
             TestJavaProtocol::Je340,
-            3,
+            1,
             property_id,
             16,
         )
@@ -344,15 +387,15 @@ async fn furnace_output_persists_across_restart_via_fold_back() -> Result<(), Ru
     }
 
     for (slot, action, clicked) in [
-        (30, 1, None),
+        (31, 1, None),
         (0, 2, Some((12, 1, 0))),
-        (31, 3, None),
+        (32, 3, None),
         (1, 4, Some((5, 1, 0))),
     ] {
         write_packet(
             &mut stream,
             &codec,
-            &click_window_in_window(TestJavaProtocol::Je340, 3, slot, 0, action, clicked),
+            &click_window_in_window(TestJavaProtocol::Je340, 1, slot, 0, action, clicked),
         )
         .await?;
         let _ = read_until_confirm_transaction(
@@ -360,7 +403,7 @@ async fn furnace_output_persists_across_restart_via_fold_back() -> Result<(), Ru
             &codec,
             &mut buffer,
             TestJavaProtocol::Je340,
-            3,
+            1,
             action,
             16,
         )
@@ -379,9 +422,32 @@ async fn furnace_output_persists_across_restart_via_fold_back() -> Result<(), Ru
     )
     .await?;
     let addr = listener_addr(&restarted);
-    let (_, _, window_items) = login_modern_1_12(addr, "alpha").await?;
+    let codec = MinecraftWireCodec;
+    let (mut stream, mut buffer, _) = login_modern_1_12(addr, "alpha").await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &player_block_placement_1_12(2, 4, 0, 1, 0),
+    )
+    .await?;
+    let _ = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::OpenWindow,
+    )
+    .await?;
+    let window_items = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je340,
+        TestJavaPacket::WindowItems,
+    )
+    .await?;
     assert_eq!(
-        window_items_slot(TestJavaProtocol::Je340, &window_items, 9)?,
+        window_items_slot(TestJavaProtocol::Je340, &window_items, 2)?,
         Some((20, 1, 0))
     );
 

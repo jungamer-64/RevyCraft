@@ -5,8 +5,8 @@ use rsa::rand_core::{OsRng, RngCore};
 fn plugin_host_status(server: &RunningServer) -> mc_plugin_host::host::PluginHostStatusSnapshot {
     server
         .runtime
-        .reload_host
-        .as_ref()
+        .reload
+        .reload_host()
         .expect("reloadable test server should retain a plugin reload host")
         .status()
 }

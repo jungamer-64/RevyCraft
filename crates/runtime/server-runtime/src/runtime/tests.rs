@@ -59,6 +59,7 @@ mod connectivity;
 mod gameplay;
 mod guardrails;
 mod multiversion;
+mod selection;
 
 #[cfg(target_os = "linux")]
 mod reload;

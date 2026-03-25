@@ -98,37 +98,27 @@ impl RunningServer {
 
 impl RuntimeServer {
     pub(crate) async fn status_snapshot(&self) -> RuntimeStatusSnapshot {
-        let (active_generation, draining_generations, listener_bindings) = {
-            let generation_state = self
-                .generation_state
-                .read()
-                .expect("runtime generation lock should not be poisoned");
-            let active_generation = generation_status_snapshot(
-                &generation_state.active,
-                GenerationStatusState::Active,
-                None,
-            );
-            let mut draining_generations = generation_state
-                .draining
-                .iter()
-                .map(|entry| {
-                    generation_status_snapshot(
-                        &entry.generation,
-                        GenerationStatusState::Draining,
-                        Some(entry.drain_deadline_ms),
-                    )
-                })
-                .collect::<Vec<_>>();
-            draining_generations.sort_by_key(|entry| entry.generation_id.0);
-            (
-                active_generation,
-                draining_generations,
-                generation_state.active.listener_bindings.clone(),
-            )
-        };
+        let (active_generation_state, draining_states) = self.topology.snapshot_generations();
+        let active_generation = generation_status_snapshot(
+            &active_generation_state,
+            GenerationStatusState::Active,
+            None,
+        );
+        let mut draining_generations = draining_states
+            .iter()
+            .map(|entry| {
+                generation_status_snapshot(
+                    &entry.generation,
+                    GenerationStatusState::Draining,
+                    Some(entry.drain_deadline_ms),
+                )
+            })
+            .collect::<Vec<_>>();
+        draining_generations.sort_by_key(|entry| entry.generation_id.0);
+        let listener_bindings = active_generation_state.listener_bindings.clone();
         let session_status = self.session_status_snapshot().await;
         let session_summary = summarize_sessions(&session_status);
-        let dirty = self.state.lock().await.dirty;
+        let dirty = self.kernel.dirty().await;
 
         RuntimeStatusSnapshot {
             active_generation,
@@ -137,42 +127,14 @@ impl RuntimeServer {
             session_summary,
             dirty,
             plugin_host: self
-                .reload_host
-                .as_ref()
+                .reload
+                .reload_host()
                 .map(|reload_host| summarize_plugin_host_status(reload_host.status())),
         }
     }
 
     pub(crate) async fn session_status_snapshot(&self) -> Vec<SessionStatusSnapshot> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .await
-            .iter()
-            .map(|(connection_id, handle)| SessionStatusSnapshot {
-                connection_id: *connection_id,
-                generation_id: handle.generation.generation_id,
-                transport: handle.transport,
-                phase: handle.phase,
-                adapter_id: handle.adapter_id.clone(),
-                gameplay_profile: handle
-                    .gameplay_profile
-                    .as_ref()
-                    .map(|profile| profile.as_str().to_string()),
-                player_id: handle.player_id,
-                entity_id: handle.entity_id,
-                protocol_generation: handle
-                    .session_capabilities
-                    .as_ref()
-                    .and_then(|capabilities| capabilities.protocol_generation),
-                gameplay_generation: handle
-                    .session_capabilities
-                    .as_ref()
-                    .and_then(|capabilities| capabilities.gameplay_generation),
-            })
-            .collect::<Vec<_>>();
-        sessions.sort_by_key(|session| session.connection_id);
-        sessions
+        self.sessions.session_status_snapshot().await
     }
 
     pub(crate) async fn log_status_summary(&self, reason: &str) {
