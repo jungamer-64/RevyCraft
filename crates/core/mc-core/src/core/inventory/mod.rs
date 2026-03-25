@@ -6,6 +6,14 @@ mod state;
 mod sync;
 mod util;
 
+pub(in crate::core) use self::click::apply_inventory_click_state;
+pub(in crate::core) use self::lifecycle::{
+    close_inventory_window_state, close_player_active_container_state,
+    close_world_container_if_invalid_state, open_non_player_window_state, open_world_chest_state,
+    open_world_furnace_state, persisted_online_player_snapshot_state,
+    sync_world_chest_viewers_state, sync_world_furnace_state, tick_active_container_state,
+    tick_dropped_item_state,
+};
 pub(crate) use self::lifecycle::{world_block_entity, world_chest_position};
 pub(crate) use self::state::OpenInventoryWindow;
 #[cfg(test)]

@@ -222,6 +222,88 @@ fn gameplay_inventory_direct_path_matches_manual_transaction_commit() {
 }
 
 #[test]
+fn gameplay_set_held_slot_direct_path_matches_manual_transaction_commit() {
+    let (mut direct, player_id) = logged_in_creative_core("held-slot-parity");
+    let mut via_tx = direct.clone();
+
+    let direct_events = set_held_slot(&mut direct, player_id, 4);
+    let tx_events = apply_test_transaction(&mut via_tx, 0, |tx| {
+        tx.set_selected_hotbar_slot(player_id, 4);
+    });
+
+    assert_eq!(direct_events, tx_events);
+    assert_eq!(direct.snapshot(), via_tx.snapshot());
+}
+
+#[test]
+fn gameplay_begin_mining_direct_path_matches_manual_transaction_commit() {
+    let (mut direct, player_id) = logged_in_core(CoreConfig::default(), 1, "mining-parity");
+    let mut via_tx = direct.clone();
+    let position = BlockPos::new(2, 1, 0);
+
+    let direct_events = direct.apply_command(
+        CoreCommand::DigBlock {
+            player_id,
+            position,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    let tx_events = apply_test_transaction(&mut via_tx, 0, |tx| {
+        let player = tx
+            .player_snapshot(player_id)
+            .expect("player should be online during mining parity test");
+        let duration_ms = crate::catalog::survival_mining_duration_ms(
+            &tx.block_state(position),
+            crate::catalog::tool_spec_for_item(
+                player
+                    .inventory
+                    .selected_hotbar_stack(player.selected_hotbar_slot),
+            ),
+        )
+        .unwrap_or(50);
+        tx.begin_mining(player_id, position, duration_ms);
+    });
+
+    assert_eq!(direct_events, tx_events);
+    assert_eq!(direct.snapshot(), via_tx.snapshot());
+}
+
+#[test]
+fn gameplay_clear_mining_direct_path_matches_manual_transaction_commit() {
+    let (mut base, player_id) = logged_in_core(CoreConfig::default(), 1, "clear-mining-parity");
+    let position = BlockPos::new(2, 1, 0);
+    let _ = base.apply_command(
+        CoreCommand::DigBlock {
+            player_id,
+            position,
+            status: 0,
+            face: Some(BlockFace::Top),
+        },
+        0,
+    );
+    let mut direct = base.clone();
+    let mut via_tx = base.clone();
+
+    let direct_events = direct.apply_command(
+        CoreCommand::DigBlock {
+            player_id,
+            position,
+            status: 1,
+            face: Some(BlockFace::Top),
+        },
+        100,
+    );
+    let tx_events = apply_test_transaction(&mut via_tx, 100, |tx| {
+        tx.clear_mining(player_id);
+    });
+
+    assert_eq!(direct_events, tx_events);
+    assert_eq!(direct.snapshot(), via_tx.snapshot());
+}
+
+#[test]
 fn tick_emits_scheduler_phases_in_canonical_order() {
     let (mut core, player_id) = logged_in_core(CoreConfig::default(), 1, "tick-order");
     let _ = core.open_furnace(player_id, 3, "Furnace");
@@ -1538,6 +1620,52 @@ fn gameplay_transaction_rollback_discards_entity_and_session_changes() {
         .expect("uncommitted transaction should leave base state intact");
     assert_eq!(after_snapshot, before_snapshot);
     assert_eq!(core.entities.dropped_items.len(), before_drop_count);
+}
+
+#[test]
+fn gameplay_transaction_overlay_reads_surface_player_and_block_changes_before_commit() {
+    let (mut core, player_id) = logged_in_creative_core("tx-overlay-reads");
+    let position = BlockPos::new(2, 4, 0);
+    let before_snapshot = core.snapshot();
+
+    {
+        let mut tx = core.begin_gameplay_transaction(0);
+        tx.set_player_pose(
+            player_id,
+            Some(Vec3::new(3.5, 4.0, 0.5)),
+            Some(90.0),
+            Some(-15.0),
+            true,
+        );
+        tx.set_inventory_slot(
+            player_id,
+            InventorySlot::Hotbar(0),
+            Some(item("minecraft:glass", 12)),
+        );
+        tx.set_block(position, BlockState::chest());
+
+        let player = tx
+            .player_snapshot(player_id)
+            .expect("overlay snapshot should expose uncommitted player changes");
+        assert_eq!(player.position, Vec3::new(3.5, 4.0, 0.5));
+        assert_eq!(player.yaw, 90.0);
+        assert_eq!(player.pitch, -15.0);
+        assert_eq!(
+            player
+                .inventory
+                .get_slot(InventorySlot::Hotbar(0))
+                .map(stack_summary),
+            Some(("minecraft:glass", 12)),
+        );
+        assert_eq!(tx.block_state(position), BlockState::chest());
+        assert_eq!(
+            tx.block_entity(position)
+                .and_then(|block_entity| block_entity.chest_slots().map(<[_]>::len)),
+            Some(27),
+        );
+    }
+
+    assert_eq!(core.snapshot(), before_snapshot);
 }
 
 #[test]

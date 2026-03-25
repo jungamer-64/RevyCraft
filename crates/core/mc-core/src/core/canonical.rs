@@ -1,8 +1,22 @@
 use super::{
     OpenInventoryWindow, ServerCore,
     inventory::{
-        inventory_diff_events, property_diff_events, property_events, window_resync_events,
+        apply_inventory_click_state, close_inventory_window_state,
+        close_player_active_container_state, inventory_diff_events, open_non_player_window_state,
+        open_world_chest_state, open_world_furnace_state, property_diff_events, property_events,
+        tick_active_container_state, tick_dropped_item_state, window_resync_events,
     },
+    login::{finalize_login_delta, state_update_client_settings},
+    mining::{
+        state_advance_mining_stage, state_begin_mining, state_clear_active_mining,
+        state_complete_survival_mining,
+    },
+    mutation::{
+        state_inventory_slot, state_player_pose, state_selected_hotbar_slot, state_set_block,
+        state_spawn_dropped_item,
+    },
+    state_backend::{BaseState, CoreStateMut, CoreStateRead},
+    tick::{disconnect_player_state, schedule_keep_alive_state},
 };
 use crate::events::{
     CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
@@ -306,7 +320,7 @@ enum AppliedCoreOp {
 }
 
 struct StateMutationContext<'a> {
-    core: &'a mut ServerCore,
+    state: BaseState<'a>,
     now_ms: u64,
     finalized_players: &'a BTreeSet<PlayerId>,
 }
@@ -349,14 +363,14 @@ impl<'a> StateMutationContext<'a> {
         finalized_players: &'a BTreeSet<PlayerId>,
     ) -> Self {
         Self {
-            core,
+            state: BaseState::new(core),
             now_ms,
             finalized_players,
         }
     }
 
     fn core(&self) -> &ServerCore {
-        self.core
+        self.state.core()
     }
 
     fn apply(&mut self, op: CoreOp) -> AppliedCoreOp {
@@ -368,7 +382,11 @@ impl<'a> StateMutationContext<'a> {
             } => {
                 let materialized = self.finalized_players.contains(&player_id);
                 if materialized {
-                    let entity_id = self.core.spawn_online_player(player, self.now_ms);
+                    let entity_id = self.state.spawn_online_player(
+                        player,
+                        self.now_ms,
+                        Some(expected_entity_id),
+                    );
                     debug_assert_eq!(entity_id, expected_entity_id);
                 }
                 AppliedCoreOp::PrepareLogin {
@@ -381,7 +399,7 @@ impl<'a> StateMutationContext<'a> {
                 player_id,
             } => AppliedCoreOp::FinalizeLogin {
                 player_id,
-                delta: self.core.finalize_login_delta(connection_id, player_id),
+                delta: finalize_login_delta(&mut self.state, connection_id, player_id),
             },
             CoreOp::SetPlayerPose {
                 player_id,
@@ -389,36 +407,47 @@ impl<'a> StateMutationContext<'a> {
                 yaw,
                 pitch,
                 on_ground,
-            } => AppliedCoreOp::SetPlayerPose(
-                self.core
-                    .state_player_pose(player_id, position, yaw, pitch, on_ground),
-            ),
+            } => AppliedCoreOp::SetPlayerPose(state_player_pose(
+                &mut self.state,
+                player_id,
+                position,
+                yaw,
+                pitch,
+                on_ground,
+            )),
             CoreOp::SetSelectedHotbarSlot { player_id, slot } => {
-                AppliedCoreOp::SetSelectedHotbarSlot(
-                    self.core.state_selected_hotbar_slot(player_id, slot),
-                )
+                AppliedCoreOp::SetSelectedHotbarSlot(state_selected_hotbar_slot(
+                    &mut self.state,
+                    player_id,
+                    slot,
+                ))
             }
             CoreOp::SetInventorySlot {
                 player_id,
                 slot,
                 stack,
-            } => AppliedCoreOp::SetInventorySlot(
-                self.core.state_inventory_slot(player_id, slot, stack),
-            ),
+            } => AppliedCoreOp::SetInventorySlot(state_inventory_slot(
+                &mut self.state,
+                player_id,
+                slot,
+                stack,
+            )),
             CoreOp::SetViewDistance {
                 player_id,
                 view_distance,
-            } => AppliedCoreOp::SetViewDistance(
-                self.core
-                    .state_update_client_settings(player_id, view_distance),
-            ),
+            } => AppliedCoreOp::SetViewDistance(state_update_client_settings(
+                &mut self.state,
+                player_id,
+                view_distance,
+            )),
             CoreOp::InventoryClick {
                 player_id,
                 transaction,
                 target,
                 button,
                 validation,
-            } => AppliedCoreOp::InventoryClick(self.core.state_apply_inventory_click(
+            } => AppliedCoreOp::InventoryClick(apply_inventory_click_state(
+                &mut self.state,
                 player_id,
                 transaction,
                 target,
@@ -429,35 +458,44 @@ impl<'a> StateMutationContext<'a> {
                 player_id,
                 window,
                 title,
-            } => AppliedCoreOp::OpenContainer(
-                self.core
-                    .state_open_non_player_window(player_id, window, title),
-            ),
+            } => AppliedCoreOp::OpenContainer(open_non_player_window_state(
+                &mut self.state,
+                player_id,
+                window,
+                title,
+            )),
             CoreOp::OpenChest {
                 player_id,
                 position,
-            } => {
-                AppliedCoreOp::OpenContainer(self.core.state_open_world_chest(player_id, position))
-            }
+            } => AppliedCoreOp::OpenContainer(open_world_chest_state(
+                &mut self.state,
+                player_id,
+                position,
+            )),
             CoreOp::OpenFurnace {
                 player_id,
                 position,
-            } => AppliedCoreOp::OpenContainer(
-                self.core.state_open_world_furnace(player_id, position),
-            ),
+            } => AppliedCoreOp::OpenContainer(open_world_furnace_state(
+                &mut self.state,
+                player_id,
+                position,
+            )),
             CoreOp::CloseContainer {
                 player_id,
                 window_id,
                 include_player_contents,
             } => {
                 let delta = if window_id == 0 {
-                    self.core
-                        .state_close_player_active_container(player_id, include_player_contents)
+                    close_player_active_container_state(
+                        &mut self.state,
+                        player_id,
+                        include_player_contents,
+                    )
                 } else if include_player_contents {
-                    self.core.state_close_inventory_window(player_id, window_id)
+                    close_inventory_window_state(&mut self.state, player_id, window_id)
                 } else {
                     let active_window_id =
-                        self.core.player_session(player_id).and_then(|session| {
+                        self.state.player_session(player_id).and_then(|session| {
                             session
                                 .active_container
                                 .as_ref()
@@ -465,21 +503,21 @@ impl<'a> StateMutationContext<'a> {
                         });
                     (active_window_id == Some(window_id))
                         .then(|| {
-                            self.core
-                                .state_close_player_active_container(player_id, false)
+                            close_player_active_container_state(&mut self.state, player_id, false)
                         })
                         .flatten()
                 };
                 AppliedCoreOp::CloseContainer(delta)
             }
             CoreOp::ClearMining { player_id } => {
-                AppliedCoreOp::ClearMining(self.core.state_clear_active_mining(player_id))
+                AppliedCoreOp::ClearMining(state_clear_active_mining(&mut self.state, player_id))
             }
             CoreOp::BeginMining {
                 player_id,
                 position,
                 duration_ms,
-            } => AppliedCoreOp::BeginMining(self.core.state_begin_mining(
+            } => AppliedCoreOp::BeginMining(state_begin_mining(
+                &mut self.state,
                 player_id,
                 position,
                 duration_ms,
@@ -491,7 +529,8 @@ impl<'a> StateMutationContext<'a> {
                 position,
                 stage,
                 duration_ms,
-            } => AppliedCoreOp::AdvanceMiningStage(self.core.state_advance_mining_stage(
+            } => AppliedCoreOp::AdvanceMiningStage(state_advance_mining_stage(
+                &mut self.state,
                 player_id,
                 entity_id,
                 position,
@@ -501,25 +540,27 @@ impl<'a> StateMutationContext<'a> {
             CoreOp::CompleteMining {
                 player_id,
                 position,
-            } => AppliedCoreOp::CompleteMining(self.core.state_complete_survival_mining(
+            } => AppliedCoreOp::CompleteMining(state_complete_survival_mining(
+                &mut self.state,
                 player_id,
                 position,
                 self.now_ms,
             )),
             CoreOp::TickFurnaceWindow { player_id } => {
-                AppliedCoreOp::WindowDiff(self.core.state_tick_active_container(player_id))
+                AppliedCoreOp::WindowDiff(tick_active_container_state(&mut self.state, player_id))
             }
             CoreOp::TickDroppedItem { entity_id } => AppliedCoreOp::DroppedItemTick(
-                self.core.state_tick_dropped_item(entity_id, self.now_ms),
+                tick_dropped_item_state(&mut self.state, entity_id, self.now_ms),
             ),
             CoreOp::SetBlock { position, block } => {
-                AppliedCoreOp::SetBlock(self.core.state_set_block(position, block))
+                AppliedCoreOp::SetBlock(state_set_block(&mut self.state, position, block))
             }
             CoreOp::SpawnDroppedItem {
                 expected_entity_id,
                 position,
                 item,
-            } => AppliedCoreOp::SpawnDroppedItem(self.core.state_spawn_dropped_item(
+            } => AppliedCoreOp::SpawnDroppedItem(state_spawn_dropped_item(
+                &mut self.state,
                 expected_entity_id,
                 position,
                 item,
@@ -528,13 +569,14 @@ impl<'a> StateMutationContext<'a> {
             CoreOp::KeepAliveRequested {
                 player_id,
                 keep_alive_id,
-            } => AppliedCoreOp::KeepAliveRequested(self.core.state_schedule_keep_alive(
+            } => AppliedCoreOp::KeepAliveRequested(schedule_keep_alive_state(
+                &mut self.state,
                 player_id,
                 keep_alive_id,
                 self.now_ms,
             )),
             CoreOp::DisconnectPlayer { player_id } => {
-                AppliedCoreOp::DisconnectPlayer(self.core.state_disconnect_player(player_id))
+                AppliedCoreOp::DisconnectPlayer(disconnect_player_state(&mut self.state, player_id))
             }
             CoreOp::EmitEvent { target, event } => {
                 AppliedCoreOp::EmitEvent(TargetedEvent { target, event })

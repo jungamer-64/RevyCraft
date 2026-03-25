@@ -4,6 +4,7 @@ mod inventory;
 mod login;
 mod mining;
 mod mutation;
+mod state_backend;
 mod tick;
 pub(crate) mod transaction;
 mod world;
@@ -247,7 +248,10 @@ impl ServerCore {
     pub fn snapshot(&self) -> crate::WorldSnapshot {
         let mut players = self.world.saved_players.clone();
         for player_id in self.sessions.player_sessions.keys().copied() {
-            if let Some(snapshot) = self.persisted_online_player_snapshot(player_id) {
+            let view = self::state_backend::BaseStateRef::new(self);
+            if let Some(snapshot) =
+                self::inventory::persisted_online_player_snapshot_state(&view, player_id)
+            {
                 players.insert(player_id, snapshot);
             }
         }
@@ -294,46 +298,14 @@ impl ServerCore {
         self.sessions.player_sessions.get_mut(&player_id)
     }
 
-    #[must_use]
-    pub(super) fn player_inventory(&self, player_id: PlayerId) -> Option<&PlayerInventory> {
-        let entity_id = self.player_entity_id(player_id)?;
-        self.entities.player_inventory.get(&entity_id)
-    }
-
-    pub(super) fn player_inventory_mut(
-        &mut self,
-        player_id: PlayerId,
-    ) -> Option<&mut PlayerInventory> {
-        let entity_id = self.player_entity_id(player_id)?;
-        self.entities.player_inventory.get_mut(&entity_id)
-    }
-
-    #[must_use]
-    pub(super) fn player_selected_hotbar(&self, player_id: PlayerId) -> Option<u8> {
-        let entity_id = self.player_entity_id(player_id)?;
-        self.entities
-            .player_selected_hotbar
-            .get(&entity_id)
-            .copied()
-    }
-
-    pub(super) fn player_selected_hotbar_mut(&mut self, player_id: PlayerId) -> Option<&mut u8> {
-        let entity_id = self.player_entity_id(player_id)?;
-        self.entities.player_selected_hotbar.get_mut(&entity_id)
-    }
-
-    #[must_use]
-    pub(super) fn player_transform(&self, player_id: PlayerId) -> Option<&PlayerTransform> {
-        let entity_id = self.player_entity_id(player_id)?;
-        self.entities.player_transform.get(&entity_id)
-    }
-
+    #[cfg(test)]
     #[must_use]
     pub(super) fn player_active_mining(&self, player_id: PlayerId) -> Option<&ActiveMiningState> {
         let entity_id = self.player_entity_id(player_id)?;
         self.entities.player_active_mining.get(&entity_id)
     }
 
+    #[cfg(test)]
     pub(super) fn compose_player_snapshot_by_entity(
         &self,
         entity_id: EntityId,
@@ -360,6 +332,7 @@ impl ServerCore {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(super) fn compose_player_snapshot(&self, player_id: PlayerId) -> Option<PlayerSnapshot> {
         let entity_id = self.player_entity_id(player_id)?;
         self.compose_player_snapshot_by_entity(entity_id)

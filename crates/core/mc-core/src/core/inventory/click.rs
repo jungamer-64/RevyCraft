@@ -1,5 +1,6 @@
+use super::super::PlayerSessionState;
 use super::super::canonical::InventoryClickDelta;
-use super::super::{PlayerSessionState, ServerCore};
+use super::super::state_backend::CoreStateMut;
 use super::crafting::{
     apply_active_container_crafting_result_click, apply_player_crafting_result_click,
     recompute_crafting_result_for_active_container, recompute_player_crafting_result,
@@ -8,6 +9,7 @@ use super::furnace::normalize_furnace_window;
 use super::state::OpenInventoryWindow;
 use super::sync::{active_window_container, resolve_inventory_target, window_contents};
 use super::util::{MAX_STACK_SIZE, decrement_cursor, reduce_slot_stack, stack_keys_match};
+use super::{sync_world_chest_viewers_state, sync_world_furnace_state};
 use crate::PlayerId;
 use crate::events::{
     InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
@@ -17,152 +19,136 @@ use crate::inventory::{
     InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory,
 };
 
-impl ServerCore {
-    pub(in crate::core) fn state_apply_inventory_click(
-        &mut self,
-        player_id: PlayerId,
-        transaction: InventoryTransactionContext,
-        target: InventoryClickTarget,
-        button: InventoryClickButton,
-        validation: &InventoryClickValidation,
-    ) -> Option<InventoryClickDelta> {
-        let Some(before_session) = self.player_session(player_id) else {
-            return None;
+pub(in crate::core) fn apply_inventory_click_state(
+    state: &mut impl CoreStateMut,
+    player_id: PlayerId,
+    transaction: InventoryTransactionContext,
+    target: InventoryClickTarget,
+    button: InventoryClickButton,
+    validation: &InventoryClickValidation,
+) -> Option<InventoryClickDelta> {
+    let Some(before_session) = state.player_session(player_id) else {
+        return None;
+    };
+    let Some(before_snapshot) = state.compose_player_snapshot(player_id) else {
+        return None;
+    };
+    let Some(before_inventory) = state.player_inventory(player_id) else {
+        return None;
+    };
+    let before_cursor = before_session.cursor.clone();
+    let Some(container) = active_window_container(&before_session, transaction.window_id) else {
+        return Some(InventoryClickDelta {
+            player_id,
+            transaction,
+            accepted: false,
+            should_resync_on_reject: false,
+            container: InventoryContainer::Player,
+            window_id: transaction.window_id,
+            resolved_slot: None,
+            before_contents: InventoryWindowContents::player(before_inventory.clone()),
+            after_contents: InventoryWindowContents::player(before_inventory.clone()),
+            before_properties: Vec::new(),
+            after_properties: Vec::new(),
+            before_cursor,
+            after_cursor: before_session.cursor.clone(),
+            selected_hotbar_before: before_snapshot.selected_hotbar_slot,
+            selected_hotbar_after: before_snapshot.selected_hotbar_slot,
+            viewer_syncs: Vec::new(),
+        });
+    };
+    let before_contents = window_contents(&before_session, &before_inventory, container);
+    let before_properties = before_session
+        .active_container
+        .as_ref()
+        .filter(|window| window.window_id == transaction.window_id)
+        .map(OpenInventoryWindow::property_entries)
+        .unwrap_or_default();
+    let world_chest_position = before_session
+        .active_container
+        .as_ref()
+        .filter(|window| window.window_id == transaction.window_id)
+        .and_then(OpenInventoryWindow::world_chest_position);
+    let world_furnace_position = before_session
+        .active_container
+        .as_ref()
+        .filter(|window| window.window_id == transaction.window_id)
+        .and_then(OpenInventoryWindow::world_furnace_position);
+    let resolved_slot = resolve_inventory_target(&target);
+
+    let (applied, after_contents, after_properties, after_cursor) = {
+        let (session, inventory) = state.player_session_inventory_mut(player_id)?;
+        let applied = match transaction.window_id {
+            0 => match target {
+                InventoryClickTarget::Outside => apply_outside_click(&mut session.cursor, button),
+                _ => {
+                    apply_player_window_click(inventory, &mut session.cursor, resolved_slot, button)
+                }
+            },
+            _ => apply_active_container_click(
+                session,
+                inventory,
+                transaction.window_id,
+                resolved_slot,
+                &target,
+                button,
+            ),
         };
-        let Some(before_snapshot) = self.compose_player_snapshot(player_id) else {
-            return None;
-        };
-        let Some(before_inventory) = self.player_inventory(player_id) else {
-            return None;
-        };
-        let before_cursor = before_session.cursor.clone();
-        let Some(container) = active_window_container(before_session, transaction.window_id) else {
-            return Some(InventoryClickDelta {
-                player_id,
-                transaction,
-                accepted: false,
-                should_resync_on_reject: false,
-                container: InventoryContainer::Player,
-                window_id: transaction.window_id,
-                resolved_slot: None,
-                before_contents: InventoryWindowContents::player(before_inventory.clone()),
-                after_contents: InventoryWindowContents::player(before_inventory.clone()),
-                before_properties: Vec::new(),
-                after_properties: Vec::new(),
-                before_cursor,
-                after_cursor: before_session.cursor.clone(),
-                selected_hotbar_before: before_snapshot.selected_hotbar_slot,
-                selected_hotbar_after: before_snapshot.selected_hotbar_slot,
-                viewer_syncs: Vec::new(),
-            });
-        };
-        let before_contents = window_contents(before_session, before_inventory, container);
-        let before_properties = before_session
+        let after_properties = session
             .active_container
             .as_ref()
             .filter(|window| window.window_id == transaction.window_id)
             .map(OpenInventoryWindow::property_entries)
             .unwrap_or_default();
-        let world_chest_position = before_session
-            .active_container
-            .as_ref()
-            .filter(|window| window.window_id == transaction.window_id)
-            .and_then(OpenInventoryWindow::world_chest_position);
-        let world_furnace_position = before_session
-            .active_container
-            .as_ref()
-            .filter(|window| window.window_id == transaction.window_id)
-            .and_then(OpenInventoryWindow::world_furnace_position);
-        let resolved_slot = resolve_inventory_target(&target);
-
-        let (applied, after_contents, after_properties, after_cursor) = {
-            let Some(entity_id) = self.player_entity_id(player_id) else {
-                return None;
-            };
-            let Some(session) = self.sessions.player_sessions.get_mut(&player_id) else {
-                return None;
-            };
-            let Some(inventory) = self.entities.player_inventory.get_mut(&entity_id) else {
-                return None;
-            };
-            let applied = match transaction.window_id {
-                0 => match target {
-                    InventoryClickTarget::Outside => {
-                        apply_outside_click(&mut session.cursor, button)
-                    }
-                    _ => apply_player_window_click(
-                        inventory,
-                        &mut session.cursor,
-                        resolved_slot,
-                        button,
-                    ),
-                },
-                _ => apply_active_container_click(
-                    session,
-                    inventory,
-                    transaction.window_id,
-                    resolved_slot,
-                    &target,
-                    button,
-                ),
-            };
-            let after_properties = session
-                .active_container
-                .as_ref()
-                .filter(|window| window.window_id == transaction.window_id)
-                .map(OpenInventoryWindow::property_entries)
-                .unwrap_or_default();
-            (
-                applied,
-                window_contents(session, inventory, container),
-                after_properties,
-                session.cursor.clone(),
-            )
-        };
-
-        let clicked_slot_stack =
-            resolved_slot.and_then(|slot| after_contents.get_slot(slot).cloned());
-        let accepted = match validation {
-            InventoryClickValidation::Authoritative => applied,
-            InventoryClickValidation::StrictSlotEcho { clicked_item } => {
-                applied
-                    && resolved_slot.is_some()
-                    && clicked_item.as_ref() == clicked_slot_stack.as_ref()
-            }
-        };
-
-        let selected_hotbar_slot = self.player_selected_hotbar(player_id).unwrap_or(0);
-        let viewer_syncs = if accepted {
-            let mut deltas = Vec::new();
-            if let Some(position) = world_chest_position {
-                deltas.extend(self.state_sync_world_chest_viewers(position, player_id));
-            }
-            if let Some(position) = world_furnace_position {
-                self.state_sync_world_furnace_state(position, player_id);
-            }
-            deltas
-        } else {
-            Vec::new()
-        };
-        Some(InventoryClickDelta {
-            player_id,
-            transaction,
-            accepted,
-            should_resync_on_reject: true,
-            container,
-            window_id: transaction.window_id,
-            resolved_slot,
-            before_contents,
-            after_contents,
-            before_properties,
+        (
+            applied,
+            window_contents(session, inventory, container),
             after_properties,
-            before_cursor,
-            after_cursor,
-            selected_hotbar_before: before_snapshot.selected_hotbar_slot,
-            selected_hotbar_after: selected_hotbar_slot,
-            viewer_syncs,
-        })
-    }
+            session.cursor.clone(),
+        )
+    };
+
+    let clicked_slot_stack = resolved_slot.and_then(|slot| after_contents.get_slot(slot).cloned());
+    let accepted = match validation {
+        InventoryClickValidation::Authoritative => applied,
+        InventoryClickValidation::StrictSlotEcho { clicked_item } => {
+            applied
+                && resolved_slot.is_some()
+                && clicked_item.as_ref() == clicked_slot_stack.as_ref()
+        }
+    };
+
+    let selected_hotbar_slot = state.player_selected_hotbar(player_id).unwrap_or(0);
+    let viewer_syncs = if accepted {
+        let mut deltas = Vec::new();
+        if let Some(position) = world_chest_position {
+            deltas.extend(sync_world_chest_viewers_state(state, position, player_id));
+        }
+        if let Some(position) = world_furnace_position {
+            sync_world_furnace_state(state, position, player_id);
+        }
+        deltas
+    } else {
+        Vec::new()
+    };
+    Some(InventoryClickDelta {
+        player_id,
+        transaction,
+        accepted,
+        should_resync_on_reject: true,
+        container,
+        window_id: transaction.window_id,
+        resolved_slot,
+        before_contents,
+        after_contents,
+        before_properties,
+        after_properties,
+        before_cursor,
+        after_cursor,
+        selected_hotbar_before: before_snapshot.selected_hotbar_slot,
+        selected_hotbar_after: selected_hotbar_slot,
+        viewer_syncs,
+    })
 }
 
 fn apply_player_window_click(
