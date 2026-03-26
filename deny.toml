@@ -6,19 +6,57 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "Unicode-DFS-2016",
-    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+]
+exceptions = [
+    { allow = ["NCSA"], crate = "libfuzzer-sys" },
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
 ]
 confidence-threshold = 0.8
+
+[[licenses.clarify]]
+crate = "bedrockrs_addon"
+expression = "Apache-2.0"
+license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrockrs_macros"
+expression = "Apache-2.0"
+license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrockrs_network"
+expression = "Apache-2.0"
+license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrockrs_proto"
+expression = "Apache-2.0"
+license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrockrs_proto_core"
+expression = "Apache-2.0"
+license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrockrs_shared"
+expression = "Apache-2.0"
+license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
 
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "warn"
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "server-runtime still relies on the Minecraft online-mode RSA login handshake and no safe upstream replacement is available yet" },
+    { id = "RUSTSEC-2024-0436", reason = "bedrock-rs still pulls paste transitively and there is no maintained upgrade path available yet" },
+]
+unmaintained = "all"
 yanked = "deny"
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/bedrock-crustaceans/bedrock-rs"]
