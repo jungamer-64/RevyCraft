@@ -4,6 +4,7 @@ use super::{
 };
 use std::collections::HashSet;
 
+#[derive(Clone)]
 pub(crate) struct PreparedProtocolTopology {
     pub(crate) registry: ProtocolRegistry,
     pub(crate) adapter_ids: Vec<String>,

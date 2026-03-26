@@ -1,9 +1,9 @@
 #![allow(clippy::multiple_crate_versions)]
 use mc_core::{AdminUiCapability, AdminUiCapabilitySet};
 use mc_plugin_api::codec::admin_ui::{
-    AdminConfigReloadView, AdminGenerationReloadView, AdminNamedCountView, AdminPluginsReloadView,
-    AdminRequest, AdminResponse, AdminSessionSummaryView, AdminSessionsView, AdminStatusView,
-    AdminUiDescriptor,
+    AdminNamedCountView, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
+    AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionsView, AdminStatusView,
+    AdminTopologyReloadView, AdminUiDescriptor, RuntimeReloadMode,
 };
 use mc_plugin_sdk_rust::admin_ui::RustAdminUiPlugin;
 use mc_plugin_sdk_rust::capabilities;
@@ -34,9 +34,18 @@ impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
             "help" => Ok(AdminRequest::Help),
             "status" => Ok(AdminRequest::Status),
             "sessions" => Ok(AdminRequest::Sessions),
-            "reload config" => Ok(AdminRequest::ReloadConfig),
-            "reload plugins" => Ok(AdminRequest::ReloadPlugins),
-            "reload generation" => Ok(AdminRequest::ReloadGeneration),
+            "reload runtime artifacts" => Ok(AdminRequest::ReloadRuntime {
+                mode: RuntimeReloadMode::Artifacts,
+            }),
+            "reload runtime topology" => Ok(AdminRequest::ReloadRuntime {
+                mode: RuntimeReloadMode::Topology,
+            }),
+            "reload runtime core" => Ok(AdminRequest::ReloadRuntime {
+                mode: RuntimeReloadMode::Core,
+            }),
+            "reload runtime full" => Ok(AdminRequest::ReloadRuntime {
+                mode: RuntimeReloadMode::Full,
+            }),
             "shutdown" => Ok(AdminRequest::Shutdown),
             _ => Err(format!("unknown command `{line}`; try `help`")),
         }
@@ -47,9 +56,7 @@ impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
             AdminResponse::Help => render_help(),
             AdminResponse::Status(status) => render_status(status),
             AdminResponse::Sessions(sessions) => render_sessions(sessions),
-            AdminResponse::ReloadConfig(result) => render_reload_config(result),
-            AdminResponse::ReloadPlugins(result) => render_reload_plugins(result),
-            AdminResponse::ReloadGeneration(result) => render_reload_generation(result),
+            AdminResponse::ReloadRuntime(result) => render_runtime_reload(result),
             AdminResponse::ShutdownScheduled => "shutdown scheduled".to_string(),
             AdminResponse::PermissionDenied {
                 principal,
@@ -72,9 +79,10 @@ fn render_help() -> String {
         "help",
         "status",
         "sessions",
-        "reload config",
-        "reload plugins",
-        "reload generation",
+        "reload runtime artifacts",
+        "reload runtime topology",
+        "reload runtime core",
+        "reload runtime full",
         "shutdown",
     ]
     .join("\n")
@@ -199,17 +207,10 @@ fn render_sessions(sessions: &AdminSessionsView) -> String {
     lines.join("\n")
 }
 
-fn render_reload_plugins(result: &AdminPluginsReloadView) -> String {
-    if result.reloaded_plugin_ids.is_empty() {
-        "reload plugins: no plugin artifacts changed".to_string()
-    } else {
-        format!("reload plugins: {}", result.reloaded_plugin_ids.join(","))
-    }
-}
-
-fn render_reload_generation(result: &AdminGenerationReloadView) -> String {
+fn render_reload_topology(result: &AdminTopologyReloadView, mode: RuntimeReloadMode) -> String {
     format!(
-        "reload generation: active={} retired={} applied-config-change={} reconfigured={}",
+        "reload runtime {}: active={} retired={} applied-config-change={} reconfigured={}",
+        mode.as_str(),
         result.activated_generation_id,
         if result.retired_generation_ids.is_empty() {
             "-".to_string()
@@ -230,17 +231,45 @@ fn render_reload_generation(result: &AdminGenerationReloadView) -> String {
     )
 }
 
-fn render_reload_config(result: &AdminConfigReloadView) -> String {
-    let plugins = if result.reloaded_plugin_ids.is_empty() {
-        "-".to_string()
-    } else {
-        result.reloaded_plugin_ids.join(",")
-    };
-    format!(
-        "reload config: plugins={} {}",
-        plugins,
-        render_reload_generation(&result.generation)
-    )
+fn render_runtime_reload(result: &AdminRuntimeReloadView) -> String {
+    match &result.detail {
+        AdminRuntimeReloadDetail::Artifacts(detail) => {
+            if detail.reloaded_plugin_ids.is_empty() {
+                format!(
+                    "reload runtime {}: no plugin artifacts changed",
+                    result.mode.as_str()
+                )
+            } else {
+                format!(
+                    "reload runtime {}: {}",
+                    result.mode.as_str(),
+                    detail.reloaded_plugin_ids.join(",")
+                )
+            }
+        }
+        AdminRuntimeReloadDetail::Topology(detail) => render_reload_topology(detail, result.mode),
+        AdminRuntimeReloadDetail::Core(_) => {
+            format!("reload runtime {}: completed", result.mode.as_str())
+        }
+        AdminRuntimeReloadDetail::Full(detail) => {
+            let plugins = if detail.reloaded_plugin_ids.is_empty() {
+                "-".to_string()
+            } else {
+                detail.reloaded_plugin_ids.join(",")
+            };
+            format!(
+                "reload runtime {}: plugins={} active={} reconfigured={}",
+                result.mode.as_str(),
+                plugins,
+                detail.topology.activated_generation_id,
+                if detail.topology.reconfigured_adapter_ids.is_empty() {
+                    "-".to_string()
+                } else {
+                    detail.topology.reconfigured_adapter_ids.join(",")
+                }
+            )
+        }
+    }
 }
 
 export_plugin!(admin_ui, ConsoleAdminUiPlugin, MANIFEST);

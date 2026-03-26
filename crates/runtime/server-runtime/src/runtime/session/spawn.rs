@@ -1,14 +1,14 @@
 use crate::RuntimeError;
 use crate::runtime::{
-    GenerationAdmission, RuntimeServer, SESSION_OUTBOUND_QUEUE_CAPACITY, SessionMessage,
-    SessionState,
+    GenerationAdmission, RuntimeServer, SESSION_OUTBOUND_QUEUE_CAPACITY, SessionControl,
+    SessionMessage, SessionState,
 };
 use crate::transport::{AcceptedTransportSession, TransportSessionIo, default_wire_codec};
 use bytes::BytesMut;
 use mc_core::ConnectionId;
 use mc_proto_common::{ConnectionPhase, TransportKind, WireCodec};
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 impl RuntimeServer {
     pub(in crate::runtime) async fn spawn_transport_session(
@@ -97,7 +97,7 @@ impl RuntimeServer {
         let connection_id = self.sessions.next_connection_id().await;
 
         let (tx, rx) = mpsc::channel(SESSION_OUTBOUND_QUEUE_CAPACITY);
-        let (control_tx, control_rx) = watch::channel(None);
+        let (control_tx, control_rx) = mpsc::channel(8);
         self.sessions
             .insert(connection_id, tx, control_tx, &session)
             .await;
@@ -121,7 +121,7 @@ impl RuntimeServer {
         mut transport_io: TransportSessionIo,
         mut session: SessionState,
         mut rx: mpsc::Receiver<SessionMessage>,
-        mut control_rx: watch::Receiver<Option<String>>,
+        mut control_rx: mpsc::Receiver<SessionControl>,
     ) -> Result<(), RuntimeError> {
         let mut read_buffer = BytesMut::with_capacity(8192);
 
@@ -154,22 +154,31 @@ impl RuntimeServer {
                             }
                         }
                     }
-                    control = control_rx.changed() => {
-                        if control.is_err() {
-                            break;
-                        }
-                        let reason = { control_rx.borrow().clone() };
-                        if let Some(reason) = reason {
-                            let should_close = self
-                                .handle_outgoing_message(
-                                    connection_id,
-                                    &mut transport_io,
-                                    &mut session,
-                                    SessionMessage::Terminate { reason },
-                                )
-                                .await?;
-                            if should_close {
-                                return Ok(());
+                    Some(control) = control_rx.recv() => {
+                        match control {
+                            SessionControl::Terminate { reason } => {
+                                let should_close = self
+                                    .handle_outgoing_message(
+                                        connection_id,
+                                        &mut transport_io,
+                                        &mut session,
+                                        SessionMessage::Terminate { reason },
+                                    )
+                                    .await?;
+                                if should_close {
+                                    return Ok(());
+                                }
+                            }
+                            SessionControl::Reattach { instruction, ack_tx } => {
+                                let result = self
+                                    .handle_session_reattach(
+                                        connection_id,
+                                        &mut transport_io,
+                                        &mut session,
+                                        instruction,
+                                    )
+                                    .await;
+                                let _ = ack_tx.send(result);
                             }
                         }
                     }

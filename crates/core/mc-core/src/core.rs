@@ -11,6 +11,8 @@ mod world;
 
 use crate::catalog::MiningToolSpec;
 use crate::events::PlayerSummary;
+use crate::events::{CoreEvent, EventTarget, TargetedEvent};
+use crate::inventory::{InventoryContainer, InventoryWindowContents};
 use crate::inventory::{ItemStack, PlayerInventory};
 use crate::player::PlayerSnapshot;
 use crate::world::{
@@ -21,9 +23,11 @@ use crate::{DEFAULT_KEEPALIVE_INTERVAL_MS, DEFAULT_KEEPALIVE_TIMEOUT_MS, EntityI
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(crate) use self::inventory::OpenInventoryWindow;
-#[cfg(test)]
-pub(crate) use self::inventory::OpenInventoryWindowState;
+pub use self::inventory::{
+    ChestWindowBinding, ChestWindowState, ContainerDescriptor, FurnaceWindowBinding,
+    FurnaceWindowState, OpenInventoryWindow, OpenInventoryWindowState,
+};
+use self::state_backend::CoreStateMut;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientView {
@@ -140,15 +144,15 @@ pub(super) struct EntityStore {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PlayerSessionState {
-    pub(crate) entity_id: EntityId,
-    pub(crate) cursor: Option<ItemStack>,
-    pub(crate) active_container: Option<OpenInventoryWindow>,
-    pub(crate) next_non_player_window_id: u8,
-    pub(crate) view: ClientView,
-    pub(crate) pending_keep_alive_id: Option<i32>,
-    pub(crate) last_keep_alive_sent_at: Option<u64>,
-    pub(crate) next_keep_alive_at: u64,
+pub struct PlayerSessionState {
+    pub entity_id: EntityId,
+    pub cursor: Option<ItemStack>,
+    pub active_container: Option<OpenInventoryWindow>,
+    pub next_non_player_window_id: u8,
+    pub view: ClientView,
+    pub pending_keep_alive_id: Option<i32>,
+    pub last_keep_alive_sent_at: Option<u64>,
+    pub next_keep_alive_at: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -171,21 +175,39 @@ pub struct ServerCore {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct DroppedItemState {
-    pub(crate) snapshot: DroppedItemSnapshot,
-    pub(crate) last_updated_at_ms: u64,
-    pub(crate) pickup_allowed_at_ms: u64,
-    pub(crate) despawn_at_ms: u64,
+pub struct DroppedItemState {
+    pub snapshot: DroppedItemSnapshot,
+    pub last_updated_at_ms: u64,
+    pub pickup_allowed_at_ms: u64,
+    pub despawn_at_ms: u64,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ActiveMiningState {
-    pub(crate) position: BlockPos,
-    pub(crate) started_at_ms: u64,
-    pub(crate) duration_ms: u64,
-    pub(crate) last_stage: Option<u8>,
-    #[expect(dead_code, reason = "tool bonuses are scaffolded but not applied yet")]
-    pub(crate) tool_context: Option<MiningToolSpec>,
+pub struct ActiveMiningState {
+    pub position: BlockPos,
+    pub started_at_ms: u64,
+    pub duration_ms: u64,
+    pub last_stage: Option<u8>,
+    pub tool_context: Option<MiningToolSpec>,
+}
+
+#[derive(Clone, Debug)]
+pub struct OnlinePlayerRuntimeState {
+    pub player: PlayerSnapshot,
+    pub session: PlayerSessionState,
+    pub active_mining: Option<ActiveMiningState>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CoreRuntimeStateBlob {
+    pub snapshot: crate::WorldSnapshot,
+    pub online_players: BTreeMap<PlayerId, OnlinePlayerRuntimeState>,
+    pub dropped_items: BTreeMap<EntityId, DroppedItemState>,
+    pub chest_viewers: BTreeMap<BlockPos, BTreeMap<PlayerId, u8>>,
+    pub next_entity_id: i32,
+    pub next_keep_alive_id: i32,
+    pub keepalive_interval_ms: u64,
+    pub keepalive_timeout_ms: u64,
 }
 
 impl ServerCore {
@@ -264,6 +286,227 @@ impl ServerCore {
     }
 
     #[must_use]
+    pub fn export_runtime_state(&self) -> CoreRuntimeStateBlob {
+        let online_players = self
+            .sessions
+            .player_sessions
+            .iter()
+            .filter_map(|(player_id, session)| {
+                Some((
+                    *player_id,
+                    OnlinePlayerRuntimeState {
+                        player: self.compose_player_snapshot_by_entity(session.entity_id)?,
+                        session: session.clone(),
+                        active_mining: self
+                            .entities
+                            .player_active_mining
+                            .get(&session.entity_id)
+                            .cloned(),
+                    },
+                ))
+            })
+            .collect();
+
+        CoreRuntimeStateBlob {
+            snapshot: self.snapshot(),
+            online_players,
+            dropped_items: self.entities.dropped_items.clone(),
+            chest_viewers: self.world.chest_viewers.clone(),
+            next_entity_id: self.entities.next_entity_id,
+            next_keep_alive_id: self.sessions.next_keep_alive_id,
+            keepalive_interval_ms: self.sessions.keepalive_interval_ms,
+            keepalive_timeout_ms: self.sessions.keepalive_timeout_ms,
+        }
+    }
+
+    #[must_use]
+    pub fn from_runtime_state(config: CoreConfig, blob: CoreRuntimeStateBlob) -> Self {
+        let mut core = Self::from_snapshot(config, blob.snapshot);
+        core.world.chest_viewers = blob.chest_viewers;
+        core.entities.dropped_items = blob.dropped_items;
+        core.entities.next_entity_id = blob.next_entity_id;
+        core.sessions.next_keep_alive_id = blob.next_keep_alive_id;
+        core.sessions.keepalive_interval_ms = blob.keepalive_interval_ms;
+        core.sessions.keepalive_timeout_ms = blob.keepalive_timeout_ms;
+        core.world.world_meta.level_name = core.world.config.level_name.clone();
+        core.world.world_meta.game_mode = core.world.config.game_mode;
+        core.world.world_meta.difficulty = core.world.config.difficulty;
+        core.world.world_meta.max_players = core.world.config.max_players;
+        core.entities.entity_kinds = core
+            .entities
+            .dropped_items
+            .keys()
+            .copied()
+            .map(|entity_id| (entity_id, EntityKind::DroppedItem))
+            .collect();
+
+        for player_id in blob.online_players.keys().copied().collect::<Vec<_>>() {
+            core.world.saved_players.remove(&player_id);
+        }
+
+        for (player_id, online) in blob.online_players {
+            let entity_id = {
+                let mut state = self::state_backend::BaseState::new(&mut core);
+                state.spawn_online_player(online.player, 0, Some(online.session.entity_id))
+            };
+            debug_assert_eq!(entity_id, online.session.entity_id);
+            if let Some(session) = core.sessions.player_sessions.get_mut(&player_id) {
+                *session = online.session;
+            }
+            if let Some(active_mining) = online.active_mining {
+                core.entities
+                    .player_active_mining
+                    .insert(entity_id, active_mining);
+            } else {
+                core.entities.player_active_mining.remove(&entity_id);
+            }
+        }
+
+        core
+    }
+
+    #[must_use]
+    pub fn session_resync_events(&self, player_id: PlayerId) -> Vec<TargetedEvent> {
+        let Some(session) = self.player_session(player_id) else {
+            return Vec::new();
+        };
+        let Some(player) = self.compose_player_snapshot_by_entity(session.entity_id) else {
+            return Vec::new();
+        };
+        let Some(inventory) = self.entities.player_inventory.get(&session.entity_id) else {
+            return Vec::new();
+        };
+        let Some(selected_hotbar_slot) =
+            self.entities.player_selected_hotbar.get(&session.entity_id)
+        else {
+            return Vec::new();
+        };
+
+        let mut events = vec![TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::PlayBootstrap {
+                player,
+                entity_id: session.entity_id,
+                world_meta: self.world.world_meta.clone(),
+                view_distance: self.world.config.view_distance,
+            },
+        }];
+        let visible_chunks = session
+            .view
+            .loaded_chunks
+            .iter()
+            .filter_map(|chunk_pos| self.world.chunks.get(chunk_pos).cloned())
+            .collect::<Vec<_>>();
+        events.push(TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::ChunkBatch {
+                chunks: visible_chunks,
+            },
+        });
+        events.extend(self.entities.players_by_player_id.iter().filter_map(
+            |(other_player_id, entity_id)| {
+                if *other_player_id == player_id || *entity_id == session.entity_id {
+                    return None;
+                }
+                let player = self.compose_player_snapshot_by_entity(*entity_id)?;
+                session
+                    .view
+                    .loaded_chunks
+                    .contains(&player.position.chunk_pos())
+                    .then_some(TargetedEvent {
+                        target: EventTarget::Player(player_id),
+                        event: CoreEvent::EntitySpawned {
+                            entity_id: *entity_id,
+                            player,
+                        },
+                    })
+            },
+        ));
+        events.extend(
+            self.entities
+                .dropped_items
+                .iter()
+                .filter_map(|(entity_id, item)| {
+                    session
+                        .view
+                        .loaded_chunks
+                        .contains(&item.snapshot.position.chunk_pos())
+                        .then_some(TargetedEvent {
+                            target: EventTarget::Player(player_id),
+                            event: CoreEvent::DroppedItemSpawned {
+                                entity_id: *entity_id,
+                                item: item.snapshot.clone(),
+                            },
+                        })
+                }),
+        );
+        events.extend(self.entities.player_active_mining.iter().filter_map(
+            |(breaker_entity_id, mining)| {
+                session
+                    .view
+                    .loaded_chunks
+                    .contains(&mining.position.chunk_pos())
+                    .then_some(TargetedEvent {
+                        target: EventTarget::Player(player_id),
+                        event: CoreEvent::BlockBreakingProgress {
+                            breaker_entity_id: *breaker_entity_id,
+                            position: mining.position,
+                            stage: mining.last_stage,
+                            duration_ms: mining.duration_ms,
+                        },
+                    })
+            },
+        ));
+
+        events.extend(if let Some(window) = session.active_container.as_ref() {
+            let mut events = vec![TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::InventoryContents {
+                    window_id: window.window_id,
+                    container: window.container,
+                    contents: window.contents(inventory),
+                },
+            }];
+            events.extend(
+                window
+                    .property_entries()
+                    .into_iter()
+                    .map(|(property_id, value)| TargetedEvent {
+                        target: EventTarget::Player(player_id),
+                        event: CoreEvent::ContainerPropertyChanged {
+                            window_id: window.window_id,
+                            property_id,
+                            value,
+                        },
+                    }),
+            );
+            events
+        } else {
+            vec![TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::InventoryContents {
+                    window_id: 0,
+                    container: InventoryContainer::Player,
+                    contents: InventoryWindowContents::player(inventory.clone()),
+                },
+            }]
+        });
+        events.push(TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::SelectedHotbarSlotChanged {
+                slot: *selected_hotbar_slot,
+            },
+        });
+        events.push(TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::CursorChanged {
+                stack: session.cursor.clone(),
+            },
+        });
+        events
+    }
+
+    #[must_use]
     pub fn player_summary(&self) -> PlayerSummary {
         PlayerSummary {
             online_players: self.sessions.player_sessions.len(),
@@ -305,7 +548,6 @@ impl ServerCore {
         self.entities.player_active_mining.get(&entity_id)
     }
 
-    #[cfg(test)]
     pub(super) fn compose_player_snapshot_by_entity(
         &self,
         entity_id: EntityId,

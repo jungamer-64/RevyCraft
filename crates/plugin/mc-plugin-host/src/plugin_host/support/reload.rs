@@ -5,7 +5,7 @@ use super::{
     StorageGeneration, StorageRequest, StorageResponse,
 };
 
-pub(crate) fn migrate_gameplay_sessions(
+pub(crate) fn validate_gameplay_session_migration(
     managed: &ManagedGameplayPlugin,
     generation: &Arc<GameplayGeneration>,
     runtime: &RuntimeReloadContext,
@@ -54,7 +54,7 @@ pub(crate) fn protocol_reload_compatible(
     compatible
 }
 
-pub(crate) fn migrate_protocol_sessions(
+pub(crate) fn validate_protocol_session_migration(
     managed: &ManagedProtocolPlugin,
     generation: &Arc<ProtocolGeneration>,
     protocol_sessions: &[ProtocolReloadSession],
@@ -85,9 +85,6 @@ pub(crate) fn migrate_protocol_sessions(
         }
     }
 
-    managed
-        .adapter
-        .swap_generation_while_reloading(Arc::clone(generation));
     Ok(true)
 }
 

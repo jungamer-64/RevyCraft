@@ -1,5 +1,5 @@
 use crate::RuntimeError;
-use crate::runtime::{RuntimeServer, SessionMessage, SessionState, now_ms};
+use crate::runtime::{RuntimeServer, SessionControl, SessionMessage, SessionState, now_ms};
 use mc_core::{
     CoreCommand, CoreEvent, EventTarget, PlayerSummary, RuntimeCommand, SessionCommand,
     TargetedEvent,
@@ -142,9 +142,13 @@ impl RuntimeServer {
                 }
             }
             for recipient in backpressured_sessions {
-                let _ = recipient.control_tx.send(Some(
-                    "server dropped the session because the outbound queue was full".to_string(),
-                ));
+                let _ = recipient
+                    .control_tx
+                    .send(SessionControl::Terminate {
+                        reason: "server dropped the session because the outbound queue was full"
+                            .to_string(),
+                    })
+                    .await;
             }
         }
     }

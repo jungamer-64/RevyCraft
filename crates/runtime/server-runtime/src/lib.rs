@@ -7,11 +7,11 @@ pub mod config;
 pub mod runtime;
 
 pub use self::api::{
-    AdminConfigReloadView, AdminGenerationCountView, AdminGenerationReloadView,
+    AdminArtifactsReloadView, AdminCoreReloadView, AdminFullReloadView, AdminGenerationCountView,
     AdminListenerBindingView, AdminNamedCountView, AdminPermission, AdminPhaseCountView,
-    AdminPluginHostView, AdminPluginsReloadView, AdminPrincipal, AdminRequest, AdminResponse,
-    AdminSessionSummaryView, AdminSessionView, AdminSessionsView, AdminStatusView,
-    AdminTransportCountView, ListenerBinding, PluginFailureAction, PluginFailureMatrix,
-    PluginHostStatusSnapshot,
+    AdminPluginHostView, AdminPrincipal, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
+    AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
+    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, ListenerBinding,
+    PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot, RuntimeReloadMode,
 };
 pub use self::error::RuntimeError;

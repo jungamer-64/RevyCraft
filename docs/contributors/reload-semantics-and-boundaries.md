@@ -1,101 +1,118 @@
-# reload の意味論と plugin 境界
+# reload の意味論と reloadable boundary
 
-この文書は、RevyCraft の reload が内部でどう成立しているかを contributors 向けに整理した正本です。operator 向けの command 説明ではなく、selection / topology / consistency gate / failure policy の観点でまとめます。
+この文書は、RevyCraft の reload を contributors 向けに整理した正本です。ここで扱うのは target design としての `reload runtime <mode>` であり、旧 `reload plugins` / `reload generation` / `reload config` の公開 surface は扱いません。operator 向けの command 説明は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、`core` migration の詳細設計は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) を参照してください。
 
 ## 公開 reload surface
 
-外向けの入口は `ServerSupervisor` です。
+外向けの入口は `ServerSupervisor::reload_runtime(mode)` です。
 
-- `reload_plugins()`
-- `reload_generation()`
-- `reload_config()`
+- `reload runtime artifacts`
+- `reload runtime topology`
+- `reload runtime core`
+- `reload runtime full`
 
-admin surface からは `reload plugins`、`reload generation`、`reload config` として見えますが、実装上の本体は [`../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs) にあります。
+admin surface、gRPC、permission もこの 4 mode を前提にそろえます。
 
 ## reload の前提
 
-reload は reload-capable supervisor boot が必要です。`server-bootstrap` の通常起動では plugin host を渡して boot するので reload 可能ですが、reload host を持たない boot path では manual reload も watch reload も使えません。
+reload は reload-capable supervisor boot が必要です。`server-bootstrap` の通常起動では reload host を伴う boot path を使い、manual reload と watch reload を許可します。reload host を持たない custom boot path では manual reload も watch reload も使えません。
 
-`plugins.reload_watch` や `topology.reload_watch` は、reload host なしの builder では config error になります。
+`plugins.reload_watch` や `topology.reload_watch` は watch trigger であり、実際に実行する処理は `reload runtime full` と同じ意味論を持ちます。
 
-## scope ごとの内部動作
+## mode ごとの内部動作
 
-### `reload plugins`
+### `artifacts`
 
-`reload plugins` は config source を再読込しません。現在の selection config をそのまま使い、write consistency lock を取ったうえで `reconcile_runtime_selection(...)` を実行します。
+active selection を固定したまま managed plugin の artifact 差分だけを reload します。
 
 流れ:
 
 1. write consistency lock を取得
-2. live protocol / gameplay session snapshot と world snapshot から `RuntimeReloadContext` を作る
-3. 現在の selection config を使って plugin host を reconcile する
-4. candidate `LoadedPluginSet` から `ResolvedRuntimeSelection` を再構築する
-5. selection を差し替える
+2. live protocol / gameplay session snapshot と `core` runtime blob を固定
+3. current selection config で plugin host を reconcile
+4. protocol / gameplay / storage generation を migration
+5. selection を差し替え
 
-generation swap は行わず、config の読み直しもしません。
+core swap と topology generation swap は行いません。
 
-### `reload generation`
+### `topology`
 
-`reload generation` は最新 config を load しますが、active config にコピーするのは `network` と `topology` だけです。
+最新 config を読みますが、candidate に反映するのは `network` と `topology` だけです。
 
 流れ:
 
 1. restart-required な static 差分が無いことを確認
-2. 現在の config を clone
-3. loaded config から `network` と `topology` だけ差し替える
-4. candidate topology generation を materialize する
-5. generation を activate し、selection 側には `network` / `topology` だけ反映する
+2. current config を clone
+3. loaded config から `network` / `topology` だけ差し替える
+4. candidate topology generation を materialize
+5. active generation を切り替え、旧 generation を draining へ移す
 
-allowlist、profile selection、buffer limit、failure policy、admin principal map は current state を維持します。
+selection と core は current state を維持します。
 
-### `reload config`
+### `core`
 
-`reload config` は selection と topology をまとめて更新します。
+selection / topology / transport を変えずに `ServerCore` だけを migration します。
 
 流れ:
 
 1. write consistency lock を取得
-2. restart-required な static 差分が無いことを確認
-3. loaded config をもとに plugin host の runtime selection を reconcile
-4. candidate `ResolvedRuntimeSelection` を構築
-5. candidate topology generation を materialize
-6. generation reload 成功後に selection を差し替える
+2. current selection と active topology generation を固定
+3. live runtime から `CoreRuntimeStateBlob` を export
+4. candidate core を materialize
+5. play session を candidate core へ reattach
+6. protocol / gameplay へ必要な resync event を発行
+7. 成功時のみ core owner を swap
 
-candidate selection の構築か generation reload のどちらかで失敗した場合、plugin host には best-effort で previous selection を戻します。
+失敗時は旧 core を維持し、session を切断しません。
+
+### `full`
+
+selection / topology / core migration を単一 transaction として扱います。
+
+流れ:
+
+1. write consistency lock を取得
+2. loaded config から candidate selection を resolve
+3. candidate topology generation を materialize
+4. `CoreRuntimeStateBlob` を export して candidate core を materialize
+5. plugin generation migration と session reattach を実行
+6. commit 条件がそろった場合のみ selection / topology / core を一括反映
+
+`full` は `config-scoped reload` の別名ではなく、artifact / topology / core をまとめた公開 mode です。
 
 ## consistency gate
 
-reload の中心にあるのが `ReloadCoordinator` の `consistency_gate` です。これは async `RwLock<()>` で、次の目的に使います。
+reload の中心にあるのは `ReloadCoordinator` の `consistency_gate` です。これは async `RwLock<()>` で、次の目的に使います。
 
-- session spawn や event dispatch 側は read lock を取る
+- session spawn、command dispatch、event dispatch、tick 側は read lock を取る
 - reload 側は write lock を取る
 
 結果として次が成り立ちます。
 
-- in-flight の整合性 reader がいるあいだ manual reload / watch reload は待機する
+- in-flight の reader がいるあいだ manual reload / watch reload は待機する
 - reload が write lock を持っているあいだ、新しい session command の進行は止まる
+- `full` は selection / topology / core の commit point まで同じ write lock の中で完結する
 
-この性質は `runtime/tests/reload/protocol.rs` でも直接検証されています。
+この性質は protocol reload 系テストで検証されている性質をそのまま設計の基盤にし、`core` migration でも同じ gate を使います。
 
-## watch reload
+## rollback と transaction 境界
 
-watch reload は `reload config` の簡略版ではなく、実質的に config-scoped reload と同じ意味を持ちます。artifact 差分だけではなく selection と topology を再評価します。
+`artifacts` と `topology` は現行実装に近い best-effort reload ですが、`core` と `full` は rollback-first で扱います。
 
-また、loaded config か active config のどちらかで watch flag が有効なら watch tick は継続されます。これは「watch を off にした変更」も次回 tick で観測できるようにするためです。
+- `artifacts`
+  candidate generation failure は旧 selection を維持する
+- `topology`
+  candidate listener / routing materialize failure は旧 generation を維持する
+- `core`
+  candidate core materialize failure、reattach failure、resync failure は old core 維持で rollback する
+- `full`
+  core migration が失敗した時点では selection / topology も commit しない
 
-## rollback しきらない理由
+特に `full` は旧 `reload config` より transaction 性を強く持ちます。
 
-reload は全体として transactional rollback ではありません。
+## failure policy の意味
 
-- plugin host 側の reconcile と topology generation swap は別段階
-- generation swap 後に selection replace が走る
-- failure policy によっては pending fatal が残る
-
-したがって「途中まで成功した変更をすべて元に戻す」保証はありません。実装は failure 時に previous selection の restore を試みますが、これは best-effort です。
-
-## failure policy の内部的な意味
-
-既定値は次です。
+plugin kind ごとの failure policy は引き続き次です。
 
 - protocol = `quarantine`
 - gameplay = `quarantine`
@@ -103,47 +120,45 @@ reload は全体として transactional rollback ではありません。
 - auth = `skip`
 - admin-ui = `skip`
 
-許可される action は kind ごとに違います。
-
-- protocol / gameplay / admin-ui
-  `quarantine` / `skip` / `fail-fast`
-- storage / auth
-  `skip` / `fail-fast`
-
 読み方:
 
 - `skip`
-  candidate failure を見送り、旧世代を維持する
+  壊れた candidate を見送り、旧 generation を維持する
 - `quarantine`
   壊れた candidate artifact や active plugin を隔離する
 - `fail-fast`
-  runtime 全体の重大障害として扱い、pending fatal や graceful stop につなぐ
+  runtime 全体の重大障害として扱う
 
-## generation と plugin generation
+ただし `core` migration failure は plugin failure policy ではなく runtime rollback policy で扱います。既定動作は rollback-first で、rollback 不可能な不整合だけを fail-fast 条件にします。
+
+## generation と migration の境界
 
 runtime には少なくとも 2 種類の世代があります。
 
 - topology generation
-  listener と routing の世代です。new connection がどの listener / adapter に入るかを決めます。
+  listener と routing の世代
 - plugin generation
-  protocol / gameplay / storage / auth / admin-ui plugin 側の世代です。
+  protocol / gameplay / storage / auth / admin-ui plugin の世代
 
-session status に両方が出るため、reload 後に「どの接続がどの世代へ pin されているか」を追えます。
+`core` migration は topology generation のような別番号を持つ公開概念ではなく、live session を同一 connection / entity identity のまま新しい core owner に張り替える内部 operation として扱います。
 
-## protocol と gameplay の境界
+## protocol / gameplay / core の境界
 
-reload を読むときに重要なのは、protocol と gameplay が近いようで責務が違うことです。
+reload を読むときの責務分割は次です。
 
 - protocol
   wire format、routing、transport 固有 session state、session transfer blob を持つ
 - gameplay
   semantic `GameplayCommand` を評価し、callback 単位の `GameplayTransaction` を commit する
+- core
+  world / entity / inventory / keepalive / dropped item / active mining を含む canonical runtime state を持つ
 
-この分離のおかげで、version 固有 inventory state や active window のようなものは protocol reload 側で扱い、semantic rule の差分は gameplay reload 側で扱えます。
+`core` を reloadable boundary に出すことで、protocol 固有 session blob と gameplay 固有 session blob に加えて、world-semantic な live state も migration 対象へ入ります。
 
 ## 読む順番
 
-1. [`../../crates/runtime/server-runtime/src/runtime/reload_coordinator.rs`](../../crates/runtime/server-runtime/src/runtime/reload_coordinator.rs)
-2. [`../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs)
-3. [`../../crates/runtime/server-runtime/src/runtime/topology_manager.rs`](../../crates/runtime/server-runtime/src/runtime/topology_manager.rs)
-4. [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)
+1. [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
+2. [`../../crates/runtime/server-runtime/src/runtime/reload_coordinator.rs`](../../crates/runtime/server-runtime/src/runtime/reload_coordinator.rs)
+3. [`../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs)
+4. [`../../crates/runtime/server-runtime/src/runtime/topology_manager.rs`](../../crates/runtime/server-runtime/src/runtime/topology_manager.rs)
+5. [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)

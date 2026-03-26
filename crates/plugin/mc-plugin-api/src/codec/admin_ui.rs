@@ -24,12 +24,30 @@ impl AdminPrincipal {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RuntimeReloadMode {
+    Artifacts,
+    Topology,
+    Core,
+    Full,
+}
+
+impl RuntimeReloadMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Artifacts => "artifacts",
+            Self::Topology => "topology",
+            Self::Core => "core",
+            Self::Full => "full",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AdminPermission {
     Status,
     Sessions,
-    ReloadConfig,
-    ReloadPlugins,
-    ReloadGeneration,
+    ReloadRuntime,
     Shutdown,
 }
 
@@ -39,9 +57,7 @@ impl AdminPermission {
         match self {
             Self::Status => "status",
             Self::Sessions => "sessions",
-            Self::ReloadConfig => "reload-config",
-            Self::ReloadPlugins => "reload-plugins",
-            Self::ReloadGeneration => "reload-generation",
+            Self::ReloadRuntime => "reload-runtime",
             Self::Shutdown => "shutdown",
         }
     }
@@ -80,9 +96,7 @@ pub enum AdminRequest {
     Help,
     Status,
     Sessions,
-    ReloadConfig,
-    ReloadPlugins,
-    ReloadGeneration,
+    ReloadRuntime { mode: RuntimeReloadMode },
     Shutdown,
 }
 
@@ -93,9 +107,7 @@ impl AdminRequest {
             Self::Help => None,
             Self::Status => Some(AdminPermission::Status),
             Self::Sessions => Some(AdminPermission::Sessions),
-            Self::ReloadConfig => Some(AdminPermission::ReloadConfig),
-            Self::ReloadPlugins => Some(AdminPermission::ReloadPlugins),
-            Self::ReloadGeneration => Some(AdminPermission::ReloadGeneration),
+            Self::ReloadRuntime { .. } => Some(AdminPermission::ReloadRuntime),
             Self::Shutdown => Some(AdminPermission::Shutdown),
         }
     }
@@ -191,12 +203,12 @@ pub struct AdminSessionsView {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminPluginsReloadView {
+pub struct AdminArtifactsReloadView {
     pub reloaded_plugin_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminGenerationReloadView {
+pub struct AdminTopologyReloadView {
     pub activated_generation_id: u64,
     pub retired_generation_ids: Vec<u64>,
     pub applied_config_change: bool,
@@ -204,9 +216,26 @@ pub struct AdminGenerationReloadView {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminConfigReloadView {
+pub struct AdminCoreReloadView {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminFullReloadView {
     pub reloaded_plugin_ids: Vec<String>,
-    pub generation: AdminGenerationReloadView,
+    pub topology: AdminTopologyReloadView,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdminRuntimeReloadDetail {
+    Artifacts(AdminArtifactsReloadView),
+    Topology(AdminTopologyReloadView),
+    Core(AdminCoreReloadView),
+    Full(AdminFullReloadView),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminRuntimeReloadView {
+    pub mode: RuntimeReloadMode,
+    pub detail: AdminRuntimeReloadDetail,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,9 +243,7 @@ pub enum AdminResponse {
     Help,
     Status(AdminStatusView),
     Sessions(AdminSessionsView),
-    ReloadConfig(AdminConfigReloadView),
-    ReloadPlugins(AdminPluginsReloadView),
-    ReloadGeneration(AdminGenerationReloadView),
+    ReloadRuntime(AdminRuntimeReloadView),
     ShutdownScheduled,
     PermissionDenied {
         principal: AdminPrincipal,

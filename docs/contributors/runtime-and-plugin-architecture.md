@@ -1,6 +1,6 @@
 # runtime と plugin architecture
 
-この文書は、runtime / plugin host / session lifecycle の責務境界をまとめた正本です。operator 向けの config key や reload 手順そのものは [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、reload の内部意味論は [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md) を参照してください。
+この文書は、runtime / plugin host / session lifecycle の責務境界をまとめた正本です。ここでは `reload runtime <mode>` を前提に、`core` を reloadable boundary の内側へ移した target architecture を説明します。operator 向けの config key や command surface は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、reload の内部意味論は [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)、`core` migration の詳細は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) を参照してください。
 
 ## レイヤー構成
 
@@ -26,7 +26,7 @@
 - `TopologyManager`
   active / draining generation、listener worker、generation swap を持ちます。
 - `RuntimeKernel`
-  `ServerCore`、tick / save、dirty flag、world_dir を持ちます。
+  単なる `ServerCore` owner ではなく、reloadable `core runtime` owner として `ServerCore`、tick / save、dirty flag、world_dir、`core` migration の export / materialize / reattach / swap / rollback を持ちます。
 - `SessionRegistry`
   live session handle、accepted queue、connection id、session task を持ちます。
 - `ReloadCoordinator`
@@ -82,13 +82,13 @@ Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host 
 - gameplay plugin
   semantic な `GameplayCommand` を評価し、invocation-scoped `GameplayTransaction` を通じて world / entity を直接更新します。
 - storage plugin
-  world snapshot の load / save / import / export を担います。
+  world snapshot の load / save / import / export を担います。`core` migration blob は process-local であり、persistent storage schema とは共有しません。
 - auth plugin
   Java offline / online、Bedrock offline / XBL の認証を担います。
 - admin-ui plugin
   local console の parse / render を担います。
 
-`mc-core` 自体は semantic command / event / inventory state machine に徹します。raw slot layout、JE の echo / reject、Bedrock の active window rewrite のような version / wire 差分は protocol plugin 側に残します。
+`mc-core` 自体は semantic command / event / inventory state machine に徹します。raw slot layout、JE の echo / reject、Bedrock の active window rewrite のような version / wire 差分は protocol plugin 側に残します。一方で reloadable boundary の観点では、`mc-core` は world snapshot だけではなく keepalive、dropped item、active mining、open window のような live-only state も含む `core runtime` として扱います。
 
 ## bootstrap 時の selection
 
@@ -101,6 +101,8 @@ Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host 
 - `LoadedPluginSet` から runtime が使う handle 群を確定する
 
 このため、auth mode の整合や gameplay profile の存在確認は session 開始前にかなり弾かれます。
+
+boot 時点では storage snapshot から `ServerCore` を materialize しますが、reload 時は同じ path を使いません。reload は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) で定義する `CoreRuntimeStateBlob` と `SessionReattachRecord` を使い、online player を saved-player に落とさずに candidate core へ再接続禁止で張り替えます。
 
 ## session lifecycle
 
@@ -128,9 +130,26 @@ play phase では次の流れになります。
 3. gameplay-owned command は `GameplayCommand` として gameplay plugin callback へ渡される
 4. gameplay plugin は `GameplayTransaction` 上で read / write し、`Ok(())` のときだけ commit される
 5. `mc-core` / commit 層が canonical `CoreEvent` を生成
-5. protocol plugin が `CoreEvent` を wire packet 群へ encode
+6. protocol plugin が `CoreEvent` を wire packet 群へ encode
 
 型の細かい流れは [`core-command-event-flow.md`](core-command-event-flow.md) を参照してください。
+
+play 中 session は `reload runtime core` と `reload runtime full` の primary target です。protocol 固有 session blob、gameplay 固有 session blob、`core` runtime blob を別々に export / import しつつ、connection 自体は切らない前提で再アタッチします。
+
+## reload runtime の責務分割
+
+公開 reload surface は `reload runtime artifacts / topology / core / full` を前提にします。
+
+- `artifacts`
+  selection を固定したまま protocol / gameplay / storage generation を入れ替える
+- `topology`
+  listener / routing generation を入れ替える
+- `core`
+  `ServerCore` を live session を切らずに差し替える
+- `full`
+  selection / topology / core migration を単一 transaction として扱う
+
+この分割により、protocol 固有 session state、gameplay callback state、world-semantic state を別々に export / import しつつ、commit point は runtime 側で一元管理できます。
 
 ## admin control plane
 
@@ -145,13 +164,14 @@ operator surface は `server-runtime` に集約されています。
 - gRPC transport
   plugin を経由せず `AdminControlPlaneHandle` を直接叩く
 
-`reload config` で admin-ui profile や remote principal map が変わっても、進行中 request は開始時点の snapshot で完了し、次の request から新設定へ切り替わります。
+target design では admin reload surface は `reload runtime <mode>` に統一されます。permission も `reload-runtime` に一本化し、進行中 request は開始時点の snapshot で完了し、次の request から新設定へ切り替わります。
 
 ## どこで reload を読むか
 
 reload を深く追うときは次を順に読むと把握しやすいです。
 
-1. [`../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs)
-2. [`../../crates/runtime/server-runtime/src/runtime/topology_manager.rs`](../../crates/runtime/server-runtime/src/runtime/topology_manager.rs)
-3. [`../../crates/runtime/server-runtime/src/runtime/reload_coordinator.rs`](../../crates/runtime/server-runtime/src/runtime/reload_coordinator.rs)
-4. [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)
+1. [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
+2. [`../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs)
+3. [`../../crates/runtime/server-runtime/src/runtime/topology_manager.rs`](../../crates/runtime/server-runtime/src/runtime/topology_manager.rs)
+4. [`../../crates/runtime/server-runtime/src/runtime/reload_coordinator.rs`](../../crates/runtime/server-runtime/src/runtime/reload_coordinator.rs)
+5. [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)

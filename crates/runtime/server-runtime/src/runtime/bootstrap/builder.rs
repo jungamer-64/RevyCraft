@@ -76,6 +76,8 @@ pub(crate) async fn boot_server(
         topology: TopologyManager::new(active_generation, listener_workers, 2),
         kernel: RuntimeKernel::new(core, storage_profile, config.bootstrap.world_dir.clone()),
         sessions,
+        #[cfg(test)]
+        fail_nth_reattach_send: std::sync::atomic::AtomicUsize::new(0),
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();

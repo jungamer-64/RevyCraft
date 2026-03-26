@@ -14,7 +14,12 @@ use std::collections::BTreeSet;
 use uuid::Uuid;
 
 pub use self::core::transaction::GameplayTransaction;
-pub use self::core::{ClientView, CoreConfig, ServerCore};
+pub use self::core::{
+    ActiveMiningState, ChestWindowBinding, ChestWindowState, ClientView, ContainerDescriptor,
+    CoreConfig, CoreRuntimeStateBlob, DroppedItemState, FurnaceWindowBinding, FurnaceWindowState,
+    OnlinePlayerRuntimeState, OpenInventoryWindow, OpenInventoryWindowState, PlayerSessionState,
+    ServerCore,
+};
 pub use self::events::{
     CoreCommand, CoreEvent, EventTarget, GameplayCommand, InventoryClickButton,
     InventoryClickTarget, InventoryClickValidation, InventoryTransactionContext, PlayerSummary,

@@ -31,8 +31,12 @@ fn remote_admin_principal(
     }
 }
 
+fn reload_request(mode: crate::runtime::RuntimeReloadMode) -> crate::runtime::AdminRequest {
+    crate::runtime::AdminRequest::ReloadRuntime { mode }
+}
+
 #[tokio::test]
-async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_command()
+async fn admin_control_plane_reload_runtime_full_updates_ui_and_permissions_for_next_command()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
@@ -42,7 +46,7 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
     let mut initial = admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
     initial.admin.local_console_permissions = vec![
         crate::config::AdminPermission::Status,
-        crate::config::AdminPermission::ReloadConfig,
+        crate::config::AdminPermission::ReloadRuntime,
     ];
     initial.plugins.buffer_limits.protocol_response_bytes = 4096;
     write_server_toml(&config_path, &initial)?;
@@ -55,10 +59,10 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
     let control = server.admin_control_plane();
     assert_eq!(
         control
-            .parse_local_command("reload config")
+            .parse_local_command("reload runtime full")
             .await
             .map_err(RuntimeError::Config)?,
-        crate::runtime::AdminRequest::ReloadConfig
+        reload_request(crate::runtime::RuntimeReloadMode::Full)
     );
     assert!(matches!(
         control
@@ -82,18 +86,18 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
     let response = control
         .execute(
             crate::runtime::AdminPrincipal::LocalConsole,
-            crate::runtime::AdminRequest::ReloadConfig,
+            reload_request(crate::runtime::RuntimeReloadMode::Full),
         )
         .await;
     assert!(matches!(
         response,
-        crate::runtime::AdminResponse::ReloadConfig(_)
+        crate::runtime::AdminResponse::ReloadRuntime(_)
     ));
     let rendered = control
         .render_local_response(&response)
         .await
         .map_err(RuntimeError::Config)?;
-    assert!(rendered.contains("reload config"));
+    assert!(rendered.contains("reload runtime full"));
     assert_eq!(
         control
             .parse_local_command("status")
@@ -106,11 +110,11 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
         control
             .execute(
                 crate::runtime::AdminPrincipal::LocalConsole,
-                crate::runtime::AdminRequest::ReloadPlugins,
+                reload_request(crate::runtime::RuntimeReloadMode::Artifacts),
             )
             .await,
         crate::runtime::AdminResponse::PermissionDenied {
-            permission: crate::runtime::AdminPermission::ReloadPlugins,
+            permission: crate::runtime::AdminPermission::ReloadRuntime,
             ..
         }
     ));
@@ -139,7 +143,7 @@ async fn admin_control_plane_reload_config_updates_ui_and_permissions_for_next_c
 }
 
 #[tokio::test]
-async fn admin_control_plane_parse_reload_generation_uses_new_command_name()
+async fn admin_control_plane_parse_reload_runtime_topology_uses_new_command_name()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
@@ -154,10 +158,10 @@ async fn admin_control_plane_parse_reload_generation_uses_new_command_name()
 
     assert_eq!(
         control
-            .parse_local_command("reload generation")
+            .parse_local_command("reload runtime topology")
             .await
             .map_err(RuntimeError::Config)?,
-        crate::runtime::AdminRequest::ReloadGeneration
+        reload_request(crate::runtime::RuntimeReloadMode::Topology)
     );
     assert!(
         control
@@ -170,7 +174,7 @@ async fn admin_control_plane_parse_reload_generation_uses_new_command_name()
 }
 
 #[tokio::test]
-async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
+async fn admin_control_plane_reload_runtime_artifacts_ignores_pending_config_changes()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
@@ -180,8 +184,7 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
     let mut initial = admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
     initial.admin.local_console_permissions = vec![
         crate::config::AdminPermission::Status,
-        crate::config::AdminPermission::ReloadConfig,
-        crate::config::AdminPermission::ReloadPlugins,
+        crate::config::AdminPermission::ReloadRuntime,
     ];
     initial.plugins.buffer_limits.protocol_response_bytes = 4096;
     write_server_toml(&config_path, &initial)?;
@@ -197,7 +200,7 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
     updated.admin.ui_profile = "missing-ui".into();
     updated.admin.local_console_permissions = vec![
         crate::config::AdminPermission::Status,
-        crate::config::AdminPermission::ReloadConfig,
+        crate::config::AdminPermission::ReloadRuntime,
     ];
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
     write_server_toml(&config_path, &updated)?;
@@ -206,10 +209,10 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
         control
             .execute(
                 crate::runtime::AdminPrincipal::LocalConsole,
-                crate::runtime::AdminRequest::ReloadPlugins,
+                reload_request(crate::runtime::RuntimeReloadMode::Artifacts),
             )
             .await,
-        crate::runtime::AdminResponse::ReloadPlugins(_)
+        crate::runtime::AdminResponse::ReloadRuntime(_)
     ));
     assert_eq!(
         server
@@ -233,12 +236,12 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
     let response = control
         .execute(
             crate::runtime::AdminPrincipal::LocalConsole,
-            crate::runtime::AdminRequest::ReloadConfig,
+            reload_request(crate::runtime::RuntimeReloadMode::Full),
         )
         .await;
     assert!(matches!(
         response,
-        crate::runtime::AdminResponse::ReloadConfig(_)
+        crate::runtime::AdminResponse::ReloadRuntime(_)
     ));
     assert_eq!(
         control
@@ -262,20 +265,18 @@ async fn admin_control_plane_reload_plugins_ignores_pending_config_changes()
         control
             .execute(
                 crate::runtime::AdminPrincipal::LocalConsole,
-                crate::runtime::AdminRequest::ReloadPlugins,
+                reload_request(crate::runtime::RuntimeReloadMode::Artifacts),
             )
             .await,
-        crate::runtime::AdminResponse::PermissionDenied {
-            permission: crate::runtime::AdminPermission::ReloadPlugins,
-            ..
-        }
+        crate::runtime::AdminResponse::ReloadRuntime(_)
     ));
 
     server.shutdown().await
 }
 
 #[tokio::test]
-async fn admin_control_plane_reload_config_rejects_bootstrap_changes() -> Result<(), RuntimeError> {
+async fn admin_control_plane_reload_runtime_full_rejects_bootstrap_changes()
+-> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
@@ -298,7 +299,7 @@ async fn admin_control_plane_reload_config_rejects_bootstrap_changes() -> Result
     let response = control
         .execute(
             crate::runtime::AdminPrincipal::LocalConsole,
-            crate::runtime::AdminRequest::ReloadConfig,
+            reload_request(crate::runtime::RuntimeReloadMode::Full),
         )
         .await;
     let crate::runtime::AdminResponse::Error { message } = &response else {
@@ -317,7 +318,7 @@ async fn admin_control_plane_reload_config_rejects_bootstrap_changes() -> Result
 }
 
 #[tokio::test]
-async fn admin_control_plane_reload_config_updates_remote_tokens_for_next_request()
+async fn admin_control_plane_reload_runtime_full_updates_remote_tokens_for_next_request()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
@@ -354,9 +355,11 @@ async fn admin_control_plane_reload_config_updates_remote_tokens_for_next_reques
         .expect("alpha token should authenticate");
     assert!(control.status(&alpha_subject).await.is_ok());
     assert!(matches!(
-        control.reload_plugins(&alpha_subject).await,
+        control
+            .reload_runtime(&alpha_subject, crate::runtime::RuntimeReloadMode::Artifacts)
+            .await,
         Err(crate::runtime::AdminCommandError::PermissionDenied {
-            permission: crate::runtime::AdminPermission::ReloadPlugins,
+            permission: crate::runtime::AdminPermission::ReloadRuntime,
             ..
         })
     ));
@@ -370,7 +373,7 @@ async fn admin_control_plane_reload_config_updates_remote_tokens_for_next_reques
             "beta-token",
             vec![
                 crate::config::AdminPermission::Status,
-                crate::config::AdminPermission::ReloadPlugins,
+                crate::config::AdminPermission::ReloadRuntime,
             ],
         ),
     );
@@ -379,12 +382,12 @@ async fn admin_control_plane_reload_config_updates_remote_tokens_for_next_reques
     let response = control
         .execute(
             crate::runtime::AdminPrincipal::LocalConsole,
-            crate::runtime::AdminRequest::ReloadConfig,
+            reload_request(crate::runtime::RuntimeReloadMode::Full),
         )
         .await;
     assert!(matches!(
         response,
-        crate::runtime::AdminResponse::ReloadConfig(_)
+        crate::runtime::AdminResponse::ReloadRuntime(_)
     ));
 
     assert!(matches!(
@@ -396,7 +399,9 @@ async fn admin_control_plane_reload_config_updates_remote_tokens_for_next_reques
         Err(crate::runtime::AdminCommandError::InvalidSubject { .. })
     ));
     assert!(matches!(
-        control.reload_plugins(&alpha_subject).await,
+        control
+            .reload_runtime(&alpha_subject, crate::runtime::RuntimeReloadMode::Artifacts)
+            .await,
         Err(crate::runtime::AdminCommandError::InvalidSubject { .. })
     ));
 
@@ -404,13 +409,18 @@ async fn admin_control_plane_reload_config_updates_remote_tokens_for_next_reques
         .authenticate_remote_token("beta-token")
         .await
         .expect("beta token should authenticate after reload");
-    assert!(control.reload_plugins(&beta_subject).await.is_ok());
+    assert!(
+        control
+            .reload_runtime(&beta_subject, crate::runtime::RuntimeReloadMode::Artifacts)
+            .await
+            .is_ok()
+    );
 
     server.shutdown().await
 }
 
 #[tokio::test]
-async fn admin_control_plane_reload_config_updates_remote_permissions_for_existing_subject()
+async fn admin_control_plane_reload_runtime_full_updates_remote_permissions_for_existing_subject()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
@@ -432,7 +442,7 @@ async fn admin_control_plane_reload_config_updates_remote_permissions_for_existi
             "ops-token",
             vec![
                 crate::config::AdminPermission::Status,
-                crate::config::AdminPermission::ReloadPlugins,
+                crate::config::AdminPermission::ReloadRuntime,
             ],
         ),
     );
@@ -449,7 +459,12 @@ async fn admin_control_plane_reload_config_updates_remote_permissions_for_existi
         .authenticate_remote_token("ops-token")
         .await
         .expect("ops token should authenticate");
-    assert!(control.reload_plugins(&subject).await.is_ok());
+    assert!(
+        control
+            .reload_runtime(&subject, crate::runtime::RuntimeReloadMode::Artifacts)
+            .await
+            .is_ok()
+    );
 
     let mut updated = initial.clone();
     updated.admin.grpc.principals.insert(
@@ -465,19 +480,21 @@ async fn admin_control_plane_reload_config_updates_remote_permissions_for_existi
     let response = control
         .execute(
             crate::runtime::AdminPrincipal::LocalConsole,
-            crate::runtime::AdminRequest::ReloadConfig,
+            reload_request(crate::runtime::RuntimeReloadMode::Full),
         )
         .await;
     assert!(matches!(
         response,
-        crate::runtime::AdminResponse::ReloadConfig(_)
+        crate::runtime::AdminResponse::ReloadRuntime(_)
     ));
 
     assert!(control.status(&subject).await.is_ok());
     assert!(matches!(
-        control.reload_plugins(&subject).await,
+        control
+            .reload_runtime(&subject, crate::runtime::RuntimeReloadMode::Artifacts)
+            .await,
         Err(crate::runtime::AdminCommandError::PermissionDenied {
-            permission: crate::runtime::AdminPermission::ReloadPlugins,
+            permission: crate::runtime::AdminPermission::ReloadRuntime,
             ..
         })
     ));
@@ -486,7 +503,7 @@ async fn admin_control_plane_reload_config_updates_remote_permissions_for_existi
 }
 
 #[tokio::test]
-async fn admin_control_plane_reload_config_invalidates_existing_subject_when_principal_changes()
+async fn admin_control_plane_reload_runtime_full_invalidates_existing_subject_when_principal_changes()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
@@ -539,12 +556,12 @@ async fn admin_control_plane_reload_config_invalidates_existing_subject_when_pri
     let response = control
         .execute(
             crate::runtime::AdminPrincipal::LocalConsole,
-            crate::runtime::AdminRequest::ReloadConfig,
+            reload_request(crate::runtime::RuntimeReloadMode::Full),
         )
         .await;
     assert!(matches!(
         response,
-        crate::runtime::AdminResponse::ReloadConfig(_)
+        crate::runtime::AdminResponse::ReloadRuntime(_)
     ));
 
     assert!(matches!(
@@ -562,7 +579,7 @@ async fn admin_control_plane_reload_config_invalidates_existing_subject_when_pri
 }
 
 #[tokio::test]
-async fn admin_control_plane_reload_config_rejects_admin_grpc_transport_changes()
+async fn admin_control_plane_reload_runtime_full_rejects_admin_grpc_transport_changes()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
@@ -603,7 +620,7 @@ async fn admin_control_plane_reload_config_rejects_admin_grpc_transport_changes(
     let response = control
         .execute(
             crate::runtime::AdminPrincipal::LocalConsole,
-            crate::runtime::AdminRequest::ReloadConfig,
+            reload_request(crate::runtime::RuntimeReloadMode::Full),
         )
         .await;
     let crate::runtime::AdminResponse::Error { message } = &response else {
@@ -615,7 +632,7 @@ async fn admin_control_plane_reload_config_rejects_admin_grpc_transport_changes(
 }
 
 #[tokio::test]
-async fn admin_control_plane_reload_config_rejects_admin_grpc_allow_non_loopback_changes()
+async fn admin_control_plane_reload_runtime_full_rejects_admin_grpc_allow_non_loopback_changes()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
@@ -654,7 +671,7 @@ async fn admin_control_plane_reload_config_rejects_admin_grpc_allow_non_loopback
     let response = control
         .execute(
             crate::runtime::AdminPrincipal::LocalConsole,
-            crate::runtime::AdminRequest::ReloadConfig,
+            reload_request(crate::runtime::RuntimeReloadMode::Full),
         )
         .await;
     let crate::runtime::AdminResponse::Error { message } = &response else {

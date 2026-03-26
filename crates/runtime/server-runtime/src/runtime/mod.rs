@@ -20,20 +20,24 @@ use crate::RuntimeError;
 use crate::config::{ServerConfig, ServerConfigSource};
 use crate::transport::AcceptedTransportSession;
 pub use crate::{
-    AdminConfigReloadView, AdminGenerationCountView, AdminGenerationReloadView,
+    AdminArtifactsReloadView, AdminCoreReloadView, AdminFullReloadView, AdminGenerationCountView,
     AdminListenerBindingView, AdminNamedCountView, AdminPermission, AdminPhaseCountView,
-    AdminPluginHostView, AdminPluginsReloadView, AdminPrincipal, AdminRequest, AdminResponse,
-    AdminSessionSummaryView, AdminSessionView, AdminSessionsView, AdminStatusView,
-    AdminTransportCountView, ListenerBinding, PluginFailureAction, PluginFailureMatrix,
-    PluginHostStatusSnapshot,
+    AdminPluginHostView, AdminPrincipal, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
+    AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
+    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, ListenerBinding,
+    PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot, RuntimeReloadMode,
 };
-use mc_core::{CoreEvent, EntityId, GameplayProfileId, PlayerId, SessionCapabilitySet};
+use mc_core::{
+    CoreEvent, EntityId, GameplayProfileId, PlayerId, PluginGenerationId, SessionCapabilitySet,
+};
 use mc_plugin_host::registry::ProtocolRegistry;
 use mc_plugin_host::runtime::{AuthGenerationHandle, GameplayProfileHandle, RuntimeReloadContext};
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -50,13 +54,6 @@ pub(crate) const LOGIN_SERVER_ID: &str = "";
 pub(crate) const LOGIN_VERIFY_TOKEN_LEN: usize = 4;
 pub(crate) const ACCEPT_QUEUE_CAPACITY: usize = 256;
 pub(crate) const SESSION_OUTBOUND_QUEUE_CAPACITY: usize = 256;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReloadScope {
-    Plugins,
-    Config,
-    Generation,
-}
 
 pub struct ServerSupervisor {
     running: RunningServer,
@@ -101,19 +98,52 @@ impl ServerSupervisor {
 
     /// # Errors
     ///
-    /// Returns [`RuntimeError`] when the requested reload scope cannot be applied.
-    pub async fn reload(&self, scope: ReloadScope) -> Result<ReloadResult, RuntimeError> {
-        self.running.reload(scope).await
+    /// Returns [`RuntimeError`] when the requested reload mode cannot be applied.
+    pub async fn reload_runtime(
+        &self,
+        mode: RuntimeReloadMode,
+    ) -> Result<RuntimeReloadResult, RuntimeError> {
+        self.running.reload_runtime(mode).await
     }
 
     /// # Errors
     ///
     /// Returns [`RuntimeError`] when a loaded plugin cannot be reloaded successfully.
-    pub async fn reload_plugins(&self) -> Result<Vec<String>, RuntimeError> {
-        match self.reload(ReloadScope::Plugins).await? {
-            ReloadResult::Plugins(reloaded) => Ok(reloaded),
-            ReloadResult::Config(_) | ReloadResult::Generation(_) => {
-                unreachable!("plugin reload should only produce a plugin-scoped result")
+    pub async fn reload_runtime_artifacts(&self) -> Result<ArtifactsReloadResult, RuntimeError> {
+        match self.reload_runtime(RuntimeReloadMode::Artifacts).await? {
+            RuntimeReloadResult::Artifacts(result) => Ok(result),
+            RuntimeReloadResult::Topology(_)
+            | RuntimeReloadResult::Core(_)
+            | RuntimeReloadResult::Full(_) => {
+                unreachable!("artifacts reload should only produce an artifacts-scoped result")
+            }
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the runtime cannot materialize a candidate topology.
+    pub async fn reload_runtime_topology(&self) -> Result<TopologyReloadResult, RuntimeError> {
+        match self.reload_runtime(RuntimeReloadMode::Topology).await? {
+            RuntimeReloadResult::Topology(result) => Ok(result),
+            RuntimeReloadResult::Artifacts(_)
+            | RuntimeReloadResult::Core(_)
+            | RuntimeReloadResult::Full(_) => {
+                unreachable!("topology reload should only produce a topology-scoped result")
+            }
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the runtime cannot reload the live core.
+    pub async fn reload_runtime_core(&self) -> Result<CoreReloadResult, RuntimeError> {
+        match self.reload_runtime(RuntimeReloadMode::Core).await? {
+            RuntimeReloadResult::Core(result) => Ok(result),
+            RuntimeReloadResult::Artifacts(_)
+            | RuntimeReloadResult::Topology(_)
+            | RuntimeReloadResult::Full(_) => {
+                unreachable!("core reload should only produce a core-scoped result")
             }
         }
     }
@@ -122,23 +152,13 @@ impl ServerSupervisor {
     ///
     /// Returns [`RuntimeError`] when the runtime cannot reconcile live config state or apply a
     /// candidate topology.
-    pub async fn reload_config(&self) -> Result<ConfigReloadResult, RuntimeError> {
-        match self.reload(ReloadScope::Config).await? {
-            ReloadResult::Config(result) => Ok(result),
-            ReloadResult::Plugins(_) | ReloadResult::Generation(_) => {
-                unreachable!("config reload should only produce a config-scoped result")
-            }
-        }
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`RuntimeError`] when the runtime cannot materialize a candidate topology.
-    pub async fn reload_generation(&self) -> Result<GenerationReloadResult, RuntimeError> {
-        match self.reload(ReloadScope::Generation).await? {
-            ReloadResult::Generation(result) => Ok(result),
-            ReloadResult::Plugins(_) | ReloadResult::Config(_) => {
-                unreachable!("generation reload should only produce a generation-scoped result")
+    pub async fn reload_runtime_full(&self) -> Result<FullReloadResult, RuntimeError> {
+        match self.reload_runtime(RuntimeReloadMode::Full).await? {
+            RuntimeReloadResult::Full(result) => Ok(result),
+            RuntimeReloadResult::Artifacts(_)
+            | RuntimeReloadResult::Topology(_)
+            | RuntimeReloadResult::Core(_) => {
+                unreachable!("full reload should only produce a full-scoped result")
             }
         }
     }
@@ -208,25 +228,62 @@ impl RunningServer {
 
     /// # Errors
     ///
-    /// Returns [`RuntimeError`] when the requested reload scope cannot be applied.
-    pub async fn reload(&self, scope: ReloadScope) -> Result<ReloadResult, RuntimeError> {
+    /// Returns [`RuntimeError`] when the requested reload mode cannot be applied.
+    pub async fn reload_runtime(
+        &self,
+        mode: RuntimeReloadMode,
+    ) -> Result<RuntimeReloadResult, RuntimeError> {
         let reload_host = self.runtime.reload.reload_host().ok_or_else(|| {
             RuntimeError::Config(
                 "reload is unavailable without a reload-capable supervisor boot".into(),
             )
         })?;
-        self.runtime.reload(reload_host.as_ref(), scope).await
+        self.runtime
+            .reload_runtime(reload_host.as_ref(), mode)
+            .await
     }
 
     /// # Errors
     ///
     /// Returns [`RuntimeError`] when a loaded plugin cannot be reloaded successfully.
     #[allow(dead_code)]
-    pub async fn reload_plugins(&self) -> Result<Vec<String>, RuntimeError> {
-        match self.reload(ReloadScope::Plugins).await? {
-            ReloadResult::Plugins(reloaded) => Ok(reloaded),
-            ReloadResult::Config(_) | ReloadResult::Generation(_) => {
-                unreachable!("plugin reload should only produce a plugin-scoped result")
+    pub async fn reload_runtime_artifacts(&self) -> Result<ArtifactsReloadResult, RuntimeError> {
+        match self.reload_runtime(RuntimeReloadMode::Artifacts).await? {
+            RuntimeReloadResult::Artifacts(result) => Ok(result),
+            RuntimeReloadResult::Topology(_)
+            | RuntimeReloadResult::Core(_)
+            | RuntimeReloadResult::Full(_) => {
+                unreachable!("artifacts reload should only produce an artifacts-scoped result")
+            }
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the runtime cannot materialize a candidate topology.
+    #[allow(dead_code)]
+    pub async fn reload_runtime_topology(&self) -> Result<TopologyReloadResult, RuntimeError> {
+        match self.reload_runtime(RuntimeReloadMode::Topology).await? {
+            RuntimeReloadResult::Topology(result) => Ok(result),
+            RuntimeReloadResult::Artifacts(_)
+            | RuntimeReloadResult::Core(_)
+            | RuntimeReloadResult::Full(_) => {
+                unreachable!("topology reload should only produce a topology-scoped result")
+            }
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the runtime cannot reload the live core.
+    #[allow(dead_code)]
+    pub async fn reload_runtime_core(&self) -> Result<CoreReloadResult, RuntimeError> {
+        match self.reload_runtime(RuntimeReloadMode::Core).await? {
+            RuntimeReloadResult::Core(result) => Ok(result),
+            RuntimeReloadResult::Artifacts(_)
+            | RuntimeReloadResult::Topology(_)
+            | RuntimeReloadResult::Full(_) => {
+                unreachable!("core reload should only produce a core-scoped result")
             }
         }
     }
@@ -236,24 +293,13 @@ impl RunningServer {
     /// Returns [`RuntimeError`] when the runtime cannot reconcile live config state or apply a
     /// candidate topology.
     #[allow(dead_code)]
-    pub async fn reload_config(&self) -> Result<ConfigReloadResult, RuntimeError> {
-        match self.reload(ReloadScope::Config).await? {
-            ReloadResult::Config(result) => Ok(result),
-            ReloadResult::Plugins(_) | ReloadResult::Generation(_) => {
-                unreachable!("config reload should only produce a config-scoped result")
-            }
-        }
-    }
-
-    /// # Errors
-    ///
-    /// Returns [`RuntimeError`] when the runtime cannot materialize a candidate topology.
-    #[allow(dead_code)]
-    pub async fn reload_generation(&self) -> Result<GenerationReloadResult, RuntimeError> {
-        match self.reload(ReloadScope::Generation).await? {
-            ReloadResult::Generation(result) => Ok(result),
-            ReloadResult::Plugins(_) | ReloadResult::Config(_) => {
-                unreachable!("generation reload should only produce a generation-scoped result")
+    pub async fn reload_runtime_full(&self) -> Result<FullReloadResult, RuntimeError> {
+        match self.reload_runtime(RuntimeReloadMode::Full).await? {
+            RuntimeReloadResult::Full(result) => Ok(result),
+            RuntimeReloadResult::Artifacts(_)
+            | RuntimeReloadResult::Topology(_)
+            | RuntimeReloadResult::Core(_) => {
+                unreachable!("full reload should only produce a full-scoped result")
             }
         }
     }
@@ -282,15 +328,22 @@ impl RuntimeServer {
             .update_generation_config(candidate_config)
             .await;
     }
+
+    pub(crate) async fn update_core_reload_config(&self, candidate_config: &ServerConfig) {
+        self.selection
+            .update_core_reload_config(candidate_config)
+            .await;
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct SessionHandle {
     pub(crate) tx: mpsc::Sender<SessionMessage>,
-    pub(crate) control_tx: watch::Sender<Option<String>>,
+    pub(crate) control_tx: mpsc::Sender<SessionControl>,
     pub(crate) generation: Arc<ActiveGeneration>,
     pub(crate) transport: TransportKind,
     pub(crate) phase: ConnectionPhase,
+    pub(crate) adapter: Option<Arc<dyn ProtocolAdapter>>,
     pub(crate) adapter_id: Option<String>,
     pub(crate) player_id: Option<PlayerId>,
     pub(crate) entity_id: Option<EntityId>,
@@ -303,6 +356,41 @@ pub(crate) struct SessionHandle {
 pub(crate) enum SessionMessage {
     Event(Arc<CoreEvent>),
     Terminate { reason: String },
+}
+
+#[derive(Clone)]
+pub(crate) struct SessionReattachInstruction {
+    pub(crate) generation: Arc<ActiveGeneration>,
+    pub(crate) adapter: Option<Arc<dyn ProtocolAdapter>>,
+    pub(crate) gameplay: Option<Arc<dyn GameplayProfileHandle>>,
+    pub(crate) phase: ConnectionPhase,
+    pub(crate) player_id: Option<PlayerId>,
+    pub(crate) entity_id: Option<EntityId>,
+    pub(crate) resync_events: Vec<Arc<CoreEvent>>,
+}
+
+pub(crate) enum SessionControl {
+    Terminate {
+        reason: String,
+    },
+    Reattach {
+        instruction: SessionReattachInstruction,
+        ack_tx: oneshot::Sender<Result<(), RuntimeError>>,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) struct SessionReattachRecord {
+    pub(crate) connection_id: mc_core::ConnectionId,
+    pub(crate) control_tx: mpsc::Sender<SessionControl>,
+    pub(crate) transport: TransportKind,
+    pub(crate) phase: ConnectionPhase,
+    pub(crate) adapter_id: Option<String>,
+    pub(crate) player_id: Option<PlayerId>,
+    pub(crate) entity_id: Option<EntityId>,
+    pub(crate) gameplay_profile: Option<GameplayProfileId>,
+    pub(crate) protocol_generation: Option<PluginGenerationId>,
+    pub(crate) gameplay_generation: Option<PluginGenerationId>,
 }
 
 pub(crate) struct SessionState {
@@ -326,14 +414,19 @@ pub(crate) struct AcceptedGenerationSession {
 pub struct GenerationId(pub u64);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GenerationReloadResult {
+pub struct ArtifactsReloadResult {
+    pub reloaded_plugin_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologyReloadResult {
     pub activated_generation_id: GenerationId,
     pub retired_generation_ids: Vec<GenerationId>,
     pub applied_config_change: bool,
     pub reconfigured_adapter_ids: Vec<String>,
 }
 
-impl GenerationReloadResult {
+impl TopologyReloadResult {
     #[must_use]
     pub fn changed(&self, previous_generation_id: GenerationId) -> bool {
         self.activated_generation_id != previous_generation_id
@@ -344,16 +437,20 @@ impl GenerationReloadResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConfigReloadResult {
-    pub reloaded_plugins: Vec<String>,
-    pub generation: GenerationReloadResult,
+pub struct CoreReloadResult {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FullReloadResult {
+    pub reloaded_plugin_ids: Vec<String>,
+    pub topology: TopologyReloadResult,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ReloadResult {
-    Plugins(Vec<String>),
-    Config(ConfigReloadResult),
-    Generation(GenerationReloadResult),
+pub enum RuntimeReloadResult {
+    Artifacts(ArtifactsReloadResult),
+    Topology(TopologyReloadResult),
+    Core(CoreReloadResult),
+    Full(FullReloadResult),
 }
 
 #[derive(Clone)]
@@ -399,6 +496,8 @@ pub(crate) struct RuntimeServer {
     pub(crate) topology: TopologyManager,
     pub(crate) kernel: RuntimeKernel,
     pub(crate) sessions: SessionRegistry,
+    #[cfg(test)]
+    pub(crate) fail_nth_reattach_send: AtomicUsize,
 }
 
 pub(crate) struct OnlineAuthKeys {

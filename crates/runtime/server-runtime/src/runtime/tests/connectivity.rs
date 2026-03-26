@@ -85,7 +85,7 @@ async fn wildcard_ipv4_dual_stack_listener_is_reused_on_noop_reload() -> Result<
     let server = build_reloadable_test_server(config, plugin_test_registries_tcp_only()?).await?;
 
     let before = listener_addr(&server);
-    let _reload = server.reload_generation().await?;
+    let _reload = server.reload_runtime_topology().await?;
     let after = listener_addr(&server);
     assert_eq!(after, before);
 

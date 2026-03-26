@@ -61,6 +61,15 @@ impl RuntimeServer {
         session: &SessionState,
     ) {
         let _consistency_guard = self.reload.read_consistency().await;
+        self.sync_session_handle_direct(connection_id, session)
+            .await;
+    }
+
+    pub(in crate::runtime::session) async fn sync_session_handle_direct(
+        &self,
+        connection_id: ConnectionId,
+        session: &SessionState,
+    ) {
         self.sessions
             .sync_from_session(connection_id, session)
             .await;

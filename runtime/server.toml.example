@@ -76,9 +76,7 @@ ui_profile = "console-v1"
 local_console_permissions = [
   "status",
   "sessions",
-  "reload-config",
-  "reload-plugins",
-  "reload-generation",
+  "reload-runtime",
   "shutdown",
 ]
 
@@ -94,7 +92,7 @@ local_console_permissions = [
 #
 # [static.admin.grpc.principals.ops]
 # token_file = "admin/ops.token"
-# permissions = ["status", "sessions", "reload-config", "reload-plugins", "reload-generation", "shutdown"]
+# permissions = ["status", "sessions", "reload-runtime", "shutdown"]
 #
 # The built-in gRPC server is plaintext h2 only. Non-loopback exposure is rejected
 # unless `allow_non_loopback = true` is set explicitly. Put TLS and public exposure

@@ -5,9 +5,7 @@ package revy.admin.v1;
 service AdminControlPlane {
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
-  rpc ReloadConfig(ReloadConfigRequest) returns (ReloadConfigResponse);
-  rpc ReloadPlugins(ReloadPluginsRequest) returns (ReloadPluginsResponse);
-  rpc ReloadGeneration(ReloadGenerationRequest) returns (ReloadGenerationResponse);
+  rpc ReloadRuntime(ReloadRuntimeRequest) returns (ReloadRuntimeResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
@@ -23,6 +21,14 @@ enum ConnectionPhase {
   CONNECTION_PHASE_STATUS = 2;
   CONNECTION_PHASE_LOGIN = 3;
   CONNECTION_PHASE_PLAY = 4;
+}
+
+enum RuntimeReloadMode {
+  RUNTIME_RELOAD_MODE_UNSPECIFIED = 0;
+  RUNTIME_RELOAD_MODE_ARTIFACTS = 1;
+  RUNTIME_RELOAD_MODE_TOPOLOGY = 2;
+  RUNTIME_RELOAD_MODE_CORE = 3;
+  RUNTIME_RELOAD_MODE_FULL = 4;
 }
 
 message AdminListenerBindingView {
@@ -104,20 +110,32 @@ message AdminSessionsView {
   repeated AdminSessionView sessions = 2;
 }
 
-message AdminPluginsReloadView {
+message AdminArtifactsReloadView {
   repeated string reloaded_plugin_ids = 1;
 }
 
-message AdminGenerationReloadView {
+message AdminTopologyReloadView {
   uint64 activated_generation_id = 1;
   repeated uint64 retired_generation_ids = 2;
   bool applied_config_change = 3;
   repeated string reconfigured_adapter_ids = 4;
 }
 
-message AdminConfigReloadView {
+message AdminCoreReloadView {}
+
+message AdminFullReloadView {
   repeated string reloaded_plugin_ids = 1;
-  AdminGenerationReloadView generation = 2;
+  AdminTopologyReloadView topology = 2;
+}
+
+message AdminRuntimeReloadView {
+  RuntimeReloadMode mode = 1;
+  oneof detail {
+    AdminArtifactsReloadView artifacts = 2;
+    AdminTopologyReloadView topology = 3;
+    AdminCoreReloadView core = 4;
+    AdminFullReloadView full = 5;
+  }
 }
 
 message GetStatusRequest {}
@@ -132,22 +150,12 @@ message ListSessionsResponse {
   AdminSessionsView sessions = 1;
 }
 
-message ReloadConfigRequest {}
-
-message ReloadConfigResponse {
-  AdminConfigReloadView result = 1;
+message ReloadRuntimeRequest {
+  RuntimeReloadMode mode = 1;
 }
 
-message ReloadPluginsRequest {}
-
-message ReloadPluginsResponse {
-  AdminPluginsReloadView result = 1;
-}
-
-message ReloadGenerationRequest {}
-
-message ReloadGenerationResponse {
-  AdminGenerationReloadView result = 1;
+message ReloadRuntimeResponse {
+  AdminRuntimeReloadView result = 1;
 }
 
 message ShutdownRequest {}

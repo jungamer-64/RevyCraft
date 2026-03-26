@@ -2,7 +2,9 @@ use crate::ListenerBinding;
 use crate::RuntimeError;
 #[cfg(test)]
 use crate::runtime::ActiveGeneration;
-use crate::runtime::{GenerationAdmission, GenerationId, GenerationReloadResult, RuntimeServer};
+use crate::runtime::{
+    GenerationAdmission, GenerationId, RuntimeServer, SessionControl, TopologyReloadResult,
+};
 use mc_plugin_host::runtime::RuntimePluginHost;
 #[cfg(test)]
 use std::sync::Arc;
@@ -43,7 +45,12 @@ impl RuntimeServer {
     pub(in crate::runtime) async fn terminate_all_sessions(&self, reason: &str) {
         let handles = self.sessions.all_handles().await;
         for handle in handles {
-            let _ = handle.control_tx.send(Some(reason.to_string()));
+            let _ = handle
+                .control_tx
+                .send(SessionControl::Terminate {
+                    reason: reason.to_string(),
+                })
+                .await;
         }
     }
 
@@ -52,16 +59,20 @@ impl RuntimeServer {
         reload_host: &dyn RuntimePluginHost,
         candidate_config: crate::config::ServerConfig,
         force_generation: bool,
-    ) -> Result<GenerationReloadResult, RuntimeError> {
-        self.topology
+    ) -> Result<TopologyReloadResult, RuntimeError> {
+        let protocol_topology = reload_host.prepare_protocol_topology_for_reload()?;
+        let result = self
+            .topology
             .reload_generation_with_config(
-                reload_host,
                 candidate_config,
                 force_generation,
+                &protocol_topology,
                 &self.kernel,
                 &self.sessions,
             )
-            .await
+            .await?;
+        reload_host.activate_protocol_topology(protocol_topology);
+        Ok(result)
     }
 
     pub(in crate::runtime) async fn enforce_generation_drains(&self) -> Result<(), RuntimeError> {

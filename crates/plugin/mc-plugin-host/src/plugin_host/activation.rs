@@ -9,63 +9,66 @@ use crate::config::PluginBufferLimits;
 use crate::registry::LoadedPluginSet;
 
 impl PluginHost {
-    pub(crate) fn loaded_plugin_set(&self, protocols: super::ProtocolRegistry) -> LoadedPluginSet {
+    pub(crate) fn loaded_plugin_set_from_parts(
+        protocols: super::ProtocolRegistry,
+        gameplay: &HashMap<GameplayProfileId, ManagedGameplayPlugin>,
+        storage: &HashMap<StorageProfileId, ManagedStoragePlugin>,
+        auth: &HashMap<AuthProfileId, ManagedAuthPlugin>,
+        admin_ui: &HashMap<AdminUiProfileId, ManagedAdminUiPlugin>,
+    ) -> LoadedPluginSet {
         let mut loaded = LoadedPluginSet::new();
         loaded.replace_protocols(protocols);
 
-        {
-            let gameplay = self
-                .gameplay
-                .lock()
-                .expect("plugin host mutex should not be poisoned");
-            for (profile_id, managed) in gameplay.iter() {
-                loaded.register_gameplay_profile(
-                    profile_id.clone(),
-                    Arc::clone(&managed.profile) as Arc<dyn crate::runtime::GameplayProfileHandle>,
-                );
-            }
+        for (profile_id, managed) in gameplay {
+            loaded.register_gameplay_profile(
+                profile_id.clone(),
+                Arc::clone(&managed.profile) as Arc<dyn crate::runtime::GameplayProfileHandle>,
+            );
         }
 
-        {
-            let storage = self
-                .storage
-                .lock()
-                .expect("plugin host mutex should not be poisoned");
-            for (profile_id, managed) in storage.iter() {
-                loaded.register_storage_profile(
-                    profile_id.clone(),
-                    Arc::clone(&managed.profile) as Arc<dyn crate::runtime::StorageProfileHandle>,
-                );
-            }
+        for (profile_id, managed) in storage {
+            loaded.register_storage_profile(
+                profile_id.clone(),
+                Arc::clone(&managed.profile) as Arc<dyn crate::runtime::StorageProfileHandle>,
+            );
         }
 
-        {
-            let auth = self
-                .auth
-                .lock()
-                .expect("plugin host mutex should not be poisoned");
-            for (profile_id, managed) in auth.iter() {
-                loaded.register_auth_profile(
-                    profile_id.clone(),
-                    Arc::clone(&managed.profile) as Arc<dyn crate::runtime::AuthProfileHandle>,
-                );
-            }
+        for (profile_id, managed) in auth {
+            loaded.register_auth_profile(
+                profile_id.clone(),
+                Arc::clone(&managed.profile) as Arc<dyn crate::runtime::AuthProfileHandle>,
+            );
         }
 
-        {
-            let admin_ui = self
-                .admin_ui
-                .lock()
-                .expect("plugin host mutex should not be poisoned");
-            for (profile_id, managed) in admin_ui.iter() {
-                loaded.register_admin_ui_profile(
-                    profile_id.clone(),
-                    Arc::clone(&managed.profile) as Arc<dyn crate::runtime::AdminUiProfileHandle>,
-                );
-            }
+        for (profile_id, managed) in admin_ui {
+            loaded.register_admin_ui_profile(
+                profile_id.clone(),
+                Arc::clone(&managed.profile) as Arc<dyn crate::runtime::AdminUiProfileHandle>,
+            );
         }
 
         loaded
+    }
+
+    pub(crate) fn loaded_plugin_set(&self, protocols: super::ProtocolRegistry) -> LoadedPluginSet {
+        let gameplay = self
+            .gameplay
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        let storage = self
+            .storage
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        let auth = self
+            .auth
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        let admin_ui = self
+            .admin_ui
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+
+        Self::loaded_plugin_set_from_parts(protocols, &gameplay, &storage, &auth, &admin_ui)
     }
 
     fn required_gameplay_profiles(config: &RuntimeSelectionConfig) -> HashSet<GameplayProfileId> {
@@ -109,6 +112,8 @@ impl PluginHost {
         package: &PluginPackage,
         required_profiles: &HashSet<GameplayProfileId>,
         config: &RuntimeSelectionConfig,
+        stage: PluginFailureStage,
+        clear_failure_state: bool,
     ) -> Result<(), RuntimeError> {
         let modified_at = package.modified_at()?;
         let identity = package.artifact_identity(modified_at);
@@ -127,12 +132,13 @@ impl PluginHost {
             Err(error) => {
                 let reason = error.to_string();
                 eprintln!(
-                    "gameplay boot load failed for `{}`: {reason}",
+                    "gameplay {} load failed for `{}`: {reason}",
+                    stage.as_str(),
                     package.plugin_id
                 );
                 self.failures.handle_candidate_failure(
                     PluginKind::Gameplay,
-                    PluginFailureStage::Boot,
+                    stage,
                     &package.plugin_id,
                     identity,
                     &reason,
@@ -166,7 +172,9 @@ impl PluginHost {
                 active_loaded_at: modified_at,
             },
         );
-        self.failures.clear_plugin_state(&package.plugin_id);
+        if clear_failure_state {
+            self.failures.clear_plugin_state(&package.plugin_id);
+        }
         Ok(())
     }
 
@@ -176,6 +184,8 @@ impl PluginHost {
         package: &PluginPackage,
         storage_profile: &StorageProfileId,
         buffer_limits: PluginBufferLimits,
+        stage: PluginFailureStage,
+        clear_failure_state: bool,
     ) -> Result<(), RuntimeError> {
         let modified_at = package.modified_at()?;
         let identity = package.artifact_identity(modified_at);
@@ -194,12 +204,13 @@ impl PluginHost {
             Err(error) => {
                 let reason = error.to_string();
                 eprintln!(
-                    "storage boot load failed for `{}`: {reason}",
+                    "storage {} load failed for `{}`: {reason}",
+                    stage.as_str(),
                     package.plugin_id
                 );
                 self.failures.handle_candidate_failure(
                     PluginKind::Storage,
-                    PluginFailureStage::Boot,
+                    stage,
                     &package.plugin_id,
                     identity,
                     &reason,
@@ -228,7 +239,9 @@ impl PluginHost {
                 active_loaded_at: modified_at,
             },
         );
-        self.failures.clear_plugin_state(&package.plugin_id);
+        if clear_failure_state {
+            self.failures.clear_plugin_state(&package.plugin_id);
+        }
         Ok(())
     }
 
@@ -238,6 +251,8 @@ impl PluginHost {
         package: &PluginPackage,
         requested_profiles: &HashSet<AuthProfileId>,
         buffer_limits: PluginBufferLimits,
+        stage: PluginFailureStage,
+        clear_failure_state: bool,
     ) -> Result<(), RuntimeError> {
         let modified_at = package.modified_at()?;
         let identity = package.artifact_identity(modified_at);
@@ -256,12 +271,13 @@ impl PluginHost {
             Err(error) => {
                 let reason = error.to_string();
                 eprintln!(
-                    "auth boot load failed for `{}`: {reason}",
+                    "auth {} load failed for `{}`: {reason}",
+                    stage.as_str(),
                     package.plugin_id
                 );
                 self.failures.handle_candidate_failure(
                     PluginKind::Auth,
-                    PluginFailureStage::Boot,
+                    stage,
                     &package.plugin_id,
                     identity,
                     &reason,
@@ -293,7 +309,9 @@ impl PluginHost {
                 active_loaded_at: modified_at,
             },
         );
-        self.failures.clear_plugin_state(&package.plugin_id);
+        if clear_failure_state {
+            self.failures.clear_plugin_state(&package.plugin_id);
+        }
         Ok(())
     }
 
@@ -303,6 +321,8 @@ impl PluginHost {
         package: &PluginPackage,
         requested_profile: Option<&AdminUiProfileId>,
         config: &RuntimeSelectionConfig,
+        stage: PluginFailureStage,
+        clear_failure_state: bool,
     ) -> Result<(), RuntimeError> {
         let Some(requested_profile) = requested_profile else {
             return Ok(());
@@ -324,12 +344,13 @@ impl PluginHost {
             Err(error) => {
                 let reason = error.to_string();
                 eprintln!(
-                    "admin-ui boot load failed for `{}`: {reason}",
+                    "admin-ui {} load failed for `{}`: {reason}",
+                    stage.as_str(),
                     package.plugin_id
                 );
                 self.failures.handle_candidate_failure(
                     PluginKind::AdminUi,
-                    PluginFailureStage::Boot,
+                    stage,
                     &package.plugin_id,
                     identity,
                     &reason,
@@ -361,8 +382,152 @@ impl PluginHost {
                 active_loaded_at: modified_at,
             },
         );
-        self.failures.clear_plugin_state(&package.plugin_id);
+        if clear_failure_state {
+            self.failures.clear_plugin_state(&package.plugin_id);
+        }
         Ok(())
+    }
+
+    pub(crate) fn prepare_gameplay_profiles(
+        &self,
+        config: &RuntimeSelectionConfig,
+        stage: PluginFailureStage,
+    ) -> Result<HashMap<GameplayProfileId, ManagedGameplayPlugin>, RuntimeError> {
+        let required_profiles = Self::required_gameplay_profiles(config);
+        let allowlist = config
+            .plugin_allowlist
+            .as_ref()
+            .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
+        let catalog = self.protocol_catalog()?;
+        let mut gameplay = HashMap::new();
+
+        for package in catalog.packages() {
+            if package.plugin_kind != PluginKind::Gameplay {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
+                continue;
+            }
+            self.load_requested_gameplay_plugin(
+                &mut gameplay,
+                package,
+                &required_profiles,
+                config,
+                stage,
+                false,
+            )?;
+        }
+
+        ensure_known_profiles(&gameplay, &required_profiles, "gameplay")?;
+        Ok(gameplay)
+    }
+
+    pub(crate) fn prepare_storage_profiles(
+        &self,
+        config: &RuntimeSelectionConfig,
+        stage: PluginFailureStage,
+    ) -> Result<HashMap<StorageProfileId, ManagedStoragePlugin>, RuntimeError> {
+        let allowlist = config
+            .plugin_allowlist
+            .as_ref()
+            .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
+        let catalog = self.protocol_catalog()?;
+        let mut storage = HashMap::new();
+
+        for package in catalog.packages() {
+            if package.plugin_kind != PluginKind::Storage {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
+                continue;
+            }
+            self.load_requested_storage_plugin(
+                &mut storage,
+                package,
+                &self.bootstrap_config.storage_profile,
+                config.buffer_limits,
+                stage,
+                false,
+            )?;
+        }
+
+        ensure_profile_known(&storage, &self.bootstrap_config.storage_profile, "storage")?;
+        Ok(storage)
+    }
+
+    pub(crate) fn prepare_auth_profiles(
+        &self,
+        config: &RuntimeSelectionConfig,
+        stage: PluginFailureStage,
+    ) -> Result<HashMap<AuthProfileId, ManagedAuthPlugin>, RuntimeError> {
+        let requested = Self::requested_auth_profiles(&Self::runtime_auth_profiles(config))?;
+        let allowlist = config
+            .plugin_allowlist
+            .as_ref()
+            .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
+        let catalog = self.protocol_catalog()?;
+        let mut auth = HashMap::new();
+
+        for package in catalog.packages() {
+            if package.plugin_kind != PluginKind::Auth {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
+                continue;
+            }
+            self.load_requested_auth_plugin(
+                &mut auth,
+                package,
+                &requested,
+                config.buffer_limits,
+                stage,
+                false,
+            )?;
+        }
+
+        ensure_known_profiles(&auth, &requested, "auth")?;
+        Ok(auth)
+    }
+
+    pub(crate) fn prepare_admin_ui_profiles(
+        &self,
+        config: &RuntimeSelectionConfig,
+        stage: PluginFailureStage,
+    ) -> Result<HashMap<AdminUiProfileId, ManagedAdminUiPlugin>, RuntimeError> {
+        let requested_profile = Self::requested_admin_ui_profile(config);
+        let allowlist = config
+            .plugin_allowlist
+            .as_ref()
+            .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
+        let catalog = self.protocol_catalog()?;
+        let mut admin_ui = HashMap::new();
+
+        for package in catalog.packages() {
+            if package.plugin_kind != PluginKind::AdminUi {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
+                continue;
+            }
+            self.load_requested_admin_ui_plugin(
+                &mut admin_ui,
+                package,
+                requested_profile,
+                config,
+                stage,
+                false,
+            )?;
+        }
+
+        Ok(admin_ui)
     }
 
     /// Activates every gameplay profile required by the current server configuration.
@@ -405,6 +570,8 @@ impl PluginHost {
                 package,
                 &required_profiles,
                 config,
+                PluginFailureStage::Boot,
+                true,
             )?;
         }
 
@@ -453,6 +620,8 @@ impl PluginHost {
                 package,
                 storage_profile,
                 buffer_limits,
+                PluginFailureStage::Boot,
+                true,
             )?;
         }
 
@@ -497,7 +666,14 @@ impl PluginHost {
             {
                 continue;
             }
-            self.load_requested_auth_plugin(&mut auth, package, &requested, buffer_limits)?;
+            self.load_requested_auth_plugin(
+                &mut auth,
+                package,
+                &requested,
+                buffer_limits,
+                PluginFailureStage::Boot,
+                true,
+            )?;
         }
 
         let result = ensure_known_profiles(&auth, &requested, "auth");
@@ -535,7 +711,14 @@ impl PluginHost {
             {
                 continue;
             }
-            self.load_requested_admin_ui_plugin(&mut admin_ui, package, requested_profile, config)?;
+            self.load_requested_admin_ui_plugin(
+                &mut admin_ui,
+                package,
+                requested_profile,
+                config,
+                PluginFailureStage::Boot,
+                true,
+            )?;
         }
 
         Ok(())

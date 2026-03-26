@@ -1,6 +1,8 @@
 # 設定と reload 運用
 
-この文書は、`runtime/server.toml` の解釈、relative path 解決、reload scope、admin surface の正本です。package / 起動 / release bundle の入口は [`getting-started.md`](getting-started.md) を参照してください。
+この文書は、`runtime/server.toml` の解釈、relative path 解決、`reload runtime <mode>`、admin surface の正本です。ここで扱う reload は target operator surface としての `reload runtime artifacts / topology / core / full` であり、旧 `reload plugins` / `reload generation` / `reload config` は扱いません。package / 起動 / release bundle の入口は [`getting-started.md`](getting-started.md) を参照してください。
+
+`core` migration の内部設計は contributor 向けの [`../contributors/core-reload-runtime-design.md`](../contributors/core-reload-runtime-design.md) を参照してください。
 
 ## config file の選ばれ方
 
@@ -36,14 +38,14 @@ TOML file が存在して読み込まれる場合、relative path はその TOML
 | `static.bootstrap` | world、online mode、level type、game mode、difficulty、view distance、storage profile | restart-required |
 | `static.plugins` | plugins dir、plugin ABI range | restart-required |
 | `static.admin.grpc` の transport 部分 | `enabled`、`bind_addr`、`allow_non_loopback` | restart-required |
-| `static.admin.grpc.principals.*` | token file、permissions | `reload config` |
-| `live.network` | `server_ip`、`server_port`、`motd`、`max_players` | `reload generation` または `reload config` |
-| `live.topology` | adapter 有効化、Bedrock 有効化、watch flag、drain | `reload generation` または `reload config` |
-| `live.plugins` | allowlist、buffer limits、failure policy、watch flag | `reload config` |
-| `live.profiles` | auth / bedrock auth / gameplay profile selection | `reload config` |
-| `live.admin` | admin-ui profile、local console permissions | `reload config` |
+| `static.admin.grpc.principals.*` | token file、permissions | `reload runtime full` |
+| `live.network` | `server_ip`、`server_port`、`motd`、`max_players` | `reload runtime topology` または `reload runtime full` |
+| `live.topology` | adapter 有効化、Bedrock 有効化、watch flag、drain | `reload runtime topology` または `reload runtime full` |
+| `live.plugins` | allowlist、buffer limits、failure policy、watch flag | `reload runtime full` |
+| `live.profiles` | auth / bedrock auth / gameplay profile selection | `reload runtime full` |
+| `live.admin` | admin-ui profile、local console permissions | `reload runtime full` |
 
-`static.bootstrap.level_type` は現在 `"flat"` のみ対応です。`static.admin.grpc.principals.*` は TOML 上では `static` 配下ですが、transport 設定とは別に `reload config` で更新されます。
+`static.bootstrap.level_type` は現在 `"flat"` のみ対応です。`storage_profile` は `static` なので引き続き restart-required です。
 
 ## live selection の基本
 
@@ -76,9 +78,9 @@ JE online auth や Bedrock XBL を有効化したいときは allowlist と prof
 
 ## manual reload の使い分け
 
-### `reload plugins`
+### `reload runtime artifacts`
 
-`reload plugins` は config file を再読込しません。現在 active な selection config を固定したまま、managed plugin の artifact 差分だけを見て reload します。
+active selection を固定したまま、managed plugin の artifact 差分だけを見て reload します。
 
 見ないもの:
 
@@ -90,11 +92,11 @@ JE online auth や Bedrock XBL を有効化したいときは allowlist と prof
 - `live.plugins.failure_policy.*`
 - remote admin principal の token / permission 変更
 
-「同じ selection のまま、新しい shared library だけを差し替えたい」ときの操作です。
+「同じ selection / topology / core のまま、新しい shared library だけを差し替えたい」ときの操作です。
 
-### `reload generation`
+### `reload runtime topology`
 
-`reload generation` は最新 config を読みますが、active config に反映するのは `network` と `topology` だけです。現在の plugin selection、allowlist、profile map、buffer limit、failure policy、admin principal map は維持します。
+最新 config を読みますが、active config に反映するのは `network` と `topology` だけです。現在の plugin selection、allowlist、profile map、buffer limit、failure policy、admin principal map、core state は維持します。
 
 主に反映される key:
 
@@ -112,9 +114,22 @@ JE online auth や Bedrock XBL を有効化したいときは allowlist と prof
 
 reload 後は新規接続が新 generation に入り、旧 generation の session は `drain_grace_secs` のあいだ継続します。
 
-### `reload config`
+### `reload runtime core`
 
-`reload config` は最新 config を読み、restart-required な差分が無いことを確認したうえで runtime selection と topology generation をまとめて再評価します。
+selection / topology / transport を変えずに `ServerCore` だけを差し替えます。
+
+期待する性質:
+
+- play 中の接続は切れない
+- `player_id` / `entity_id` は維持される
+- open window、`cursor`、keepalive、dropped item、active mining、view/chunk state を維持する
+- `LoginAccepted` は再送しない
+
+この mode は config file を再読込しません。runtime 内の live state を export して candidate core へ移し替える操作です。
+
+### `reload runtime full`
+
+最新 config を読み、restart-required な差分が無いことを確認したうえで runtime selection、topology generation、core migration をまとめて再評価します。
 
 反映対象:
 
@@ -125,21 +140,17 @@ reload 後は新規接続が新 generation に入り、旧 generation の sessio
 - remote admin principal の token / permission
 - `live.network.*`
 - `live.topology.*`
+- core runtime state migration
 
-失敗しやすい例:
-
-- `static.bootstrap`、`static.plugins`、`static.admin.grpc` transport を変更した
-- candidate selection が validation を通らない
-- gameplay profile の切替が live session 条件を満たさない
-- candidate topology の materialize に失敗した
+`full` は単なる config reload ではなく、artifact / topology / core をひとまとめにした reload mode です。途中で core migration が失敗した場合は、selection / topology も commit しません。
 
 ## watch reload
 
-`live.plugins.reload_watch = true` または `live.topology.reload_watch = true` が有効な場合、runtime loop は定期的に config source を読み直し、`reload config` 相当の処理を試みます。
+`live.plugins.reload_watch = true` または `live.topology.reload_watch = true` が有効な場合、runtime loop は定期的に config source を読み直し、`reload runtime full` 相当の処理を試みます。
 
 watch reload の重要な点は次の 2 つです。
 
-- artifact 差分だけではなく config と topology も再評価します。
+- artifact 差分だけではなく selection / topology / core migration をまとめて再評価します。
 - loaded config か active config のどちらかで watch flag が有効なら、次回の watch tick が継続されます。
 
 custom boot path で reload host を持たない supervisor を作る場合、watch flag は使えません。`server-bootstrap` から通常起動する限りは reload-capable な boot になります。
@@ -170,6 +181,8 @@ kind ごとの既定値は次です。
 - `fail-fast`
   runtime 全体の重大障害として扱い、graceful stop へ入ります。
 
+`core` migration failure は plugin kind の failure policy ではなく rollback-first の runtime policy で扱います。通常の candidate failure では旧 core を維持し、rollback 不可能な不整合だけを fail-fast 条件とします。
+
 ## admin console と gRPC
 
 ### local console
@@ -181,16 +194,17 @@ sample の `console-v1` profile で使える command は次です。
 - `help`
 - `status`
 - `sessions`
-- `reload config`
-- `reload plugins`
-- `reload generation`
+- `reload runtime artifacts`
+- `reload runtime topology`
+- `reload runtime core`
+- `reload runtime full`
 - `shutdown`
 
-実行可否は `live.admin.local_console_permissions` で制御します。permission 名は `status`、`sessions`、`reload-config`、`reload-plugins`、`reload-generation`、`shutdown` です。
+実行可否は `live.admin.local_console_permissions` で制御します。permission 名は `status`、`sessions`、`reload-runtime`、`shutdown` です。
 
 ### built-in gRPC
 
-`static.admin.grpc.enabled = true` のとき、同じ process に unary gRPC control plane が起動します。
+`static.admin.grpc.enabled = true` のとき、同じ process に unary gRPC control plane が起動します。reload surface は `ReloadRuntime { mode }` を前提にします。
 
 - transport は plaintext h2 のみです。
 - 既定では loopback bind だけを許可します。
@@ -201,7 +215,7 @@ sample の `console-v1` profile で使える command は次です。
 - principal 間で同じ token を使うことはできません。
 - TLS と public exposure は reverse proxy / ingress 側で扱う前提です。
 
-`reload config` 後は remote principal の token / permission が次の request から新設定へ切り替わります。
+`reload runtime full` 後は remote principal の token / permission が次の request から新設定へ切り替わります。
 
 ## stdin EOF と終了条件
 

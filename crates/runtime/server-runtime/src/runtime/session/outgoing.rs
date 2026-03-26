@@ -1,10 +1,44 @@
 use crate::RuntimeError;
-use crate::runtime::{RuntimeServer, SessionMessage, SessionState};
+use crate::runtime::{RuntimeServer, SessionMessage, SessionReattachInstruction, SessionState};
 use crate::transport::{TransportSessionIo, write_payload};
 use mc_core::CoreEvent;
 use mc_proto_common::{ConnectionPhase, PlayEncodingContext};
 
 impl RuntimeServer {
+    pub(in crate::runtime::session) async fn handle_session_reattach(
+        &self,
+        connection_id: mc_core::ConnectionId,
+        transport_io: &mut TransportSessionIo,
+        session: &mut SessionState,
+        instruction: SessionReattachInstruction,
+    ) -> Result<(), RuntimeError> {
+        session.generation = instruction.generation;
+        session.adapter = instruction.adapter;
+        session.gameplay = instruction.gameplay;
+        session.phase = instruction.phase;
+        session.player_id = instruction.player_id;
+        session.entity_id = instruction.entity_id;
+        Self::refresh_session_capabilities(session);
+        for event in instruction.resync_events {
+            let should_close = self
+                .handle_outgoing_message(
+                    connection_id,
+                    transport_io,
+                    session,
+                    SessionMessage::Event(event),
+                )
+                .await?;
+            if should_close {
+                return Err(RuntimeError::Config(
+                    "session terminated while applying reattach resync events".to_string(),
+                ));
+            }
+        }
+        self.sync_session_handle_direct(connection_id, session)
+            .await;
+        Ok(())
+    }
+
     pub(in crate::runtime::session) async fn handle_outgoing_message(
         &self,
         connection_id: mc_core::ConnectionId,

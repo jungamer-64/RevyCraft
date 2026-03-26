@@ -70,6 +70,165 @@ fn dropped_item_entity_id(events: &[TargetedEvent], player_id: PlayerId) -> Enti
 }
 
 #[test]
+fn runtime_state_round_trips_live_session_state() {
+    let mut core = ServerCore::new(CoreConfig {
+        view_distance: 2,
+        ..CoreConfig::default()
+    });
+    let (player_id, _) = login_player(&mut core, 1, "coreblob");
+    let _ = spawn_dropped_item_via_tx(
+        &mut core,
+        Vec3::new(1.5, 4.5, 1.5),
+        item("minecraft:diamond", 2),
+        0,
+    );
+    let dropped_item_id = *core
+        .entities
+        .dropped_items
+        .keys()
+        .next()
+        .expect("dropped item should exist");
+    let spawned_item = dropped_item_snapshot(&core, dropped_item_id);
+
+    let _ = core.open_crafting_table(player_id, 7, "Workbench");
+    {
+        let session = core
+            .player_session_mut(player_id)
+            .expect("player session should exist");
+        session.cursor = Some(item("minecraft:stone", 3));
+        session.pending_keep_alive_id = Some(91);
+        session.last_keep_alive_sent_at = Some(77);
+        session.next_keep_alive_at = 1234;
+        session.next_non_player_window_id = 9;
+    }
+    let entity_id = core
+        .player_entity_id(player_id)
+        .expect("player entity should exist");
+    core.entities.player_active_mining.insert(
+        entity_id,
+        crate::core::ActiveMiningState {
+            position: BlockPos::new(1, 4, 1),
+            started_at_ms: 10,
+            duration_ms: 250,
+            last_stage: Some(3),
+            tool_context: None,
+        },
+    );
+
+    let blob = core.export_runtime_state();
+    let restored = ServerCore::from_runtime_state(
+        CoreConfig {
+            max_players: 40,
+            ..CoreConfig::default()
+        },
+        blob,
+    );
+    let restored_player = online_player(&restored, player_id);
+    let restored_session = restored
+        .player_session(player_id)
+        .expect("player session should restore");
+
+    assert_eq!(restored.world_meta().max_players, 40);
+    assert_eq!(restored_player.snapshot.username, "coreblob");
+    assert_eq!(restored_player.cursor, Some(item("minecraft:stone", 3)));
+    assert!(matches!(
+        restored_player.active_container,
+        Some(crate::core::OpenInventoryWindow {
+            window_id: 7,
+            container: InventoryContainer::CraftingTable,
+            ..
+        })
+    ));
+    assert!(restored_player.active_mining.is_some());
+    assert_eq!(restored_session.pending_keep_alive_id, Some(91));
+    assert_eq!(restored_session.last_keep_alive_sent_at, Some(77));
+    assert_eq!(restored_session.next_keep_alive_at, 1234);
+    assert_eq!(restored_session.next_non_player_window_id, 9);
+    assert_eq!(
+        dropped_item_snapshot(&restored, dropped_item_id),
+        spawned_item
+    );
+}
+
+#[test]
+fn session_resync_events_cover_live_play_state_without_login_success() {
+    let mut core = ServerCore::new(CoreConfig {
+        view_distance: 1,
+        ..CoreConfig::default()
+    });
+    let (first, _) = login_player(&mut core, 1, "first");
+    let (second, _) = login_player(&mut core, 2, "second");
+    let second_entity_id = core
+        .player_entity_id(second)
+        .expect("second player entity should exist");
+    let _ = spawn_dropped_item_via_tx(
+        &mut core,
+        Vec3::new(1.5, 4.5, 1.5),
+        item("minecraft:diamond", 1),
+        0,
+    );
+    let _ = core.open_crafting_table(first, 7, "Workbench");
+    core.player_session_mut(first)
+        .expect("first player session should exist")
+        .cursor = Some(item("minecraft:stone", 2));
+    core.entities.player_active_mining.insert(
+        second_entity_id,
+        crate::core::ActiveMiningState {
+            position: BlockPos::new(1, 4, 1),
+            started_at_ms: 10,
+            duration_ms: 250,
+            last_stage: Some(4),
+            tool_context: None,
+        },
+    );
+
+    let events = core.session_resync_events(first);
+
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event.event, CoreEvent::LoginAccepted { .. }))
+    );
+    assert_player_event(&events, first, |event| {
+        matches!(event, CoreEvent::PlayBootstrap { .. })
+    });
+    assert_player_event(&events, first, |event| {
+        matches!(event, CoreEvent::ChunkBatch { .. })
+    });
+    assert_player_event(
+        &events,
+        first,
+        |event| matches!(event, CoreEvent::EntitySpawned { entity_id, .. } if *entity_id == second_entity_id),
+    );
+    assert_player_event(&events, first, |event| {
+        matches!(event, CoreEvent::DroppedItemSpawned { .. })
+    });
+    assert_player_event(&events, first, |event| {
+        matches!(
+            event,
+            CoreEvent::BlockBreakingProgress {
+                breaker_entity_id,
+                stage: Some(4),
+                ..
+            } if *breaker_entity_id == second_entity_id
+        )
+    });
+    assert_player_event(&events, first, |event| {
+        matches!(event, CoreEvent::InventoryContents { window_id: 7, .. })
+    });
+    assert_player_event(&events, first, |event| {
+        matches!(
+            event,
+            CoreEvent::CursorChanged { stack }
+            if stack.as_ref() == Some(&item("minecraft:stone", 2))
+        )
+    });
+    assert_player_event(&events, first, |event| {
+        matches!(event, CoreEvent::SelectedHotbarSlotChanged { slot: 0 })
+    });
+}
+
+#[test]
 fn chunk_column_stores_semantic_states() {
     let mut column = ChunkColumn::new(ChunkPos::new(0, 0));
     column.set_block(1, 12, 2, BlockState::grass_block());

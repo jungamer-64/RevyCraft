@@ -15,9 +15,10 @@ pub(in crate::core) use self::lifecycle::{
     tick_dropped_item_state, unregister_world_container_viewer_state,
     writeback_world_container_state,
 };
-pub(crate) use self::state::OpenInventoryWindow;
-#[cfg(test)]
-pub(crate) use self::state::OpenInventoryWindowState;
+pub use self::state::{
+    ChestWindowBinding, ChestWindowState, ContainerDescriptor, FurnaceWindowBinding,
+    FurnaceWindowState, OpenInventoryWindow, OpenInventoryWindowState,
+};
 pub(in crate::core) use self::sync::{
     inventory_diff_events, property_diff_events, property_events, window_resync_events,
 };

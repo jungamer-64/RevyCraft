@@ -87,7 +87,7 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = server.reload_plugins().await?;
+    let reloaded = server.reload_runtime_artifacts().await?.reloaded_plugin_ids;
     assert!(
         reloaded
             .iter()
@@ -195,7 +195,7 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = server.reload_plugins().await?;
+    let reloaded = server.reload_runtime_artifacts().await?.reloaded_plugin_ids;
     assert!(
         !reloaded
             .iter()
@@ -292,7 +292,7 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = server.reload_plugins().await?;
+    let reloaded = server.reload_runtime_artifacts().await?.reloaded_plugin_ids;
     assert!(
         reloaded
             .iter()
@@ -383,7 +383,7 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = server.reload_plugins().await?;
+    let reloaded = server.reload_runtime_artifacts().await?.reloaded_plugin_ids;
     assert!(
         !reloaded
             .iter()
@@ -437,9 +437,9 @@ async fn config_reload_updates_storage_generation_for_buffer_limit_changes()
     updated.plugins.buffer_limits.storage_response_bytes = 8192;
     write_server_toml(&config_path, &updated)?;
 
-    let result = server.reload_config().await?;
+    let result = server.reload_runtime_full().await?;
     assert_eq!(
-        result.generation.activated_generation_id,
+        result.topology.activated_generation_id,
         before_protocol_generation
     );
     let storage_after = loaded_plugins_snapshot(&server)
@@ -514,7 +514,7 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = server.reload_plugins().await?;
+    let reloaded = server.reload_runtime_artifacts().await?.reloaded_plugin_ids;
     assert!(
         reloaded.iter().any(|plugin_id| plugin_id == "auth-offline"),
         "auth reload should report generation swap"

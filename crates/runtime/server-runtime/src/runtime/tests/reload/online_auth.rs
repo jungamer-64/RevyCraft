@@ -21,7 +21,7 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
             "online-auth-v2",
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
-    let reloaded = server.reload_plugins().await?;
+    let reloaded = server.reload_runtime_artifacts().await?.reloaded_plugin_ids;
     assert!(
         reloaded
             .iter()

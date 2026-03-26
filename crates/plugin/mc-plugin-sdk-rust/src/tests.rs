@@ -872,13 +872,13 @@ fn exported_admin_ui_plugins_parse_and_render_round_trip() {
                 &AdminUiInput::RenderResponse {
                     response: AdminResponse::PermissionDenied {
                         principal: AdminPrincipal::LocalConsole,
-                        permission: AdminPermission::ReloadPlugins,
+                        permission: AdminPermission::ReloadRuntime,
                     },
                 },
             )
         },
         AdminUiOutput::RenderedText(
-            "permission denied: principal=local-console permission=reload-plugins".to_string()
+            "permission denied: principal=local-console permission=reload-runtime".to_string()
         )
     );
 }

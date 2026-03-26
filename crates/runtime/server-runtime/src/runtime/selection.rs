@@ -102,6 +102,15 @@ impl SelectionManager {
         selection_state.config.topology = candidate_config.topology.clone();
     }
 
+    pub(crate) async fn update_core_reload_config(&self, candidate_config: &ServerConfig) {
+        let mut selection_state = self.state.write().await;
+        selection_state.config.bootstrap.level_name = candidate_config.bootstrap.level_name.clone();
+        selection_state.config.bootstrap.game_mode = candidate_config.bootstrap.game_mode;
+        selection_state.config.bootstrap.difficulty = candidate_config.bootstrap.difficulty;
+        selection_state.config.bootstrap.view_distance = candidate_config.bootstrap.view_distance;
+        selection_state.config.network.max_players = candidate_config.network.max_players;
+    }
+
     pub(crate) async fn current_admin_ui(&self) -> Option<Arc<dyn AdminUiProfileHandle>> {
         self.current().await.admin_ui
     }
@@ -151,6 +160,30 @@ impl SelectionManager {
 pub(crate) struct SelectionResolver;
 
 impl SelectionResolver {
+    pub(crate) fn gameplay_profile_for_adapter(
+        config: &ServerConfig,
+        adapter_id: &str,
+    ) -> GameplayProfileId {
+        config
+            .profiles
+            .gameplay_map
+            .get(&AdapterId::new(adapter_id))
+            .cloned()
+            .unwrap_or_else(|| config.profiles.default_gameplay.clone())
+    }
+
+    pub(crate) fn core_config(config: &ServerConfig) -> mc_core::CoreConfig {
+        mc_core::CoreConfig {
+            level_name: config.bootstrap.level_name.clone(),
+            seed: 0,
+            max_players: config.network.max_players,
+            view_distance: config.bootstrap.view_distance,
+            game_mode: config.bootstrap.game_mode,
+            difficulty: config.bootstrap.difficulty,
+            ..mc_core::CoreConfig::default()
+        }
+    }
+
     pub(crate) fn resolve_bootstrap(
         config: &ServerConfig,
         loaded_plugins: LoadedPluginSet,
@@ -163,15 +196,7 @@ impl SelectionResolver {
             None
         };
         let snapshot = storage_profile.load_snapshot(&config.bootstrap.world_dir)?;
-        let core_config = mc_core::CoreConfig {
-            level_name: config.bootstrap.level_name.clone(),
-            seed: 0,
-            max_players: config.network.max_players,
-            view_distance: config.bootstrap.view_distance,
-            game_mode: config.bootstrap.game_mode,
-            difficulty: config.bootstrap.difficulty,
-            ..mc_core::CoreConfig::default()
-        };
+        let core_config = Self::core_config(config);
         let core = match snapshot {
             Some(snapshot) => ServerCore::from_snapshot(core_config, snapshot),
             None => ServerCore::new(core_config),
@@ -308,9 +333,7 @@ const fn runtime_permission_from_config(
     match permission {
         crate::config::AdminPermission::Status => AdminPermission::Status,
         crate::config::AdminPermission::Sessions => AdminPermission::Sessions,
-        crate::config::AdminPermission::ReloadConfig => AdminPermission::ReloadConfig,
-        crate::config::AdminPermission::ReloadPlugins => AdminPermission::ReloadPlugins,
-        crate::config::AdminPermission::ReloadGeneration => AdminPermission::ReloadGeneration,
+        crate::config::AdminPermission::ReloadRuntime => AdminPermission::ReloadRuntime,
         crate::config::AdminPermission::Shutdown => AdminPermission::Shutdown,
     }
 }

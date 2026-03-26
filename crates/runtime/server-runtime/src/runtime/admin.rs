@@ -1,9 +1,10 @@
 use super::{
-    AdminConfigReloadView, AdminGenerationCountView, AdminGenerationReloadView,
+    AdminArtifactsReloadView, AdminCoreReloadView, AdminFullReloadView, AdminGenerationCountView,
     AdminListenerBindingView, AdminNamedCountView, AdminPermission, AdminPhaseCountView,
-    AdminPluginHostView, AdminPluginsReloadView, AdminPrincipal, AdminRequest, AdminResponse,
-    AdminSessionSummaryView, AdminSessionView, AdminSessionsView, AdminStatusView,
-    AdminTransportCountView, ReloadResult, ReloadScope, RuntimeServer,
+    AdminPluginHostView, AdminPrincipal, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
+    AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
+    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, RuntimeReloadMode,
+    RuntimeReloadResult, RuntimeServer,
 };
 use crate::RuntimeError;
 use crate::runtime::selection::AdminCredentialTag;
@@ -152,25 +153,12 @@ impl AdminControlPlaneHandle {
         self.service.sessions(subject).await
     }
 
-    pub async fn reload_config(
+    pub async fn reload_runtime(
         &self,
         subject: &AdminSubject,
-    ) -> Result<AdminConfigReloadView, AdminCommandError> {
-        self.service.reload_config(subject).await
-    }
-
-    pub async fn reload_plugins(
-        &self,
-        subject: &AdminSubject,
-    ) -> Result<AdminPluginsReloadView, AdminCommandError> {
-        self.service.reload_plugins(subject).await
-    }
-
-    pub async fn reload_generation(
-        &self,
-        subject: &AdminSubject,
-    ) -> Result<AdminGenerationReloadView, AdminCommandError> {
-        self.service.reload_generation(subject).await
+        mode: RuntimeReloadMode,
+    ) -> Result<AdminRuntimeReloadView, AdminCommandError> {
+        self.service.reload_runtime(subject, mode).await
     }
 
     pub async fn shutdown(&self, subject: &AdminSubject) -> Result<(), AdminCommandError> {
@@ -235,41 +223,16 @@ impl AdminService {
         Ok(self.runtime.admin_sessions_view().await)
     }
 
-    async fn reload_config(
+    async fn reload_runtime(
         &self,
         subject: &AdminSubject,
-    ) -> Result<AdminConfigReloadView, AdminCommandError> {
+        mode: RuntimeReloadMode,
+    ) -> Result<AdminRuntimeReloadView, AdminCommandError> {
         self.runtime
-            .authorize(subject, AdminPermission::ReloadConfig)
+            .authorize(subject, AdminPermission::ReloadRuntime)
             .await?;
         self.runtime
-            .admin_reload_config_view()
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn reload_plugins(
-        &self,
-        subject: &AdminSubject,
-    ) -> Result<AdminPluginsReloadView, AdminCommandError> {
-        self.runtime
-            .authorize(subject, AdminPermission::ReloadPlugins)
-            .await?;
-        self.runtime
-            .admin_reload_plugins_view()
-            .await
-            .map_err(Into::into)
-    }
-
-    async fn reload_generation(
-        &self,
-        subject: &AdminSubject,
-    ) -> Result<AdminGenerationReloadView, AdminCommandError> {
-        self.runtime
-            .authorize(subject, AdminPermission::ReloadGeneration)
-            .await?;
-        self.runtime
-            .admin_reload_generation_view()
+            .admin_reload_runtime_view(mode)
             .await
             .map_err(Into::into)
     }
@@ -296,20 +259,10 @@ impl AdminService {
                 .await
                 .map(AdminResponse::Sessions)
                 .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
-            AdminRequest::ReloadConfig => self
-                .reload_config(&subject)
+            AdminRequest::ReloadRuntime { mode } => self
+                .reload_runtime(&subject, mode)
                 .await
-                .map(AdminResponse::ReloadConfig)
-                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
-            AdminRequest::ReloadPlugins => self
-                .reload_plugins(&subject)
-                .await
-                .map(AdminResponse::ReloadPlugins)
-                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
-            AdminRequest::ReloadGeneration => self
-                .reload_generation(&subject)
-                .await
-                .map(AdminResponse::ReloadGeneration)
+                .map(AdminResponse::ReloadRuntime)
                 .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
             AdminRequest::Shutdown => self
                 .shutdown(&subject)
@@ -578,81 +531,35 @@ impl RuntimeServer {
         }
     }
 
-    async fn admin_reload_plugins_view(&self) -> Result<AdminPluginsReloadView, RuntimeError> {
-        let Some(reload_host) = self.reload.reload_host() else {
-            return Err(RuntimeError::Config(
-                "plugin reload is unavailable without a reload-capable host".to_string(),
-            ));
-        };
-        match self
-            .reload(reload_host.as_ref(), ReloadScope::Plugins)
-            .await?
-        {
-            ReloadResult::Plugins(reloaded_plugin_ids) => Ok(AdminPluginsReloadView {
-                reloaded_plugin_ids,
-            }),
-            ReloadResult::Config(_) | ReloadResult::Generation(_) => {
-                unreachable!("plugin reload should only produce a plugin-scoped result")
-            }
-        }
-    }
-
-    async fn admin_reload_generation_view(
+    async fn admin_reload_runtime_view(
         &self,
-    ) -> Result<AdminGenerationReloadView, RuntimeError> {
+        mode: RuntimeReloadMode,
+    ) -> Result<AdminRuntimeReloadView, RuntimeError> {
         let Some(reload_host) = self.reload.reload_host() else {
             return Err(RuntimeError::Config(
-                "generation reload is unavailable without a reload-capable host".to_string(),
+                "runtime reload is unavailable without a reload-capable host".to_string(),
             ));
         };
-        match self
-            .reload(reload_host.as_ref(), ReloadScope::Generation)
-            .await?
-        {
-            ReloadResult::Generation(result) => Ok(AdminGenerationReloadView {
-                activated_generation_id: result.activated_generation_id.0,
-                retired_generation_ids: result
-                    .retired_generation_ids
-                    .into_iter()
-                    .map(|generation_id| generation_id.0)
-                    .collect(),
-                applied_config_change: result.applied_config_change,
-                reconfigured_adapter_ids: result.reconfigured_adapter_ids,
-            }),
-            ReloadResult::Plugins(_) | ReloadResult::Config(_) => {
-                unreachable!("generation reload should only produce a generation-scoped result")
+        let detail = match self.reload_runtime(reload_host.as_ref(), mode).await? {
+            RuntimeReloadResult::Artifacts(result) => {
+                AdminRuntimeReloadDetail::Artifacts(AdminArtifactsReloadView {
+                    reloaded_plugin_ids: result.reloaded_plugin_ids,
+                })
             }
-        }
-    }
-
-    async fn admin_reload_config_view(&self) -> Result<AdminConfigReloadView, RuntimeError> {
-        let Some(reload_host) = self.reload.reload_host() else {
-            return Err(RuntimeError::Config(
-                "config reload is unavailable without a reload-capable host".to_string(),
-            ));
+            RuntimeReloadResult::Topology(result) => {
+                AdminRuntimeReloadDetail::Topology(admin_topology_reload_view(result))
+            }
+            RuntimeReloadResult::Core(_result) => {
+                AdminRuntimeReloadDetail::Core(AdminCoreReloadView {})
+            }
+            RuntimeReloadResult::Full(result) => {
+                AdminRuntimeReloadDetail::Full(AdminFullReloadView {
+                    reloaded_plugin_ids: result.reloaded_plugin_ids,
+                    topology: admin_topology_reload_view(result.topology),
+                })
+            }
         };
-        match self
-            .reload(reload_host.as_ref(), ReloadScope::Config)
-            .await?
-        {
-            ReloadResult::Config(result) => Ok(AdminConfigReloadView {
-                reloaded_plugin_ids: result.reloaded_plugins,
-                generation: AdminGenerationReloadView {
-                    activated_generation_id: result.generation.activated_generation_id.0,
-                    retired_generation_ids: result
-                        .generation
-                        .retired_generation_ids
-                        .into_iter()
-                        .map(|generation_id| generation_id.0)
-                        .collect(),
-                    applied_config_change: result.generation.applied_config_change,
-                    reconfigured_adapter_ids: result.generation.reconfigured_adapter_ids,
-                },
-            }),
-            ReloadResult::Plugins(_) | ReloadResult::Generation(_) => {
-                unreachable!("config reload should only produce a config-scoped result")
-            }
-        }
+        Ok(AdminRuntimeReloadView { mode, detail })
     }
 }
 
@@ -661,9 +568,9 @@ fn runtime_request_from_plugin_request(request: plugin_admin::AdminRequest) -> A
         plugin_admin::AdminRequest::Help => AdminRequest::Help,
         plugin_admin::AdminRequest::Status => AdminRequest::Status,
         plugin_admin::AdminRequest::Sessions => AdminRequest::Sessions,
-        plugin_admin::AdminRequest::ReloadConfig => AdminRequest::ReloadConfig,
-        plugin_admin::AdminRequest::ReloadPlugins => AdminRequest::ReloadPlugins,
-        plugin_admin::AdminRequest::ReloadGeneration => AdminRequest::ReloadGeneration,
+        plugin_admin::AdminRequest::ReloadRuntime { mode } => AdminRequest::ReloadRuntime {
+            mode: runtime_reload_mode_from_plugin(mode),
+        },
         plugin_admin::AdminRequest::Shutdown => AdminRequest::Shutdown,
     }
 }
@@ -679,9 +586,18 @@ fn parse_builtin_local_command(line: &str) -> Result<AdminRequest, String> {
         "help" | "?" => Ok(AdminRequest::Help),
         "status" => Ok(AdminRequest::Status),
         "sessions" => Ok(AdminRequest::Sessions),
-        "reload config" | "reload-config" => Ok(AdminRequest::ReloadConfig),
-        "reload plugins" | "reload-plugins" => Ok(AdminRequest::ReloadPlugins),
-        "reload generation" | "reload-generation" => Ok(AdminRequest::ReloadGeneration),
+        "reload runtime artifacts" => Ok(AdminRequest::ReloadRuntime {
+            mode: RuntimeReloadMode::Artifacts,
+        }),
+        "reload runtime topology" => Ok(AdminRequest::ReloadRuntime {
+            mode: RuntimeReloadMode::Topology,
+        }),
+        "reload runtime core" => Ok(AdminRequest::ReloadRuntime {
+            mode: RuntimeReloadMode::Core,
+        }),
+        "reload runtime full" => Ok(AdminRequest::ReloadRuntime {
+            mode: RuntimeReloadMode::Full,
+        }),
         "shutdown" | "stop" => Ok(AdminRequest::Shutdown),
         _ => Err(format!("unknown command: {line}")),
     }
@@ -693,9 +609,10 @@ fn render_builtin_local_response(response: &AdminResponse) -> String {
             "commands:",
             "  status",
             "  sessions",
-            "  reload config",
-            "  reload plugins",
-            "  reload generation",
+            "  reload runtime artifacts",
+            "  reload runtime topology",
+            "  reload runtime core",
+            "  reload runtime full",
             "  shutdown",
         ]
         .join("\n"),
@@ -712,21 +629,7 @@ fn render_builtin_local_response(response: &AdminResponse) -> String {
             sessions.summary.total,
             sessions.sessions.len(),
         ),
-        AdminResponse::ReloadConfig(result) => format!(
-            "reload config: plugins={} activated_generation={} reconfigured={}",
-            render_csv_or_dash(&result.reloaded_plugin_ids),
-            result.generation.activated_generation_id,
-            render_csv_or_dash(&result.generation.reconfigured_adapter_ids),
-        ),
-        AdminResponse::ReloadPlugins(result) => format!(
-            "reload plugins: {}",
-            render_csv_or_dash(&result.reloaded_plugin_ids),
-        ),
-        AdminResponse::ReloadGeneration(result) => format!(
-            "reload generation: activated_generation={} reconfigured={}",
-            result.activated_generation_id,
-            render_csv_or_dash(&result.reconfigured_adapter_ids),
-        ),
+        AdminResponse::ReloadRuntime(result) => render_builtin_runtime_reload_response(result),
         AdminResponse::ShutdownScheduled => "shutdown: scheduled".to_string(),
         AdminResponse::PermissionDenied {
             principal,
@@ -758,9 +661,7 @@ fn plugin_permission_from_runtime(permission: AdminPermission) -> plugin_admin::
     match permission {
         AdminPermission::Status => plugin_admin::AdminPermission::Status,
         AdminPermission::Sessions => plugin_admin::AdminPermission::Sessions,
-        AdminPermission::ReloadConfig => plugin_admin::AdminPermission::ReloadConfig,
-        AdminPermission::ReloadPlugins => plugin_admin::AdminPermission::ReloadPlugins,
-        AdminPermission::ReloadGeneration => plugin_admin::AdminPermission::ReloadGeneration,
+        AdminPermission::ReloadRuntime => plugin_admin::AdminPermission::ReloadRuntime,
         AdminPermission::Shutdown => plugin_admin::AdminPermission::Shutdown,
     }
 }
@@ -774,14 +675,8 @@ fn plugin_response_from_runtime_response(response: &AdminResponse) -> plugin_adm
         AdminResponse::Sessions(sessions) => {
             plugin_admin::AdminResponse::Sessions(plugin_sessions_view_from_runtime(sessions))
         }
-        AdminResponse::ReloadConfig(result) => plugin_admin::AdminResponse::ReloadConfig(
-            plugin_config_reload_view_from_runtime(result),
-        ),
-        AdminResponse::ReloadPlugins(result) => plugin_admin::AdminResponse::ReloadPlugins(
-            plugin_plugins_reload_view_from_runtime(result),
-        ),
-        AdminResponse::ReloadGeneration(result) => plugin_admin::AdminResponse::ReloadGeneration(
-            plugin_generation_reload_view_from_runtime(result),
+        AdminResponse::ReloadRuntime(result) => plugin_admin::AdminResponse::ReloadRuntime(
+            plugin_runtime_reload_view_from_runtime(result),
         ),
         AdminResponse::ShutdownScheduled => plugin_admin::AdminResponse::ShutdownScheduled,
         AdminResponse::PermissionDenied {
@@ -905,18 +800,82 @@ fn plugin_sessions_view_from_runtime(
     }
 }
 
-fn plugin_plugins_reload_view_from_runtime(
-    result: &AdminPluginsReloadView,
-) -> plugin_admin::AdminPluginsReloadView {
-    plugin_admin::AdminPluginsReloadView {
-        reloaded_plugin_ids: result.reloaded_plugin_ids.clone(),
+const fn runtime_permission_from_config(
+    permission: crate::config::AdminPermission,
+) -> AdminPermission {
+    match permission {
+        crate::config::AdminPermission::Status => AdminPermission::Status,
+        crate::config::AdminPermission::Sessions => AdminPermission::Sessions,
+        crate::config::AdminPermission::ReloadRuntime => AdminPermission::ReloadRuntime,
+        crate::config::AdminPermission::Shutdown => AdminPermission::Shutdown,
     }
 }
 
-fn plugin_generation_reload_view_from_runtime(
-    result: &AdminGenerationReloadView,
-) -> plugin_admin::AdminGenerationReloadView {
-    plugin_admin::AdminGenerationReloadView {
+fn admin_topology_reload_view(result: super::TopologyReloadResult) -> AdminTopologyReloadView {
+    AdminTopologyReloadView {
+        activated_generation_id: result.activated_generation_id.0,
+        retired_generation_ids: result
+            .retired_generation_ids
+            .into_iter()
+            .map(|generation_id| generation_id.0)
+            .collect(),
+        applied_config_change: result.applied_config_change,
+        reconfigured_adapter_ids: result.reconfigured_adapter_ids,
+    }
+}
+
+fn render_builtin_runtime_reload_response(result: &AdminRuntimeReloadView) -> String {
+    match &result.detail {
+        AdminRuntimeReloadDetail::Artifacts(detail) => format!(
+            "reload runtime {}: {}",
+            result.mode.as_str(),
+            render_csv_or_dash(&detail.reloaded_plugin_ids),
+        ),
+        AdminRuntimeReloadDetail::Topology(detail) => format!(
+            "reload runtime {}: activated_generation={} reconfigured={}",
+            result.mode.as_str(),
+            detail.activated_generation_id,
+            render_csv_or_dash(&detail.reconfigured_adapter_ids),
+        ),
+        AdminRuntimeReloadDetail::Core(_) => {
+            format!("reload runtime {}: completed", result.mode.as_str())
+        }
+        AdminRuntimeReloadDetail::Full(result_view) => format!(
+            "reload runtime {}: plugins={} activated_generation={} reconfigured={}",
+            result.mode.as_str(),
+            render_csv_or_dash(&result_view.reloaded_plugin_ids),
+            result_view.topology.activated_generation_id,
+            render_csv_or_dash(&result_view.topology.reconfigured_adapter_ids),
+        ),
+    }
+}
+
+const fn plugin_reload_mode_from_runtime(
+    mode: RuntimeReloadMode,
+) -> plugin_admin::RuntimeReloadMode {
+    match mode {
+        RuntimeReloadMode::Artifacts => plugin_admin::RuntimeReloadMode::Artifacts,
+        RuntimeReloadMode::Topology => plugin_admin::RuntimeReloadMode::Topology,
+        RuntimeReloadMode::Core => plugin_admin::RuntimeReloadMode::Core,
+        RuntimeReloadMode::Full => plugin_admin::RuntimeReloadMode::Full,
+    }
+}
+
+const fn runtime_reload_mode_from_plugin(
+    mode: plugin_admin::RuntimeReloadMode,
+) -> RuntimeReloadMode {
+    match mode {
+        plugin_admin::RuntimeReloadMode::Artifacts => RuntimeReloadMode::Artifacts,
+        plugin_admin::RuntimeReloadMode::Topology => RuntimeReloadMode::Topology,
+        plugin_admin::RuntimeReloadMode::Core => RuntimeReloadMode::Core,
+        plugin_admin::RuntimeReloadMode::Full => RuntimeReloadMode::Full,
+    }
+}
+
+fn plugin_topology_reload_view_from_runtime(
+    result: &AdminTopologyReloadView,
+) -> plugin_admin::AdminTopologyReloadView {
+    plugin_admin::AdminTopologyReloadView {
         activated_generation_id: result.activated_generation_id,
         retired_generation_ids: result.retired_generation_ids.clone(),
         applied_config_change: result.applied_config_change,
@@ -924,24 +883,34 @@ fn plugin_generation_reload_view_from_runtime(
     }
 }
 
-fn plugin_config_reload_view_from_runtime(
-    result: &AdminConfigReloadView,
-) -> plugin_admin::AdminConfigReloadView {
-    plugin_admin::AdminConfigReloadView {
-        reloaded_plugin_ids: result.reloaded_plugin_ids.clone(),
-        generation: plugin_generation_reload_view_from_runtime(&result.generation),
-    }
-}
-
-const fn runtime_permission_from_config(
-    permission: crate::config::AdminPermission,
-) -> AdminPermission {
-    match permission {
-        crate::config::AdminPermission::Status => AdminPermission::Status,
-        crate::config::AdminPermission::Sessions => AdminPermission::Sessions,
-        crate::config::AdminPermission::ReloadConfig => AdminPermission::ReloadConfig,
-        crate::config::AdminPermission::ReloadPlugins => AdminPermission::ReloadPlugins,
-        crate::config::AdminPermission::ReloadGeneration => AdminPermission::ReloadGeneration,
-        crate::config::AdminPermission::Shutdown => AdminPermission::Shutdown,
+fn plugin_runtime_reload_view_from_runtime(
+    result: &AdminRuntimeReloadView,
+) -> plugin_admin::AdminRuntimeReloadView {
+    let detail = match &result.detail {
+        AdminRuntimeReloadDetail::Artifacts(result) => {
+            plugin_admin::AdminRuntimeReloadDetail::Artifacts(
+                plugin_admin::AdminArtifactsReloadView {
+                    reloaded_plugin_ids: result.reloaded_plugin_ids.clone(),
+                },
+            )
+        }
+        AdminRuntimeReloadDetail::Topology(result) => {
+            plugin_admin::AdminRuntimeReloadDetail::Topology(
+                plugin_topology_reload_view_from_runtime(result),
+            )
+        }
+        AdminRuntimeReloadDetail::Core(_result) => {
+            plugin_admin::AdminRuntimeReloadDetail::Core(plugin_admin::AdminCoreReloadView {})
+        }
+        AdminRuntimeReloadDetail::Full(result) => {
+            plugin_admin::AdminRuntimeReloadDetail::Full(plugin_admin::AdminFullReloadView {
+                reloaded_plugin_ids: result.reloaded_plugin_ids.clone(),
+                topology: plugin_topology_reload_view_from_runtime(&result.topology),
+            })
+        }
+    };
+    plugin_admin::AdminRuntimeReloadView {
+        mode: plugin_reload_mode_from_runtime(result.mode),
+        detail,
     }
 }

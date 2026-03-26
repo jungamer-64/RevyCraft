@@ -14,6 +14,7 @@ use mc_plugin_api::codec::auth::{AuthMode, BedrockAuthResult};
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_proto_common::StorageError;
+use std::any::Any;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -176,12 +177,19 @@ pub trait AdminUiProfileHandle: Send + Sync {
 
 pub struct RuntimeProtocolTopologyCandidate {
     prepared: PreparedProtocolTopology,
+    requires_protocol_swap: bool,
 }
 
 impl RuntimeProtocolTopologyCandidate {
     #[must_use]
-    pub(crate) const fn new(prepared: PreparedProtocolTopology) -> Self {
-        Self { prepared }
+    pub(crate) const fn new(
+        prepared: PreparedProtocolTopology,
+        requires_protocol_swap: bool,
+    ) -> Self {
+        Self {
+            prepared,
+            requires_protocol_swap,
+        }
     }
 
     #[must_use]
@@ -195,6 +203,11 @@ impl RuntimeProtocolTopologyCandidate {
     }
 
     #[must_use]
+    pub const fn requires_protocol_swap(&self) -> bool {
+        self.requires_protocol_swap
+    }
+
+    #[must_use]
     pub(crate) fn into_prepared(self) -> PreparedProtocolTopology {
         self.prepared
     }
@@ -205,24 +218,74 @@ pub struct RuntimeSelectionResult {
     pub reloaded: Vec<String>,
 }
 
+pub struct PreparedRuntimeSelection {
+    loaded_plugins: LoadedPluginSet,
+    reloaded_plugin_ids: Vec<String>,
+    protocol_topology: RuntimeProtocolTopologyCandidate,
+    staged: Option<Box<dyn Any + Send>>,
+}
+
+impl PreparedRuntimeSelection {
+    #[must_use]
+    pub(crate) fn new<T: Any + Send>(
+        loaded_plugins: LoadedPluginSet,
+        reloaded_plugin_ids: Vec<String>,
+        protocol_topology: RuntimeProtocolTopologyCandidate,
+        staged: T,
+    ) -> Self {
+        Self {
+            loaded_plugins,
+            reloaded_plugin_ids,
+            protocol_topology,
+            staged: Some(Box::new(staged)),
+        }
+    }
+
+    #[must_use]
+    pub const fn loaded_plugins(&self) -> &LoadedPluginSet {
+        &self.loaded_plugins
+    }
+
+    #[must_use]
+    pub fn reloaded_plugin_ids(&self) -> &[String] {
+        &self.reloaded_plugin_ids
+    }
+
+    #[must_use]
+    pub const fn protocol_topology(&self) -> &RuntimeProtocolTopologyCandidate {
+        &self.protocol_topology
+    }
+
+    pub(crate) fn take_staged<T: Any + Send>(mut self) -> T {
+        *self
+            .staged
+            .take()
+            .expect("prepared runtime selection should contain staged state")
+            .downcast::<T>()
+            .expect("prepared runtime selection staged payload type should match")
+    }
+}
+
 pub trait RuntimePluginHost: Send + Sync {
     /// # Errors
     ///
-    /// Returns [`PluginHostError`] when the host cannot reconcile its
+    /// Returns [`PluginHostError`] when the host cannot stage its
     /// runtime-selected gameplay/auth/plugin state with the provided config.
-    fn reconcile_runtime_selection(
+    fn prepare_runtime_selection(
         &self,
         config: &RuntimeSelectionConfig,
         runtime: &RuntimeReloadContext,
-    ) -> Result<RuntimeSelectionResult, PluginHostError>;
+    ) -> Result<PreparedRuntimeSelection, PluginHostError>;
 
     /// # Errors
     ///
-    /// Returns [`PluginHostError`] when a modified plugin cannot be reloaded.
-    fn reload_modified_with_context(
+    /// Returns [`PluginHostError`] when a modified plugin cannot be staged.
+    fn prepare_runtime_artifacts(
         &self,
         runtime: &RuntimeReloadContext,
-    ) -> Result<Vec<String>, PluginHostError>;
+    ) -> Result<PreparedRuntimeSelection, PluginHostError>;
+
+    fn commit_runtime_selection(&self, prepared: PreparedRuntimeSelection);
 
     /// # Errors
     ///

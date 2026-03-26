@@ -66,7 +66,7 @@ fn write_server_toml_at(
         fs::write(&token_path, "ops-token\n")?;
         (
             format!(
-                "\n[static.admin.grpc.principals.ops]\ntoken_file = {}\npermissions = [\"status\", \"sessions\", \"reload-config\", \"reload-plugins\", \"reload-generation\", \"shutdown\"]\n",
+                "\n[static.admin.grpc.principals.ops]\ntoken_file = {}\npermissions = [\"status\", \"sessions\", \"reload-runtime\", \"shutdown\"]\n",
                 toml_string(&token_path.display().to_string())
             ),
             format!("127.0.0.1:{admin_grpc_port}"),
@@ -91,8 +91,8 @@ storage_profile = \"je-anvil-1_7_10\"
 
 [static.plugins]
 plugins_dir = {}
-plugin_abi_min = \"3.0\"
-plugin_abi_max = \"3.0\"
+plugin_abi_min = \"4.0\"
+plugin_abi_max = \"4.0\"
 
 [static.admin.grpc]
 enabled = {}
@@ -130,7 +130,7 @@ default_gameplay = \"canonical\"
 
 [live.admin]
 ui_profile = \"console-v1\"
-local_console_permissions = [\"status\", \"sessions\", \"reload-config\", \"reload-plugins\", \"reload-generation\", \"shutdown\"]
+local_console_permissions = [\"status\", \"sessions\", \"reload-runtime\", \"shutdown\"]
 ",
             toml_string(&world_dir.display().to_string()),
             toml_string(&plugins_dir.display().to_string()),

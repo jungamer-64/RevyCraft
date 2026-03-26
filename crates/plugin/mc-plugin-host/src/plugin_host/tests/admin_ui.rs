@@ -36,8 +36,10 @@ fn in_process_admin_ui_profile_parses_and_renders() -> Result<(), RuntimeError> 
         .expect("console admin-ui profile should resolve");
 
     assert_eq!(
-        profile.parse_line("reload plugins")?,
-        AdminRequest::ReloadPlugins
+        profile.parse_line("reload runtime artifacts")?,
+        AdminRequest::ReloadRuntime {
+            mode: mc_plugin_api::codec::admin_ui::RuntimeReloadMode::Artifacts,
+        }
     );
     assert!(
         profile

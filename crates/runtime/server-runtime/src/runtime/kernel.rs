@@ -1,7 +1,7 @@
 use crate::RuntimeError;
 use mc_core::{
-    CoreCommand, CoreEvent, PlayerId, PlayerSummary, ServerCore, SessionCapabilitySet,
-    TargetedEvent,
+    CoreCommand, CoreEvent, CoreRuntimeStateBlob, PlayerId, PlayerSummary, ServerCore,
+    SessionCapabilitySet, TargetedEvent,
 };
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_host::host::PluginFailureAction;
@@ -13,6 +13,11 @@ use tokio::sync::Mutex;
 struct KernelState {
     core: ServerCore,
     dirty: bool,
+}
+
+pub(crate) struct ExportedCoreRuntimeState {
+    pub(crate) blob: CoreRuntimeStateBlob,
+    pub(crate) dirty: bool,
 }
 
 pub(crate) struct RuntimeKernel {
@@ -157,6 +162,20 @@ impl RuntimeKernel {
 
     pub(crate) async fn snapshot(&self) -> mc_core::WorldSnapshot {
         self.state.lock().await.core.snapshot()
+    }
+
+    pub(crate) async fn export_core_runtime_state(&self) -> ExportedCoreRuntimeState {
+        let state = self.state.lock().await;
+        ExportedCoreRuntimeState {
+            blob: state.core.export_runtime_state(),
+            dirty: state.dirty,
+        }
+    }
+
+    pub(crate) async fn swap_core(&self, candidate: ServerCore, dirty: bool) {
+        let mut state = self.state.lock().await;
+        state.core = candidate;
+        state.dirty = dirty;
     }
 
     pub(crate) async fn player_summary(&self) -> PlayerSummary {

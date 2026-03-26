@@ -1,6 +1,6 @@
 use super::{
     ActiveGeneration, DrainingGeneration, GenerationAdmission, GenerationId,
-    GenerationReloadResult, RuntimeGenerationState, TopologyListenerWorker, now_ms,
+    RuntimeGenerationState, SessionControl, TopologyListenerWorker, TopologyReloadResult, now_ms,
 };
 use crate::ListenerBinding;
 use crate::RuntimeError;
@@ -9,14 +9,69 @@ use crate::runtime::kernel::RuntimeKernel;
 use crate::runtime::session_registry::SessionRegistry;
 use crate::transport::{bind_transport_listener, build_listener_plans};
 use mc_plugin_host::registry::ProtocolRegistry;
-use mc_plugin_host::runtime::RuntimePluginHost;
+use mc_plugin_host::runtime::RuntimeProtocolTopologyCandidate;
 use mc_proto_common::{BedrockListenerDescriptor, Edition, TransportKind, WireFormatKind};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) struct TopologyManager {
     state: std::sync::RwLock<RuntimeGenerationState>,
+    #[cfg(test)]
+    fail_next_precommit: AtomicBool,
+}
+
+pub(crate) enum PreparedTopologyReload {
+    Noop(TopologyReloadResult),
+    ProtocolOnly {
+        candidate_generation: Arc<ActiveGeneration>,
+        result: TopologyReloadResult,
+    },
+    Generation {
+        candidate_generation: Arc<ActiveGeneration>,
+        new_bound_listeners: Vec<crate::transport::BoundTransportListener>,
+        reused_transports: HashSet<TransportKind>,
+        applied_config_change: bool,
+        reconfigured_adapter_ids: Vec<String>,
+        drain_grace_secs: u64,
+    },
+}
+
+pub(crate) enum PrecommittedTopologyReload {
+    Noop(TopologyReloadResult),
+    ProtocolOnly {
+        candidate_generation: Arc<ActiveGeneration>,
+        result: TopologyReloadResult,
+    },
+    Generation {
+        candidate_generation: Arc<ActiveGeneration>,
+        new_listener_workers: HashMap<TransportKind, TopologyListenerWorker>,
+        reused_transports: HashSet<TransportKind>,
+        applied_config_change: bool,
+        reconfigured_adapter_ids: Vec<String>,
+        drain_grace_secs: u64,
+    },
+}
+
+impl PreparedTopologyReload {
+    pub(crate) fn candidate_generation(
+        &self,
+        active_generation: &Arc<ActiveGeneration>,
+    ) -> Arc<ActiveGeneration> {
+        match self {
+            Self::Noop(_) => Arc::clone(active_generation),
+            Self::ProtocolOnly {
+                candidate_generation,
+                ..
+            } => Arc::clone(candidate_generation),
+            Self::Generation {
+                candidate_generation,
+                ..
+            } => Arc::clone(candidate_generation),
+        }
+    }
 }
 
 impl TopologyManager {
@@ -32,6 +87,8 @@ impl TopologyManager {
                 listener_workers,
                 next_generation_id,
             }),
+            #[cfg(test)]
+            fail_next_precommit: AtomicBool::new(false),
         }
     }
 
@@ -101,8 +158,8 @@ impl TopologyManager {
         )
     }
 
-    pub(crate) fn noop_generation_reload_result(&self) -> GenerationReloadResult {
-        GenerationReloadResult {
+    pub(crate) fn noop_generation_reload_result(&self) -> TopologyReloadResult {
+        TopologyReloadResult {
             activated_generation_id: self.active_generation_id(),
             retired_generation_ids: Vec::new(),
             applied_config_change: false,
@@ -120,6 +177,11 @@ impl TopologyManager {
         generation_id
     }
 
+    #[cfg(test)]
+    pub(crate) fn fail_next_precommit_for_test(&self) {
+        self.fail_next_precommit.store(true, Ordering::SeqCst);
+    }
+
     pub(crate) async fn shutdown_listener_workers(&self) {
         let workers = {
             let mut generation_state = self
@@ -132,6 +194,26 @@ impl TopologyManager {
                 .map(|(_, worker)| worker)
                 .collect::<Vec<_>>()
         };
+        Self::shutdown_workers(workers).await;
+    }
+
+    pub(crate) async fn reload_generation_with_config(
+        &self,
+        candidate_config: crate::config::ServerConfig,
+        force_generation: bool,
+        protocol_topology: &RuntimeProtocolTopologyCandidate,
+        kernel: &RuntimeKernel,
+        sessions: &SessionRegistry,
+    ) -> Result<TopologyReloadResult, RuntimeError> {
+        let prepared = self
+            .prepare_generation_reload(candidate_config, force_generation, protocol_topology)
+            .await?;
+        let prepared = self.precommit_generation_reload(prepared, sessions).await?;
+        self.commit_generation_reload(prepared, kernel, sessions)
+            .await
+    }
+
+    async fn shutdown_workers(workers: Vec<TopologyListenerWorker>) {
         for mut worker in workers {
             if let Some(shutdown_tx) = worker.shutdown_tx.take() {
                 let shutdown_tx: tokio::sync::oneshot::Sender<()> = shutdown_tx;
@@ -143,48 +225,71 @@ impl TopologyManager {
         }
     }
 
-    pub(crate) async fn reload_generation_with_config(
+    pub(crate) async fn prepare_generation_reload(
         &self,
-        reload_host: &dyn RuntimePluginHost,
         candidate_config: crate::config::ServerConfig,
         force_generation: bool,
-        kernel: &RuntimeKernel,
-        sessions: &SessionRegistry,
-    ) -> Result<GenerationReloadResult, RuntimeError> {
+        protocol_topology: &RuntimeProtocolTopologyCandidate,
+    ) -> Result<PreparedTopologyReload, RuntimeError> {
         let active = self.active_generation();
         let applied_config_change = active.config.network != candidate_config.network
             || active.config.topology != candidate_config.topology;
 
-        let prepared = reload_host.prepare_protocol_topology_for_reload()?;
         let current_signature = protocol_topology_signature(&active.protocol_registry);
         let candidate_active_protocols =
-            activate_protocols(&candidate_config, prepared.registry())?;
+            activate_protocols(&candidate_config, protocol_topology.registry())?;
         let candidate_signature =
             protocol_topology_signature(&candidate_active_protocols.protocols);
         let protocol_buffer_limits_changed = protocol_buffer_limit_signature(&active.config)
             != protocol_buffer_limit_signature(&candidate_config);
-        let current_managed_ids = reload_host.managed_protocol_ids();
+        let mut current_managed_ids = active
+            .protocol_registry
+            .adapter_ids_for_transport(TransportKind::Tcp);
+        current_managed_ids.extend(
+            active
+                .protocol_registry
+                .adapter_ids_for_transport(TransportKind::Udp),
+        );
+        let mut current_managed_ids = current_managed_ids
+            .into_iter()
+            .map(|adapter_id| adapter_id.to_string())
+            .collect::<Vec<_>>();
+        current_managed_ids.sort();
+        current_managed_ids.dedup();
         let reconfigured_adapter_ids = reconfigured_adapter_ids(
             &current_signature,
             &candidate_signature,
             &current_managed_ids,
-            prepared.managed_protocol_ids(),
+            protocol_topology.managed_protocol_ids(),
         );
         if !force_generation
             && !applied_config_change
             && !protocol_buffer_limits_changed
             && current_signature == candidate_signature
         {
-            if current_managed_ids != prepared.managed_protocol_ids() {
-                reload_host.activate_protocol_topology(prepared);
-                return Ok(GenerationReloadResult {
-                    activated_generation_id: active.generation_id,
-                    retired_generation_ids: Vec::new(),
-                    applied_config_change: false,
-                    reconfigured_adapter_ids,
+            if current_managed_ids != protocol_topology.managed_protocol_ids()
+                || protocol_topology.requires_protocol_swap()
+            {
+                return Ok(PreparedTopologyReload::ProtocolOnly {
+                    candidate_generation: Arc::new(ActiveGeneration {
+                        generation_id: active.generation_id,
+                        config: candidate_config.clone(),
+                        protocol_registry: candidate_active_protocols.protocols.clone(),
+                        default_adapter: candidate_active_protocols.default_adapter,
+                        default_bedrock_adapter: candidate_active_protocols.default_bedrock_adapter,
+                        listener_bindings: active.listener_bindings.clone(),
+                    }),
+                    result: TopologyReloadResult {
+                        activated_generation_id: active.generation_id,
+                        retired_generation_ids: Vec::new(),
+                        applied_config_change: false,
+                        reconfigured_adapter_ids,
+                    },
                 });
             }
-            return Ok(self.noop_generation_reload_result());
+            return Ok(PreparedTopologyReload::Noop(
+                self.noop_generation_reload_result(),
+            ));
         }
 
         let new_generation_id = self.next_generation_id();
@@ -251,79 +356,178 @@ impl TopologyManager {
             candidate_bindings.push(udp_binding);
         }
 
-        let candidate_generation = Arc::new(ActiveGeneration {
-            generation_id: new_generation_id,
-            config: candidate_config.clone(),
-            protocol_registry: candidate_active_protocols.protocols.clone(),
-            default_adapter: candidate_active_protocols.default_adapter,
-            default_bedrock_adapter: candidate_active_protocols.default_bedrock_adapter,
-            listener_bindings: candidate_bindings,
-        });
-
-        let workers_to_shutdown = {
-            let mut generation_state = self
-                .state
-                .write()
-                .expect("runtime topology lock should not be poisoned");
-            let previous_active = Arc::clone(&generation_state.active);
-            let mut workers_to_shutdown = Vec::new();
-
-            generation_state.active = Arc::clone(&candidate_generation);
-            generation_state.draining.push(DrainingGeneration {
-                generation: previous_active,
-                drain_deadline_ms: now_ms().saturating_add(
-                    candidate_config
-                        .topology
-                        .drain_grace_secs
-                        .saturating_mul(1_000),
-                ),
-            });
-
-            for transport in [TransportKind::Tcp, TransportKind::Udp] {
-                if reused_transports.contains(&transport) {
-                    if let Some(worker) = generation_state.listener_workers.get(&transport) {
-                        let _ = worker.generation_tx.send(new_generation_id);
-                    }
-                    continue;
-                }
-                if let Some(worker) = generation_state.listener_workers.remove(&transport) {
-                    workers_to_shutdown.push(worker);
-                }
-            }
-            for listener in new_bound_listeners {
-                let worker = spawn_listener_worker(
-                    listener,
-                    new_generation_id,
-                    sessions.accepted_sender(),
-                    sessions.queued_accepts(),
-                )?;
-                generation_state
-                    .listener_workers
-                    .insert(worker.transport, worker);
-            }
-            workers_to_shutdown
-        };
-
-        reload_host.activate_protocol_topology(prepared);
-        kernel
-            .set_max_players(candidate_config.network.max_players)
-            .await;
-        for mut worker in workers_to_shutdown {
-            if let Some(shutdown_tx) = worker.shutdown_tx.take() {
-                let shutdown_tx: tokio::sync::oneshot::Sender<()> = shutdown_tx;
-                let _ = shutdown_tx.send(());
-            }
-            if let Some(join_handle) = worker.join_handle.take() {
-                let _ = join_handle.await;
-            }
-        }
-        let retired_generation_ids = self.retire_drained_generations(sessions).await;
-        Ok(GenerationReloadResult {
-            activated_generation_id: new_generation_id,
-            retired_generation_ids,
+        Ok(PreparedTopologyReload::Generation {
+            candidate_generation: Arc::new(ActiveGeneration {
+                generation_id: new_generation_id,
+                config: candidate_config.clone(),
+                protocol_registry: candidate_active_protocols.protocols.clone(),
+                default_adapter: candidate_active_protocols.default_adapter,
+                default_bedrock_adapter: candidate_active_protocols.default_bedrock_adapter,
+                listener_bindings: candidate_bindings,
+            }),
+            new_bound_listeners,
+            reused_transports,
             applied_config_change,
             reconfigured_adapter_ids,
+            drain_grace_secs: candidate_config.topology.drain_grace_secs,
         })
+    }
+
+    pub(crate) async fn commit_generation_reload(
+        &self,
+        prepared_reload: PrecommittedTopologyReload,
+        kernel: &RuntimeKernel,
+        sessions: &SessionRegistry,
+    ) -> Result<TopologyReloadResult, RuntimeError> {
+        match prepared_reload {
+            PrecommittedTopologyReload::Noop(result) => Ok(result),
+            PrecommittedTopologyReload::ProtocolOnly {
+                candidate_generation,
+                result,
+            } => {
+                {
+                    let mut generation_state = self
+                        .state
+                        .write()
+                        .expect("runtime topology lock should not be poisoned");
+                    generation_state.active = candidate_generation;
+                }
+                Ok(result)
+            }
+            PrecommittedTopologyReload::Generation {
+                candidate_generation,
+                new_listener_workers,
+                reused_transports,
+                applied_config_change,
+                reconfigured_adapter_ids,
+                drain_grace_secs,
+            } => {
+                let new_generation_id = candidate_generation.generation_id;
+                let workers_to_shutdown = {
+                    let mut generation_state = self
+                        .state
+                        .write()
+                        .expect("runtime topology lock should not be poisoned");
+                    let previous_active = Arc::clone(&generation_state.active);
+                    let mut workers_to_shutdown = Vec::new();
+
+                    generation_state.active = Arc::clone(&candidate_generation);
+                    generation_state.draining.push(DrainingGeneration {
+                        generation: previous_active,
+                        drain_deadline_ms: now_ms()
+                            .saturating_add(drain_grace_secs.saturating_mul(1_000)),
+                    });
+
+                    for transport in [TransportKind::Tcp, TransportKind::Udp] {
+                        if reused_transports.contains(&transport) {
+                            if let Some(worker) = generation_state.listener_workers.get(&transport)
+                            {
+                                let _ = worker.generation_tx.send(new_generation_id);
+                            }
+                            continue;
+                        }
+                        if let Some(worker) = generation_state.listener_workers.remove(&transport) {
+                            workers_to_shutdown.push(worker);
+                        }
+                    }
+                    for worker in new_listener_workers.into_values() {
+                        generation_state
+                            .listener_workers
+                            .insert(worker.transport, worker);
+                    }
+                    workers_to_shutdown
+                };
+
+                kernel
+                    .set_max_players(candidate_generation.config.network.max_players)
+                    .await;
+                Self::shutdown_workers(workers_to_shutdown).await;
+                let retired_generation_ids = self.retire_drained_generations(sessions).await;
+                Ok(TopologyReloadResult {
+                    activated_generation_id: new_generation_id,
+                    retired_generation_ids,
+                    applied_config_change,
+                    reconfigured_adapter_ids,
+                })
+            }
+        }
+    }
+
+    pub(crate) async fn precommit_generation_reload(
+        &self,
+        prepared_reload: PreparedTopologyReload,
+        sessions: &SessionRegistry,
+    ) -> Result<PrecommittedTopologyReload, RuntimeError> {
+        match prepared_reload {
+            PreparedTopologyReload::Noop(result) => Ok(PrecommittedTopologyReload::Noop(result)),
+            PreparedTopologyReload::ProtocolOnly {
+                candidate_generation,
+                result,
+            } => Ok(PrecommittedTopologyReload::ProtocolOnly {
+                candidate_generation,
+                result,
+            }),
+            PreparedTopologyReload::Generation {
+                candidate_generation,
+                new_bound_listeners,
+                reused_transports,
+                applied_config_change,
+                reconfigured_adapter_ids,
+                drain_grace_secs,
+            } => {
+                let mut new_listener_workers = HashMap::new();
+                for listener in new_bound_listeners {
+                    let worker = match spawn_listener_worker(
+                        listener,
+                        candidate_generation.generation_id,
+                        sessions.accepted_sender(),
+                        sessions.queued_accepts(),
+                    ) {
+                        Ok(worker) => worker,
+                        Err(error) => {
+                            Self::shutdown_workers(
+                                new_listener_workers.into_values().collect::<Vec<_>>(),
+                            )
+                            .await;
+                            return Err(error);
+                        }
+                    };
+                    if new_listener_workers
+                        .insert(worker.transport, worker)
+                        .is_some()
+                    {
+                        Self::shutdown_workers(
+                            new_listener_workers.into_values().collect::<Vec<_>>(),
+                        )
+                        .await;
+                        return Err(RuntimeError::Config(
+                            "multiple listener workers for the same transport are not supported"
+                                .to_string(),
+                        ));
+                    }
+                }
+                #[cfg(test)]
+                if self.fail_next_precommit.swap(false, Ordering::SeqCst) {
+                    Self::shutdown_workers(new_listener_workers.into_values().collect::<Vec<_>>())
+                        .await;
+                    return Err(RuntimeError::Config(
+                        "injected topology precommit failure".to_string(),
+                    ));
+                }
+                Ok(PrecommittedTopologyReload::Generation {
+                    candidate_generation,
+                    new_listener_workers,
+                    reused_transports,
+                    applied_config_change,
+                    reconfigured_adapter_ids,
+                    drain_grace_secs,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn rollback_generation_reload(&self, prepared_reload: PreparedTopologyReload) {
+        drop(prepared_reload);
     }
 
     pub(crate) async fn enforce_generation_drains(
@@ -354,7 +558,10 @@ impl TopologyManager {
         for handle in session_handles {
             let _ = handle
                 .control_tx
-                .send(Some("Server generation reloaded".to_string()));
+                .send(SessionControl::Terminate {
+                    reason: "Server generation reloaded".to_string(),
+                })
+                .await;
         }
         let _ = self.retire_drained_generations(sessions).await;
         Ok(())

@@ -1,13 +1,14 @@
 use revy_admin_grpc::admin::{
-    self as proto, GetStatusResponse, ListSessionsResponse, ReloadConfigResponse,
-    ReloadGenerationResponse, ReloadPluginsResponse, ShutdownResponse,
+    self as proto, GetStatusResponse, ListSessionsResponse, ReloadRuntimeResponse,
+    ShutdownResponse,
     admin_control_plane_server::{AdminControlPlane, AdminControlPlaneServer},
 };
 use server_runtime::RuntimeError;
 use server_runtime::runtime::{
-    AdminAuthError, AdminCommandError, AdminConfigReloadView, AdminControlPlaneHandle,
-    AdminGenerationReloadView, AdminNamedCountView, AdminSessionSummaryView, AdminSessionsView,
-    AdminStatusView, AdminSubject,
+    AdminArtifactsReloadView, AdminAuthError, AdminCommandError, AdminControlPlaneHandle,
+    AdminFullReloadView, AdminNamedCountView, AdminRuntimeReloadDetail, AdminRuntimeReloadView,
+    AdminSessionSummaryView, AdminSessionsView, AdminStatusView, AdminSubject,
+    AdminTopologyReloadView, RuntimeReloadMode,
 };
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -74,51 +75,18 @@ impl AdminControlPlane for AdminGrpcService {
             .map_err(map_command_error)
     }
 
-    async fn reload_config(
+    async fn reload_runtime(
         &self,
-        request: Request<proto::ReloadConfigRequest>,
-    ) -> Result<Response<ReloadConfigResponse>, Status> {
+        request: Request<proto::ReloadRuntimeRequest>,
+    ) -> Result<Response<ReloadRuntimeResponse>, Status> {
         let subject = authenticate_request(&self.control_plane, request.metadata()).await?;
+        let mode = map_reload_mode_request(request.into_inner().mode)?;
         self.control_plane
-            .reload_config(&subject)
+            .reload_runtime(&subject, mode)
             .await
             .map(|result| {
-                Response::new(ReloadConfigResponse {
-                    result: Some(map_config_reload_view(result)),
-                })
-            })
-            .map_err(map_command_error)
-    }
-
-    async fn reload_plugins(
-        &self,
-        request: Request<proto::ReloadPluginsRequest>,
-    ) -> Result<Response<ReloadPluginsResponse>, Status> {
-        let subject = authenticate_request(&self.control_plane, request.metadata()).await?;
-        self.control_plane
-            .reload_plugins(&subject)
-            .await
-            .map(|result| {
-                Response::new(ReloadPluginsResponse {
-                    result: Some(proto::AdminPluginsReloadView {
-                        reloaded_plugin_ids: result.reloaded_plugin_ids,
-                    }),
-                })
-            })
-            .map_err(map_command_error)
-    }
-
-    async fn reload_generation(
-        &self,
-        request: Request<proto::ReloadGenerationRequest>,
-    ) -> Result<Response<ReloadGenerationResponse>, Status> {
-        let subject = authenticate_request(&self.control_plane, request.metadata()).await?;
-        self.control_plane
-            .reload_generation(&subject)
-            .await
-            .map(|result| {
-                Response::new(ReloadGenerationResponse {
-                    result: Some(map_generation_reload_view(result)),
+                Response::new(ReloadRuntimeResponse {
+                    result: Some(map_runtime_reload_view(result)),
                 })
             })
             .map_err(map_command_error)
@@ -254,6 +222,31 @@ fn map_phase(phase: mc_proto_common::ConnectionPhase) -> i32 {
     }
 }
 
+fn map_reload_mode(mode: RuntimeReloadMode) -> i32 {
+    match mode {
+        RuntimeReloadMode::Artifacts => proto::RuntimeReloadMode::Artifacts as i32,
+        RuntimeReloadMode::Topology => proto::RuntimeReloadMode::Topology as i32,
+        RuntimeReloadMode::Core => proto::RuntimeReloadMode::Core as i32,
+        RuntimeReloadMode::Full => proto::RuntimeReloadMode::Full as i32,
+    }
+}
+
+fn map_reload_mode_request(mode: i32) -> Result<RuntimeReloadMode, Status> {
+    let mode = proto::RuntimeReloadMode::try_from(mode)
+        .map_err(|_| Status::invalid_argument("invalid reload runtime mode"))?;
+    Ok(match mode {
+        proto::RuntimeReloadMode::Artifacts => RuntimeReloadMode::Artifacts,
+        proto::RuntimeReloadMode::Topology => RuntimeReloadMode::Topology,
+        proto::RuntimeReloadMode::Core => RuntimeReloadMode::Core,
+        proto::RuntimeReloadMode::Full => RuntimeReloadMode::Full,
+        proto::RuntimeReloadMode::Unspecified => {
+            return Err(Status::invalid_argument(
+                "reload runtime mode must be specified",
+            ));
+        }
+    })
+}
+
 fn count_to_u64(value: usize) -> u64 {
     u64::try_from(value).expect("count should fit into u64")
 }
@@ -360,10 +353,8 @@ fn map_sessions_view(sessions: AdminSessionsView) -> proto::AdminSessionsView {
     }
 }
 
-fn map_generation_reload_view(
-    result: AdminGenerationReloadView,
-) -> proto::AdminGenerationReloadView {
-    proto::AdminGenerationReloadView {
+fn map_topology_reload_view(result: AdminTopologyReloadView) -> proto::AdminTopologyReloadView {
+    proto::AdminTopologyReloadView {
         activated_generation_id: result.activated_generation_id,
         retired_generation_ids: result.retired_generation_ids,
         applied_config_change: result.applied_config_change,
@@ -371,10 +362,32 @@ fn map_generation_reload_view(
     }
 }
 
-fn map_config_reload_view(result: AdminConfigReloadView) -> proto::AdminConfigReloadView {
-    proto::AdminConfigReloadView {
-        reloaded_plugin_ids: result.reloaded_plugin_ids,
-        generation: Some(map_generation_reload_view(result.generation)),
+fn map_runtime_reload_view(result: AdminRuntimeReloadView) -> proto::AdminRuntimeReloadView {
+    let detail = match result.detail {
+        AdminRuntimeReloadDetail::Artifacts(AdminArtifactsReloadView {
+            reloaded_plugin_ids,
+        }) => {
+            proto::admin_runtime_reload_view::Detail::Artifacts(proto::AdminArtifactsReloadView {
+                reloaded_plugin_ids,
+            })
+        }
+        AdminRuntimeReloadDetail::Topology(result) => {
+            proto::admin_runtime_reload_view::Detail::Topology(map_topology_reload_view(result))
+        }
+        AdminRuntimeReloadDetail::Core(_) => {
+            proto::admin_runtime_reload_view::Detail::Core(proto::AdminCoreReloadView {})
+        }
+        AdminRuntimeReloadDetail::Full(AdminFullReloadView {
+            reloaded_plugin_ids,
+            topology,
+        }) => proto::admin_runtime_reload_view::Detail::Full(proto::AdminFullReloadView {
+            reloaded_plugin_ids,
+            topology: Some(map_topology_reload_view(topology)),
+        }),
+    };
+    proto::AdminRuntimeReloadView {
+        mode: map_reload_mode(result.mode),
+        detail: Some(detail),
     }
 }
 
@@ -434,9 +447,7 @@ mod tests {
                 permissions: vec![
                     ConfigAdminPermission::Status,
                     ConfigAdminPermission::Sessions,
-                    ConfigAdminPermission::ReloadConfig,
-                    ConfigAdminPermission::ReloadPlugins,
-                    ConfigAdminPermission::ReloadGeneration,
+                    ConfigAdminPermission::ReloadRuntime,
                     ConfigAdminPermission::Shutdown,
                 ],
             },
@@ -558,8 +569,10 @@ mod tests {
         assert!(status.status.is_some());
 
         let denied = client
-            .reload_plugins(authorized_request(
-                proto::ReloadPluginsRequest {},
+            .reload_runtime(authorized_request(
+                proto::ReloadRuntimeRequest {
+                    mode: proto::RuntimeReloadMode::Artifacts as i32,
+                },
                 "status-token",
             ))
             .await;
@@ -602,32 +615,49 @@ mod tests {
             .into_inner();
         assert!(sessions.sessions.is_some());
 
-        let reload_config = client
-            .reload_config(authorized_request(
-                proto::ReloadConfigRequest {},
+        let reload_artifacts = client
+            .reload_runtime(authorized_request(
+                proto::ReloadRuntimeRequest {
+                    mode: proto::RuntimeReloadMode::Artifacts as i32,
+                },
                 "admin-token",
             ))
             .await?
             .into_inner();
-        assert!(reload_config.result.is_some());
+        assert!(reload_artifacts.result.is_some());
 
-        let reload_plugins = client
-            .reload_plugins(authorized_request(
-                proto::ReloadPluginsRequest {},
+        let reload_topology = client
+            .reload_runtime(authorized_request(
+                proto::ReloadRuntimeRequest {
+                    mode: proto::RuntimeReloadMode::Topology as i32,
+                },
                 "admin-token",
             ))
             .await?
             .into_inner();
-        assert!(reload_plugins.result.is_some());
+        assert!(reload_topology.result.is_some());
 
-        let reload_generation = client
-            .reload_generation(authorized_request(
-                proto::ReloadGenerationRequest {},
+        let reload_full = client
+            .reload_runtime(authorized_request(
+                proto::ReloadRuntimeRequest {
+                    mode: proto::RuntimeReloadMode::Full as i32,
+                },
                 "admin-token",
             ))
             .await?
             .into_inner();
-        assert!(reload_generation.result.is_some());
+        assert!(reload_full.result.is_some());
+
+        let reload_core = client
+            .reload_runtime(authorized_request(
+                proto::ReloadRuntimeRequest {
+                    mode: proto::RuntimeReloadMode::Core as i32,
+                },
+                "admin-token",
+            ))
+            .await?
+            .into_inner();
+        assert!(reload_core.result.is_some());
 
         let shutdown = client
             .shutdown(authorized_request(proto::ShutdownRequest {}, "admin-token"))

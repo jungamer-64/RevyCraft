@@ -57,9 +57,7 @@ impl ServerConfigSource {
 pub enum AdminPermission {
     Status,
     Sessions,
-    ReloadConfig,
-    ReloadPlugins,
-    ReloadGeneration,
+    ReloadRuntime,
     Shutdown,
 }
 
@@ -69,9 +67,7 @@ impl AdminPermission {
         match self {
             Self::Status => "status",
             Self::Sessions => "sessions",
-            Self::ReloadConfig => "reload-config",
-            Self::ReloadPlugins => "reload-plugins",
-            Self::ReloadGeneration => "reload-generation",
+            Self::ReloadRuntime => "reload-runtime",
             Self::Shutdown => "shutdown",
         }
     }
@@ -966,13 +962,11 @@ where
     }
 }
 
-const fn all_admin_permissions() -> [AdminPermission; 6] {
+const fn all_admin_permissions() -> [AdminPermission; 4] {
     [
         AdminPermission::Status,
         AdminPermission::Sessions,
-        AdminPermission::ReloadConfig,
-        AdminPermission::ReloadPlugins,
-        AdminPermission::ReloadGeneration,
+        AdminPermission::ReloadRuntime,
         AdminPermission::Shutdown,
     ]
 }
@@ -1000,9 +994,7 @@ fn parse_admin_permissions(
         let permission = match value.as_str() {
             "status" => AdminPermission::Status,
             "sessions" => AdminPermission::Sessions,
-            "reload-config" => AdminPermission::ReloadConfig,
-            "reload-plugins" => AdminPermission::ReloadPlugins,
-            "reload-generation" => AdminPermission::ReloadGeneration,
+            "reload-runtime" => AdminPermission::ReloadRuntime,
             "shutdown" => AdminPermission::Shutdown,
             _ => {
                 return Err(ServerConfigError::Config(format!(

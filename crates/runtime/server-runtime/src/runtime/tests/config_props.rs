@@ -151,7 +151,7 @@ fn tracked_runtime_server_toml_parses() -> Result<(), RuntimeError> {
         config
             .admin
             .local_console_permissions
-            .contains(&crate::config::AdminPermission::ReloadGeneration)
+            .contains(&crate::config::AdminPermission::ReloadRuntime)
     );
     Ok(())
 }
@@ -164,7 +164,7 @@ fn tracked_runtime_server_toml_example_parses() -> Result<(), RuntimeError> {
         config
             .admin
             .local_console_permissions
-            .contains(&crate::config::AdminPermission::ReloadGeneration)
+            .contains(&crate::config::AdminPermission::ReloadRuntime)
     );
     Ok(())
 }
@@ -280,7 +280,7 @@ admin_ui = "quarantine"
 
 [live.admin]
 ui_profile = "console-v2"
-local_console_permissions = ["status", "reload-config", "status"]
+local_console_permissions = ["status", "reload-runtime", "status"]
 
 [static.admin.grpc]
 enabled = true
@@ -288,7 +288,7 @@ bind_addr = "127.0.0.1:50052"
 
 [static.admin.grpc.principals.ops]
 token_file = "ops.token"
-permissions = ["status", "reload-plugins", "status"]
+permissions = ["status", "reload-runtime", "status"]
 "#,
     )?;
 
@@ -303,7 +303,7 @@ permissions = ["status", "reload-plugins", "status"]
         parsed.admin.local_console_permissions,
         vec![
             crate::config::AdminPermission::Status,
-            crate::config::AdminPermission::ReloadConfig,
+            crate::config::AdminPermission::ReloadRuntime,
         ]
     );
     assert!(parsed.admin.grpc.enabled);
@@ -332,14 +332,14 @@ permissions = ["status", "reload-plugins", "status"]
             .permissions,
         vec![
             crate::config::AdminPermission::Status,
-            crate::config::AdminPermission::ReloadPlugins,
+            crate::config::AdminPermission::ReloadRuntime,
         ]
     );
     Ok(())
 }
 
 #[test]
-fn server_toml_accepts_reload_generation_admin_permission() -> Result<(), RuntimeError> {
+fn server_toml_accepts_reload_runtime_admin_permission() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     fs::write(temp_dir.path().join("ops.token"), "token-ops\n")?;
     let path = temp_dir.path().join("server.toml");
@@ -347,7 +347,7 @@ fn server_toml_accepts_reload_generation_admin_permission() -> Result<(), Runtim
         &path,
         r#"
 [live.admin]
-local_console_permissions = ["reload-generation"]
+local_console_permissions = ["reload-runtime"]
 
 [static.admin.grpc]
 enabled = true
@@ -355,14 +355,14 @@ bind_addr = "127.0.0.1:50052"
 
 [static.admin.grpc.principals.ops]
 token_file = "ops.token"
-permissions = ["reload-generation"]
+permissions = ["reload-runtime"]
 "#,
     )?;
 
     let parsed = ServerConfig::from_toml(&path)?;
     assert_eq!(
         parsed.admin.local_console_permissions,
-        vec![crate::config::AdminPermission::ReloadGeneration]
+        vec![crate::config::AdminPermission::ReloadRuntime]
     );
     assert_eq!(
         parsed
@@ -372,7 +372,7 @@ permissions = ["reload-generation"]
             .get("ops")
             .expect("ops principal should exist")
             .permissions,
-        vec![crate::config::AdminPermission::ReloadGeneration]
+        vec![crate::config::AdminPermission::ReloadRuntime]
     );
     Ok(())
 }
@@ -634,7 +634,7 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
     config.admin.ui_profile = "console-v2".into();
     config.admin.local_console_permissions = vec![
         crate::config::AdminPermission::Status,
-        crate::config::AdminPermission::ReloadPlugins,
+        crate::config::AdminPermission::ReloadRuntime,
     ];
     config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 0 };
     config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 1 };

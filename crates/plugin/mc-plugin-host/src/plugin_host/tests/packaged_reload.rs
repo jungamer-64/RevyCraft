@@ -200,6 +200,84 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
 }
 
 #[test]
+fn packaged_protocol_artifact_prepare_is_staged_until_commit() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let target_dir = harness.scoped_target_dir("plugin-host-prepare-commit");
+    seed_packaged_plugins(&dist_dir, &["je-5"])?;
+
+    let bootstrap = bootstrap_config_with_plugins_dir(dist_dir.clone());
+    let host = plugin_host_from_config(&bootstrap)?.expect("packaged plugins should be discovered");
+    let initial_topology =
+        host.prepare_protocol_topology_for_reload(&RuntimeSelectionConfig::default())?;
+    host.activate_protocol_topology(initial_topology);
+    let before_status = host.status();
+    let before_protocol = before_status
+        .protocols
+        .iter()
+        .find(|plugin| plugin.plugin_id == "je-5")
+        .expect("je-5 status should exist before staging");
+    let before_generation = before_protocol.generation_id;
+
+    std::thread::sleep(Duration::from_secs(1));
+    harness
+        .install_protocol_plugin(
+            "mc-plugin-proto-je-5",
+            "je-5",
+            &dist_dir,
+            &target_dir,
+            "reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+
+    let prepared = host.prepare_runtime_artifacts(&protocol_reload_context(Vec::new()))?;
+    assert_eq!(prepared.reloaded_plugin_ids(), &["je-5".to_string()]);
+    let status_before_commit = host.status();
+    let protocol_before_commit = status_before_commit
+        .protocols
+        .iter()
+        .find(|plugin| plugin.plugin_id == "je-5")
+        .expect("je-5 status should exist before commit");
+    assert_eq!(protocol_before_commit.generation_id, before_generation);
+    assert_eq!(
+        protocol_before_commit
+            .build_tag
+            .as_ref()
+            .map(|tag| tag.as_str()),
+        Some(PACKAGED_PLUGIN_TEST_HARNESS_TAG)
+    );
+
+    drop(prepared);
+    let status_after_drop = host.status();
+    let protocol_after_drop = status_after_drop
+        .protocols
+        .iter()
+        .find(|plugin| plugin.plugin_id == "je-5")
+        .expect("je-5 status should exist after dropping staged candidate");
+    assert_eq!(protocol_after_drop.generation_id, before_generation);
+
+    let prepared = host.prepare_runtime_artifacts(&protocol_reload_context(Vec::new()))?;
+    host.commit_runtime_selection(prepared);
+    let status_after_commit = host.status();
+    let protocol_after_commit = status_after_commit
+        .protocols
+        .iter()
+        .find(|plugin| plugin.plugin_id == "je-5")
+        .expect("je-5 status should exist after commit");
+    assert_ne!(protocol_after_commit.generation_id, before_generation);
+    assert_eq!(
+        protocol_after_commit
+            .build_tag
+            .as_ref()
+            .map(|tag| tag.as_str()),
+        Some("reload-v2")
+    );
+    Ok(())
+}
+
+#[test]
 fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");

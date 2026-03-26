@@ -4,6 +4,7 @@ use super::{
     HotSwappableStorageProfile, PluginPackage, StorageProfileId, SystemTime,
 };
 
+#[derive(Clone)]
 pub(crate) struct ManagedProtocolPlugin {
     pub(crate) package: PluginPackage,
     pub(crate) adapter: Arc<HotSwappableProtocolAdapter>,
@@ -11,6 +12,7 @@ pub(crate) struct ManagedProtocolPlugin {
     pub(crate) active_loaded_at: SystemTime,
 }
 
+#[derive(Clone)]
 pub(crate) struct ManagedGameplayPlugin {
     pub(crate) package: PluginPackage,
     pub(crate) profile_id: GameplayProfileId,
@@ -19,6 +21,7 @@ pub(crate) struct ManagedGameplayPlugin {
     pub(crate) active_loaded_at: SystemTime,
 }
 
+#[derive(Clone)]
 pub(crate) struct ManagedStoragePlugin {
     pub(crate) package: PluginPackage,
     pub(crate) profile_id: StorageProfileId,
@@ -27,6 +30,7 @@ pub(crate) struct ManagedStoragePlugin {
     pub(crate) active_loaded_at: SystemTime,
 }
 
+#[derive(Clone)]
 pub(crate) struct ManagedAuthPlugin {
     pub(crate) package: PluginPackage,
     pub(crate) profile_id: AuthProfileId,
@@ -35,6 +39,7 @@ pub(crate) struct ManagedAuthPlugin {
     pub(crate) active_loaded_at: SystemTime,
 }
 
+#[derive(Clone)]
 pub(crate) struct ManagedAdminUiPlugin {
     pub(crate) package: PluginPackage,
     pub(crate) profile_id: AdminUiProfileId,

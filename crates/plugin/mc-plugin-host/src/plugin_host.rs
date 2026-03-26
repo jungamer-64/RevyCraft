@@ -3,8 +3,7 @@ use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
 use crate::registry::ProtocolRegistry;
 use crate::runtime::{
     AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
-    RuntimeProtocolTopologyCandidate, RuntimeReloadContext, RuntimeSelectionResult,
-    StorageProfileHandle,
+    RuntimeProtocolTopologyCandidate, RuntimeReloadContext, StorageProfileHandle,
 };
 use bytes::BytesMut;
 use libloading::Library;
@@ -124,8 +123,8 @@ use self::support::{
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
     import_storage_runtime_state, invoke_admin_ui, invoke_auth, invoke_gameplay, invoke_protocol,
-    invoke_storage, migrate_gameplay_sessions, migrate_protocol_sessions,
-    protocol_reload_compatible, read_byte_slice, take_owned_buffer,
+    invoke_storage, protocol_reload_compatible, read_byte_slice, take_owned_buffer,
+    validate_gameplay_session_migration, validate_protocol_session_migration,
 };
 pub(crate) use self::topology::PreparedProtocolTopology;
 
@@ -389,26 +388,35 @@ impl PluginHost {
 }
 
 impl RuntimePluginHost for PluginHost {
-    fn reconcile_runtime_selection(
+    fn prepare_runtime_selection(
         &self,
         config: &RuntimeSelectionConfig,
         runtime: &RuntimeReloadContext,
-    ) -> Result<RuntimeSelectionResult, RuntimeError> {
-        Self::reconcile_runtime_selection(self, config, runtime)
+    ) -> Result<crate::runtime::PreparedRuntimeSelection, RuntimeError> {
+        Self::prepare_runtime_selection(self, config, runtime)
     }
 
-    fn reload_modified_with_context(
+    fn prepare_runtime_artifacts(
         &self,
         runtime: &RuntimeReloadContext,
-    ) -> Result<Vec<String>, RuntimeError> {
-        Self::reload_modified_with_context(self, runtime)
+    ) -> Result<crate::runtime::PreparedRuntimeSelection, RuntimeError> {
+        Self::prepare_runtime_artifacts(self, runtime)
+    }
+
+    fn commit_runtime_selection(&self, prepared: crate::runtime::PreparedRuntimeSelection) {
+        Self::commit_runtime_selection(self, prepared);
     }
 
     fn prepare_protocol_topology_for_reload(
         &self,
     ) -> Result<RuntimeProtocolTopologyCandidate, RuntimeError> {
-        self.prepare_protocol_topology_for_reload(&self.current_runtime_selection())
-            .map(RuntimeProtocolTopologyCandidate::new)
+        let config = self.current_runtime_selection();
+        let prepared = self.prepare_protocol_topology_for_reload(&config)?;
+        let requires_protocol_swap = self.requires_protocol_swap(&config, &prepared);
+        Ok(RuntimeProtocolTopologyCandidate::new(
+            prepared,
+            requires_protocol_swap,
+        ))
     }
 
     fn activate_protocol_topology(&self, candidate: RuntimeProtocolTopologyCandidate) {

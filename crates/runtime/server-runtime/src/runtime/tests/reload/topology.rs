@@ -40,7 +40,7 @@ async fn reload_server_with_queued_old_accept(
     let mut updated = initial.clone();
     updated.topology.default_adapter = JE_47_ADAPTER_ID.into();
     write_server_toml(&config_path, &updated)?;
-    let result = server.reload_generation().await?;
+    let result = server.reload_runtime_topology().await?;
     assert_ne!(result.activated_generation_id, old_generation);
 
     Ok((temp_dir, server, old_generation))
@@ -109,7 +109,7 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let result = server.reload_generation().await?;
+    let result = server.reload_runtime_topology().await?;
     assert_ne!(
         result.activated_generation_id,
         before_generation.generation_id
@@ -168,7 +168,7 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
     write_server_toml(&config_path, &updated)?;
 
-    let result = server.reload_generation().await?;
+    let result = server.reload_runtime_topology().await?;
     assert_ne!(result.activated_generation_id, before_generation);
     assert!(result.applied_config_change);
     let bindings = server.listener_bindings();
@@ -228,9 +228,9 @@ async fn config_reload_rotates_generation_for_protocol_buffer_limit_changes()
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
     write_server_toml(&config_path, &updated)?;
 
-    let result = server.reload_config().await?;
-    assert_ne!(result.generation.activated_generation_id, before_generation);
-    assert!(!result.generation.applied_config_change);
+    let result = server.reload_runtime_full().await?;
+    assert_ne!(result.topology.activated_generation_id, before_generation);
+    assert!(!result.topology.applied_config_change);
     assert_eq!(server.listener_bindings(), before_bindings);
     assert_eq!(
         server
@@ -283,7 +283,7 @@ async fn generation_reload_ignores_pending_protocol_buffer_limit_changes()
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
     write_server_toml(&config_path, &updated)?;
 
-    let result = server.reload_generation().await?;
+    let result = server.reload_runtime_topology().await?;
     assert_eq!(result.activated_generation_id, before_generation);
     assert!(!result.changed(before_generation));
     assert_eq!(server.listener_bindings(), before_bindings);
@@ -337,7 +337,7 @@ async fn plugin_reload_ignores_pending_generation_config_changes() -> Result<(),
     updated.network.motd = "plugin-reload-after".to_string();
     write_server_toml(&config_path, &updated)?;
 
-    let reloaded = server.reload_plugins().await?;
+    let reloaded = server.reload_runtime_artifacts().await?.reloaded_plugin_ids;
     assert!(reloaded.is_empty());
 
     let after_status = server.status().await;
@@ -384,7 +384,7 @@ async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result
     write_server_toml(&config_path, &invalid)?;
 
     let error = server
-        .reload_generation()
+        .reload_runtime_topology()
         .await
         .expect_err("invalid topology candidate should fail");
     assert!(matches!(
@@ -430,7 +430,7 @@ async fn topology_reload_status_reports_draining_generation() -> Result<(), Runt
     let mut updated = initial.clone();
     updated.topology.default_adapter = JE_47_ADAPTER_ID.into();
     write_server_toml(&config_path, &updated)?;
-    let result = server.reload_generation().await?;
+    let result = server.reload_runtime_topology().await?;
     assert_ne!(result.activated_generation_id, before_generation);
 
     let status = server.status().await;
@@ -498,7 +498,7 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
     let mut updated = initial.clone();
     updated.topology.default_adapter = JE_47_ADAPTER_ID.into();
     write_server_toml(&config_path, &updated)?;
-    let _ = server.reload_generation().await?;
+    let _ = server.reload_runtime_topology().await?;
 
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {

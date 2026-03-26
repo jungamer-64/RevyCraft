@@ -52,22 +52,22 @@ pub(super) fn spawn_runtime_loop(
                     _ = config_reload_interval.tick(), if run_server.reload.reload_host().is_some() => {
                         if let Some(reload_host) = run_server.reload.reload_host() {
                             let previous_generation = run_server.active_generation_id();
-                            match run_server.maybe_reload_config_watch(reload_host.as_ref()).await {
+                            match run_server.maybe_reload_runtime_watch(reload_host.as_ref()).await {
                                 Ok(Some(result)) => {
-                                    if !result.reloaded_plugins.is_empty() || result.generation.changed(previous_generation) {
+                                    if !result.reloaded_plugin_ids.is_empty() || result.topology.changed(previous_generation) {
                                         run_server
                                             .log_status_summary(&format!(
-                                                "config reload applied: plugins={} activated_generation={} reconfigured={}",
-                                                if result.reloaded_plugins.is_empty() {
+                                                "runtime full reload applied: plugins={} activated_generation={} reconfigured={}",
+                                                if result.reloaded_plugin_ids.is_empty() {
                                                     "-".to_string()
                                                 } else {
-                                                    result.reloaded_plugins.join(",")
+                                                    result.reloaded_plugin_ids.join(",")
                                                 },
-                                                result.generation.activated_generation_id.0,
-                                                if result.generation.reconfigured_adapter_ids.is_empty() {
+                                                result.topology.activated_generation_id.0,
+                                                if result.topology.reconfigured_adapter_ids.is_empty() {
                                                     "-".to_string()
                                                 } else {
-                                                    result.generation.reconfigured_adapter_ids.join(",")
+                                                    result.topology.reconfigured_adapter_ids.join(",")
                                                 },
                                             ))
                                             .await;
@@ -78,7 +78,7 @@ pub(super) fn spawn_runtime_loop(
                                     if matches!(error, RuntimeError::PluginFatal(_)) {
                                         return run_server.finish_with_runtime_error(error, true).await;
                                     }
-                                    eprintln!("config reload failed: {error}");
+                                    eprintln!("runtime full reload failed: {error}");
                                 }
                             }
                         }

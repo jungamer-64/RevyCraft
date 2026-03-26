@@ -1,7 +1,7 @@
 use super::status::SessionStatusSnapshot;
 use super::{
-    AcceptedGenerationSession, GenerationId, QueuedAcceptTracker, SessionHandle, SessionMessage,
-    SessionState,
+    AcceptedGenerationSession, GenerationId, QueuedAcceptTracker, SessionControl, SessionHandle,
+    SessionMessage, SessionReattachRecord, SessionState,
 };
 use crate::RuntimeError;
 use mc_core::{ConnectionId, EventTarget, PlayerId, SessionCapabilitySet};
@@ -12,7 +12,7 @@ use mc_proto_common::ConnectionPhase;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
 
 static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
@@ -50,7 +50,7 @@ impl SessionRegistry {
         &self,
         connection_id: ConnectionId,
         tx: mpsc::Sender<SessionMessage>,
-        control_tx: watch::Sender<Option<String>>,
+        control_tx: mpsc::Sender<SessionControl>,
         session: &SessionState,
     ) {
         self.sessions.lock().await.insert(
@@ -61,6 +61,7 @@ impl SessionRegistry {
                 generation: Arc::clone(&session.generation),
                 transport: session.transport,
                 phase: session.phase,
+                adapter: session.adapter.clone(),
                 adapter_id: session
                     .adapter
                     .as_ref()
@@ -86,6 +87,7 @@ impl SessionRegistry {
             handle.generation = Arc::clone(&session.generation);
             handle.transport = session.transport;
             handle.phase = session.phase;
+            handle.adapter = session.adapter.clone();
             handle.adapter_id = session
                 .adapter
                 .as_ref()
@@ -223,6 +225,33 @@ impl SessionRegistry {
 
     pub(crate) async fn all_handles(&self) -> Vec<SessionHandle> {
         self.sessions.lock().await.values().cloned().collect()
+    }
+
+    pub(crate) async fn play_reattach_records(&self) -> Vec<SessionReattachRecord> {
+        self.sessions
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, handle)| handle.phase == ConnectionPhase::Play)
+            .map(|(connection_id, handle)| SessionReattachRecord {
+                connection_id: *connection_id,
+                control_tx: handle.control_tx.clone(),
+                transport: handle.transport,
+                phase: handle.phase,
+                adapter_id: handle.adapter_id.clone(),
+                player_id: handle.player_id,
+                entity_id: handle.entity_id,
+                gameplay_profile: handle.gameplay_profile.clone(),
+                protocol_generation: handle
+                    .session_capabilities
+                    .as_ref()
+                    .and_then(|capabilities| capabilities.protocol_generation),
+                gameplay_generation: handle
+                    .session_capabilities
+                    .as_ref()
+                    .and_then(|capabilities| capabilities.gameplay_generation),
+            })
+            .collect()
     }
 
     #[cfg(test)]

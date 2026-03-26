@@ -7,7 +7,7 @@
 | 読者 | 最初に読む文書 | その後の正本 |
 | --- | --- | --- |
 | 運用者 | [`operators/getting-started.md`](operators/getting-started.md) | [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md) |
-| 実装 contributors | [`contributors/repository-overview.md`](contributors/repository-overview.md) | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md) |
+| 実装 contributors | [`contributors/repository-overview.md`](contributors/repository-overview.md) | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md)、[`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md) |
 | plugin 作者 | [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md) | [`plugin-authors/rust-sdk-and-manifest.md`](plugin-authors/rust-sdk-and-manifest.md) |
 
 ## トピックごとの正本
@@ -20,6 +20,8 @@
   [`contributors/repository-overview.md`](contributors/repository-overview.md)
 - runtime / plugin host / session lifecycle の責務境界
   [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md)
+- `reload runtime`、`core` migration、reloadable boundary の最終設計
+  [`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md)
 - `CoreCommand` / `GameplayCommand` / `GameplayTransaction` / `CoreEvent` の流れ
   [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md)
 - reload の内部意味論、failure policy、consistency gate

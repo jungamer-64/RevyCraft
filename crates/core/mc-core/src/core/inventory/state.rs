@@ -10,58 +10,58 @@ const FURNACE_PROPERTY_COOK_PROGRESS: u8 = 2;
 const FURNACE_PROPERTY_COOK_TOTAL: u8 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ContainerDescriptor {
-    pub(crate) local_slot_count: u8,
-    pub(crate) main_inventory_start: i16,
-    pub(crate) hotbar_start: i16,
+pub struct ContainerDescriptor {
+    pub local_slot_count: u8,
+    pub main_inventory_start: i16,
+    pub hotbar_start: i16,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct OpenInventoryWindow {
-    pub(crate) window_id: u8,
-    pub(crate) container: InventoryContainer,
-    pub(crate) state: OpenInventoryWindowState,
+pub struct OpenInventoryWindow {
+    pub window_id: u8,
+    pub container: InventoryContainer,
+    pub state: OpenInventoryWindowState,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum OpenInventoryWindowState {
+pub enum OpenInventoryWindowState {
     CraftingTable { slots: Vec<Option<ItemStack>> },
     Chest(ChestWindowState),
     Furnace(FurnaceWindowState),
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ChestWindowState {
-    pub(crate) binding: ChestWindowBinding,
-    pub(crate) slots: Vec<Option<ItemStack>>,
+pub struct ChestWindowState {
+    pub binding: ChestWindowBinding,
+    pub slots: Vec<Option<ItemStack>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ChestWindowBinding {
+pub enum ChestWindowBinding {
     Virtual,
     Block(BlockPos),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FurnaceWindowBinding {
+pub enum FurnaceWindowBinding {
     Virtual,
     Block(BlockPos),
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct FurnaceWindowState {
-    pub(crate) binding: FurnaceWindowBinding,
-    pub(crate) input: Option<ItemStack>,
-    pub(crate) fuel: Option<ItemStack>,
-    pub(crate) output: Option<ItemStack>,
-    pub(crate) burn_left: i16,
-    pub(crate) burn_max: i16,
-    pub(crate) cook_progress: i16,
-    pub(crate) cook_total: i16,
+pub struct FurnaceWindowState {
+    pub binding: FurnaceWindowBinding,
+    pub input: Option<ItemStack>,
+    pub fuel: Option<ItemStack>,
+    pub output: Option<ItemStack>,
+    pub burn_left: i16,
+    pub burn_max: i16,
+    pub cook_progress: i16,
+    pub cook_total: i16,
 }
 
 impl OpenInventoryWindow {
-    pub(super) fn contents(&self, player_inventory: &PlayerInventory) -> InventoryWindowContents {
+    pub(crate) fn contents(&self, player_inventory: &PlayerInventory) -> InventoryWindowContents {
         InventoryWindowContents::with_container(
             player_inventory.clone(),
             match &self.state {
@@ -80,7 +80,7 @@ impl OpenInventoryWindow {
         }
     }
 
-    pub(super) fn property_entries(&self) -> Vec<(u8, i16)> {
+    pub(crate) fn property_entries(&self) -> Vec<(u8, i16)> {
         match &self.state {
             OpenInventoryWindowState::CraftingTable { .. } | OpenInventoryWindowState::Chest(_) => {
                 Vec::new()

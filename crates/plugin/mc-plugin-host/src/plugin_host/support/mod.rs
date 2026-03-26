@@ -43,6 +43,6 @@ pub(super) use self::manifest::{
 };
 pub(super) use self::profiles::{ensure_known_profiles, ensure_profile_known};
 pub(super) use self::reload::{
-    import_storage_runtime_state, migrate_gameplay_sessions, migrate_protocol_sessions,
-    protocol_reload_compatible,
+    import_storage_runtime_state, protocol_reload_compatible, validate_gameplay_session_migration,
+    validate_protocol_session_migration,
 };

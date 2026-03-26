@@ -31,7 +31,7 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = server.reload_plugins().await?;
+    let reloaded = server.reload_runtime_artifacts().await?.reloaded_plugin_ids;
     assert!(
         reloaded
             .iter()
@@ -82,7 +82,7 @@ async fn manual_protocol_reload_waits_for_consistency_readers() -> Result<(), Ru
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     {
-        let reload = server.reload_plugins();
+        let reload = server.reload_runtime_artifacts();
         tokio::pin!(reload);
         assert!(
             tokio::time::timeout(Duration::from_millis(100), &mut reload)
@@ -103,6 +103,7 @@ async fn manual_protocol_reload_waits_for_consistency_readers() -> Result<(), Ru
             .map_err(|_| RuntimeError::Config("manual reload did not resume".to_string()))??;
         assert!(
             reloaded
+                .reloaded_plugin_ids
                 .iter()
                 .any(|plugin_id| plugin_id == JE_5_ADAPTER_ID),
             "manual reload should complete after the consistency reader releases"
@@ -185,7 +186,7 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
-    let reloaded = server.reload_plugins().await?;
+    let reloaded = server.reload_runtime_artifacts().await?.reloaded_plugin_ids;
     assert!(
         !reloaded
             .iter()

@@ -18,7 +18,7 @@ fn selection_resolver_bootstrap_matches_reload_resolution() -> Result<(), Runtim
             token: "ops-token".to_string(),
             permissions: vec![
                 crate::config::AdminPermission::Status,
-                crate::config::AdminPermission::ReloadConfig,
+                crate::config::AdminPermission::ReloadRuntime,
             ],
         },
     );
