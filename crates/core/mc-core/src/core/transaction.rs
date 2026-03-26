@@ -271,6 +271,26 @@ impl<'a> GameplayTransaction<'a> {
     pub(crate) fn dropped_item_ids(&self) -> Vec<crate::EntityId> {
         self.overlay_view().dropped_item_ids()
     }
+
+    #[cfg(test)]
+    pub(crate) fn request_keep_alive(&mut self, player_id: PlayerId) {
+        self.push_previewed_op(CoreOp::RequestKeepAlive { player_id });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn player_session_state(
+        &self,
+        player_id: PlayerId,
+    ) -> Option<super::PlayerSessionState> {
+        self.overlay_view().player_session(player_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn next_keep_alive_id(&self) -> i32 {
+        self.overlay
+            .next_keep_alive_id
+            .unwrap_or(self.base.sessions.next_keep_alive_id)
+    }
 }
 
 impl ServerCore {

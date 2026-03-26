@@ -1,8 +1,8 @@
+use super::ActiveMiningState;
 use super::canonical::{
     BeginMiningDelta, ClearMiningDelta, CompleteMiningDelta, MiningProgressDelta,
 };
 use super::state_backend::{CoreStateMut, CoreStateRead};
-use super::{ActiveMiningState, ServerCore};
 use crate::catalog;
 use crate::world::{BlockPos, BlockState, Vec3};
 use crate::{EntityId, PlayerId};
@@ -244,11 +244,4 @@ pub(super) fn state_complete_survival_mining(
         block,
         spawned_item,
     })
-}
-
-impl ServerCore {
-    pub(super) fn collect_active_mining_ops(&self, now_ms: u64) -> Vec<super::canonical::CoreOp> {
-        let view = super::state_backend::BaseStateRef::new(self);
-        collect_active_mining_ops(&view, now_ms)
-    }
 }

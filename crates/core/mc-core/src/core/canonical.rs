@@ -109,6 +109,9 @@ pub(super) enum CoreOp {
     TickDroppedItem {
         entity_id: EntityId,
     },
+    RequestKeepAlive {
+        player_id: PlayerId,
+    },
     SetBlock {
         position: BlockPos,
         block: BlockState,
@@ -117,10 +120,6 @@ pub(super) enum CoreOp {
         expected_entity_id: Option<EntityId>,
         position: Vec3,
         item: ItemStack,
-    },
-    KeepAliveRequested {
-        player_id: PlayerId,
-        keep_alive_id: i32,
     },
     DisconnectPlayer {
         player_id: PlayerId,
@@ -509,15 +508,9 @@ pub(super) fn reduce_core_op(
             item,
             now_ms,
         )),
-        CoreOp::KeepAliveRequested {
-            player_id,
-            keep_alive_id,
-        } => AppliedCoreOp::KeepAliveRequested(schedule_keep_alive_state(
-            state,
-            player_id,
-            keep_alive_id,
-            now_ms,
-        )),
+        CoreOp::RequestKeepAlive { player_id } => {
+            AppliedCoreOp::KeepAliveRequested(schedule_keep_alive_state(state, player_id, now_ms))
+        }
         CoreOp::DisconnectPlayer { player_id } => {
             AppliedCoreOp::DisconnectPlayer(disconnect_player_state(state, player_id))
         }

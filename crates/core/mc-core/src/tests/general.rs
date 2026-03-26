@@ -157,11 +157,182 @@ fn moving_player_updates_other_clients_and_view() {
 #[test]
 fn keepalive_tick_emits_keepalive() {
     let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "first");
+    let initial_keep_alive_id = core.sessions.next_keep_alive_id;
     let events = core.tick(DEFAULT_KEEPALIVE_INTERVAL_MS + 1);
 
     assert_player_event(&events, first, |event| {
         matches!(event, CoreEvent::KeepAliveRequested { .. })
     });
+    let session = core
+        .player_session(first)
+        .expect("player session should still exist after keepalive tick");
+    assert_eq!(session.pending_keep_alive_id, Some(initial_keep_alive_id));
+    assert_eq!(
+        session.last_keep_alive_sent_at,
+        Some(DEFAULT_KEEPALIVE_INTERVAL_MS + 1)
+    );
+    assert_eq!(
+        session.next_keep_alive_at,
+        (DEFAULT_KEEPALIVE_INTERVAL_MS + 1).saturating_add(DEFAULT_KEEPALIVE_INTERVAL_MS)
+    );
+    assert_eq!(
+        core.sessions.next_keep_alive_id,
+        initial_keep_alive_id.saturating_add(1)
+    );
+}
+
+#[test]
+fn keepalive_tick_does_not_duplicate_pending_request() {
+    let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "ka-pending");
+    let _ = core.tick(DEFAULT_KEEPALIVE_INTERVAL_MS + 1);
+    let next_keep_alive_id = core.sessions.next_keep_alive_id;
+
+    let later_events = core.tick(DEFAULT_KEEPALIVE_INTERVAL_MS * 2 + 1);
+
+    assert_eq!(
+        count_player_events(&later_events, first, |event| {
+            matches!(event, CoreEvent::KeepAliveRequested { .. })
+        }),
+        0
+    );
+    assert_eq!(core.sessions.next_keep_alive_id, next_keep_alive_id);
+}
+
+#[test]
+fn keepalive_timeout_disconnects_without_emitting_new_request() {
+    let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "ka-timeout");
+    {
+        let session = core
+            .player_session_mut(first)
+            .expect("player session should exist");
+        session.pending_keep_alive_id = Some(7);
+        session.last_keep_alive_sent_at = Some(0);
+        session.next_keep_alive_at = 0;
+    }
+
+    let events = core.tick(DEFAULT_KEEPALIVE_TIMEOUT_MS + 1);
+
+    assert_eq!(
+        count_player_events(&events, first, |event| {
+            matches!(event, CoreEvent::KeepAliveRequested { .. })
+        }),
+        0
+    );
+    assert!(core.player_session(first).is_none());
+}
+
+#[test]
+fn keepalive_response_clears_pending_state_without_emitting_events() {
+    let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "ka-ack");
+    let _ = core.tick(DEFAULT_KEEPALIVE_INTERVAL_MS + 1);
+    let keep_alive_id = core
+        .player_session(first)
+        .expect("player session should exist")
+        .pending_keep_alive_id
+        .expect("keepalive should be pending");
+
+    let events = core.apply_command(
+        CoreCommand::KeepAliveResponse {
+            player_id: first,
+            keep_alive_id,
+        },
+        DEFAULT_KEEPALIVE_INTERVAL_MS + 2,
+    );
+
+    assert!(events.is_empty());
+    let session = core
+        .player_session(first)
+        .expect("player should remain online after keepalive ack");
+    assert_eq!(session.pending_keep_alive_id, None);
+    assert_eq!(session.last_keep_alive_sent_at, None);
+}
+
+#[test]
+fn keepalive_tick_matches_manual_transaction_request_keep_alive() {
+    let (mut direct, player_id) = logged_in_core(CoreConfig::default(), 1, "ka-parity");
+    let mut via_tx = direct.clone();
+    direct
+        .player_session_mut(player_id)
+        .expect("player session should exist")
+        .next_keep_alive_at = 0;
+
+    let direct_events = direct.tick(250);
+    let tx_events = apply_test_transaction(&mut via_tx, 250, |tx| {
+        tx.request_keep_alive(player_id);
+    });
+
+    assert_eq!(direct_events, tx_events);
+    assert_eq!(
+        direct.sessions.next_keep_alive_id,
+        via_tx.sessions.next_keep_alive_id
+    );
+    let direct_session = direct
+        .player_session(player_id)
+        .expect("direct session should exist");
+    let tx_session = via_tx
+        .player_session(player_id)
+        .expect("transaction session should exist");
+    assert_eq!(
+        direct_session.pending_keep_alive_id,
+        tx_session.pending_keep_alive_id
+    );
+    assert_eq!(
+        direct_session.last_keep_alive_sent_at,
+        tx_session.last_keep_alive_sent_at
+    );
+    assert_eq!(
+        direct_session.next_keep_alive_at,
+        tx_session.next_keep_alive_at
+    );
+}
+
+#[test]
+fn gameplay_transaction_keepalive_preview_uses_overlay_counter_and_writeback() {
+    let (mut core, player_id) = logged_in_core(CoreConfig::default(), 1, "tx-ka");
+    let initial_keep_alive_id = core.sessions.next_keep_alive_id;
+
+    let events = {
+        let mut tx = core.begin_gameplay_transaction(500);
+        tx.request_keep_alive(player_id);
+        let preview_session = tx
+            .player_session_state(player_id)
+            .expect("previewed keepalive should expose player session");
+        assert_eq!(
+            preview_session.pending_keep_alive_id,
+            Some(initial_keep_alive_id)
+        );
+        assert_eq!(preview_session.last_keep_alive_sent_at, Some(500));
+        assert_eq!(
+            preview_session.next_keep_alive_at,
+            500_u64.saturating_add(DEFAULT_KEEPALIVE_INTERVAL_MS)
+        );
+        assert_eq!(
+            tx.next_keep_alive_id(),
+            initial_keep_alive_id.saturating_add(1)
+        );
+        tx.commit()
+    };
+
+    assert_player_event(&events, player_id, |event| {
+        matches!(
+            event,
+            CoreEvent::KeepAliveRequested { keep_alive_id }
+            if *keep_alive_id == initial_keep_alive_id
+        )
+    });
+    let session = core
+        .player_session(player_id)
+        .expect("committed keepalive should persist to base state");
+    assert_eq!(session.pending_keep_alive_id, Some(initial_keep_alive_id));
+    assert_eq!(session.last_keep_alive_sent_at, Some(500));
+    assert_eq!(
+        session.next_keep_alive_at,
+        500_u64.saturating_add(DEFAULT_KEEPALIVE_INTERVAL_MS)
+    );
+    assert_eq!(
+        core.sessions.next_keep_alive_id,
+        initial_keep_alive_id.saturating_add(1)
+    );
 }
 
 #[test]

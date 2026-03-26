@@ -28,6 +28,7 @@ pub(super) struct TxOverlay {
     pub(super) dropped_items: BTreeMap<EntityId, Option<DroppedItemState>>,
     pub(super) player_sessions: BTreeMap<PlayerId, Option<PlayerSessionState>>,
     pub(super) next_entity_id: Option<i32>,
+    pub(super) next_keep_alive_id: Option<i32>,
 }
 
 pub(super) trait CoreStateRead {
@@ -136,6 +137,7 @@ pub(super) trait CoreStateMut: CoreStateRead {
     fn remove_player_active_mining(&mut self, entity_id: EntityId) -> Option<ActiveMiningState>;
     fn set_player_active_mining(&mut self, entity_id: EntityId, state: Option<ActiveMiningState>);
     fn allocate_entity_id(&mut self) -> EntityId;
+    fn allocate_keep_alive_id(&mut self) -> i32;
     fn set_entity_kind(&mut self, entity_id: EntityId, kind: Option<EntityKind>);
     fn set_dropped_item(&mut self, entity_id: EntityId, item: Option<DroppedItemState>);
     fn take_dropped_item(&mut self, entity_id: EntityId) -> Option<DroppedItemState>;
@@ -269,6 +271,9 @@ impl TxOverlay {
         }
         if let Some(next_entity_id) = self.next_entity_id {
             base.entities.next_entity_id = next_entity_id;
+        }
+        if let Some(next_keep_alive_id) = self.next_keep_alive_id {
+            base.sessions.next_keep_alive_id = next_keep_alive_id;
         }
     }
 }
@@ -573,6 +578,13 @@ impl CoreStateMut for BaseState<'_> {
         let entity_id = EntityId(self.core.entities.next_entity_id);
         self.core.entities.next_entity_id = self.core.entities.next_entity_id.saturating_add(1);
         entity_id
+    }
+
+    fn allocate_keep_alive_id(&mut self) -> i32 {
+        let keep_alive_id = self.core.sessions.next_keep_alive_id;
+        self.core.sessions.next_keep_alive_id =
+            self.core.sessions.next_keep_alive_id.saturating_add(1);
+        keep_alive_id
     }
 
     fn set_entity_kind(&mut self, entity_id: EntityId, kind: Option<EntityKind>) {
@@ -1110,6 +1122,16 @@ impl CoreStateMut for OverlayState<'_> {
         let entity_id = EntityId(*next_entity_id);
         *next_entity_id = next_entity_id.saturating_add(1);
         entity_id
+    }
+
+    fn allocate_keep_alive_id(&mut self) -> i32 {
+        let next_keep_alive_id = self
+            .overlay
+            .next_keep_alive_id
+            .get_or_insert(self.base.sessions.next_keep_alive_id);
+        let keep_alive_id = *next_keep_alive_id;
+        *next_keep_alive_id = next_keep_alive_id.saturating_add(1);
+        keep_alive_id
     }
 
     fn set_entity_kind(&mut self, entity_id: EntityId, kind: Option<EntityKind>) {
