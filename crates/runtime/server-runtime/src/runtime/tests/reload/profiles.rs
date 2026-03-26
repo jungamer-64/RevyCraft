@@ -76,9 +76,8 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
     )
     .await?;
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_gameplay_plugin(
+        .install_gameplay_plugin_for_reload(
             "mc-plugin-gameplay-canonical",
             "gameplay-canonical",
             &dist_dir,
@@ -184,9 +183,8 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
     )
     .await?;
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_gameplay_plugin(
+        .install_gameplay_plugin_for_reload(
             "mc-plugin-gameplay-canonical",
             "gameplay-canonical",
             &dist_dir,
@@ -281,9 +279,8 @@ async fn storage_reload_updates_generation_and_preserves_persistence() -> Result
     )
     .await?;
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_storage_plugin(
+        .install_storage_plugin_for_reload(
             "mc-plugin-storage-je-anvil-1_7_10",
             "storage-je-anvil-1_7_10",
             &dist_dir,
@@ -372,9 +369,8 @@ async fn storage_reload_failure_keeps_existing_generation() -> Result<(), Runtim
         .plugin_generation_id()
         .expect("storage profile should report generation");
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_storage_plugin(
+        .install_storage_plugin_for_reload(
             "mc-plugin-storage-je-anvil-1_7_10",
             "storage-je-anvil-1_7_10",
             &dist_dir,
@@ -432,10 +428,9 @@ async fn config_reload_updates_storage_generation_for_buffer_limit_changes()
         .plugin_generation_id()
         .expect("storage profile should report generation");
 
-    std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
     updated.plugins.buffer_limits.storage_response_bytes = 8192;
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     let result = server.reload_runtime_full().await?;
     assert_eq!(
@@ -503,9 +498,8 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     )
     .await?;
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_auth_plugin(
+        .install_auth_plugin_for_reload(
             "mc-plugin-auth-offline",
             "auth-offline",
             &dist_dir,

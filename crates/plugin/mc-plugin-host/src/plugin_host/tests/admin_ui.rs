@@ -94,9 +94,8 @@ fn packaged_admin_ui_reload_swaps_generation_and_keeps_last_good() -> Result<(),
 
     assert_eq!(profile.parse_line("status")?, AdminRequest::Status);
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_admin_ui_plugin(
+        .install_admin_ui_plugin_for_reload(
             "mc-plugin-admin-ui-console",
             "admin-ui-console",
             &dist_dir,
@@ -113,9 +112,8 @@ fn packaged_admin_ui_reload_swaps_generation_and_keeps_last_good() -> Result<(),
     assert_ne!(first_generation, second_generation);
     assert_eq!(profile.parse_line("sessions")?, AdminRequest::Sessions);
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_admin_ui_plugin(
+        .install_admin_ui_plugin_for_reload(
             "mc-plugin-proto-je-5",
             "admin-ui-console",
             &dist_dir,

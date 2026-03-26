@@ -5,6 +5,7 @@ mod plugins;
 
 use super::*;
 use crate::runtime::RunningServer;
+use std::time::{Duration, Instant, SystemTime};
 
 pub(crate) use self::build::*;
 pub(crate) use self::network::*;
@@ -245,4 +246,41 @@ pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<()
     ));
     fs::write(path, contents)?;
     Ok(())
+}
+
+pub(crate) fn write_server_toml_for_reload(
+    path: &Path,
+    config: &ServerConfig,
+) -> Result<(), RuntimeError> {
+    let previous_modified_at = fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok());
+    write_server_toml(path, config)?;
+    ensure_file_reload_visible(path, previous_modified_at)
+}
+
+fn ensure_file_reload_visible(
+    path: &Path,
+    previous_modified_at: Option<SystemTime>,
+) -> Result<(), RuntimeError> {
+    let Some(previous_modified_at) = previous_modified_at else {
+        return Ok(());
+    };
+    let contents = fs::read(path)?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+
+    loop {
+        let modified_at = fs::metadata(path)?.modified()?;
+        if modified_at > previous_modified_at {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(RuntimeError::Config(format!(
+                "timed out waiting for reload-visible config update at {}",
+                path.display()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+        fs::write(path, &contents)?;
+    }
 }

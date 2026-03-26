@@ -408,6 +408,7 @@ pub(crate) struct SessionState {
 pub(crate) struct AcceptedGenerationSession {
     pub(crate) generation_id: GenerationId,
     pub(crate) session: AcceptedTransportSession,
+    queued_accept: QueuedAcceptGuard,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -433,6 +434,20 @@ impl TopologyReloadResult {
             || self.applied_config_change
             || !self.retired_generation_ids.is_empty()
             || !self.reconfigured_adapter_ids.is_empty()
+    }
+}
+
+impl AcceptedGenerationSession {
+    pub(crate) fn new(
+        generation_id: GenerationId,
+        session: AcceptedTransportSession,
+        queued_accept: QueuedAcceptGuard,
+    ) -> Self {
+        Self {
+            generation_id,
+            session,
+            queued_accept,
+        }
     }
 }
 
@@ -517,7 +532,20 @@ pub(crate) struct QueuedAcceptTracker {
     counts: Arc<StdMutex<HashMap<GenerationId, usize>>>,
 }
 
+pub(crate) struct QueuedAcceptGuard {
+    tracker: QueuedAcceptTracker,
+    generation_id: Option<GenerationId>,
+}
+
 impl QueuedAcceptTracker {
+    pub(crate) fn track(&self, generation_id: GenerationId) -> QueuedAcceptGuard {
+        self.increment(generation_id);
+        QueuedAcceptGuard {
+            tracker: self.clone(),
+            generation_id: Some(generation_id),
+        }
+    }
+
     pub(crate) fn increment(&self, generation_id: GenerationId) {
         let mut counts = self
             .counts
@@ -548,6 +576,14 @@ impl QueuedAcceptTracker {
             .keys()
             .copied()
             .collect()
+    }
+}
+
+impl Drop for QueuedAcceptGuard {
+    fn drop(&mut self) {
+        if let Some(generation_id) = self.generation_id.take() {
+            self.tracker.decrement(generation_id);
+        }
     }
 }
 

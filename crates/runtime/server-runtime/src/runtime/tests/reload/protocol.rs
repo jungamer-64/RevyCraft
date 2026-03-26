@@ -19,10 +19,9 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
     )
     .await?;
 
-    std::thread::sleep(Duration::from_secs(1));
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             JE_5_ADAPTER_ID,
             &dist_dir,
@@ -69,10 +68,9 @@ async fn manual_protocol_reload_waits_for_consistency_readers() -> Result<(), Ru
         spawn_protocol_reload_server(&temp_dir, "protocol-reload-consistency-manual").await?;
     let consistency_guard = server.runtime.reload.read_consistency().await;
 
-    std::thread::sleep(Duration::from_secs(1));
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             JE_5_ADAPTER_ID,
             &dist_dir,
@@ -174,10 +172,9 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
     )
     .await?;
 
-    std::thread::sleep(Duration::from_secs(1));
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             JE_5_ADAPTER_ID,
             &dist_dir,
@@ -249,9 +246,8 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
         .expect("watch server should report a protocol generation");
 
     let consistency_guard = server.runtime.reload.read_consistency().await;
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             JE_5_ADAPTER_ID,
             &dist_dir,
@@ -311,7 +307,7 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
         &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
     )?;
     harness
-        .install_auth_plugin(
+        .install_auth_plugin_for_reload(
             "mc-plugin-auth-online-stub",
             ONLINE_STUB_AUTH_PLUGIN_ID,
             &dist_dir,

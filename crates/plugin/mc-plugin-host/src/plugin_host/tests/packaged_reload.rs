@@ -170,9 +170,8 @@ fn packaged_protocol_reload_replaces_generation() -> Result<(), RuntimeError> {
         Some(PACKAGED_PLUGIN_TEST_HARNESS_TAG)
     );
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5",
             "je-5",
             &dist_dir,
@@ -221,9 +220,8 @@ fn packaged_protocol_artifact_prepare_is_staged_until_commit() -> Result<(), Run
         .expect("je-5 status should exist before staging");
     let before_generation = before_protocol.generation_id;
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5",
             "je-5",
             &dist_dir,
@@ -323,9 +321,8 @@ fn packaged_protocol_reload_with_context_migrates_protocol_sessions() -> Result<
         ),
     ]);
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             "je-5",
             &dist_dir,
@@ -397,9 +394,8 @@ fn packaged_protocol_reload_with_context_is_all_or_nothing() -> Result<(), Runti
         ),
     ]);
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             "je-5",
             &dist_dir,
@@ -457,9 +453,8 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
         .plugin_generation_id()
         .expect("packaged adapter should report plugin generation");
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             "je-5",
             &dist_dir,
@@ -499,9 +494,8 @@ fn packaged_protocol_reload_rejects_incompatible_candidate() -> Result<(), Runti
     assert!(protocol.artifact_quarantine.is_some());
     assert!(protocol.current_artifact.reason.is_none());
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             "je-5",
             &dist_dir,

@@ -1,7 +1,7 @@
 use crate::RuntimeError;
 use crate::runtime::{
-    GenerationAdmission, RuntimeServer, SESSION_OUTBOUND_QUEUE_CAPACITY, SessionControl,
-    SessionMessage, SessionState,
+    AcceptedGenerationSession, GenerationAdmission, QueuedAcceptGuard, RuntimeServer,
+    SESSION_OUTBOUND_QUEUE_CAPACITY, SessionControl, SessionMessage, SessionState,
 };
 use crate::transport::{AcceptedTransportSession, TransportSessionIo, default_wire_codec};
 use bytes::BytesMut;
@@ -11,11 +11,25 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 impl RuntimeServer {
-    pub(in crate::runtime) async fn spawn_transport_session(
+    pub(in crate::runtime) async fn spawn_accepted_transport_session(
+        self: &Arc<Self>,
+        accepted: AcceptedGenerationSession,
+    ) {
+        self.spawn_transport_session_inner(
+            accepted.generation_id,
+            accepted.session,
+            Some(accepted.queued_accept),
+        )
+        .await;
+    }
+
+    async fn spawn_transport_session_inner(
         self: &Arc<Self>,
         generation_id: crate::runtime::GenerationId,
         transport_session: AcceptedTransportSession,
+        queued_accept_guard: Option<QueuedAcceptGuard>,
     ) {
+        let queued_accept_guard = queued_accept_guard;
         if self.reload.is_shutting_down() {
             return;
         }
@@ -87,6 +101,7 @@ impl RuntimeServer {
         };
         self.spawn_session_with_state_guarded(transport_session, session)
             .await;
+        drop(queued_accept_guard);
     }
 
     async fn spawn_session_with_state_guarded(

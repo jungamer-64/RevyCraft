@@ -1,6 +1,6 @@
 # 設定と reload 運用
 
-この文書は、`runtime/server.toml` の解釈、relative path 解決、`reload runtime <mode>`、admin surface の正本です。ここで扱う reload は target operator surface としての `reload runtime artifacts / topology / core / full` であり、旧 `reload plugins` / `reload generation` / `reload config` は扱いません。package / 起動 / release bundle の入口は [`getting-started.md`](getting-started.md) を参照してください。
+この文書は、`runtime/server.toml` の解釈、relative path 解決、`reload runtime <mode>`、admin surface の正本です。ここで扱う reload は現在の operator surface である `reload runtime artifacts / topology / core / full` であり、旧 `reload plugins` / `reload generation` / `reload config` は扱いません。package / 起動 / release bundle の入口は [`getting-started.md`](getting-started.md) を参照してください。
 
 `core` migration の内部設計は contributor 向けの [`../contributors/core-reload-runtime-design.md`](../contributors/core-reload-runtime-design.md) を参照してください。
 

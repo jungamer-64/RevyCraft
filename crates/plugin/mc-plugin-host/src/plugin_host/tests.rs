@@ -30,7 +30,6 @@ use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_common::{ConnectionPhase, Edition, PacketWriter, TransportKind, WireFormatKind};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use uuid::Uuid;
 
 #[path = "tests/admin_ui.rs"]

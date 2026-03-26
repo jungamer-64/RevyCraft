@@ -1,8 +1,5 @@
 use super::*;
 use mc_proto_common::ConnectionPhase;
-use tokio::sync::Mutex as TokioMutex;
-
-static RELOAD_CORE_TEST_LOCK: TokioMutex<()> = TokioMutex::const_new(());
 
 fn core_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerConfig {
     let mut config = loopback_server_config(world_dir);
@@ -13,7 +10,6 @@ fn core_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerCon
 
 #[tokio::test]
 async fn core_reload_preserves_live_java_session() -> Result<(), RuntimeError> {
-    let _guard = RELOAD_CORE_TEST_LOCK.lock().await;
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.game_mode = 1;
@@ -47,7 +43,6 @@ async fn core_reload_preserves_live_java_session() -> Result<(), RuntimeError> {
 #[tokio::test]
 async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
 -> Result<(), RuntimeError> {
-    let _guard = RELOAD_CORE_TEST_LOCK.lock().await;
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
@@ -75,14 +70,13 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
         .session
         .clone();
 
-    std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
     updated.bootstrap.level_name = "renamed-world".to_string();
     updated.bootstrap.view_distance = 4;
     updated.bootstrap.game_mode = 0;
     updated.bootstrap.difficulty = 3;
     updated.network.max_players = 31;
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     let result = server.reload_runtime_core().await?;
     assert_eq!(result, crate::runtime::CoreReloadResult {});
@@ -124,7 +118,6 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
 
 #[tokio::test]
 async fn full_reload_preserves_live_java_session() -> Result<(), RuntimeError> {
-    let _guard = RELOAD_CORE_TEST_LOCK.lock().await;
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.game_mode = 1;
@@ -148,7 +141,6 @@ async fn full_reload_preserves_live_java_session() -> Result<(), RuntimeError> {
 #[tokio::test]
 async fn full_reload_updates_live_play_session_generations_without_resending_login_success()
 -> Result<(), RuntimeError> {
-    let _guard = RELOAD_CORE_TEST_LOCK.lock().await;
     let temp_dir = tempdir()?;
     let (server, dist_dir, target_dir, before_protocol_generation) =
         spawn_protocol_reload_server(&temp_dir, "full-reload-generation-swap").await?;
@@ -171,11 +163,10 @@ async fn full_reload_updates_live_play_session_generations_without_resending_log
     )
     .await?;
 
-    std::thread::sleep(Duration::from_secs(1));
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
     harness
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             JE_5_ADAPTER_ID,
             &dist_dir,
@@ -184,7 +175,7 @@ async fn full_reload_updates_live_play_session_generations_without_resending_log
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     harness
-        .install_gameplay_plugin(
+        .install_gameplay_plugin_for_reload(
             "mc-plugin-gameplay-canonical",
             "gameplay-canonical",
             &dist_dir,
@@ -243,7 +234,6 @@ async fn full_reload_updates_live_play_session_generations_without_resending_log
 
 #[tokio::test]
 async fn core_reload_rolls_back_core_swap_when_reattach_fails() -> Result<(), RuntimeError> {
-    let _guard = RELOAD_CORE_TEST_LOCK.lock().await;
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
@@ -264,12 +254,11 @@ async fn core_reload_rolls_back_core_swap_when_reattach_fails() -> Result<(), Ru
     let before_snapshot = server.runtime.kernel.export_core_runtime_state().await;
     let before_selection = server.runtime.selection_state().await;
 
-    std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
     updated.bootstrap.level_name = "rollback-world".to_string();
     updated.bootstrap.view_distance = 4;
     updated.network.max_players = 31;
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     server.runtime.fail_nth_reattach_send_for_test(2);
     let error = server
@@ -313,7 +302,6 @@ async fn core_reload_rolls_back_core_swap_when_reattach_fails() -> Result<(), Ru
 #[tokio::test]
 async fn full_reload_keeps_plugin_host_and_session_generations_unchanged_when_reattach_fails()
 -> Result<(), RuntimeError> {
-    let _guard = RELOAD_CORE_TEST_LOCK.lock().await;
     let temp_dir = tempdir()?;
     let (server, dist_dir, target_dir, before_protocol_generation) =
         spawn_protocol_reload_server(&temp_dir, "full-reload-reattach-fail").await?;
@@ -329,11 +317,10 @@ async fn full_reload_keeps_plugin_host_and_session_generations_unchanged_when_re
     let (_stream, _buffer) =
         connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "reattach-fail").await?;
 
-    std::thread::sleep(Duration::from_secs(1));
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
     harness
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             JE_5_ADAPTER_ID,
             &dist_dir,
@@ -342,7 +329,7 @@ async fn full_reload_keeps_plugin_host_and_session_generations_unchanged_when_re
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     harness
-        .install_gameplay_plugin(
+        .install_gameplay_plugin_for_reload(
             "mc-plugin-gameplay-canonical",
             "gameplay-canonical",
             &dist_dir,
@@ -387,7 +374,6 @@ async fn full_reload_keeps_plugin_host_and_session_generations_unchanged_when_re
 #[tokio::test]
 async fn full_reload_keeps_runtime_state_unchanged_when_topology_precommit_fails()
 -> Result<(), RuntimeError> {
-    let _guard = RELOAD_CORE_TEST_LOCK.lock().await;
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
@@ -427,9 +413,8 @@ async fn full_reload_keeps_runtime_state_unchanged_when_topology_precommit_fails
 
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_gameplay_plugin(
+        .install_gameplay_plugin_for_reload(
             "mc-plugin-gameplay-canonical",
             "gameplay-canonical",
             &dist_dir,
@@ -441,7 +426,7 @@ async fn full_reload_keeps_runtime_state_unchanged_when_topology_precommit_fails
     let mut updated = initial.clone();
     updated.topology.default_adapter = JE_47_ADAPTER_ID.into();
     updated.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into(), JE_47_ADAPTER_ID.into()]);
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     server.runtime.topology.fail_next_precommit_for_test();
     let error = server

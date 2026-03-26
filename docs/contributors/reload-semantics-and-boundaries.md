@@ -1,6 +1,6 @@
 # reload の意味論と reloadable boundary
 
-この文書は、RevyCraft の reload を contributors 向けに整理した正本です。ここで扱うのは target design としての `reload runtime <mode>` であり、旧 `reload plugins` / `reload generation` / `reload config` の公開 surface は扱いません。operator 向けの command 説明は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、`core` migration の詳細設計は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) を参照してください。
+この文書は、RevyCraft の reload を contributors 向けに整理した正本です。ここでは、現在実装されている `reload runtime <mode>` の意味論を扱います。旧 `reload plugins` / `reload generation` / `reload config` の公開 surface は扱いません。operator 向けの command 説明は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、`core` migration の詳細設計は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) を参照してください。
 
 ## 公開 reload surface
 

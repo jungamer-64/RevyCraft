@@ -1,6 +1,6 @@
 # `core` reloadable boundary と `reload runtime` 設計
 
-この文書は、`ServerCore` を reload 境界の内側へ移し、接続を切らずに live session を完全保持したまま runtime を更新するための contributors 向け正本です。ここで定義するのは target design であり、現行の `reload plugins` / `reload generation` / `reload config` を説明する文書ではありません。
+この文書は、`ServerCore` を reload 境界の内側へ移し、接続を切らずに live session を完全保持したまま runtime を更新する contributors 向け正本です。ここでは、現在の `reload runtime <mode>` 実装が採用している `core` migration の意味論を説明します。旧 `reload plugins` / `reload generation` / `reload config` の公開 surface は扱いません。
 
 operator 向けの command surface と permission は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、reload 全体の意味論は [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md) を参照してください。
 

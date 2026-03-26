@@ -108,19 +108,18 @@ pub(in crate::runtime) fn spawn_listener_worker(
                             break;
                         };
                         let generation_id = *generation_rx.borrow();
-                        queued_accepts.increment(generation_id);
-                        let session = AcceptedGenerationSession {
+                        let session = AcceptedGenerationSession::new(
                             generation_id,
-                            session: AcceptedTransportSession {
+                            AcceptedTransportSession {
                                 transport: TransportKind::Tcp,
                                 io: TransportSessionIo::Tcp {
                                     stream,
                                     encryption: Box::default(),
                                 },
                             },
-                        };
+                            queued_accepts.track(generation_id),
+                        );
                         if let Err(error) = accepted_tx.try_send(session) {
-                            queued_accepts.decrement(generation_id);
                             match error {
                                 tokio::sync::mpsc::error::TrySendError::Full(_) => {
                                     eprintln!("dropping tcp session because the accept queue is full");
@@ -142,19 +141,18 @@ pub(in crate::runtime) fn spawn_listener_worker(
                             break;
                         };
                         let generation_id = *generation_rx.borrow();
-                        queued_accepts.increment(generation_id);
-                        let session = AcceptedGenerationSession {
+                        let session = AcceptedGenerationSession::new(
                             generation_id,
-                            session: AcceptedTransportSession {
+                            AcceptedTransportSession {
                                 transport: TransportKind::Udp,
                                 io: TransportSessionIo::Bedrock {
                                     connection,
                                     compression: None,
                                 },
                             },
-                        };
+                            queued_accepts.track(generation_id),
+                        );
                         if let Err(error) = accepted_tx.try_send(session) {
-                            queued_accepts.decrement(generation_id);
                             match error {
                                 tokio::sync::mpsc::error::TrySendError::Full(_) => {
                                     eprintln!("dropping bedrock session because the accept queue is full");

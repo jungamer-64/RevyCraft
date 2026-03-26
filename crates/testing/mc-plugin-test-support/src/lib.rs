@@ -2,7 +2,7 @@ use fs2::FileExt;
 use std::fs;
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PackagedPluginKind {
@@ -202,6 +202,29 @@ impl PackagedPluginHarness {
     /// # Errors
     ///
     /// Returns an error when the packaged plugin cannot be built, cached, or installed.
+    pub fn install_protocol_plugin_for_reload(
+        &self,
+        cargo_package: &str,
+        plugin_id: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), PackagedPluginTestError> {
+        self.install_cached_plugin_for_reload(
+            PackagedPluginSpec {
+                cargo_package,
+                plugin_id,
+                kind: PackagedPluginKind::Protocol,
+                build_tag,
+            },
+            dist_dir,
+            target_dir,
+        )
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error when the packaged plugin cannot be built, cached, or installed.
     pub fn install_gameplay_plugin(
         &self,
         cargo_package: &str,
@@ -211,6 +234,29 @@ impl PackagedPluginHarness {
         build_tag: &str,
     ) -> Result<(), PackagedPluginTestError> {
         self.install_cached_plugin(
+            PackagedPluginSpec {
+                cargo_package,
+                plugin_id,
+                kind: PackagedPluginKind::Gameplay,
+                build_tag,
+            },
+            dist_dir,
+            target_dir,
+        )
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error when the packaged plugin cannot be built, cached, or installed.
+    pub fn install_gameplay_plugin_for_reload(
+        &self,
+        cargo_package: &str,
+        plugin_id: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), PackagedPluginTestError> {
+        self.install_cached_plugin_for_reload(
             PackagedPluginSpec {
                 cargo_package,
                 plugin_id,
@@ -248,6 +294,29 @@ impl PackagedPluginHarness {
     /// # Errors
     ///
     /// Returns an error when the packaged plugin cannot be built, cached, or installed.
+    pub fn install_storage_plugin_for_reload(
+        &self,
+        cargo_package: &str,
+        plugin_id: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), PackagedPluginTestError> {
+        self.install_cached_plugin_for_reload(
+            PackagedPluginSpec {
+                cargo_package,
+                plugin_id,
+                kind: PackagedPluginKind::Storage,
+                build_tag,
+            },
+            dist_dir,
+            target_dir,
+        )
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error when the packaged plugin cannot be built, cached, or installed.
     pub fn install_auth_plugin(
         &self,
         cargo_package: &str,
@@ -271,6 +340,29 @@ impl PackagedPluginHarness {
     /// # Errors
     ///
     /// Returns an error when the packaged plugin cannot be built, cached, or installed.
+    pub fn install_auth_plugin_for_reload(
+        &self,
+        cargo_package: &str,
+        plugin_id: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), PackagedPluginTestError> {
+        self.install_cached_plugin_for_reload(
+            PackagedPluginSpec {
+                cargo_package,
+                plugin_id,
+                kind: PackagedPluginKind::Auth,
+                build_tag,
+            },
+            dist_dir,
+            target_dir,
+        )
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error when the packaged plugin cannot be built, cached, or installed.
     pub fn install_admin_ui_plugin(
         &self,
         cargo_package: &str,
@@ -280,6 +372,29 @@ impl PackagedPluginHarness {
         build_tag: &str,
     ) -> Result<(), PackagedPluginTestError> {
         self.install_cached_plugin(
+            PackagedPluginSpec {
+                cargo_package,
+                plugin_id,
+                kind: PackagedPluginKind::AdminUi,
+                build_tag,
+            },
+            dist_dir,
+            target_dir,
+        )
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error when the packaged plugin cannot be built, cached, or installed.
+    pub fn install_admin_ui_plugin_for_reload(
+        &self,
+        cargo_package: &str,
+        plugin_id: &str,
+        dist_dir: &Path,
+        target_dir: &Path,
+        build_tag: &str,
+    ) -> Result<(), PackagedPluginTestError> {
+        self.install_cached_plugin_for_reload(
             PackagedPluginSpec {
                 cargo_package,
                 plugin_id,
@@ -319,6 +434,19 @@ impl PackagedPluginHarness {
             plugin_dir.join("plugin.toml"),
             plugin_manifest_contents(spec.plugin_id, spec.kind, &packaged_artifact),
         )?;
+        Ok(())
+    }
+
+    fn install_cached_plugin_for_reload(
+        &self,
+        spec: PackagedPluginSpec<'_>,
+        dist_dir: &Path,
+        target_dir: &Path,
+    ) -> Result<(), PackagedPluginTestError> {
+        let plugin_dir = dist_dir.join(spec.plugin_id);
+        let previous_modified_at = latest_modified_at_in_dir(&plugin_dir)?;
+        self.install_cached_plugin(spec, dist_dir, target_dir)?;
+        ensure_reload_visible_plugin_dir(&plugin_dir, previous_modified_at)?;
         Ok(())
     }
 
@@ -372,6 +500,8 @@ impl PackagedPluginHarness {
 }
 
 const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
+const RELOAD_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(3);
+const RELOAD_VISIBILITY_POLL: Duration = Duration::from_millis(25);
 
 static PACKAGED_PLUGIN_TEST_HARNESS_BUILDS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -607,6 +737,54 @@ fn dynamic_library_filename(package: &str) -> String {
         "windows" => format!("{crate_name}.dll"),
         "macos" => format!("lib{crate_name}.dylib"),
         _ => format!("lib{crate_name}.so"),
+    }
+}
+
+fn latest_modified_at_in_dir(path: &Path) -> Result<Option<SystemTime>, PackagedPluginTestError> {
+    if !path.is_dir() {
+        return Ok(None);
+    }
+
+    let mut latest: Option<SystemTime> = None;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let modified_at = entry.metadata()?.modified()?;
+        latest = Some(match latest {
+            Some(current) => current.max(modified_at),
+            None => modified_at,
+        });
+    }
+    Ok(latest)
+}
+
+fn ensure_reload_visible_plugin_dir(
+    plugin_dir: &Path,
+    previous_modified_at: Option<SystemTime>,
+) -> Result<(), PackagedPluginTestError> {
+    let Some(previous_modified_at) = previous_modified_at else {
+        return Ok(());
+    };
+    let manifest_path = plugin_dir.join("plugin.toml");
+    let manifest_contents = fs::read(&manifest_path)?;
+    let deadline = Instant::now() + RELOAD_VISIBILITY_TIMEOUT;
+
+    loop {
+        if latest_modified_at_in_dir(plugin_dir)?
+            .is_some_and(|current_modified_at| current_modified_at > previous_modified_at)
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(PackagedPluginTestError::Message(format!(
+                "timed out waiting for reload-visible artifact update in {}",
+                plugin_dir.display()
+            )));
+        }
+        std::thread::sleep(RELOAD_VISIBILITY_POLL);
+        fs::write(&manifest_path, &manifest_contents)?;
     }
 }
 

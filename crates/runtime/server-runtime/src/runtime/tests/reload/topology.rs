@@ -1,5 +1,5 @@
 use super::*;
-use crate::runtime::{GenerationId, RunningServer};
+use crate::runtime::{AcceptedGenerationSession, GenerationId, QueuedAcceptGuard, RunningServer};
 
 fn topology_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerConfig {
     let mut config = loopback_server_config(world_dir);
@@ -9,7 +9,15 @@ fn topology_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> Serve
 
 async fn reload_server_with_queued_old_accept(
     drain_grace_secs: u64,
-) -> Result<(tempfile::TempDir, RunningServer, GenerationId), RuntimeError> {
+) -> Result<
+    (
+        tempfile::TempDir,
+        RunningServer,
+        GenerationId,
+        QueuedAcceptGuard,
+    ),
+    RuntimeError,
+> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
@@ -30,20 +38,19 @@ async fn reload_server_with_queued_old_accept(
     )
     .await?;
     let old_generation = server.runtime.active_generation().generation_id;
-    server
+    let queued_accept = server
         .runtime
         .sessions
         .queued_accepts()
-        .increment(old_generation);
+        .track(old_generation);
 
-    std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
     updated.topology.default_adapter = JE_47_ADAPTER_ID.into();
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
     let result = server.reload_runtime_topology().await?;
     assert_ne!(result.activated_generation_id, old_generation);
 
-    Ok((temp_dir, server, old_generation))
+    Ok((temp_dir, server, old_generation, queued_accept))
 }
 
 async fn synthetic_tcp_transport_session() -> Result<
@@ -98,9 +105,8 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
         .expect("runtime should resolve the initial adapter");
     let before_protocol_number = before_adapter.descriptor().protocol_number;
 
-    std::thread::sleep(Duration::from_secs(1));
     harness
-        .install_protocol_plugin(
+        .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",
             JE_5_ADAPTER_ID,
             &dist_dir,
@@ -159,14 +165,13 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
     let before_generation = server.runtime.active_generation().generation_id;
     assert_eq!(server.listener_bindings().len(), 1);
 
-    std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
     updated.topology.default_adapter = JE_47_ADAPTER_ID.into();
     updated.topology.be_enabled = true;
     updated.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.into();
     updated.topology.enabled_bedrock_adapters = Some(vec![BE_924_ADAPTER_ID.into()]);
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     let result = server.reload_runtime_topology().await?;
     assert_ne!(result.activated_generation_id, before_generation);
@@ -223,10 +228,9 @@ async fn config_reload_rotates_generation_for_protocol_buffer_limit_changes()
     let before_generation = server.runtime.active_generation().generation_id;
     let before_bindings = server.listener_bindings();
 
-    std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     let result = server.reload_runtime_full().await?;
     assert_ne!(result.topology.activated_generation_id, before_generation);
@@ -278,10 +282,9 @@ async fn generation_reload_ignores_pending_protocol_buffer_limit_changes()
     let before_generation = server.runtime.active_generation().generation_id;
     let before_bindings = server.listener_bindings();
 
-    std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     let result = server.reload_runtime_topology().await?;
     assert_eq!(result.activated_generation_id, before_generation);
@@ -335,7 +338,7 @@ async fn plugin_reload_ignores_pending_generation_config_changes() -> Result<(),
     let mut updated = initial.clone();
     updated.network.server_port = occupied.local_addr()?.port();
     updated.network.motd = "plugin-reload-after".to_string();
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     let reloaded = server.reload_runtime_artifacts().await?.reloaded_plugin_ids;
     assert!(reloaded.is_empty());
@@ -377,11 +380,10 @@ async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result
     .await?;
     let before_generation = server.runtime.active_generation().generation_id;
 
-    std::thread::sleep(Duration::from_secs(1));
     let mut invalid = initial.clone();
     invalid.topology.default_adapter = "missing-adapter".into();
     invalid.topology.enabled_adapters = Some(vec!["missing-adapter".into()]);
-    write_server_toml(&config_path, &invalid)?;
+    write_server_toml_for_reload(&config_path, &invalid)?;
 
     let error = server
         .reload_runtime_topology()
@@ -426,10 +428,9 @@ async fn topology_reload_status_reports_draining_generation() -> Result<(), Runt
             .await?;
     let before_generation = server.runtime.active_generation().generation_id;
 
-    std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
     updated.topology.default_adapter = JE_47_ADAPTER_ID.into();
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
     let result = server.reload_runtime_topology().await?;
     assert_ne!(result.activated_generation_id, before_generation);
 
@@ -494,10 +495,9 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
         connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "topodrain").await?;
     assert_eq!(server.runtime.sessions.len().await, 1);
 
-    std::thread::sleep(Duration::from_secs(1));
     let mut updated = initial.clone();
     updated.topology.default_adapter = JE_47_ADAPTER_ID.into();
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
     let _ = server.reload_runtime_topology().await?;
 
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -517,7 +517,8 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
 #[tokio::test]
 async fn topology_reload_retains_draining_generation_while_old_accepts_remain_queued()
 -> Result<(), RuntimeError> {
-    let (_temp_dir, server, old_generation) = reload_server_with_queued_old_accept(30).await?;
+    let (_temp_dir, server, old_generation, queued_accept) =
+        reload_server_with_queued_old_accept(30).await?;
 
     assert!(
         server
@@ -528,11 +529,7 @@ async fn topology_reload_retains_draining_generation_while_old_accepts_remain_qu
             .any(|generation| generation.generation_id == old_generation)
     );
 
-    server
-        .runtime
-        .sessions
-        .queued_accepts()
-        .decrement(old_generation);
+    drop(queued_accept);
     let retired = server.runtime.retire_drained_generations().await;
     assert_eq!(retired, vec![old_generation]);
 
@@ -542,17 +539,16 @@ async fn topology_reload_retains_draining_generation_while_old_accepts_remain_qu
 #[tokio::test]
 async fn topology_reload_admits_old_generation_accept_during_drain_grace()
 -> Result<(), RuntimeError> {
-    let (_temp_dir, server, old_generation) = reload_server_with_queued_old_accept(30).await?;
-
-    server
-        .runtime
-        .sessions
-        .queued_accepts()
-        .decrement(old_generation);
+    let (_temp_dir, server, old_generation, queued_accept) =
+        reload_server_with_queued_old_accept(30).await?;
     let (_client, accepted_session) = synthetic_tcp_transport_session().await?;
     server
         .runtime
-        .spawn_transport_session(old_generation, accepted_session)
+        .spawn_accepted_transport_session(AcceptedGenerationSession::new(
+            old_generation,
+            accepted_session,
+            queued_accept,
+        ))
         .await;
 
     tokio::time::timeout(Duration::from_secs(1), async {
@@ -570,6 +566,14 @@ async fn topology_reload_admits_old_generation_accept_during_drain_grace()
     })
     .await
     .map_err(|_| RuntimeError::Config("old-generation queued accept was not admitted".into()))?;
+    assert!(
+        server
+            .status()
+            .await
+            .draining_generations
+            .iter()
+            .any(|generation| generation.generation_id == old_generation)
+    );
 
     server.shutdown().await
 }
@@ -577,17 +581,16 @@ async fn topology_reload_admits_old_generation_accept_during_drain_grace()
 #[tokio::test]
 async fn topology_reload_drops_old_generation_accept_after_drain_deadline()
 -> Result<(), RuntimeError> {
-    let (_temp_dir, server, old_generation) = reload_server_with_queued_old_accept(0).await?;
-
-    server
-        .runtime
-        .sessions
-        .queued_accepts()
-        .decrement(old_generation);
+    let (_temp_dir, server, old_generation, queued_accept) =
+        reload_server_with_queued_old_accept(0).await?;
     let (_client, accepted_session) = synthetic_tcp_transport_session().await?;
     server
         .runtime
-        .spawn_transport_session(old_generation, accepted_session)
+        .spawn_accepted_transport_session(AcceptedGenerationSession::new(
+            old_generation,
+            accepted_session,
+            queued_accept,
+        ))
         .await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 

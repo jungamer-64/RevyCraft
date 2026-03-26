@@ -81,7 +81,7 @@ async fn admin_control_plane_reload_runtime_full_updates_ui_and_permissions_for_
     updated.admin.ui_profile = "missing-ui".into();
     updated.admin.local_console_permissions = vec![crate::config::AdminPermission::Status];
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     let response = control
         .execute(
@@ -203,7 +203,7 @@ async fn admin_control_plane_reload_runtime_artifacts_ignores_pending_config_cha
         crate::config::AdminPermission::ReloadRuntime,
     ];
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     assert!(matches!(
         control
@@ -294,7 +294,7 @@ async fn admin_control_plane_reload_runtime_full_rejects_bootstrap_changes()
 
     let mut invalid = initial.clone();
     invalid.bootstrap.world_dir = temp_dir.path().join("other-world");
-    write_server_toml(&config_path, &invalid)?;
+    write_server_toml_for_reload(&config_path, &invalid)?;
 
     let response = control
         .execute(
@@ -377,7 +377,7 @@ async fn admin_control_plane_reload_runtime_full_updates_remote_tokens_for_next_
             ],
         ),
     );
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     let response = control
         .execute(
@@ -475,7 +475,7 @@ async fn admin_control_plane_reload_runtime_full_updates_remote_permissions_for_
             vec![crate::config::AdminPermission::Status],
         ),
     );
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     let response = control
         .execute(
@@ -551,7 +551,7 @@ async fn admin_control_plane_reload_runtime_full_invalidates_existing_subject_wh
             vec![crate::config::AdminPermission::Status],
         ),
     );
-    write_server_toml(&config_path, &updated)?;
+    write_server_toml_for_reload(&config_path, &updated)?;
 
     let response = control
         .execute(
@@ -615,7 +615,7 @@ async fn admin_control_plane_reload_runtime_full_rejects_admin_grpc_transport_ch
     invalid.admin.grpc.bind_addr = "127.0.0.1:50052"
         .parse()
         .expect("loopback admin grpc addr should parse");
-    write_server_toml(&config_path, &invalid)?;
+    write_server_toml_for_reload(&config_path, &invalid)?;
 
     let response = control
         .execute(
@@ -666,7 +666,7 @@ async fn admin_control_plane_reload_runtime_full_rejects_admin_grpc_allow_non_lo
 
     let mut invalid = initial.clone();
     invalid.admin.grpc.allow_non_loopback = true;
-    write_server_toml(&config_path, &invalid)?;
+    write_server_toml_for_reload(&config_path, &invalid)?;
 
     let response = control
         .execute(

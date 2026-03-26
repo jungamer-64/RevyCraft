@@ -10,10 +10,9 @@ async fn online_auth_reload_keeps_existing_challenge_generation() -> Result<(), 
         begin_online_auth_handshake(&server).await?;
     let addr = listener_addr(&server);
 
-    std::thread::sleep(Duration::from_secs(1));
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
-        .install_auth_plugin(
+        .install_auth_plugin_for_reload(
             "mc-plugin-auth-online-stub",
             ONLINE_STUB_AUTH_PLUGIN_ID,
             &dist_dir,

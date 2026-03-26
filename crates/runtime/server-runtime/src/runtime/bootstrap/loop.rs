@@ -33,13 +33,7 @@ pub(super) fn spawn_runtime_loop(
                         let Some(accepted) = maybe_accepted else {
                             continue;
                         };
-                        run_server
-                            .sessions
-                            .queued_accepts()
-                            .decrement(accepted.generation_id);
-                        run_server
-                            .spawn_transport_session(accepted.generation_id, accepted.session)
-                            .await;
+                        run_server.spawn_accepted_transport_session(accepted).await;
                     }
                     _ = tick_interval.tick() => {
                         if let Err(error) = run_server.tick().await {

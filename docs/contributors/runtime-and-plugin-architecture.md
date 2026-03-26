@@ -1,6 +1,6 @@
 # runtime と plugin architecture
 
-この文書は、runtime / plugin host / session lifecycle の責務境界をまとめた正本です。ここでは `reload runtime <mode>` を前提に、`core` を reloadable boundary の内側へ移した target architecture を説明します。operator 向けの config key や command surface は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、reload の内部意味論は [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)、`core` migration の詳細は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) を参照してください。
+この文書は、runtime / plugin host / session lifecycle の責務境界をまとめた正本です。ここでは `reload runtime <mode>` を前提に、`core` を reloadable boundary の内側へ移した現在の architecture を説明します。operator 向けの config key や command surface は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、reload の内部意味論は [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)、`core` migration の詳細は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) を参照してください。
 
 ## レイヤー構成
 
@@ -164,7 +164,7 @@ operator surface は `server-runtime` に集約されています。
 - gRPC transport
   plugin を経由せず `AdminControlPlaneHandle` を直接叩く
 
-target design では admin reload surface は `reload runtime <mode>` に統一されます。permission も `reload-runtime` に一本化し、進行中 request は開始時点の snapshot で完了し、次の request から新設定へ切り替わります。
+admin reload surface は `reload runtime <mode>` に統一されています。permission も `reload-runtime` に一本化されており、進行中 request は開始時点の snapshot で完了し、次の request から新設定へ切り替わります。
 
 ## どこで reload を読むか
 
