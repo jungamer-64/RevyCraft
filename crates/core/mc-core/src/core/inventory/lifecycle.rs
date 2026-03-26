@@ -1,6 +1,6 @@
 use super::super::canonical::{
     ApplyCoreOpsOptions, CloseContainerDelta, CoreOp, DroppedItemTickDelta, EntityDespawnDelta,
-    OpenContainerDelta, WindowDiffDelta, apply_core_ops,
+    OpenContainerDelta, WindowDiffDelta, WorldContainerSyncDelta, apply_core_ops,
 };
 use super::super::state_backend::{CoreStateMut, CoreStateRead};
 use super::super::{DroppedItemState, PlayerSessionState, ServerCore};
@@ -280,7 +280,7 @@ pub(in crate::core) fn sync_world_chest_viewers_state(
     state: &mut impl CoreStateMut,
     position: BlockPos,
     actor_player_id: PlayerId,
-) -> Vec<WindowDiffDelta> {
+) -> WorldContainerSyncDelta {
     let Some(slots) = state
         .player_session(actor_player_id)
         .and_then(|session| session.active_container.as_ref().cloned())
@@ -291,7 +291,7 @@ pub(in crate::core) fn sync_world_chest_viewers_state(
             _ => None,
         })
     else {
-        return Vec::new();
+        return WorldContainerSyncDelta::default();
     };
 
     state.set_block_entity(
@@ -367,7 +367,9 @@ pub(in crate::core) fn sync_world_chest_viewers_state(
     for stale_viewer in stale_viewers {
         unregister_world_chest_viewer_state(state, position, stale_viewer);
     }
-    deltas
+    WorldContainerSyncDelta {
+        window_diffs: deltas,
+    }
 }
 
 pub(in crate::core) fn sync_world_furnace_state(
@@ -480,7 +482,7 @@ pub(in crate::core) fn open_non_player_window_state(
         contents
     };
     if let Some(position) = world_chest_position {
-        register_world_chest_viewer(state, position, player_id, window_id);
+        register_world_chest_viewer_state(state, position, player_id, window_id);
     }
 
     Some(OpenContainerDelta {
@@ -499,36 +501,20 @@ pub(in crate::core) fn close_player_active_container_state(
     player_id: PlayerId,
     include_player_contents: bool,
 ) -> Option<CloseContainerDelta> {
-    let (window_id, world_block_entity, world_chest_position, contents) = {
+    let (window, contents) = {
         let (session, inventory) = state.player_session_inventory_mut(player_id)?;
         let window = close_active_container_window(session, inventory)?;
-        let world_block_entity = window.world_block_entity();
         let contents =
             include_player_contents.then(|| InventoryWindowContents::player(inventory.clone()));
-        (
-            window.window_id,
-            world_block_entity,
-            window.world_chest_position(),
-            contents,
-        )
+        (window, contents)
     };
 
-    if let Some((position, block_entity)) = world_block_entity {
-        let expected_block_key = match &block_entity {
-            BlockEntityState::Chest { .. } => catalog::CHEST,
-            BlockEntityState::Furnace { .. } => catalog::FURNACE,
-        };
-        if state.block_state(position).key.as_str() == expected_block_key {
-            state.set_block_entity(position, Some(block_entity));
-        }
-    }
-    if let Some(position) = world_chest_position {
-        unregister_world_chest_viewer_state(state, position, player_id);
-    }
+    writeback_world_container_state(state, &window);
+    unregister_world_container_viewer_state(state, &window, player_id);
 
     Some(CloseContainerDelta {
         player_id,
-        window_id,
+        window_id: window.window_id,
         contents,
     })
 }
@@ -544,7 +530,7 @@ fn allocate_non_player_window_id(state: &mut impl CoreStateMut, player_id: Playe
     Some(window_id)
 }
 
-fn register_world_chest_viewer(
+pub(in crate::core) fn register_world_chest_viewer_state(
     state: &mut impl CoreStateMut,
     position: BlockPos,
     player_id: PlayerId,
@@ -568,6 +554,32 @@ fn unregister_world_chest_viewer_state(
         state.set_chest_viewers(position, None);
     } else {
         state.set_chest_viewers(position, Some(viewers));
+    }
+}
+
+pub(in crate::core) fn writeback_world_container_state(
+    state: &mut impl CoreStateMut,
+    window: &OpenInventoryWindow,
+) {
+    let Some((position, block_entity)) = window.world_block_entity() else {
+        return;
+    };
+    let expected_block_key = match &block_entity {
+        BlockEntityState::Chest { .. } => catalog::CHEST,
+        BlockEntityState::Furnace { .. } => catalog::FURNACE,
+    };
+    if state.block_state(position).key.as_str() == expected_block_key {
+        state.set_block_entity(position, Some(block_entity));
+    }
+}
+
+pub(in crate::core) fn unregister_world_container_viewer_state(
+    state: &mut impl CoreStateMut,
+    window: &OpenInventoryWindow,
+    player_id: PlayerId,
+) {
+    if let Some(position) = window.world_chest_position() {
+        unregister_world_chest_viewer_state(state, position, player_id);
     }
 }
 
@@ -733,16 +745,6 @@ fn dropped_item_rest_y(state: &impl CoreStateRead, x: f64, y: f64, z: f64) -> Op
         return Some(f64::from(block_y) + 1.0 + DROPPED_ITEM_REST_HEIGHT);
     }
     None
-}
-
-pub(crate) fn world_chest_position(window: &OpenInventoryWindow) -> Option<BlockPos> {
-    window.world_chest_position()
-}
-
-pub(crate) fn world_block_entity(
-    window: &OpenInventoryWindow,
-) -> Option<(BlockPos, BlockEntityState)> {
-    window.world_block_entity()
 }
 
 fn persist_live_player_state(

@@ -16,7 +16,7 @@ use super::{
         state_spawn_dropped_item,
     },
     state_backend::{BaseState, CoreStateMut},
-    tick::{disconnect_player_state, schedule_keep_alive_state},
+    tick::{accept_keep_alive_state, disconnect_player_state, schedule_keep_alive_state},
 };
 use crate::events::{
     CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
@@ -111,6 +111,10 @@ pub(super) enum CoreOp {
     },
     RequestKeepAlive {
         player_id: PlayerId,
+    },
+    AcknowledgeKeepAlive {
+        player_id: PlayerId,
+        keep_alive_id: i32,
     },
     SetBlock {
         position: BlockPos,
@@ -211,6 +215,11 @@ pub(super) struct WindowDiffDelta {
     pub(super) after_properties: Vec<(u8, i16)>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(super) struct WorldContainerSyncDelta {
+    pub(super) window_diffs: Vec<WindowDiffDelta>,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct BlockDelta {
     pub(super) position: BlockPos,
@@ -246,7 +255,7 @@ pub(super) struct InventoryClickDelta {
     pub(super) after_cursor: Option<ItemStack>,
     pub(super) selected_hotbar_before: u8,
     pub(super) selected_hotbar_after: u8,
-    pub(super) viewer_syncs: Vec<WindowDiffDelta>,
+    pub(super) world_sync: WorldContainerSyncDelta,
 }
 
 #[derive(Clone, Debug)]
@@ -282,6 +291,11 @@ pub(super) struct KeepAliveDelta {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct AcknowledgeKeepAliveDelta {
+    pub(super) accepted: bool,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct DisconnectDelta {
     pub(super) player_id: PlayerId,
     pub(super) entity_id: EntityId,
@@ -314,6 +328,7 @@ pub(super) enum AppliedCoreOp {
     SetBlock(BlockDelta),
     SpawnDroppedItem(Option<DroppedItemSpawnDelta>),
     KeepAliveRequested(Option<KeepAliveDelta>),
+    AcknowledgeKeepAlive(AcknowledgeKeepAliveDelta),
     DisconnectPlayer(Option<DisconnectDelta>),
     EmitEvent(TargetedEvent),
 }
@@ -511,6 +526,14 @@ pub(super) fn reduce_core_op(
         CoreOp::RequestKeepAlive { player_id } => {
             AppliedCoreOp::KeepAliveRequested(schedule_keep_alive_state(state, player_id, now_ms))
         }
+        CoreOp::AcknowledgeKeepAlive {
+            player_id,
+            keep_alive_id,
+        } => AppliedCoreOp::AcknowledgeKeepAlive(accept_keep_alive_state(
+            state,
+            player_id,
+            keep_alive_id,
+        )),
         CoreOp::DisconnectPlayer { player_id } => {
             AppliedCoreOp::DisconnectPlayer(disconnect_player_state(state, player_id))
         }
@@ -602,6 +625,10 @@ impl CoreEventBuilder {
             AppliedCoreOp::KeepAliveRequested(delta) => delta
                 .map(|delta| self.build_keep_alive(delta))
                 .unwrap_or_default(),
+            AppliedCoreOp::AcknowledgeKeepAlive(delta) => {
+                let _ = delta.accepted;
+                Vec::new()
+            }
             AppliedCoreOp::DisconnectPlayer(delta) => delta
                 .map(|delta| self.build_disconnect(core, delta))
                 .unwrap_or_default(),
@@ -773,7 +800,7 @@ impl CoreEventBuilder {
                 },
             });
         }
-        for viewer_sync in delta.viewer_syncs {
+        for viewer_sync in delta.world_sync.window_diffs {
             events.extend(self.build_window_diff(viewer_sync));
         }
         events

@@ -278,6 +278,14 @@ impl<'a> GameplayTransaction<'a> {
     }
 
     #[cfg(test)]
+    pub(crate) fn acknowledge_keep_alive(&mut self, player_id: PlayerId, keep_alive_id: i32) {
+        self.push_previewed_op(CoreOp::AcknowledgeKeepAlive {
+            player_id,
+            keep_alive_id,
+        });
+    }
+
+    #[cfg(test)]
     pub(crate) fn player_session_state(
         &self,
         player_id: PlayerId,

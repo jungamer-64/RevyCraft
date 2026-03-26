@@ -248,6 +248,87 @@ fn keepalive_response_clears_pending_state_without_emitting_events() {
 }
 
 #[test]
+fn keepalive_response_ignores_mismatched_pending_id() {
+    let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "ka-ack-mismatch");
+    let _ = core.tick(DEFAULT_KEEPALIVE_INTERVAL_MS + 1);
+    let session_before = core
+        .player_session(first)
+        .expect("player session should exist before mismatched ack")
+        .clone();
+    let pending_keep_alive_id = session_before
+        .pending_keep_alive_id
+        .expect("keepalive should be pending");
+
+    let events = core.apply_command(
+        CoreCommand::KeepAliveResponse {
+            player_id: first,
+            keep_alive_id: pending_keep_alive_id.saturating_add(1),
+        },
+        DEFAULT_KEEPALIVE_INTERVAL_MS + 2,
+    );
+
+    assert!(events.is_empty());
+    let session_after = core
+        .player_session(first)
+        .expect("player should remain online after mismatched keepalive ack");
+    assert_eq!(
+        session_after.pending_keep_alive_id,
+        Some(pending_keep_alive_id)
+    );
+    assert_eq!(
+        session_after.last_keep_alive_sent_at,
+        session_before.last_keep_alive_sent_at
+    );
+    assert_eq!(
+        session_after.next_keep_alive_at,
+        session_before.next_keep_alive_at
+    );
+}
+
+#[test]
+fn keepalive_response_matches_manual_transaction_acknowledge() {
+    let (mut direct, player_id) = logged_in_core(CoreConfig::default(), 1, "ka-ack-parity");
+    let _ = direct.tick(DEFAULT_KEEPALIVE_INTERVAL_MS + 1);
+    let keep_alive_id = direct
+        .player_session(player_id)
+        .expect("player session should exist after keepalive tick")
+        .pending_keep_alive_id
+        .expect("keepalive should be pending");
+    let mut via_tx = direct.clone();
+
+    let direct_events = direct.apply_command(
+        CoreCommand::KeepAliveResponse {
+            player_id,
+            keep_alive_id,
+        },
+        DEFAULT_KEEPALIVE_INTERVAL_MS + 2,
+    );
+    let tx_events = apply_test_transaction(&mut via_tx, DEFAULT_KEEPALIVE_INTERVAL_MS + 2, |tx| {
+        tx.acknowledge_keep_alive(player_id, keep_alive_id);
+    });
+
+    assert_eq!(direct_events, tx_events);
+    let direct_session = direct
+        .player_session(player_id)
+        .expect("direct player session should remain online");
+    let tx_session = via_tx
+        .player_session(player_id)
+        .expect("transaction player session should remain online");
+    assert_eq!(
+        direct_session.pending_keep_alive_id,
+        tx_session.pending_keep_alive_id
+    );
+    assert_eq!(
+        direct_session.last_keep_alive_sent_at,
+        tx_session.last_keep_alive_sent_at
+    );
+    assert_eq!(
+        direct_session.next_keep_alive_at,
+        tx_session.next_keep_alive_at
+    );
+}
+
+#[test]
 fn keepalive_tick_matches_manual_transaction_request_keep_alive() {
     let (mut direct, player_id) = logged_in_core(CoreConfig::default(), 1, "ka-parity");
     let mut via_tx = direct.clone();
@@ -853,6 +934,12 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
     );
     assert_container_opened(&first_open, first, 1, InventoryContainer::Chest);
     assert_container_opened(&second_open, second, 1, InventoryContainer::Chest);
+    let stale_viewer = player_id("stale-chest-viewer");
+    core.world
+        .chest_viewers
+        .entry(chest_pos)
+        .or_default()
+        .insert(stale_viewer, 1);
 
     let pickup_events = click_slot(
         &mut core,
@@ -889,6 +976,70 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
         InventorySlot::Container(0),
         Some(("minecraft:stone", 2)),
     );
+    assert!(
+        !core
+            .world
+            .chest_viewers
+            .get(&chest_pos)
+            .is_some_and(|viewers| viewers.contains_key(&stale_viewer))
+    );
+    let actor_tx_index = place_events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::InventoryTransactionProcessed {
+                        transaction:
+                            InventoryTransactionContext {
+                                window_id: 1,
+                                action_number: 2,
+                            },
+                        accepted: true,
+                    }
+                ) if *event_player_id == first
+            )
+        })
+        .expect("actor transaction event should be present");
+    let actor_slot_index = place_events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::InventorySlotChanged {
+                        window_id: 1,
+                        slot: InventorySlot::Container(0),
+                        stack,
+                        ..
+                    }
+                ) if *event_player_id == first
+                    && stack.as_ref().map(stack_summary) == Some(("minecraft:stone", 2))
+            )
+        })
+        .expect("actor window diff should be present");
+    let viewer_slot_index = place_events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::InventorySlotChanged {
+                        window_id: 1,
+                        slot: InventorySlot::Container(0),
+                        stack,
+                        ..
+                    }
+                ) if *event_player_id == second
+                    && stack.as_ref().map(stack_summary) == Some(("minecraft:stone", 2))
+            )
+        })
+        .expect("viewer window diff should be present");
+    assert!(actor_tx_index < actor_slot_index);
+    assert!(actor_slot_index < viewer_slot_index);
 
     let reject_break = core.apply_command(
         CoreCommand::DigBlock {
@@ -955,7 +1106,130 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
     assert!(block_change_count(&break_events, chest_pos, BlockState::is_air) >= 2);
     assert_container_closed(&break_events, first, 1);
     assert_container_closed(&break_events, second, 1);
+    let close_index = break_events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::ContainerClosed { window_id: 1 }
+                ) if *event_player_id == first
+            )
+        })
+        .expect("player close event should be present before chest removal");
+    let block_changed_index = break_events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::BlockChanged { position, block }
+                ) if *event_player_id == first
+                    && *position == chest_pos
+                    && block.is_air()
+            )
+        })
+        .expect("player block change event should be present after chest removal");
+    assert!(close_index < block_changed_index);
     assert!(!core.snapshot().block_entities.contains_key(&chest_pos));
+}
+
+#[test]
+fn disconnecting_world_backed_chest_writes_back_contents_and_unregisters_viewer() {
+    let (mut core, first) = logged_in_creative_core("wchest-disc");
+    let chest_pos = BlockPos::new(2, 4, 0);
+
+    let _ = creative_inventory_set(
+        &mut core,
+        first,
+        InventorySlot::Hotbar(0),
+        Some(item("minecraft:chest", 1)),
+    );
+    let place_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: BlockPos::new(2, 3, 0),
+            face: Some(BlockFace::Top),
+            held_item: Some(item("minecraft:chest", 1)),
+        },
+        0,
+    );
+    assert!(
+        block_change_count(&place_events, chest_pos, |block| {
+            block.key.as_str() == "minecraft:chest"
+        }) >= 1
+    );
+    assert_eq!(
+        core.snapshot()
+            .block_entities
+            .get(&chest_pos)
+            .and_then(BlockEntityState::chest_slots)
+            .map(<[_]>::len),
+        Some(27)
+    );
+    let _ = creative_inventory_set(
+        &mut core,
+        first,
+        InventorySlot::Hotbar(0),
+        Some(item("minecraft:stone", 3)),
+    );
+    let open_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: chest_pos,
+            face: Some(BlockFace::Top),
+            held_item: None,
+        },
+        0,
+    );
+    assert_container_opened(&open_events, first, 1, InventoryContainer::Chest);
+    let pickup_events = click_slot(
+        &mut core,
+        first,
+        0,
+        1,
+        InventorySlot::Hotbar(0),
+        InventoryClickButton::Left,
+        None,
+    );
+    assert_transaction_processed(&pickup_events, first, 0, 1, true);
+    let place_events = click_slot(
+        &mut core,
+        first,
+        1,
+        2,
+        InventorySlot::Container(0),
+        InventoryClickButton::Left,
+        Some(item("minecraft:stone", 3)),
+    );
+    assert_transaction_processed(&place_events, first, 1, 2, true);
+
+    let disconnect_events = core.apply_command(CoreCommand::Disconnect { player_id: first }, 0);
+
+    assert!(disconnect_events.iter().any(|event| {
+        matches!(
+            (&event.target, &event.event),
+            (
+                EventTarget::EveryoneExcept(event_player_id),
+                CoreEvent::EntityDespawned { .. }
+            ) if *event_player_id == first
+        )
+    }));
+    assert_eq!(
+        core.snapshot()
+            .block_entities
+            .get(&chest_pos)
+            .and_then(BlockEntityState::chest_slots)
+            .and_then(|slots| slots.first())
+            .and_then(Option::as_ref)
+            .map(stack_summary),
+        Some(("minecraft:stone", 3))
+    );
+    assert!(!core.world.chest_viewers.contains_key(&chest_pos));
 }
 
 #[test]
@@ -1163,6 +1437,33 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
     );
     assert!(block_change_count(&break_events, furnace_pos, BlockState::is_air) >= 1);
     assert_container_closed(&break_events, first, 1);
+    let close_index = break_events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::ContainerClosed { window_id: 1 }
+                ) if *event_player_id == first
+            )
+        })
+        .expect("furnace close event should be present");
+    let block_changed_index = break_events
+        .iter()
+        .position(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::BlockChanged { position, block }
+                ) if *event_player_id == first
+                    && *position == furnace_pos
+                    && block.is_air()
+            )
+        })
+        .expect("furnace removal block change should be present");
+    assert!(close_index < block_changed_index);
     assert!(!core.snapshot().block_entities.contains_key(&furnace_pos));
 }
 

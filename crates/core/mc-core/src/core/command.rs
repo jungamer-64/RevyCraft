@@ -87,10 +87,15 @@ impl ServerCore {
             CoreCommand::KeepAliveResponse {
                 player_id,
                 keep_alive_id,
-            } => {
-                self.accept_keep_alive(player_id, keep_alive_id);
-                Vec::new()
-            }
+            } => apply_core_ops(
+                self,
+                vec![CoreOp::AcknowledgeKeepAlive {
+                    player_id,
+                    keep_alive_id,
+                }],
+                now_ms,
+                ApplyCoreOpsOptions::default(),
+            ),
             CoreCommand::Disconnect { player_id } => apply_core_ops(
                 self,
                 vec![CoreOp::DisconnectPlayer { player_id }],

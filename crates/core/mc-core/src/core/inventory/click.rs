@@ -1,5 +1,5 @@
 use super::super::PlayerSessionState;
-use super::super::canonical::InventoryClickDelta;
+use super::super::canonical::{InventoryClickDelta, WorldContainerSyncDelta};
 use super::super::state_backend::CoreStateMut;
 use super::crafting::{
     apply_active_container_crafting_result_click, apply_player_crafting_result_click,
@@ -54,7 +54,7 @@ pub(in crate::core) fn apply_inventory_click_state(
             after_cursor: before_session.cursor.clone(),
             selected_hotbar_before: before_snapshot.selected_hotbar_slot,
             selected_hotbar_after: before_snapshot.selected_hotbar_slot,
-            viewer_syncs: Vec::new(),
+            world_sync: WorldContainerSyncDelta::default(),
         });
     };
     let before_contents = window_contents(&before_session, &before_inventory, container);
@@ -119,17 +119,17 @@ pub(in crate::core) fn apply_inventory_click_state(
     };
 
     let selected_hotbar_slot = state.player_selected_hotbar(player_id).unwrap_or(0);
-    let viewer_syncs = if accepted {
-        let mut deltas = Vec::new();
+    let world_sync = if accepted {
+        let mut delta = WorldContainerSyncDelta::default();
         if let Some(position) = world_chest_position {
-            deltas.extend(sync_world_chest_viewers_state(state, position, player_id));
+            delta = sync_world_chest_viewers_state(state, position, player_id);
         }
         if let Some(position) = world_furnace_position {
             sync_world_furnace_state(state, position, player_id);
         }
-        deltas
+        delta
     } else {
-        Vec::new()
+        WorldContainerSyncDelta::default()
     };
     Some(InventoryClickDelta {
         player_id,
@@ -147,7 +147,7 @@ pub(in crate::core) fn apply_inventory_click_state(
         after_cursor,
         selected_hotbar_before: before_snapshot.selected_hotbar_slot,
         selected_hotbar_after: selected_hotbar_slot,
-        viewer_syncs,
+        world_sync,
     })
 }
 
