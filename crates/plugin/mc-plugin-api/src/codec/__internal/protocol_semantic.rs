@@ -1,10 +1,10 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::shared::{
     decode_capability_announcement, decode_connection_id, decode_connection_phase,
-    decode_core_command, decode_core_event, decode_entity_id, decode_option, decode_player_id,
-    decode_player_snapshot, encode_capability_announcement, encode_connection_id,
-    encode_connection_phase, encode_core_command, encode_core_event, encode_entity_id,
-    encode_option, encode_player_id, encode_player_snapshot,
+    decode_core_event, decode_entity_id, decode_option, decode_player_id, decode_player_snapshot,
+    decode_runtime_command, encode_capability_announcement, encode_connection_id,
+    encode_connection_phase, encode_core_event, encode_entity_id, encode_option, encode_player_id,
+    encode_player_snapshot, encode_runtime_command,
 };
 use crate::codec::protocol::{
     ProtocolOpCode, ProtocolRequest, ProtocolResponse, ProtocolSessionSnapshot,
@@ -500,8 +500,8 @@ pub(crate) fn encode_protocol_response_payload(
             | ProtocolOpCode::EncodeLoginSuccess,
             ProtocolResponse::Frame(frame),
         ) => encoder.write_bytes(frame),
-        (ProtocolOpCode::DecodePlay, ProtocolResponse::CoreCommand(command)) => {
-            encode_option(encoder, command.as_ref(), encode_core_command)
+        (ProtocolOpCode::DecodePlay, ProtocolResponse::RuntimeCommand(command)) => {
+            encode_option(encoder, command.as_ref(), encode_runtime_command)
         }
         (ProtocolOpCode::EncodePlayEvent, ProtocolResponse::Frames(frames)) => {
             encoder.write_len(frames.len())?;
@@ -560,9 +560,9 @@ pub(crate) fn decode_protocol_response_payload(
         | ProtocolOpCode::EncodeNetworkSettings
         | ProtocolOpCode::EncodeLoginSuccess
         | ProtocolOpCode::EncodeWireFrame => Ok(ProtocolResponse::Frame(decoder.read_bytes()?)),
-        ProtocolOpCode::DecodePlay => Ok(ProtocolResponse::CoreCommand(decode_option(
+        ProtocolOpCode::DecodePlay => Ok(ProtocolResponse::RuntimeCommand(decode_option(
             decoder,
-            decode_core_command,
+            decode_runtime_command,
         )?)),
         ProtocolOpCode::EncodePlayEvent => {
             let len = decoder.read_len()?;

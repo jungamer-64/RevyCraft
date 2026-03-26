@@ -11,9 +11,8 @@ mod tests;
 
 use bedrockrs_proto::ProtoVersion;
 use mc_core::{
-    BlockState, ChunkColumn, CoreCommand, CoreEvent, DroppedItemSnapshot, EntityId,
-    InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot,
-    WorldMeta,
+    BlockState, ChunkColumn, CoreEvent, DroppedItemSnapshot, EntityId, InventoryContainer,
+    InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_be_common::{BedrockAdapter, BedrockProfile};
 use mc_proto_common::{
@@ -179,7 +178,7 @@ impl BedrockProfile for Bedrock924Profile {
         &self,
         session: &ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError> {
+    ) -> Result<Option<mc_core::RuntimeCommand>, ProtocolError> {
         decoding::decode_play_packet(session, &self.sessions, frame)
     }
 

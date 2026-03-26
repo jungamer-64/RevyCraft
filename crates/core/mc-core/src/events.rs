@@ -42,10 +42,6 @@ pub enum CoreCommand {
         player_id: PlayerId,
         view_distance: u8,
     },
-    ClientStatus {
-        player_id: PlayerId,
-        action_id: i8,
-    },
     MoveIntent {
         player_id: PlayerId,
         position: Option<Vec3>,
@@ -72,11 +68,6 @@ pub enum CoreCommand {
         target: InventoryClickTarget,
         button: InventoryClickButton,
         validation: InventoryClickValidation,
-    },
-    InventoryTransactionAck {
-        player_id: PlayerId,
-        transaction: InventoryTransactionContext,
-        accepted: bool,
     },
     CloseContainer {
         player_id: PlayerId,
@@ -113,13 +104,11 @@ impl CoreCommand {
         match self {
             Self::LoginStart { player_id, .. }
             | Self::UpdateClientView { player_id, .. }
-            | Self::ClientStatus { player_id, .. }
             | Self::MoveIntent { player_id, .. }
             | Self::KeepAliveResponse { player_id, .. }
             | Self::SetHeldSlot { player_id, .. }
             | Self::CreativeInventorySet { player_id, .. }
             | Self::InventoryClick { player_id, .. }
-            | Self::InventoryTransactionAck { player_id, .. }
             | Self::CloseContainer { player_id, .. }
             | Self::DigBlock { player_id, .. }
             | Self::PlaceBlock { player_id, .. }
@@ -131,6 +120,45 @@ impl CoreCommand {
     #[must_use]
     pub fn into_gameplay(self) -> Result<GameplayCommand, Self> {
         GameplayCommand::try_from(self)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SessionCommand {
+    ClientStatus {
+        player_id: PlayerId,
+        action_id: i8,
+    },
+    InventoryTransactionAck {
+        player_id: PlayerId,
+        transaction: InventoryTransactionContext,
+        accepted: bool,
+    },
+}
+
+impl SessionCommand {
+    #[must_use]
+    pub const fn player_id(&self) -> PlayerId {
+        match self {
+            Self::ClientStatus { player_id, .. }
+            | Self::InventoryTransactionAck { player_id, .. } => *player_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum RuntimeCommand {
+    Core(CoreCommand),
+    Session(SessionCommand),
+}
+
+impl RuntimeCommand {
+    #[must_use]
+    pub const fn player_id(&self) -> Option<PlayerId> {
+        match self {
+            Self::Core(command) => command.player_id(),
+            Self::Session(command) => Some(command.player_id()),
+        }
     }
 }
 

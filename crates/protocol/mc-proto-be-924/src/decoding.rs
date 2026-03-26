@@ -15,7 +15,9 @@ use bedrockrs_proto::v662::packets::{
 use bedrockrs_proto::v712::enums::ItemStackRequestActionType;
 use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecVAR};
-use mc_core::{CoreCommand, InteractionHand, InventoryClickValidation, PlayerId, Vec3};
+use mc_core::{
+    CoreCommand, InteractionHand, InventoryClickValidation, PlayerId, RuntimeCommand, Vec3,
+};
 use mc_proto_be_common::__version_support::{
     login::parse_bedrock_login_payload,
     world::{block_face_from_i32, block_pos_from_network, protocol_error},
@@ -62,12 +64,12 @@ pub(crate) fn decode_play_packet(
     session: &ProtocolSessionSnapshot,
     sessions: &BedrockProtocolSessionStore,
     frame: &[u8],
-) -> Result<Option<CoreCommand>, ProtocolError> {
+) -> Result<Option<RuntimeCommand>, ProtocolError> {
     let player_id = session.player_id.ok_or(ProtocolError::InvalidPacket(
         "play session is missing player id",
     ))?;
     if let Some(command) = decode_inventory_transaction_frame(player_id, frame)? {
-        return Ok(Some(command));
+        return Ok(Some(RuntimeCommand::Core(command)));
     }
 
     let packets = decode_v924(frame)?;
@@ -80,7 +82,7 @@ pub(crate) fn decode_play_packet(
             rotation,
             on_ground,
             ..
-        }) => Ok(Some(CoreCommand::MoveIntent {
+        }) => Ok(Some(RuntimeCommand::Core(CoreCommand::MoveIntent {
             player_id,
             position: Some(Vec3::new(
                 f64::from(position.x),
@@ -90,12 +92,12 @@ pub(crate) fn decode_play_packet(
             yaw: Some(rotation.x),
             pitch: Some(rotation.y),
             on_ground,
-        })),
+        }))),
         V924::MobEquipmentPacket(MobEquipmentPacket { slot, .. }) => {
-            Ok(Some(CoreCommand::SetHeldSlot {
+            Ok(Some(RuntimeCommand::Core(CoreCommand::SetHeldSlot {
                 player_id,
                 slot: i16::from(slot),
-            }))
+            })))
         }
         V924::PlayerActionPacket(PlayerActionPacket {
             action,
@@ -104,33 +106,34 @@ pub(crate) fn decode_play_packet(
             ..
         }) => match action {
             PlayerActionType::StartDestroyBlock | PlayerActionType::ContinueDestroyBlock => {
-                Ok(Some(CoreCommand::DigBlock {
+                Ok(Some(RuntimeCommand::Core(CoreCommand::DigBlock {
                     player_id,
                     position: block_pos_from_network(&block_position),
                     status: 0,
                     face: block_face_from_i32(face),
-                }))
+                })))
             }
             PlayerActionType::AbortDestroyBlock | PlayerActionType::StopDestroyBlock => {
-                Ok(Some(CoreCommand::DigBlock {
+                Ok(Some(RuntimeCommand::Core(CoreCommand::DigBlock {
                     player_id,
                     position: block_pos_from_network(&block_position),
                     status: 1,
                     face: block_face_from_i32(face),
-                }))
+                })))
             }
             PlayerActionType::CreativeDestroyBlock | PlayerActionType::PredictDestroyBlock => {
-                Ok(Some(CoreCommand::DigBlock {
+                Ok(Some(RuntimeCommand::Core(CoreCommand::DigBlock {
                     player_id,
                     position: block_pos_from_network(&block_position),
                     status: 2,
                     face: block_face_from_i32(face),
-                }))
+                })))
             }
             _ => Ok(None),
         },
         V924::ItemStackRequestPacket(ItemStackRequestPacket { requests }) => {
             decode_item_stack_request_packet(session, sessions, player_id, &requests)
+                .map(|command| command.map(RuntimeCommand::Core))
         }
         V924::PlayerAuthInputPacket(PlayerAuthInputPacket {
             item_stack_request,
@@ -140,12 +143,14 @@ pub(crate) fn decode_play_packet(
             ..
         }) => {
             if let Some(request) = item_stack_request {
-                return decode_auth_input_stack_request(session, sessions, player_id, &request);
+                return decode_auth_input_stack_request(session, sessions, player_id, &request)
+                    .map(|command| command.map(RuntimeCommand::Core));
             }
             if let Some(transaction) = item_use_transaction {
-                return decode_item_use_transaction(player_id, &transaction);
+                return decode_item_use_transaction(player_id, &transaction)
+                    .map(|command| command.map(RuntimeCommand::Core));
             }
-            Ok(Some(CoreCommand::MoveIntent {
+            Ok(Some(RuntimeCommand::Core(CoreCommand::MoveIntent {
                 player_id,
                 position: Some(Vec3::new(
                     f64::from(player_position.x),
@@ -155,7 +160,7 @@ pub(crate) fn decode_play_packet(
                 yaw: Some(player_rotation.x),
                 pitch: Some(player_rotation.y),
                 on_ground: true,
-            }))
+            })))
         }
         V924::ContainerClosePacket(packet) => Ok(matches!(
             packet.container_id,
@@ -163,9 +168,11 @@ pub(crate) fn decode_play_packet(
         )
         .then(|| sessions.active_window_id(session))
         .flatten()
-        .map(|window_id| CoreCommand::CloseContainer {
-            player_id,
-            window_id,
+        .map(|window_id| {
+            RuntimeCommand::Core(CoreCommand::CloseContainer {
+                player_id,
+                window_id,
+            })
         })),
         V924::ClientCacheStatusPacket(_) | V924::ResourcePackClientResponsePacket(_) => Ok(None),
         _ => Ok(None),

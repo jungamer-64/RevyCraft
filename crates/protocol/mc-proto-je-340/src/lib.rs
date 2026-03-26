@@ -16,9 +16,9 @@ use encoding::{
     encode_window_items, encode_window_property,
 };
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, CoreCommand, DroppedItemSnapshot, EntityId,
-    InventoryContainer, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
-    ItemStack, PlayerSnapshot, WorldMeta,
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, EntityId, InventoryContainer,
+    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerSnapshot,
+    RuntimeCommand, WorldMeta,
 };
 use mc_proto_common::{
     ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot, TransportKind, WireFormatKind,
@@ -269,7 +269,7 @@ impl JavaEditionProfile for Je340Profile {
         &self,
         session: &ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, ProtocolError> {
         decode_play_packet(session, &self.sessions, frame)
     }
 

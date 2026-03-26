@@ -9,7 +9,9 @@ use crate::codec::__internal::protocol_semantic::{
     decode_protocol_request_payload, decode_protocol_response_payload,
     encode_protocol_request_payload, encode_protocol_response_payload,
 };
-use mc_core::{CapabilityAnnouncement, CoreCommand, CoreEvent, PlayerSnapshot, ProtocolCapability};
+use mc_core::{
+    CapabilityAnnouncement, CoreEvent, PlayerSnapshot, ProtocolCapability, RuntimeCommand,
+};
 pub use mc_proto_common::ProtocolSessionSnapshot;
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, LoginRequest, PlayEncodingContext,
@@ -174,7 +176,7 @@ pub enum ProtocolResponse {
     LoginRequest(LoginRequest),
     Frame(Vec<u8>),
     Frames(Vec<Vec<u8>>),
-    CoreCommand(Option<CoreCommand>),
+    RuntimeCommand(Option<RuntimeCommand>),
     SessionTransferBlob(Vec<u8>),
     WireFrameDecodeResult(Option<WireFrameDecodeResult>),
     Empty,
@@ -298,7 +300,8 @@ mod tests {
         BlockPos, CapabilityAnnouncement, ChunkColumn, ConnectionId, CoreCommand, CoreEvent,
         EntityId, GameplayCapabilitySet, GameplayProfileId, InventoryContainer, InventorySlot,
         ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, PluginGenerationId,
-        ProtocolCapability, ProtocolCapabilitySet, SessionCapabilitySet, Vec3, WorldMeta,
+        ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet, Vec3,
+        WorldMeta,
     };
     use mc_proto_common::{
         BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState,
@@ -375,12 +378,12 @@ mod tests {
         }
     }
 
-    fn sample_command() -> CoreCommand {
-        CoreCommand::CreativeInventorySet {
+    fn sample_command() -> RuntimeCommand {
+        RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
             player_id: sample_player_id(),
             slot: InventorySlot::Hotbar(1),
             stack: Some(ItemStack::new("minecraft:glass", 16, 0)),
-        }
+        })
     }
 
     fn sample_protocol_session() -> super::ProtocolSessionSnapshot {
@@ -491,7 +494,7 @@ mod tests {
                     session: sample_protocol_session(),
                     frame: vec![10, 11],
                 },
-                ProtocolResponse::CoreCommand(Some(sample_command())),
+                ProtocolResponse::RuntimeCommand(Some(sample_command())),
             ),
             (
                 ProtocolRequest::EncodePlayEvent {
@@ -603,7 +606,7 @@ mod tests {
                 session: sample_protocol_session(),
                 frame: vec![1],
             },
-            &ProtocolResponse::CoreCommand(Some(sample_command())),
+            &ProtocolResponse::RuntimeCommand(Some(sample_command())),
         )
         .expect("response should encode");
         let mut truncated = response.clone();
@@ -690,7 +693,7 @@ mod tests {
             username: "alice".to_string(),
             player_id: sample_player_id(),
         };
-        let response = ProtocolResponse::CoreCommand(Some(login_command));
+        let response = ProtocolResponse::RuntimeCommand(Some(RuntimeCommand::Core(login_command)));
         let decode_play = ProtocolRequest::DecodePlay {
             session: sample_protocol_session(),
             frame: vec![0x10],

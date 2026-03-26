@@ -413,15 +413,15 @@ macro_rules! export_plugin {
         $crate::__export_plugin_non_gameplay!(
             $plugin_ty,
             $manifest,
-            mc_plugin_api::host_api::ProtocolPluginApiV2,
-            mc_plugin_api::host_api::ProtocolPluginApiV2 {
+            mc_plugin_api::host_api::ProtocolPluginApiV3,
+            mc_plugin_api::host_api::ProtocolPluginApiV3 {
                 invoke: mc_plugin_invoke,
                 free_buffer: mc_plugin_free_buffer,
             },
             mc_plugin_api::codec::protocol::decode_protocol_request,
             $crate::__macro_support::handle_protocol_request,
             mc_plugin_api::codec::protocol::encode_protocol_response,
-            mc_plugin_protocol_api_v2,
+            mc_plugin_protocol_api_v3,
             "protocol plugin panicked while decoding request",
             "protocol plugin panicked while handling request",
         );

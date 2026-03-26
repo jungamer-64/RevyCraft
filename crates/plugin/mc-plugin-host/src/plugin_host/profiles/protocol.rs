@@ -277,13 +277,13 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
         &self,
         session: &mc_proto_common::ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<mc_core::CoreCommand>, ProtocolError> {
+    ) -> Result<Option<mc_core::RuntimeCommand>, ProtocolError> {
         self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::DecodePlay {
                 session: session.clone(),
                 frame: frame.to_vec(),
             })? {
-                ProtocolResponse::CoreCommand(command) => Ok(command),
+                ProtocolResponse::RuntimeCommand(command) => Ok(command),
                 other => Err(ProtocolError::Plugin(format!(
                     "unexpected decode_play payload: {other:?}"
                 ))),

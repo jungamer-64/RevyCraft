@@ -78,7 +78,7 @@ pub(super) mod custom_wire_codec_protocol_plugin {
         ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_protocol_request,
         encode_protocol_response,
     };
-    use mc_plugin_api::host_api::ProtocolPluginApiV2;
+    use mc_plugin_api::host_api::ProtocolPluginApiV3;
     use mc_plugin_api::manifest::PluginManifestV1;
     use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
@@ -199,10 +199,10 @@ pub(super) mod custom_wire_codec_protocol_plugin {
         let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
     }
 
-    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV2> {
+    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV3> {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
         static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
-        static API: OnceLock<ProtocolPluginApiV2> = OnceLock::new();
+        static API: OnceLock<ProtocolPluginApiV3> = OnceLock::new();
         InProcessPluginEntrypoints::new(
             MANIFEST.get_or_init(|| PluginManifestV1 {
                 plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
@@ -223,7 +223,7 @@ pub(super) mod custom_wire_codec_protocol_plugin {
                     .as_ptr(),
                 capabilities_len: 1,
             }),
-            API.get_or_init(|| ProtocolPluginApiV2 {
+            API.get_or_init(|| ProtocolPluginApiV3 {
                 invoke,
                 free_buffer,
             }),
@@ -240,7 +240,7 @@ pub(super) mod failing_protocol_plugin {
     use mc_plugin_api::codec::protocol::{
         ProtocolRequest, ProtocolResponse, decode_protocol_request, encode_protocol_response,
     };
-    use mc_plugin_api::host_api::ProtocolPluginApiV2;
+    use mc_plugin_api::host_api::ProtocolPluginApiV3;
     use mc_plugin_api::manifest::PluginManifestV1;
     use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
@@ -336,10 +336,10 @@ pub(super) mod failing_protocol_plugin {
         let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
     }
 
-    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV2> {
+    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV3> {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
         static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
-        static API: OnceLock<ProtocolPluginApiV2> = OnceLock::new();
+        static API: OnceLock<ProtocolPluginApiV3> = OnceLock::new();
         InProcessPluginEntrypoints::new(
             MANIFEST.get_or_init(|| PluginManifestV1 {
                 plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
@@ -360,7 +360,7 @@ pub(super) mod failing_protocol_plugin {
                     .as_ptr(),
                 capabilities_len: 1,
             }),
-            API.get_or_init(|| ProtocolPluginApiV2 {
+            API.get_or_init(|| ProtocolPluginApiV3 {
                 invoke,
                 free_buffer,
             }),
@@ -464,7 +464,7 @@ pub(super) mod route_collision_protocol_plugin {
     use mc_plugin_api::codec::protocol::{
         ProtocolRequest, ProtocolResponse, decode_protocol_request, encode_protocol_response,
     };
-    use mc_plugin_api::host_api::ProtocolPluginApiV2;
+    use mc_plugin_api::host_api::ProtocolPluginApiV3;
     use mc_plugin_api::manifest::PluginManifestV1;
     use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
@@ -559,10 +559,10 @@ pub(super) mod route_collision_protocol_plugin {
         let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
     }
 
-    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV2> {
+    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV3> {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
         static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
-        static API: OnceLock<ProtocolPluginApiV2> = OnceLock::new();
+        static API: OnceLock<ProtocolPluginApiV3> = OnceLock::new();
         InProcessPluginEntrypoints::new(
             MANIFEST.get_or_init(|| PluginManifestV1 {
                 plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
@@ -583,7 +583,7 @@ pub(super) mod route_collision_protocol_plugin {
                     .as_ptr(),
                 capabilities_len: 1,
             }),
-            API.get_or_init(|| ProtocolPluginApiV2 {
+            API.get_or_init(|| ProtocolPluginApiV3 {
                 invoke,
                 free_buffer,
             }),
@@ -600,7 +600,7 @@ pub(super) mod oversized_protocol_response_plugin {
     use mc_plugin_api::codec::protocol::{
         ProtocolRequest, ProtocolResponse, decode_protocol_request, encode_protocol_response,
     };
-    use mc_plugin_api::host_api::ProtocolPluginApiV2;
+    use mc_plugin_api::host_api::ProtocolPluginApiV3;
     use mc_plugin_api::manifest::PluginManifestV1;
     use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
@@ -695,10 +695,10 @@ pub(super) mod oversized_protocol_response_plugin {
         let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
     }
 
-    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV2> {
+    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV3> {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
         static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
-        static API: OnceLock<ProtocolPluginApiV2> = OnceLock::new();
+        static API: OnceLock<ProtocolPluginApiV3> = OnceLock::new();
         InProcessPluginEntrypoints::new(
             MANIFEST.get_or_init(|| PluginManifestV1 {
                 plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
@@ -719,7 +719,7 @@ pub(super) mod oversized_protocol_response_plugin {
                     .as_ptr(),
                 capabilities_len: 1,
             }),
-            API.get_or_init(|| ProtocolPluginApiV2 {
+            API.get_or_init(|| ProtocolPluginApiV3 {
                 invoke,
                 free_buffer,
             }),

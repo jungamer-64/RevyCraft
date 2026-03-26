@@ -2,9 +2,9 @@ use crate::handshake::decode_handshake_frame;
 use crate::login::{encode_login_success_packet, read_login_byte_array, write_login_byte_array};
 use crate::status::{encode_status_pong_packet, encode_status_response_packet};
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DroppedItemSnapshot, EntityId,
+    BlockPos, BlockState, ChunkColumn, CoreEvent, DroppedItemSnapshot, EntityId,
     InventoryContainer, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
-    ItemStack, PlayerSnapshot, WorldMeta,
+    ItemStack, PlayerSnapshot, RuntimeCommand, WorldMeta,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
@@ -241,7 +241,7 @@ pub trait JavaEditionProfile: Default + Send + Sync {
         &self,
         session: &ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError>;
+    ) -> Result<Option<RuntimeCommand>, ProtocolError>;
 
     fn session_closed(&self, _session: &ProtocolSessionSnapshot) -> Result<(), ProtocolError> {
         Ok(())
@@ -389,7 +389,7 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
         &self,
         session: &ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, ProtocolError> {
         self.profile.decode_play(session, frame)
     }
 

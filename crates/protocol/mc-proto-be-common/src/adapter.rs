@@ -1,8 +1,8 @@
 use crate::probe::{bedrock_probe_intent, detects_bedrock_datagram};
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, CoreCommand, CoreEvent, DroppedItemSnapshot, EntityId,
+    BlockPos, BlockState, ChunkColumn, CoreEvent, DroppedItemSnapshot, EntityId,
     InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot,
-    WorldMeta,
+    RuntimeCommand, WorldMeta,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest,
@@ -33,7 +33,7 @@ pub trait BedrockProfile: Default + Send + Sync {
         &self,
         session: &ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError>;
+    ) -> Result<Option<RuntimeCommand>, ProtocolError>;
     fn encode_play_bootstrap_packets(
         &self,
         player: &PlayerSnapshot,
@@ -225,7 +225,7 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
         &self,
         session: &ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, ProtocolError> {
         self.profile.decode_play_packet(session, frame)
     }
 

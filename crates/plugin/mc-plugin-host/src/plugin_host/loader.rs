@@ -3,9 +3,9 @@ use super::{
     AuthGeneration, AuthPluginApiV1, AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest,
     GameplayCapability, GameplayGeneration, GameplayPluginApiV3, GameplayRequest, Library,
     ManifestCapabilities, Mutex, PLUGIN_ADMIN_UI_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1,
-    PLUGIN_GAMEPLAY_API_SYMBOL_V3, PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V2,
+    PLUGIN_GAMEPLAY_API_SYMBOL_V3, PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V3,
     PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginGenerationId, PluginManifestV1, PluginPackage,
-    PluginSource, ProtocolCapability, ProtocolGeneration, ProtocolPluginApiV2, ProtocolRequest,
+    PluginSource, ProtocolCapability, ProtocolGeneration, ProtocolPluginApiV3, ProtocolRequest,
     RuntimeError, StorageCapability, StorageGeneration, StoragePluginApiV1, StorageRequest,
     decode_manifest, expect_admin_ui_capabilities, expect_admin_ui_descriptor,
     expect_auth_capabilities, expect_auth_descriptor, expect_gameplay_capabilities,
@@ -17,7 +17,7 @@ use super::{
 use crate::config::PluginBufferLimits;
 
 type LibraryGuard = Option<Arc<Mutex<Library>>>;
-type LoadedProtocolApi = (LibraryGuard, DecodedManifest, ProtocolPluginApiV2);
+type LoadedProtocolApi = (LibraryGuard, DecodedManifest, ProtocolPluginApiV3);
 type LoadedGameplayApi = (LibraryGuard, DecodedManifest, GameplayPluginApiV3);
 type LoadedStorageApi = (LibraryGuard, DecodedManifest, StoragePluginApiV1);
 type LoadedAuthApi = (LibraryGuard, DecodedManifest, AuthPluginApiV1);
@@ -472,8 +472,8 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const ProtocolPluginApiV2> =
-                unsafe { library.get(PLUGIN_PROTOCOL_API_SYMBOL_V2) }.map_err(|error| {
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const ProtocolPluginApiV3> =
+                unsafe { library.get(PLUGIN_PROTOCOL_API_SYMBOL_V3) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve protocol api symbol in {}: {error}",
                         library_path.display()

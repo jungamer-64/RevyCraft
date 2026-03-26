@@ -12,7 +12,7 @@ use super::{
     GameplayProfileId, GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HashMap,
     HashSet, ManagedGameplayPlugin, ManagedProtocolPlugin, OwnedBuffer, PluginAbiVersion,
     PluginErrorCode, PluginFreeBufferFn, PluginKind, PluginManifestV1, ProtocolCapability,
-    ProtocolDescriptor, ProtocolGeneration, ProtocolPluginApiV2, ProtocolRequest, ProtocolResponse,
+    ProtocolDescriptor, ProtocolGeneration, ProtocolPluginApiV3, ProtocolRequest, ProtocolResponse,
     RuntimeError, RuntimeReloadContext, StorageCapability, StorageGeneration, StoragePluginApiV1,
     StorageRequest, StorageResponse, admin_ui_host_api, decode_admin_ui_output,
     decode_auth_response, decode_gameplay_response, decode_plugin_error, decode_protocol_response,

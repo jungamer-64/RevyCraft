@@ -3,8 +3,8 @@ use mc_core::{
     BlockPos, BlockState, ChunkColumn, ChunkPos, ConnectionId, CoreCommand, CoreConfig, CoreEvent,
     DroppedItemSnapshot, EntityId, InventoryClickButton, InventoryClickTarget,
     InventoryClickValidation, InventoryContainer, InventorySlot, InventoryTransactionContext,
-    InventoryWindowContents, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, ServerCore,
-    Vec3,
+    InventoryWindowContents, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, RuntimeCommand,
+    ServerCore, SessionCommand, Vec3,
 };
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter,
@@ -57,7 +57,7 @@ trait TestPlaySyncAdapterExt: PlaySyncAdapter {
         &self,
         player_id: PlayerId,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, mc_proto_common::ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, mc_proto_common::ProtocolError> {
         mc_proto_common::PlaySyncAdapter::decode_play(self, &decode_session(player_id), frame)
     }
 
@@ -180,10 +180,10 @@ fn decodes_play_packets_into_core_commands() {
         .expect("position should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::MoveIntent {
+        RuntimeCommand::Core(CoreCommand::MoveIntent {
             position: Some(_),
             ..
-        }
+        })
     ));
 }
 
@@ -199,7 +199,10 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
         .decode_play_for(player_id, &held_item.into_inner())
         .expect("held item change should decode")
         .expect("held item change should produce command");
-    assert!(matches!(command, CoreCommand::SetHeldSlot { slot: 4, .. }));
+    assert!(matches!(
+        command,
+        RuntimeCommand::Core(CoreCommand::SetHeldSlot { slot: 4, .. })
+    ));
 
     let mut settings = PacketWriter::default();
     settings.write_varint(0x15);
@@ -215,10 +218,10 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
         .expect("settings should produce command");
     assert!(matches!(
         command,
-        CoreCommand::UpdateClientView {
+        RuntimeCommand::Core(CoreCommand::UpdateClientView {
             view_distance: 7,
             ..
-        }
+        })
     ));
 
     let mut creative_inventory = PacketWriter::default();
@@ -234,11 +237,11 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
         .expect("creative inventory should produce command");
     assert!(matches!(
         command,
-        CoreCommand::CreativeInventorySet {
+        RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
             slot: InventorySlot::Hotbar(0),
             stack: Some(ref stack),
             ..
-        }
+        })
             if stack.key.as_str() == "minecraft:glass"
     ));
 
@@ -261,12 +264,12 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
         .expect("placement should produce command");
     assert!(matches!(
         command,
-        CoreCommand::UseBlock {
+        RuntimeCommand::Core(CoreCommand::UseBlock {
             position: mc_core::BlockPos { x: 2, y: 3, z: 0 },
             face: Some(mc_core::BlockFace::Top),
             held_item: Some(ref stack),
             ..
-        } if stack.key.as_str() == "minecraft:stone"
+        }) if stack.key.as_str() == "minecraft:stone"
     ));
 }
 
@@ -292,7 +295,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
         .expect("click window should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::InventoryClick {
+        RuntimeCommand::Core(CoreCommand::InventoryClick {
             transaction: InventoryTransactionContext {
                 window_id: 0,
                 action_number: 7,
@@ -303,7 +306,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
                 clicked_item: Some(ref stack),
             },
             ..
-        } if stack.key.as_str() == "minecraft:oak_log" && stack.count == 1
+        }) if stack.key.as_str() == "minecraft:oak_log" && stack.count == 1
     ));
 
     let mut confirm = PacketWriter::default();
@@ -317,14 +320,14 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
         .expect("confirm transaction should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::InventoryTransactionAck {
+        RuntimeCommand::Session(SessionCommand::InventoryTransactionAck {
             transaction: InventoryTransactionContext {
                 window_id: 0,
                 action_number: 7,
             },
             accepted: false,
             ..
-        }
+        })
     ));
 
     let packet = adapter
@@ -537,10 +540,10 @@ fn encodes_and_decodes_container_window_packets() {
         .expect("close window should produce command");
     assert_eq!(
         command,
-        CoreCommand::CloseContainer {
+        RuntimeCommand::Core(CoreCommand::CloseContainer {
             player_id,
             window_id: 2,
-        }
+        })
     );
 }
 

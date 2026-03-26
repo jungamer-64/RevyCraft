@@ -16,7 +16,7 @@ impl RuntimeServer {
         let Some(command) = current.decode_play(&snapshot, frame)? else {
             return Ok(false);
         };
-        self.apply_command(command, Some(session)).await?;
+        self.apply_runtime_command(command, Some(session)).await?;
         Ok(false)
     }
 }

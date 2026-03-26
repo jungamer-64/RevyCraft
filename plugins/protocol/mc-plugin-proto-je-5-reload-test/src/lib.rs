@@ -1,5 +1,7 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::{CoreCommand, CoreEvent, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet};
+use mc_core::{
+    CoreEvent, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
+};
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_sdk_rust::capabilities::{build_tag_contains, protocol_capabilities};
 use mc_plugin_sdk_rust::export_plugin;
@@ -126,7 +128,7 @@ impl PlaySyncAdapter for Je5ReloadTestProtocolPlugin {
         &self,
         session: &ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, ProtocolError> {
         self.adapter.decode_play(session, frame)
     }
 

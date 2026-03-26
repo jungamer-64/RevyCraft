@@ -58,7 +58,7 @@ pub fn handle_protocol_request<P: RustProtocolPlugin>(
             .map_err(|error| error.to_string()),
         ProtocolRequest::DecodePlay { session, frame } => plugin
             .decode_play(&session, &frame)
-            .map(ProtocolResponse::CoreCommand)
+            .map(ProtocolResponse::RuntimeCommand)
             .map_err(|error| error.to_string()),
         ProtocolRequest::EncodePlayEvent {
             session,

@@ -11,13 +11,15 @@ use mc_plugin_host::runtime::{GameplayProfileHandle, ProtocolReloadSession};
 use mc_proto_common::ConnectionPhase;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{Mutex, mpsc, watch};
 use tokio::task::JoinSet;
+
+static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
     session_tasks: Mutex<JoinSet<(ConnectionId, Result<(), RuntimeError>)>>,
-    next_connection_id: Mutex<u64>,
     queued_accepts: QueuedAcceptTracker,
     accepted_tx: mpsc::Sender<AcceptedGenerationSession>,
 }
@@ -27,7 +29,6 @@ impl SessionRegistry {
         Self {
             sessions: Mutex::new(HashMap::new()),
             session_tasks: Mutex::new(JoinSet::new()),
-            next_connection_id: Mutex::new(1),
             queued_accepts: QueuedAcceptTracker::default(),
             accepted_tx,
         }
@@ -42,10 +43,7 @@ impl SessionRegistry {
     }
 
     pub(crate) async fn next_connection_id(&self) -> ConnectionId {
-        let mut next_connection_id = self.next_connection_id.lock().await;
-        let connection_id = ConnectionId(*next_connection_id);
-        *next_connection_id = next_connection_id.saturating_add(1);
-        connection_id
+        ConnectionId(NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed))
     }
 
     pub(crate) async fn insert(

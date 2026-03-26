@@ -120,19 +120,19 @@ async fn craft_log_into_planks(
     );
 
     write_packet(stream, codec, &click_window(protocol, 36, 0, 1, None)).await?;
-    let pickup_ack =
-        read_until_confirm_transaction(stream, codec, buffer, protocol, 0, 1, 16).await?;
-    assert_eq!(
-        decode_confirm_transaction(protocol, &pickup_ack)?,
-        (0, 1, true)
-    );
-    let hotbar_pickup = read_until_set_slot(stream, codec, buffer, protocol, 0, 36, 16).await?;
-    assert_eq!(decode_set_slot(protocol, &hotbar_pickup)?, (0, 36, None));
-    let cursor_pickup = read_until_set_slot(stream, codec, buffer, protocol, -1, -1, 16).await?;
-    assert_eq!(
-        decode_set_slot(protocol, &cursor_pickup)?,
-        (-1, -1, Some((17, 1, 0)))
-    );
+    let _ = read_click_transcript_and_ack_reject_if_needed(
+        protocol,
+        stream,
+        buffer,
+        codec,
+        0,
+        1,
+        36,
+        None,
+        Some((17, 1, 0)),
+        Some(0),
+    )
+    .await?;
 
     write_packet(
         stream,
@@ -176,6 +176,100 @@ async fn craft_log_into_planks(
         (-1, -1, Some((5, 4, 0)))
     );
     Ok(())
+}
+
+async fn read_click_transcript_and_ack_reject_if_needed(
+    protocol: TestJavaProtocol,
+    stream: &mut tokio::net::TcpStream,
+    buffer: &mut BytesMut,
+    codec: &MinecraftWireCodec,
+    window_id: u8,
+    action_number: i16,
+    synced_slot: i16,
+    expected_slot_item: Option<(i16, u8, i16)>,
+    expected_cursor_item: Option<(i16, u8, i16)>,
+    expected_held_slot: Option<i16>,
+) -> Result<bool, RuntimeError> {
+    let confirm = read_until_confirm_transaction(
+        stream,
+        codec,
+        buffer,
+        protocol,
+        window_id,
+        action_number,
+        16,
+    )
+    .await?;
+    let decoded = decode_confirm_transaction(protocol, &confirm)?;
+    assert_eq!(decoded.0, window_id);
+    assert_eq!(decoded.1, action_number);
+
+    if !decoded.2 {
+        let resync =
+            read_until_java_packet(stream, codec, buffer, protocol, TestJavaPacket::WindowItems)
+                .await?;
+        assert_eq!(
+            window_items_slot(
+                protocol,
+                &resync,
+                usize::try_from(synced_slot).expect("test slot ids should be non-negative"),
+            )?,
+            expected_slot_item
+        );
+    }
+
+    let slot_update = read_until_set_slot(
+        stream,
+        codec,
+        buffer,
+        protocol,
+        i8::try_from(window_id).expect("window ids used in tests should fit into i8"),
+        synced_slot,
+        16,
+    )
+    .await?;
+    assert_eq!(
+        decode_set_slot(protocol, &slot_update)?,
+        (
+            i8::try_from(window_id).expect("window ids used in tests should fit into i8"),
+            synced_slot,
+            expected_slot_item
+        )
+    );
+
+    if let Some(expected_held_slot) = expected_held_slot
+        && !decoded.2
+    {
+        let held_item = read_until_java_packet(
+            stream,
+            codec,
+            buffer,
+            protocol,
+            TestJavaPacket::HeldItemChange,
+        )
+        .await?;
+        assert_eq!(
+            held_item_from_packet(&held_item)?,
+            i8::try_from(expected_held_slot).expect("test held slot should fit into i8")
+        );
+    }
+
+    let cursor_update = read_until_set_slot(stream, codec, buffer, protocol, -1, -1, 16).await?;
+    assert_eq!(
+        decode_set_slot(protocol, &cursor_update)?,
+        (-1, -1, expected_cursor_item)
+    );
+
+    if !decoded.2 {
+        write_packet(
+            stream,
+            codec,
+            &confirm_transaction_ack(protocol, window_id, action_number, false),
+        )
+        .await?;
+    }
+
+    Ok(decoded.2)
 }
 
 fn assert_java_set_slot(

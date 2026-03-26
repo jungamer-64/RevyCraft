@@ -7,7 +7,8 @@ use crate::{
 };
 use mc_core::{
     BlockFace, CoreCommand, InteractionHand, InventoryClickButton, InventoryClickTarget,
-    InventoryClickValidation, InventoryTransactionContext, PlayerId, Vec3,
+    InventoryClickValidation, InventoryTransactionContext, PlayerId, RuntimeCommand,
+    SessionCommand, Vec3,
 };
 use mc_proto_common::{PacketReader, ProtocolError, ProtocolSessionSnapshot};
 use mc_proto_je_common::__version_support::{
@@ -20,49 +21,58 @@ pub fn decode_play_packet(
     session: &ProtocolSessionSnapshot,
     sessions: &JavaProtocolSessionStore,
     frame: &[u8],
-) -> Result<Option<CoreCommand>, ProtocolError> {
+) -> Result<Option<RuntimeCommand>, ProtocolError> {
     let player_id = session.player_id.ok_or(ProtocolError::InvalidPacket(
         "play session is missing player id",
     ))?;
     let mut reader = PacketReader::new(frame);
     let packet_id = reader.read_varint()?;
     match packet_id {
-        PACKET_SB_KEEP_ALIVE => Ok(Some(CoreCommand::KeepAliveResponse {
+        PACKET_SB_KEEP_ALIVE => Ok(Some(RuntimeCommand::Core(CoreCommand::KeepAliveResponse {
             player_id,
             keep_alive_id: i32::try_from(reader.read_i64()?)
                 .map_err(|_| ProtocolError::InvalidPacket("keepalive id out of range"))?,
-        })),
-        PACKET_SB_FLYING => Ok(Some(CoreCommand::MoveIntent {
+        }))),
+        PACKET_SB_FLYING => Ok(Some(RuntimeCommand::Core(CoreCommand::MoveIntent {
             player_id,
             position: None,
             yaw: None,
             pitch: None,
             on_ground: reader.read_bool()?,
-        })),
-        PACKET_SB_POSITION => Ok(Some(decode_position_packet(player_id, &mut reader)?)),
-        PACKET_SB_LOOK => Ok(Some(CoreCommand::MoveIntent {
+        }))),
+        PACKET_SB_POSITION => Ok(Some(RuntimeCommand::Core(decode_position_packet(
+            player_id,
+            &mut reader,
+        )?))),
+        PACKET_SB_LOOK => Ok(Some(RuntimeCommand::Core(CoreCommand::MoveIntent {
             player_id,
             position: None,
             yaw: Some(reader.read_f32()?),
             pitch: Some(reader.read_f32()?),
             on_ground: reader.read_bool()?,
-        })),
-        PACKET_SB_POSITION_LOOK => Ok(Some(decode_position_look_packet(player_id, &mut reader)?)),
-        PACKET_SB_PLAYER_DIGGING => Ok(Some(decode_digging_packet(player_id, &mut reader)?)),
-        PACKET_SB_HELD_ITEM_CHANGE => Ok(Some(CoreCommand::SetHeldSlot {
+        }))),
+        PACKET_SB_POSITION_LOOK => Ok(Some(RuntimeCommand::Core(decode_position_look_packet(
+            player_id,
+            &mut reader,
+        )?))),
+        PACKET_SB_PLAYER_DIGGING => Ok(Some(RuntimeCommand::Core(decode_digging_packet(
+            player_id,
+            &mut reader,
+        )?))),
+        PACKET_SB_HELD_ITEM_CHANGE => Ok(Some(RuntimeCommand::Core(CoreCommand::SetHeldSlot {
             player_id,
             slot: reader.read_i16()?,
-        })),
+        }))),
         PACKET_SB_CONFIRM_TRANSACTION => Ok(Some(decode_confirm_transaction_packet(
             session,
             sessions,
             player_id,
             &mut reader,
         )?)),
-        PACKET_SB_CLOSE_WINDOW => Ok(Some(CoreCommand::CloseContainer {
+        PACKET_SB_CLOSE_WINDOW => Ok(Some(RuntimeCommand::Core(CoreCommand::CloseContainer {
             player_id,
             window_id: reader.read_u8()?,
-        })),
+        }))),
         PACKET_SB_CLICK_WINDOW => {
             decode_click_window_packet(session, sessions, player_id, &mut reader)
         }
@@ -74,10 +84,12 @@ pub fn decode_play_packet(
                 crate::INVENTORY_SPEC.layout,
                 slot,
             )
-            .map(|slot| CoreCommand::CreativeInventorySet {
-                player_id,
-                slot,
-                stack,
+            .map(|slot| {
+                RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
+                    player_id,
+                    slot,
+                    stack,
+                })
             }))
         }
         PACKET_SB_PLAYER_BLOCK_PLACEMENT => decode_place_block_packet(player_id, &mut reader),
@@ -85,12 +97,17 @@ pub fn decode_play_packet(
             let _hand = decode_interaction_hand(reader.read_varint()?)?;
             Ok(None)
         }
-        PACKET_SB_SETTINGS => Ok(Some(decode_client_settings_packet(player_id, &mut reader)?)),
-        PACKET_SB_CLIENT_COMMAND => Ok(Some(CoreCommand::ClientStatus {
+        PACKET_SB_SETTINGS => Ok(Some(RuntimeCommand::Core(decode_client_settings_packet(
             player_id,
-            action_id: i8::try_from(reader.read_varint()?)
-                .map_err(|_| ProtocolError::InvalidPacket("client command out of range"))?,
-        })),
+            &mut reader,
+        )?))),
+        PACKET_SB_CLIENT_COMMAND => Ok(Some(RuntimeCommand::Session(
+            SessionCommand::ClientStatus {
+                player_id,
+                action_id: i8::try_from(reader.read_varint()?)
+                    .map_err(|_| ProtocolError::InvalidPacket("client command out of range"))?,
+            },
+        ))),
         _ => Ok(None),
     }
 }
@@ -147,7 +164,7 @@ fn decode_digging_packet(
 fn decode_place_block_packet(
     player_id: PlayerId,
     reader: &mut PacketReader<'_>,
-) -> Result<Option<CoreCommand>, ProtocolError> {
+) -> Result<Option<RuntimeCommand>, ProtocolError> {
     let position = unpack_block_position(reader.read_i64()?);
     let face = u8::try_from(reader.read_varint()?)
         .map_err(|_| ProtocolError::InvalidPacket("face out of range"))?;
@@ -155,13 +172,13 @@ fn decode_place_block_packet(
     let _cursor_x = reader.read_f32()?;
     let _cursor_y = reader.read_f32()?;
     let _cursor_z = reader.read_f32()?;
-    Ok(Some(CoreCommand::UseBlock {
+    Ok(Some(RuntimeCommand::Core(CoreCommand::UseBlock {
         player_id,
         hand,
         position,
         face: BlockFace::from_protocol_byte(face),
         held_item: None,
-    }))
+    })))
 }
 
 fn decode_client_settings_packet(
@@ -201,7 +218,7 @@ fn decode_click_window_packet(
     sessions: &JavaProtocolSessionStore,
     player_id: PlayerId,
     reader: &mut PacketReader<'_>,
-) -> Result<Option<CoreCommand>, ProtocolError> {
+) -> Result<Option<RuntimeCommand>, ProtocolError> {
     let window_id = reader.read_u8()?;
     let raw_slot = reader.read_i16()?;
     let raw_button = reader.read_i8()?;
@@ -233,13 +250,13 @@ fn decode_click_window_packet(
         return Ok(None);
     }
 
-    Ok(Some(CoreCommand::InventoryClick {
+    Ok(Some(RuntimeCommand::Core(CoreCommand::InventoryClick {
         player_id,
         transaction,
         target,
         button,
         validation: InventoryClickValidation::StrictSlotEcho { clicked_item },
-    }))
+    })))
 }
 
 fn decode_confirm_transaction_packet(
@@ -247,22 +264,18 @@ fn decode_confirm_transaction_packet(
     sessions: &JavaProtocolSessionStore,
     player_id: PlayerId,
     reader: &mut PacketReader<'_>,
-) -> Result<CoreCommand, ProtocolError> {
-    let command = CoreCommand::InventoryTransactionAck {
-        player_id,
-        transaction: InventoryTransactionContext {
-            window_id: reader.read_u8()?,
-            action_number: reader.read_i16()?,
-        },
-        accepted: reader.read_bool()?,
+) -> Result<RuntimeCommand, ProtocolError> {
+    let transaction = InventoryTransactionContext {
+        window_id: reader.read_u8()?,
+        action_number: reader.read_i16()?,
     };
-    if let CoreCommand::InventoryTransactionAck {
-        transaction,
-        accepted,
-        ..
-    } = command
-    {
-        sessions.observe_transaction_ack(session, transaction, accepted);
-    }
-    Ok(command)
+    let accepted = reader.read_bool()?;
+    sessions.observe_transaction_ack(session, transaction, accepted);
+    Ok(RuntimeCommand::Session(
+        SessionCommand::InventoryTransactionAck {
+            player_id,
+            transaction,
+            accepted,
+        },
+    ))
 }

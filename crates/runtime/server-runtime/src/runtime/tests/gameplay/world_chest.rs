@@ -97,34 +97,17 @@ async fn world_backed_chest_place_open_and_persist_across_restart() -> Result<()
         &click_window_in_window(TestJavaProtocol::Je340, 1, 55, 0, 1, None),
     )
     .await?;
-    let _ = read_until_confirm_transaction(
-        &mut stream,
-        &codec,
-        &mut buffer,
+    let _ = read_click_transcript_and_ack_reject_if_needed(
         TestJavaProtocol::Je340,
-        1,
-        1,
-        16,
-    )
-    .await?;
-    let _ = read_until_set_slot(
         &mut stream,
-        &codec,
         &mut buffer,
-        TestJavaProtocol::Je340,
+        &codec,
+        1,
         1,
         55,
-        16,
-    )
-    .await?;
-    let _ = read_until_set_slot(
-        &mut stream,
-        &codec,
-        &mut buffer,
-        TestJavaProtocol::Je340,
-        -1,
-        -1,
-        16,
+        None,
+        Some((1, 2, 0)),
+        None,
     )
     .await?;
 
@@ -329,34 +312,17 @@ async fn world_backed_chest_syncs_slot_updates_to_other_viewers() -> Result<(), 
         &click_window_in_window(TestJavaProtocol::Je340, 1, 55, 0, 1, None),
     )
     .await?;
-    let _ = read_until_confirm_transaction(
-        &mut first,
-        &codec,
-        &mut first_buffer,
+    let _ = read_click_transcript_and_ack_reject_if_needed(
         TestJavaProtocol::Je340,
-        1,
-        1,
-        16,
-    )
-    .await?;
-    let _ = read_until_set_slot(
         &mut first,
-        &codec,
         &mut first_buffer,
-        TestJavaProtocol::Je340,
+        &codec,
+        1,
         1,
         55,
-        16,
-    )
-    .await?;
-    let _ = read_until_set_slot(
-        &mut first,
-        &codec,
-        &mut first_buffer,
-        TestJavaProtocol::Je340,
-        -1,
-        -1,
-        16,
+        None,
+        Some((1, 2, 0)),
+        None,
     )
     .await?;
 

@@ -1,9 +1,9 @@
 use super::{__macro_support, admin_ui, capabilities, gameplay, manifest, protocol};
 use bytes::BytesMut;
 use mc_core::{
-    BlockPos, CapabilityAnnouncement, CoreCommand, CoreEvent, DimensionId, GameplayCapability,
+    BlockPos, CapabilityAnnouncement, CoreEvent, DimensionId, GameplayCapability,
     GameplayProfileId, PlayerId, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet,
-    WorldMeta,
+    RuntimeCommand, WorldMeta,
 };
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
 use mc_plugin_api::codec::admin_ui::{
@@ -223,7 +223,7 @@ impl mc_proto_common::PlaySyncAdapter for DirectProtocolPlugin {
         &self,
         _session: &mc_proto_common::ProtocolSessionSnapshot,
         _frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, ProtocolError> {
         Err(ProtocolError::InvalidPacket("unused test protocol method"))
     }
 
@@ -614,7 +614,7 @@ mod declared_protocol_plugin {
             &self,
             _session: &mc_proto_common::ProtocolSessionSnapshot,
             _frame: &[u8],
-        ) -> Result<Option<CoreCommand>, ProtocolError> {
+        ) -> Result<Option<RuntimeCommand>, ProtocolError> {
             Err(ProtocolError::InvalidPacket(
                 "unused declared protocol method",
             ))

@@ -1,5 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::{CoreCommand, CoreEvent, PlayerSnapshot};
+use mc_core::{CoreEvent, PlayerSnapshot, RuntimeCommand};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, LoginRequest,
     PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
@@ -129,7 +129,7 @@ impl PlaySyncAdapter for BePlaceholderAdapter {
         &self,
         _session: &ProtocolSessionSnapshot,
         _frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, ProtocolError> {
         Err(unsupported())
     }
 

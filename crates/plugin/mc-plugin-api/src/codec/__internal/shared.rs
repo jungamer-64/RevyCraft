@@ -12,7 +12,8 @@ use mc_core::{
     BlockEntityState, BlockFace, BlockPos, BlockState, CapabilityAnnouncement, ChunkColumn,
     ChunkSection, ClosedCapability, ClosedCapabilitySet, ConnectionId, CoreCommand, CoreEvent,
     DimensionId, DroppedItemSnapshot, EntityId, GameplayCommand, InteractionHand, PlayerId,
-    PlayerSnapshot, PluginBuildTag, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
+    PlayerSnapshot, PluginBuildTag, RuntimeCommand, SessionCommand, Vec3, WorldMeta, WorldSnapshot,
+    expand_block_index,
 };
 use mc_proto_common::ConnectionPhase;
 use std::collections::BTreeMap;
@@ -539,44 +540,44 @@ pub(crate) fn decode_player_snapshot(
     })
 }
 
-pub(crate) fn encode_core_command(
+pub(crate) fn encode_runtime_command(
     encoder: &mut Encoder,
-    command: &CoreCommand,
+    command: &RuntimeCommand,
 ) -> Result<(), ProtocolCodecError> {
     match command {
-        CoreCommand::LoginStart {
+        RuntimeCommand::Core(CoreCommand::LoginStart {
             connection_id,
             username,
             player_id,
-        } => {
+        }) => {
             encoder.write_u8(1);
             encode_connection_id(encoder, *connection_id);
             encoder.write_string(username)?;
             encode_player_id(encoder, *player_id);
         }
-        CoreCommand::UpdateClientView {
+        RuntimeCommand::Core(CoreCommand::UpdateClientView {
             player_id,
             view_distance,
-        } => {
+        }) => {
             encoder.write_u8(2);
             encode_player_id(encoder, *player_id);
             encoder.write_u8(*view_distance);
         }
-        CoreCommand::ClientStatus {
+        RuntimeCommand::Session(SessionCommand::ClientStatus {
             player_id,
             action_id,
-        } => {
+        }) => {
             encoder.write_u8(3);
             encode_player_id(encoder, *player_id);
             encoder.write_i8(*action_id);
         }
-        CoreCommand::MoveIntent {
+        RuntimeCommand::Core(CoreCommand::MoveIntent {
             player_id,
             position,
             yaw,
             pitch,
             on_ground,
-        } => {
+        }) => {
             encoder.write_u8(4);
             encode_player_id(encoder, *player_id);
             encode_option(encoder, position.as_ref(), |encoder, position| {
@@ -593,36 +594,36 @@ pub(crate) fn encode_core_command(
             })?;
             encoder.write_bool(*on_ground);
         }
-        CoreCommand::KeepAliveResponse {
+        RuntimeCommand::Core(CoreCommand::KeepAliveResponse {
             player_id,
             keep_alive_id,
-        } => {
+        }) => {
             encoder.write_u8(5);
             encode_player_id(encoder, *player_id);
             encoder.write_i32(*keep_alive_id);
         }
-        CoreCommand::SetHeldSlot { player_id, slot } => {
+        RuntimeCommand::Core(CoreCommand::SetHeldSlot { player_id, slot }) => {
             encoder.write_u8(6);
             encode_player_id(encoder, *player_id);
             encoder.write_i16(*slot);
         }
-        CoreCommand::CreativeInventorySet {
+        RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
             player_id,
             slot,
             stack,
-        } => {
+        }) => {
             encoder.write_u8(7);
             encode_player_id(encoder, *player_id);
             encode_inventory_slot(encoder, *slot);
             encode_option(encoder, stack.as_ref(), encode_item_stack)?;
         }
-        CoreCommand::InventoryClick {
+        RuntimeCommand::Core(CoreCommand::InventoryClick {
             player_id,
             transaction,
             target,
             button,
             validation,
-        } => {
+        }) => {
             encoder.write_u8(11);
             encode_player_id(encoder, *player_id);
             encode_inventory_transaction_context(encoder, *transaction);
@@ -630,30 +631,30 @@ pub(crate) fn encode_core_command(
             encode_inventory_click_button(encoder, *button);
             encode_inventory_click_validation(encoder, validation)?;
         }
-        CoreCommand::InventoryTransactionAck {
+        RuntimeCommand::Session(SessionCommand::InventoryTransactionAck {
             player_id,
             transaction,
             accepted,
-        } => {
+        }) => {
             encoder.write_u8(12);
             encode_player_id(encoder, *player_id);
             encode_inventory_transaction_context(encoder, *transaction);
             encoder.write_bool(*accepted);
         }
-        CoreCommand::CloseContainer {
+        RuntimeCommand::Core(CoreCommand::CloseContainer {
             player_id,
             window_id,
-        } => {
+        }) => {
             encoder.write_u8(13);
             encode_player_id(encoder, *player_id);
             encoder.write_u8(*window_id);
         }
-        CoreCommand::DigBlock {
+        RuntimeCommand::Core(CoreCommand::DigBlock {
             player_id,
             position,
             status,
             face,
-        } => {
+        }) => {
             encoder.write_u8(8);
             encode_player_id(encoder, *player_id);
             encode_block_pos(encoder, *position);
@@ -663,13 +664,13 @@ pub(crate) fn encode_core_command(
                 Ok(())
             })?;
         }
-        CoreCommand::PlaceBlock {
+        RuntimeCommand::Core(CoreCommand::PlaceBlock {
             player_id,
             hand,
             position,
             face,
             held_item,
-        } => {
+        }) => {
             encoder.write_u8(9);
             encode_player_id(encoder, *player_id);
             encode_interaction_hand(encoder, *hand);
@@ -680,13 +681,13 @@ pub(crate) fn encode_core_command(
             })?;
             encode_option(encoder, held_item.as_ref(), encode_item_stack)?;
         }
-        CoreCommand::UseBlock {
+        RuntimeCommand::Core(CoreCommand::UseBlock {
             player_id,
             hand,
             position,
             face,
             held_item,
-        } => {
+        }) => {
             encoder.write_u8(14);
             encode_player_id(encoder, *player_id);
             encode_interaction_hand(encoder, *hand);
@@ -697,7 +698,7 @@ pub(crate) fn encode_core_command(
             })?;
             encode_option(encoder, held_item.as_ref(), encode_item_stack)?;
         }
-        CoreCommand::Disconnect { player_id } => {
+        RuntimeCommand::Core(CoreCommand::Disconnect { player_id }) => {
             encoder.write_u8(10);
             encode_player_id(encoder, *player_id);
         }
@@ -705,83 +706,87 @@ pub(crate) fn encode_core_command(
     Ok(())
 }
 
-pub(crate) fn decode_core_command(
+pub(crate) fn decode_runtime_command(
     decoder: &mut Decoder<'_>,
-) -> Result<CoreCommand, ProtocolCodecError> {
+) -> Result<RuntimeCommand, ProtocolCodecError> {
     match decoder.read_u8()? {
-        1 => Ok(CoreCommand::LoginStart {
+        1 => Ok(RuntimeCommand::Core(CoreCommand::LoginStart {
             connection_id: decode_connection_id(decoder)?,
             username: decoder.read_string()?,
             player_id: decode_player_id(decoder)?,
-        }),
-        2 => Ok(CoreCommand::UpdateClientView {
+        })),
+        2 => Ok(RuntimeCommand::Core(CoreCommand::UpdateClientView {
             player_id: decode_player_id(decoder)?,
             view_distance: decoder.read_u8()?,
-        }),
-        3 => Ok(CoreCommand::ClientStatus {
+        })),
+        3 => Ok(RuntimeCommand::Session(SessionCommand::ClientStatus {
             player_id: decode_player_id(decoder)?,
             action_id: decoder.read_i8()?,
-        }),
-        4 => Ok(CoreCommand::MoveIntent {
+        })),
+        4 => Ok(RuntimeCommand::Core(CoreCommand::MoveIntent {
             player_id: decode_player_id(decoder)?,
             position: decode_option(decoder, decode_vec3)?,
             yaw: decode_option(decoder, decode_f32_value)?,
             pitch: decode_option(decoder, decode_f32_value)?,
             on_ground: decoder.read_bool()?,
-        }),
-        5 => Ok(CoreCommand::KeepAliveResponse {
+        })),
+        5 => Ok(RuntimeCommand::Core(CoreCommand::KeepAliveResponse {
             player_id: decode_player_id(decoder)?,
             keep_alive_id: decoder.read_i32()?,
-        }),
-        6 => Ok(CoreCommand::SetHeldSlot {
+        })),
+        6 => Ok(RuntimeCommand::Core(CoreCommand::SetHeldSlot {
             player_id: decode_player_id(decoder)?,
             slot: decoder.read_i16()?,
-        }),
-        7 => Ok(CoreCommand::CreativeInventorySet {
+        })),
+        7 => Ok(RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
             player_id: decode_player_id(decoder)?,
             slot: decode_inventory_slot(decoder)?,
             stack: decode_option(decoder, decode_item_stack)?,
-        }),
-        11 => Ok(CoreCommand::InventoryClick {
+        })),
+        11 => Ok(RuntimeCommand::Core(CoreCommand::InventoryClick {
             player_id: decode_player_id(decoder)?,
             transaction: decode_inventory_transaction_context(decoder)?,
             target: decode_inventory_click_target(decoder)?,
             button: decode_inventory_click_button(decoder)?,
             validation: decode_inventory_click_validation(decoder)?,
-        }),
-        12 => Ok(CoreCommand::InventoryTransactionAck {
-            player_id: decode_player_id(decoder)?,
-            transaction: decode_inventory_transaction_context(decoder)?,
-            accepted: decoder.read_bool()?,
-        }),
-        13 => Ok(CoreCommand::CloseContainer {
+        })),
+        12 => Ok(RuntimeCommand::Session(
+            SessionCommand::InventoryTransactionAck {
+                player_id: decode_player_id(decoder)?,
+                transaction: decode_inventory_transaction_context(decoder)?,
+                accepted: decoder.read_bool()?,
+            },
+        )),
+        13 => Ok(RuntimeCommand::Core(CoreCommand::CloseContainer {
             player_id: decode_player_id(decoder)?,
             window_id: decoder.read_u8()?,
-        }),
-        8 => Ok(CoreCommand::DigBlock {
+        })),
+        8 => Ok(RuntimeCommand::Core(CoreCommand::DigBlock {
             player_id: decode_player_id(decoder)?,
             position: decode_block_pos(decoder)?,
             status: decoder.read_u8()?,
             face: decode_option(decoder, decode_block_face)?,
-        }),
-        9 => Ok(CoreCommand::PlaceBlock {
+        })),
+        9 => Ok(RuntimeCommand::Core(CoreCommand::PlaceBlock {
             player_id: decode_player_id(decoder)?,
             hand: decode_interaction_hand(decoder)?,
             position: decode_block_pos(decoder)?,
             face: decode_option(decoder, decode_block_face)?,
             held_item: decode_option(decoder, decode_item_stack)?,
-        }),
-        14 => Ok(CoreCommand::UseBlock {
+        })),
+        14 => Ok(RuntimeCommand::Core(CoreCommand::UseBlock {
             player_id: decode_player_id(decoder)?,
             hand: decode_interaction_hand(decoder)?,
             position: decode_block_pos(decoder)?,
             face: decode_option(decoder, decode_block_face)?,
             held_item: decode_option(decoder, decode_item_stack)?,
-        }),
-        10 => Ok(CoreCommand::Disconnect {
+        })),
+        10 => Ok(RuntimeCommand::Core(CoreCommand::Disconnect {
             player_id: decode_player_id(decoder)?,
-        }),
-        _ => Err(ProtocolCodecError::InvalidValue("invalid core command tag")),
+        })),
+        _ => Err(ProtocolCodecError::InvalidValue(
+            "invalid runtime command tag",
+        )),
     }
 }
 

@@ -1,9 +1,34 @@
 use crate::RuntimeError;
 use crate::runtime::{RuntimeServer, SessionMessage, SessionState, now_ms};
-use mc_core::{CoreCommand, CoreEvent, EventTarget, PlayerSummary, TargetedEvent};
+use mc_core::{
+    CoreCommand, CoreEvent, EventTarget, PlayerSummary, RuntimeCommand, SessionCommand,
+    TargetedEvent,
+};
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 
 impl RuntimeServer {
+    pub(in crate::runtime) async fn apply_runtime_command(
+        &self,
+        command: RuntimeCommand,
+        session: Option<&SessionState>,
+    ) -> Result<(), RuntimeError> {
+        let _consistency_guard = self.reload.read_consistency().await;
+        self.apply_runtime_command_guarded(command, session).await
+    }
+
+    async fn apply_runtime_command_guarded(
+        &self,
+        command: RuntimeCommand,
+        session: Option<&SessionState>,
+    ) -> Result<(), RuntimeError> {
+        match command {
+            RuntimeCommand::Core(command) => self.apply_command_guarded(command, session).await,
+            RuntimeCommand::Session(command) => {
+                self.apply_session_command_guarded(command, session).await
+            }
+        }
+    }
+
     pub(in crate::runtime) async fn apply_command(
         &self,
         command: CoreCommand,
@@ -36,6 +61,27 @@ impl RuntimeServer {
             .await?;
         self.dispatch_events(events).await;
         Ok(())
+    }
+
+    async fn apply_session_command_guarded(
+        &self,
+        command: SessionCommand,
+        session: Option<&SessionState>,
+    ) -> Result<(), RuntimeError> {
+        debug_assert!(
+            session.is_some(),
+            "session-only command reached runtime core loop without session context"
+        );
+        if let Some(session) = session {
+            debug_assert!(
+                session.player_id.is_none() || session.player_id == Some(command.player_id()),
+                "session-only command player id did not match session player id"
+            );
+        }
+        match command {
+            SessionCommand::ClientStatus { .. }
+            | SessionCommand::InventoryTransactionAck { .. } => Ok(()),
+        }
     }
 
     #[cfg(test)]

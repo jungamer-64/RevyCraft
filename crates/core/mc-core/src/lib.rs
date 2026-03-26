@@ -18,7 +18,7 @@ pub use self::core::{ClientView, CoreConfig, ServerCore};
 pub use self::events::{
     CoreCommand, CoreEvent, EventTarget, GameplayCommand, InventoryClickButton,
     InventoryClickTarget, InventoryClickValidation, InventoryTransactionContext, PlayerSummary,
-    TargetedEvent,
+    RuntimeCommand, SessionCommand, TargetedEvent,
 };
 pub use self::inventory::{
     InventoryContainer, InventorySlot, InventoryWindowContents, ItemKey, ItemStack, PlayerInventory,

@@ -82,52 +82,19 @@ async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<
         &click_window_in_window(TestJavaProtocol::Je340, 2, 37, 0, 1, None),
     )
     .await?;
-    let pickup_ack = read_until_confirm_transaction(
-        &mut stream,
-        &codec,
-        &mut buffer,
+    let _ = read_click_transcript_and_ack_reject_if_needed(
         TestJavaProtocol::Je340,
+        &mut stream,
+        &mut buffer,
+        &codec,
         2,
         1,
-        16,
+        37,
+        None,
+        Some((17, 1, 0)),
+        None,
     )
     .await?;
-    assert_eq!(
-        decode_confirm_transaction(TestJavaProtocol::Je340, &pickup_ack)?,
-        (2, 1, true)
-    );
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                2,
-                37,
-                16,
-            )
-            .await?,
-        )?,
-        (2, 37, None)
-    );
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                -1,
-                -1,
-                16,
-            )
-            .await?,
-        )?,
-        (-1, -1, Some((17, 1, 0)))
-    );
 
     write_packet(
         &mut stream,
@@ -399,54 +366,19 @@ async fn world_backed_chest_moves_items_and_resyncs_player_inventory_on_close()
         &click_window_in_window(TestJavaProtocol::Je340, 1, 55, 0, 1, None),
     )
     .await?;
-    assert_eq!(
-        decode_confirm_transaction(
-            TestJavaProtocol::Je340,
-            &read_until_confirm_transaction(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                1,
-                1,
-                16,
-            )
-            .await?,
-        )?,
-        (1, 1, true)
-    );
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                1,
-                55,
-                16,
-            )
-            .await?,
-        )?,
-        (1, 55, None)
-    );
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                -1,
-                -1,
-                16,
-            )
-            .await?,
-        )?,
-        (-1, -1, Some((1, 2, 0)))
-    );
+    let _ = read_click_transcript_and_ack_reject_if_needed(
+        TestJavaProtocol::Je340,
+        &mut stream,
+        &mut buffer,
+        &codec,
+        1,
+        1,
+        55,
+        None,
+        Some((1, 2, 0)),
+        None,
+    )
+    .await?;
 
     write_packet(
         &mut stream,

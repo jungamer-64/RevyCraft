@@ -3,7 +3,8 @@ use mc_core::{
     BlockPos, ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DimensionId, DroppedItemSnapshot,
     EntityId, InteractionHand, InventoryClickButton, InventoryClickTarget,
     InventoryClickValidation, InventoryContainer, InventorySlot, InventoryTransactionContext,
-    InventoryWindowContents, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3,
+    InventoryWindowContents, ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, RuntimeCommand,
+    SessionCommand, Vec3,
 };
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter,
@@ -54,7 +55,7 @@ trait TestPlaySyncAdapterExt: PlaySyncAdapter {
         &self,
         player_id: PlayerId,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, mc_proto_common::ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, mc_proto_common::ProtocolError> {
         mc_proto_common::PlaySyncAdapter::decode_play(self, &decode_session(player_id), frame)
     }
 
@@ -177,10 +178,10 @@ fn decodes_play_packets_into_core_commands() {
         .expect("position should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::MoveIntent {
+        RuntimeCommand::Core(CoreCommand::MoveIntent {
             position: Some(_),
             ..
-        }
+        })
     ));
 
     let mut placement = PacketWriter::default();
@@ -200,13 +201,13 @@ fn decodes_play_packets_into_core_commands() {
         .expect("placement should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::UseBlock {
+        RuntimeCommand::Core(CoreCommand::UseBlock {
             hand: InteractionHand::Main,
             position: mc_core::BlockPos { x: 2, y: 3, z: 4 },
             face: Some(mc_core::BlockFace::Top),
             held_item: Some(ref stack),
             ..
-        } if stack.key.as_str() == "minecraft:chest" && stack.count == 1
+        }) if stack.key.as_str() == "minecraft:chest" && stack.count == 1
     ));
 }
 
@@ -294,10 +295,10 @@ fn decodes_creative_inventory_slot_mapping() {
         .expect("creative inventory action should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::CreativeInventorySet {
+        RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
             slot: InventorySlot::Hotbar(0),
             ..
-        }
+        })
     ));
 }
 
@@ -322,7 +323,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
         .expect("click window should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::InventoryClick {
+        RuntimeCommand::Core(CoreCommand::InventoryClick {
             transaction: InventoryTransactionContext {
                 window_id: 0,
                 action_number: 3,
@@ -333,7 +334,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
                 clicked_item: Some(ref stack),
             },
             ..
-        } if stack.key.as_str() == "minecraft:oak_planks" && stack.count == 4
+        }) if stack.key.as_str() == "minecraft:oak_planks" && stack.count == 4
     ));
 
     let mut writer = PacketWriter::default();
@@ -347,14 +348,14 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
         .expect("confirm transaction should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::InventoryTransactionAck {
+        RuntimeCommand::Session(SessionCommand::InventoryTransactionAck {
             transaction: InventoryTransactionContext {
                 window_id: 0,
                 action_number: 3,
             },
             accepted: false,
             ..
-        }
+        })
     ));
 
     let packet = adapter
@@ -498,10 +499,10 @@ fn encodes_and_decodes_container_window_packets() {
         .expect("close window should produce command");
     assert_eq!(
         command,
-        CoreCommand::CloseContainer {
+        RuntimeCommand::Core(CoreCommand::CloseContainer {
             player_id,
             window_id: 2,
-        }
+        })
     );
 }
 

@@ -34,7 +34,7 @@ use mc_core::{
     BlockPos, BlockState, ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DroppedItemSnapshot,
     EntityId, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
     InventoryContainer, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
-    ItemStack, PlayerId, PlayerInventory,
+    ItemStack, PlayerId, PlayerInventory, RuntimeCommand,
 };
 use mc_proto_be_common::__version_support::world::bedrock_actor_id;
 use mc_proto_common::{
@@ -76,7 +76,7 @@ trait TestPlaySyncAdapterExt: PlaySyncAdapter {
         &self,
         player_id: PlayerId,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, mc_proto_common::ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, mc_proto_common::ProtocolError> {
         mc_proto_common::PlaySyncAdapter::decode_play(self, &decode_session(player_id), frame)
     }
 
@@ -412,12 +412,12 @@ fn decodes_legacy_inventory_transaction_item_use() {
         .expect("legacy inventory transaction should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::PlaceBlock {
+        RuntimeCommand::Core(CoreCommand::PlaceBlock {
             player_id: decoded_player,
             position,
             face: Some(mc_core::BlockFace::Top),
             ..
-        } if decoded_player == player_id && position == BlockPos::new(2, 3, 4)
+        }) if decoded_player == player_id && position == BlockPos::new(2, 3, 4)
     ));
 }
 
@@ -456,12 +456,12 @@ fn decodes_player_auth_input_item_use() {
         .expect("player auth input should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::DigBlock {
+        RuntimeCommand::Core(CoreCommand::DigBlock {
             player_id: decoded_player,
             position,
             face: Some(mc_core::BlockFace::West),
             ..
-        } if decoded_player == player_id && position == BlockPos::new(5, 6, 7)
+        }) if decoded_player == player_id && position == BlockPos::new(5, 6, 7)
     ));
 }
 
@@ -493,7 +493,7 @@ fn decodes_item_stack_request_take_action() {
         .expect("item stack request should produce a command");
     assert!(matches!(
         command,
-        CoreCommand::InventoryClick {
+        RuntimeCommand::Core(CoreCommand::InventoryClick {
             player_id: decoded_player,
             transaction: InventoryTransactionContext {
                 window_id: 0,
@@ -502,7 +502,7 @@ fn decodes_item_stack_request_take_action() {
             target: InventoryClickTarget::Slot(InventorySlot::Hotbar(0)),
             button: InventoryClickButton::Left,
             validation: InventoryClickValidation::Authoritative,
-        } if decoded_player == player_id
+        }) if decoded_player == player_id
     ));
 }
 
@@ -673,12 +673,12 @@ fn decodes_player_action_destroy_packets_to_dig_statuses() {
             .expect("player action should produce a command");
         assert!(matches!(
             command,
-            CoreCommand::DigBlock {
+            RuntimeCommand::Core(CoreCommand::DigBlock {
                 player_id: decoded_player,
                 position,
                 status,
                 face: Some(mc_core::BlockFace::Top),
-            } if decoded_player == player_id
+            }) if decoded_player == player_id
                 && position == BlockPos::new(2, 4, 0)
                 && status == expected_status
         ));

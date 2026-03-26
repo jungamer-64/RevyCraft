@@ -87,7 +87,7 @@ pub type AdminUiPluginInvokeV1Fn = unsafe extern "C" fn(
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct ProtocolPluginApiV2 {
+pub struct ProtocolPluginApiV3 {
     pub invoke: PluginInvokeFn,
     pub free_buffer: PluginFreeBufferFn,
 }

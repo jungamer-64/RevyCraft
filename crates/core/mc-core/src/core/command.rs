@@ -37,11 +37,6 @@ impl ServerCore {
                 now_ms,
                 ApplyCoreOpsOptions::default(),
             ),
-            CoreCommand::ClientStatus {
-                player_id: _,
-                action_id: _,
-            }
-            | CoreCommand::InventoryTransactionAck { .. } => Vec::new(),
             CoreCommand::InventoryClick {
                 player_id,
                 transaction,

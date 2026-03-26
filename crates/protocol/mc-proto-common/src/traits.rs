@@ -5,7 +5,7 @@ use crate::types::{
 };
 use bytes::BytesMut;
 use mc_core::{
-    CoreCommand, CoreEvent, PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet,
+    CoreEvent, PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet, RuntimeCommand,
     WorldSnapshot,
 };
 use std::path::Path;
@@ -126,7 +126,7 @@ pub trait PlaySyncAdapter: Send + Sync {
         &self,
         session: &ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<CoreCommand>, ProtocolError>;
+    ) -> Result<Option<RuntimeCommand>, ProtocolError>;
 
     /// # Errors
     ///

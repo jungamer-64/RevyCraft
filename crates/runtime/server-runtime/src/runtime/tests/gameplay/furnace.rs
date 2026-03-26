@@ -128,29 +128,85 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
         );
     }
 
-    for (slot, action, clicked) in [
-        (31, 1, None),
-        (0, 2, Some((12, 1, 0))),
-        (32, 3, None),
-        (1, 4, Some((5, 1, 0))),
-    ] {
-        write_packet(
-            &mut stream,
-            &codec,
-            &click_window_in_window(TestJavaProtocol::Je340, 1, slot, 0, action, clicked),
-        )
-        .await?;
-        let _ = read_until_confirm_transaction(
-            &mut stream,
-            &codec,
-            &mut buffer,
-            TestJavaProtocol::Je340,
-            1,
-            action,
-            16,
-        )
-        .await?;
-    }
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window_in_window(TestJavaProtocol::Je340, 1, 31, 0, 1, None),
+    )
+    .await?;
+    let _ = read_click_transcript_and_ack_reject_if_needed(
+        TestJavaProtocol::Je340,
+        &mut stream,
+        &mut buffer,
+        &codec,
+        1,
+        1,
+        31,
+        None,
+        Some((12, 1, 0)),
+        None,
+    )
+    .await?;
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window_in_window(TestJavaProtocol::Je340, 1, 0, 0, 2, Some((12, 1, 0))),
+    )
+    .await?;
+    let _ = read_click_transcript_and_ack_reject_if_needed(
+        TestJavaProtocol::Je340,
+        &mut stream,
+        &mut buffer,
+        &codec,
+        1,
+        2,
+        0,
+        Some((12, 1, 0)),
+        None,
+        None,
+    )
+    .await?;
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window_in_window(TestJavaProtocol::Je340, 1, 32, 0, 3, None),
+    )
+    .await?;
+    let _ = read_click_transcript_and_ack_reject_if_needed(
+        TestJavaProtocol::Je340,
+        &mut stream,
+        &mut buffer,
+        &codec,
+        1,
+        3,
+        32,
+        None,
+        Some((5, 1, 0)),
+        None,
+    )
+    .await?;
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window_in_window(TestJavaProtocol::Je340, 1, 1, 0, 4, Some((5, 1, 0))),
+    )
+    .await?;
+    let _ = read_click_transcript_and_ack_reject_if_needed(
+        TestJavaProtocol::Je340,
+        &mut stream,
+        &mut buffer,
+        &codec,
+        1,
+        4,
+        1,
+        Some((5, 1, 0)),
+        None,
+        None,
+    )
+    .await?;
 
     server.runtime.tick().await?;
 
@@ -386,29 +442,85 @@ async fn world_backed_furnace_output_persists_across_restart() -> Result<(), Run
         .await?;
     }
 
-    for (slot, action, clicked) in [
-        (31, 1, None),
-        (0, 2, Some((12, 1, 0))),
-        (32, 3, None),
-        (1, 4, Some((5, 1, 0))),
-    ] {
-        write_packet(
-            &mut stream,
-            &codec,
-            &click_window_in_window(TestJavaProtocol::Je340, 1, slot, 0, action, clicked),
-        )
-        .await?;
-        let _ = read_until_confirm_transaction(
-            &mut stream,
-            &codec,
-            &mut buffer,
-            TestJavaProtocol::Je340,
-            1,
-            action,
-            16,
-        )
-        .await?;
-    }
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window_in_window(TestJavaProtocol::Je340, 1, 31, 0, 1, None),
+    )
+    .await?;
+    let _ = read_click_transcript_and_ack_reject_if_needed(
+        TestJavaProtocol::Je340,
+        &mut stream,
+        &mut buffer,
+        &codec,
+        1,
+        1,
+        31,
+        None,
+        Some((12, 1, 0)),
+        None,
+    )
+    .await?;
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window_in_window(TestJavaProtocol::Je340, 1, 0, 0, 2, Some((12, 1, 0))),
+    )
+    .await?;
+    let _ = read_click_transcript_and_ack_reject_if_needed(
+        TestJavaProtocol::Je340,
+        &mut stream,
+        &mut buffer,
+        &codec,
+        1,
+        2,
+        0,
+        Some((12, 1, 0)),
+        None,
+        None,
+    )
+    .await?;
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window_in_window(TestJavaProtocol::Je340, 1, 32, 0, 3, None),
+    )
+    .await?;
+    let _ = read_click_transcript_and_ack_reject_if_needed(
+        TestJavaProtocol::Je340,
+        &mut stream,
+        &mut buffer,
+        &codec,
+        1,
+        3,
+        32,
+        None,
+        Some((5, 1, 0)),
+        None,
+    )
+    .await?;
+
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window_in_window(TestJavaProtocol::Je340, 1, 1, 0, 4, Some((5, 1, 0))),
+    )
+    .await?;
+    let _ = read_click_transcript_and_ack_reject_if_needed(
+        TestJavaProtocol::Je340,
+        &mut stream,
+        &mut buffer,
+        &codec,
+        1,
+        4,
+        1,
+        Some((5, 1, 0)),
+        None,
+        None,
+    )
+    .await?;
 
     for _ in 0..200 {
         server.runtime.tick().await?;
