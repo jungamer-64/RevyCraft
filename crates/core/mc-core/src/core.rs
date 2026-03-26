@@ -338,65 +338,6 @@ impl ServerCore {
         self.compose_player_snapshot_by_entity(entity_id)
     }
 
-    pub(super) fn spawn_online_player(&mut self, player: PlayerSnapshot, now_ms: u64) -> EntityId {
-        let player_id = player.id;
-        let entity_id = EntityId(self.entities.next_entity_id);
-        self.entities.next_entity_id = self.entities.next_entity_id.saturating_add(1);
-        let view = ClientView::new(player.position.chunk_pos(), self.world.config.view_distance);
-        self.entities
-            .entity_kinds
-            .insert(entity_id, EntityKind::Player);
-        self.entities
-            .players_by_player_id
-            .insert(player_id, entity_id);
-        self.entities.player_identity.insert(
-            entity_id,
-            PlayerIdentity {
-                player_id,
-                username: player.username.clone(),
-            },
-        );
-        self.entities.player_transform.insert(
-            entity_id,
-            PlayerTransform {
-                position: player.position,
-                yaw: player.yaw,
-                pitch: player.pitch,
-                on_ground: player.on_ground,
-                dimension: player.dimension,
-            },
-        );
-        self.entities.player_vitals.insert(
-            entity_id,
-            PlayerVitals {
-                health: player.health,
-                food: player.food,
-                food_saturation: player.food_saturation,
-            },
-        );
-        self.entities
-            .player_inventory
-            .insert(entity_id, player.inventory);
-        self.entities
-            .player_selected_hotbar
-            .insert(entity_id, player.selected_hotbar_slot);
-        self.entities.player_active_mining.remove(&entity_id);
-        self.sessions.player_sessions.insert(
-            player_id,
-            PlayerSessionState {
-                entity_id,
-                cursor: None,
-                active_container: None,
-                next_non_player_window_id: 1,
-                view,
-                pending_keep_alive_id: None,
-                last_keep_alive_sent_at: None,
-                next_keep_alive_at: now_ms.saturating_add(self.sessions.keepalive_interval_ms),
-            },
-        );
-        entity_id
-    }
-
     pub(super) fn remove_online_player(
         &mut self,
         player_id: PlayerId,

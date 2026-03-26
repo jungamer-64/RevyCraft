@@ -1,13 +1,9 @@
 use super::{
     ServerCore,
-    canonical::{ApplyCoreOpsOptions, CoreOp, apply_core_ops},
-    inventory::{open_world_chest_state, open_world_furnace_state},
-    login::default_player,
-    mining::{state_begin_mining, state_clear_active_mining},
-    mutation::{
-        state_inventory_slot, state_player_pose, state_selected_hotbar_slot, state_set_block,
-        state_spawn_dropped_item,
+    canonical::{
+        AppliedCoreOp, ApplyCoreOpsOptions, CoreOp, build_applied_core_events, reduce_core_op,
     },
+    login::default_player,
     state_backend::{CoreStateMut, CoreStateRead, OverlayState, OverlayStateRef, TxOverlay},
 };
 use crate::catalog;
@@ -16,12 +12,15 @@ use crate::inventory::{InventoryContainer, InventorySlot, ItemStack};
 use crate::player::{InteractionHand, PlayerSnapshot};
 use crate::world::{BlockEntityState, BlockFace, BlockPos, BlockState, Vec3, WorldMeta};
 use crate::{ConnectionId, HOTBAR_SLOT_COUNT, PlayerId};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub struct GameplayTransaction<'a> {
     base: &'a mut ServerCore,
     overlay: TxOverlay,
     now_ms: u64,
-    ops: Vec<CoreOp>,
+    prepared_players: BTreeMap<PlayerId, crate::EntityId>,
+    finalized_players: BTreeSet<PlayerId>,
+    applied_ops: Vec<AppliedCoreOp>,
 }
 
 impl<'a> GameplayTransaction<'a> {
@@ -30,7 +29,9 @@ impl<'a> GameplayTransaction<'a> {
             base,
             overlay: TxOverlay::default(),
             now_ms,
-            ops: Vec::new(),
+            prepared_players: BTreeMap::new(),
+            finalized_players: BTreeSet::new(),
+            applied_ops: Vec::new(),
         }
     }
 
@@ -74,30 +75,17 @@ impl<'a> GameplayTransaction<'a> {
         pitch: Option<f32>,
         on_ground: bool,
     ) {
-        let applied = {
-            let mut state = self.overlay_state();
-            state_player_pose(&mut state, player_id, position, yaw, pitch, on_ground).is_some()
-        };
-        if applied {
-            self.ops.push(CoreOp::SetPlayerPose {
-                player_id,
-                position,
-                yaw,
-                pitch,
-                on_ground,
-            });
-        }
+        self.push_previewed_op(CoreOp::SetPlayerPose {
+            player_id,
+            position,
+            yaw,
+            pitch,
+            on_ground,
+        });
     }
 
     pub fn set_selected_hotbar_slot(&mut self, player_id: PlayerId, slot: u8) {
-        let applied = {
-            let mut state = self.overlay_state();
-            state_selected_hotbar_slot(&mut state, player_id, slot).is_some()
-        };
-        if applied {
-            self.ops
-                .push(CoreOp::SetSelectedHotbarSlot { player_id, slot });
-        }
+        self.push_previewed_op(CoreOp::SetSelectedHotbarSlot { player_id, slot });
     }
 
     pub fn set_inventory_slot(
@@ -106,95 +94,53 @@ impl<'a> GameplayTransaction<'a> {
         slot: InventorySlot,
         stack: Option<ItemStack>,
     ) {
-        let applied = {
-            let mut state = self.overlay_state();
-            state_inventory_slot(&mut state, player_id, slot, stack.clone()).is_some()
-        };
-        if applied {
-            self.ops.push(CoreOp::SetInventorySlot {
-                player_id,
-                slot,
-                stack,
-            });
-        }
+        self.push_previewed_op(CoreOp::SetInventorySlot {
+            player_id,
+            slot,
+            stack,
+        });
     }
 
     pub fn clear_mining(&mut self, player_id: PlayerId) {
-        let applied = {
-            let mut state = self.overlay_state();
-            state_clear_active_mining(&mut state, player_id).is_some()
-        };
-        if applied {
-            self.ops.push(CoreOp::ClearMining { player_id });
-        }
+        self.push_previewed_op(CoreOp::ClearMining { player_id });
     }
 
     pub fn begin_mining(&mut self, player_id: PlayerId, position: BlockPos, duration_ms: u64) {
-        let now_ms = self.now_ms;
-        let applied = {
-            let mut state = self.overlay_state();
-            state_begin_mining(&mut state, player_id, position, duration_ms, now_ms).is_some()
-        };
-        if applied {
-            self.ops.push(CoreOp::BeginMining {
-                player_id,
-                position,
-                duration_ms,
-            });
-        }
+        self.push_previewed_op(CoreOp::BeginMining {
+            player_id,
+            position,
+            duration_ms,
+        });
     }
 
     pub fn open_chest(&mut self, player_id: PlayerId, position: BlockPos) {
-        let applied = {
-            let mut state = self.overlay_state();
-            open_world_chest_state(&mut state, player_id, position).is_some()
-        };
-        if applied {
-            self.ops.push(CoreOp::OpenChest {
-                player_id,
-                position,
-            });
-        }
+        self.push_previewed_op(CoreOp::OpenChest {
+            player_id,
+            position,
+        });
     }
 
     pub fn open_furnace(&mut self, player_id: PlayerId, position: BlockPos) {
-        let applied = {
-            let mut state = self.overlay_state();
-            open_world_furnace_state(&mut state, player_id, position).is_some()
-        };
-        if applied {
-            self.ops.push(CoreOp::OpenFurnace {
-                player_id,
-                position,
-            });
-        }
+        self.push_previewed_op(CoreOp::OpenFurnace {
+            player_id,
+            position,
+        });
     }
 
     pub fn set_block(&mut self, position: BlockPos, block: BlockState) {
-        {
-            let mut state = self.overlay_state();
-            let _ = state_set_block(&mut state, position, block.clone());
-        }
-        self.ops.push(CoreOp::SetBlock { position, block });
+        self.push_previewed_op(CoreOp::SetBlock { position, block });
     }
 
     pub fn spawn_dropped_item(&mut self, position: Vec3, item: ItemStack) {
-        let now_ms = self.now_ms;
-        let spawned = {
-            let mut state = self.overlay_state();
-            state_spawn_dropped_item(&mut state, None, position, item.clone(), now_ms)
-        };
-        if let Some(delta) = spawned {
-            self.ops.push(CoreOp::SpawnDroppedItem {
-                expected_entity_id: Some(delta.entity_id),
-                position,
-                item,
-            });
-        }
+        self.push_previewed_op(CoreOp::SpawnDroppedItem {
+            expected_entity_id: None,
+            position,
+            item,
+        });
     }
 
     pub fn emit_event(&mut self, target: EventTarget, event: CoreEvent) {
-        self.ops.push(CoreOp::EmitEvent { target, event });
+        self.push_previewed_op(CoreOp::EmitEvent { target, event });
     }
 
     pub fn begin_login(
@@ -233,16 +179,28 @@ impl<'a> GameplayTransaction<'a> {
         player.username = username;
         ServerCore::recompute_crafting_result_for_inventory(&mut player.inventory);
 
-        let now_ms = self.now_ms;
         let entity_id = {
             let mut state = self.overlay_state();
-            state.spawn_online_player(player.clone(), now_ms, None)
+            state.allocate_entity_id()
         };
-        self.ops.push(CoreOp::PrepareLogin {
-            player_id,
-            player,
-            expected_entity_id: entity_id,
-        });
+        let mut materialized_players = self.materialized_preview_players();
+        materialized_players.insert(player_id);
+        let now_ms = self.now_ms;
+        let applied = {
+            let mut state = self.overlay_state();
+            reduce_core_op(
+                &mut state,
+                CoreOp::PrepareLogin {
+                    player_id,
+                    player,
+                    expected_entity_id: entity_id,
+                },
+                now_ms,
+                &materialized_players,
+            )
+        };
+        self.prepared_players.insert(player_id, entity_id);
+        self.applied_ops.push(applied);
         Ok(None)
     }
 
@@ -261,7 +219,8 @@ impl<'a> GameplayTransaction<'a> {
         if self.overlay_view().player_session(player_id).is_none() {
             return Err("cannot finalize login for missing player session".to_string());
         }
-        self.ops.push(CoreOp::FinalizeLogin {
+        self.finalized_players.insert(player_id);
+        self.push_previewed_op(CoreOp::FinalizeLogin {
             connection_id,
             player_id,
         });
@@ -271,11 +230,14 @@ impl<'a> GameplayTransaction<'a> {
     pub fn commit(self) -> Vec<TargetedEvent> {
         let GameplayTransaction {
             base,
-            overlay: _,
-            now_ms,
-            ops,
+            overlay,
+            now_ms: _,
+            prepared_players,
+            finalized_players,
+            applied_ops,
         } = self;
-        apply_core_ops(base, ops, now_ms, ApplyCoreOpsOptions::default())
+        overlay.materialize_into(base, &prepared_players, &finalized_players);
+        build_applied_core_events(base, applied_ops, ApplyCoreOpsOptions::default())
     }
 
     fn overlay_view(&self) -> OverlayStateRef<'_> {
@@ -286,9 +248,28 @@ impl<'a> GameplayTransaction<'a> {
         OverlayState::new(self.base, &mut self.overlay)
     }
 
+    fn materialized_preview_players(&self) -> BTreeSet<PlayerId> {
+        self.prepared_players.keys().copied().collect()
+    }
+
+    fn push_previewed_op(&mut self, op: CoreOp) {
+        let materialized_players = self.materialized_preview_players();
+        let now_ms = self.now_ms;
+        let applied = {
+            let mut state = self.overlay_state();
+            reduce_core_op(&mut state, op, now_ms, &materialized_players)
+        };
+        self.applied_ops.push(applied);
+    }
+
     fn can_edit_block_for_snapshot(&self, actor: &PlayerSnapshot, position: BlockPos) -> bool {
         self.overlay_view()
             .can_edit_block_for_snapshot(actor, position)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dropped_item_ids(&self) -> Vec<crate::EntityId> {
+        self.overlay_view().dropped_item_ids()
     }
 }
 

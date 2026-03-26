@@ -1669,6 +1669,92 @@ fn gameplay_transaction_overlay_reads_surface_player_and_block_changes_before_co
 }
 
 #[test]
+fn gameplay_transaction_commit_materializes_previewed_state() {
+    let (mut core, player_id) = logged_in_creative_core("tx-writeback");
+    let block_pos = BlockPos::new(2, 4, 0);
+    let moved_pos = Vec3::new(3.5, 4.0, 0.5);
+    let drop_pos = Vec3::new(3.5, 4.5, 0.5);
+    let _events = apply_test_transaction(&mut core, 0, |tx| {
+        tx.set_player_pose(player_id, Some(moved_pos), Some(90.0), Some(-15.0), true);
+        tx.set_inventory_slot(
+            player_id,
+            InventorySlot::Hotbar(0),
+            Some(item("minecraft:glass", 12)),
+        );
+        tx.set_block(block_pos, BlockState::chest());
+        tx.spawn_dropped_item(drop_pos, item("minecraft:cobblestone", 4));
+        assert_eq!(tx.block_state(block_pos), BlockState::chest());
+    });
+
+    let player = core
+        .compose_player_snapshot(player_id)
+        .expect("committed transaction should materialize player changes");
+    assert_eq!(player.position, moved_pos);
+    assert_eq!(player.yaw, 90.0);
+    assert_eq!(player.pitch, -15.0);
+    assert_eq!(
+        player
+            .inventory
+            .get_slot(InventorySlot::Hotbar(0))
+            .map(stack_summary),
+        Some(("minecraft:glass", 12)),
+    );
+    assert_eq!(snapshot_block(&core, block_pos), BlockState::chest());
+    let (_drop_entity_id, dropped_state) = core
+        .entities
+        .dropped_items
+        .iter()
+        .next()
+        .expect("committed transaction should materialize dropped item state");
+    assert_eq!(core.entities.dropped_items.len(), 1);
+    let dropped = &dropped_state.snapshot;
+    assert_eq!(dropped.position, drop_pos);
+    assert_eq!(stack_summary(&dropped.item), ("minecraft:cobblestone", 4));
+}
+
+#[test]
+fn gameplay_transaction_commit_preserves_previewed_drop_entity_id_and_allocator_progress() {
+    let (mut core, player_id) = logged_in_core(CoreConfig::default(), 1, "tx-drop-id");
+    let player_entity_id = core
+        .player_session(player_id)
+        .expect("logged-in player should have a session")
+        .entity_id;
+
+    let (preview_entity_id, events) = {
+        let mut tx = core.begin_gameplay_transaction(0);
+        tx.spawn_dropped_item(Vec3::new(4.5, 4.5, 0.5), item("minecraft:stone", 1));
+        let preview_entity_id = tx
+            .dropped_item_ids()
+            .into_iter()
+            .next()
+            .expect("previewed dropped item should be visible inside the transaction");
+        let events = tx.commit();
+        (preview_entity_id, events)
+    };
+
+    let committed_entity_id = dropped_item_entity_id(&events, player_id);
+    assert_ne!(committed_entity_id, player_entity_id);
+    assert_eq!(committed_entity_id, preview_entity_id);
+    assert_eq!(
+        core.entities.next_entity_id,
+        committed_entity_id.0.saturating_add(1)
+    );
+
+    let next_events = spawn_dropped_item_via_tx(
+        &mut core,
+        Vec3::new(5.5, 4.5, 0.5),
+        item("minecraft:granite", 2),
+        1,
+    );
+    let next_entity_id = dropped_item_entity_id(&next_events, player_id);
+    assert_eq!(next_entity_id.0, committed_entity_id.0.saturating_add(1));
+    assert_eq!(
+        core.entities.next_entity_id,
+        next_entity_id.0.saturating_add(1)
+    );
+}
+
+#[test]
 fn gameplay_transaction_prepare_login_is_overlay_only_until_finalize() {
     let mut core = ServerCore::new(CoreConfig::default());
     let joining = player_id("prepared-only");
@@ -1688,6 +1774,7 @@ fn gameplay_transaction_prepare_login_is_overlay_only_until_finalize() {
 
     assert!(events.is_empty());
     assert!(core.player_session(joining).is_none());
+    assert!(core.player_entity_id(joining).is_none());
     assert!(core.compose_player_snapshot(joining).is_none());
     assert!(!core.world.saved_players.contains_key(&joining));
 }

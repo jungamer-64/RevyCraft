@@ -15,7 +15,7 @@ use super::{
         state_inventory_slot, state_player_pose, state_selected_hotbar_slot, state_set_block,
         state_spawn_dropped_item,
     },
-    state_backend::{BaseState, CoreStateMut, CoreStateRead},
+    state_backend::{BaseState, CoreStateMut},
     tick::{disconnect_player_state, schedule_keep_alive_state},
 };
 use crate::events::{
@@ -26,7 +26,7 @@ use crate::inventory::{InventoryContainer, InventorySlot, InventoryWindowContent
 use crate::player::PlayerSnapshot;
 use crate::world::{BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, Vec3};
 use crate::{ConnectionId, EntityId, PlayerId};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]
 pub(super) enum CoreOp {
@@ -290,10 +290,10 @@ pub(super) struct DisconnectDelta {
 }
 
 #[derive(Clone, Debug)]
-enum AppliedCoreOp {
+pub(super) enum AppliedCoreOp {
     PrepareLogin {
         player_id: PlayerId,
-        materialized: bool,
+        entity_id: EntityId,
     },
     FinalizeLogin {
         player_id: PlayerId,
@@ -319,14 +319,9 @@ enum AppliedCoreOp {
     EmitEvent(TargetedEvent),
 }
 
-struct StateMutationContext<'a> {
-    state: BaseState<'a>,
-    now_ms: u64,
-    finalized_players: &'a BTreeSet<PlayerId>,
-}
-
 struct CoreEventBuilder {
     hidden_players: BTreeSet<PlayerId>,
+    hidden_player_entities: BTreeMap<PlayerId, EntityId>,
 }
 
 pub(super) type CoreEvents = Vec<TargetedEvent>;
@@ -344,265 +339,228 @@ pub(super) fn apply_core_ops(
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    let mut state = StateMutationContext::new(core, now_ms, &finalized_players);
+    let mut state = BaseState::new(core);
     let mut builder = CoreEventBuilder::new(options.hidden_players);
     let mut events = Vec::new();
 
     for op in ops {
-        let applied = state.apply(op);
+        let applied = reduce_core_op(&mut state, op, now_ms, &finalized_players);
         events.extend(builder.build(state.core(), applied));
     }
 
     events
 }
 
-impl<'a> StateMutationContext<'a> {
-    fn new(
-        core: &'a mut ServerCore,
-        now_ms: u64,
-        finalized_players: &'a BTreeSet<PlayerId>,
-    ) -> Self {
-        Self {
-            state: BaseState::new(core),
-            now_ms,
-            finalized_players,
+pub(super) fn reduce_core_op(
+    state: &mut impl CoreStateMut,
+    op: CoreOp,
+    now_ms: u64,
+    materialized_players: &BTreeSet<PlayerId>,
+) -> AppliedCoreOp {
+    match op {
+        CoreOp::PrepareLogin {
+            player_id,
+            player,
+            expected_entity_id,
+        } => {
+            if materialized_players.contains(&player_id) {
+                let entity_id = state.spawn_online_player(player, now_ms, Some(expected_entity_id));
+                debug_assert_eq!(entity_id, expected_entity_id);
+            }
+            AppliedCoreOp::PrepareLogin {
+                player_id,
+                entity_id: expected_entity_id,
+            }
         }
-    }
-
-    fn core(&self) -> &ServerCore {
-        self.state.core()
-    }
-
-    fn apply(&mut self, op: CoreOp) -> AppliedCoreOp {
-        match op {
-            CoreOp::PrepareLogin {
-                player_id,
-                player,
-                expected_entity_id,
-            } => {
-                let materialized = self.finalized_players.contains(&player_id);
-                if materialized {
-                    let entity_id = self.state.spawn_online_player(
-                        player,
-                        self.now_ms,
-                        Some(expected_entity_id),
-                    );
-                    debug_assert_eq!(entity_id, expected_entity_id);
-                }
-                AppliedCoreOp::PrepareLogin {
-                    player_id,
-                    materialized,
-                }
-            }
-            CoreOp::FinalizeLogin {
-                connection_id,
-                player_id,
-            } => AppliedCoreOp::FinalizeLogin {
-                player_id,
-                delta: finalize_login_delta(&mut self.state, connection_id, player_id),
-            },
-            CoreOp::SetPlayerPose {
-                player_id,
-                position,
-                yaw,
-                pitch,
-                on_ground,
-            } => AppliedCoreOp::SetPlayerPose(state_player_pose(
-                &mut self.state,
-                player_id,
-                position,
-                yaw,
-                pitch,
-                on_ground,
-            )),
-            CoreOp::SetSelectedHotbarSlot { player_id, slot } => {
-                AppliedCoreOp::SetSelectedHotbarSlot(state_selected_hotbar_slot(
-                    &mut self.state,
-                    player_id,
-                    slot,
-                ))
-            }
-            CoreOp::SetInventorySlot {
-                player_id,
-                slot,
-                stack,
-            } => AppliedCoreOp::SetInventorySlot(state_inventory_slot(
-                &mut self.state,
-                player_id,
-                slot,
-                stack,
-            )),
-            CoreOp::SetViewDistance {
-                player_id,
-                view_distance,
-            } => AppliedCoreOp::SetViewDistance(state_update_client_settings(
-                &mut self.state,
-                player_id,
-                view_distance,
-            )),
-            CoreOp::InventoryClick {
-                player_id,
-                transaction,
-                target,
-                button,
-                validation,
-            } => AppliedCoreOp::InventoryClick(apply_inventory_click_state(
-                &mut self.state,
-                player_id,
-                transaction,
-                target,
-                button,
-                &validation,
-            )),
-            CoreOp::OpenWindow {
-                player_id,
-                window,
-                title,
-            } => AppliedCoreOp::OpenContainer(open_non_player_window_state(
-                &mut self.state,
-                player_id,
-                window,
-                title,
-            )),
-            CoreOp::OpenChest {
-                player_id,
-                position,
-            } => AppliedCoreOp::OpenContainer(open_world_chest_state(
-                &mut self.state,
-                player_id,
-                position,
-            )),
-            CoreOp::OpenFurnace {
-                player_id,
-                position,
-            } => AppliedCoreOp::OpenContainer(open_world_furnace_state(
-                &mut self.state,
-                player_id,
-                position,
-            )),
-            CoreOp::CloseContainer {
-                player_id,
-                window_id,
-                include_player_contents,
-            } => {
-                let delta = if window_id == 0 {
-                    close_player_active_container_state(
-                        &mut self.state,
-                        player_id,
-                        include_player_contents,
-                    )
-                } else if include_player_contents {
-                    close_inventory_window_state(&mut self.state, player_id, window_id)
-                } else {
-                    let active_window_id =
-                        self.state.player_session(player_id).and_then(|session| {
-                            session
-                                .active_container
-                                .as_ref()
-                                .map(|window| window.window_id)
-                        });
-                    (active_window_id == Some(window_id))
-                        .then(|| {
-                            close_player_active_container_state(&mut self.state, player_id, false)
-                        })
-                        .flatten()
-                };
-                AppliedCoreOp::CloseContainer(delta)
-            }
-            CoreOp::ClearMining { player_id } => {
-                AppliedCoreOp::ClearMining(state_clear_active_mining(&mut self.state, player_id))
-            }
-            CoreOp::BeginMining {
-                player_id,
-                position,
-                duration_ms,
-            } => AppliedCoreOp::BeginMining(state_begin_mining(
-                &mut self.state,
-                player_id,
-                position,
-                duration_ms,
-                self.now_ms,
-            )),
-            CoreOp::AdvanceMiningStage {
-                player_id,
-                entity_id,
-                position,
-                stage,
-                duration_ms,
-            } => AppliedCoreOp::AdvanceMiningStage(state_advance_mining_stage(
-                &mut self.state,
-                player_id,
-                entity_id,
-                position,
-                stage,
-                duration_ms,
-            )),
-            CoreOp::CompleteMining {
-                player_id,
-                position,
-            } => AppliedCoreOp::CompleteMining(state_complete_survival_mining(
-                &mut self.state,
-                player_id,
-                position,
-                self.now_ms,
-            )),
-            CoreOp::TickFurnaceWindow { player_id } => {
-                AppliedCoreOp::WindowDiff(tick_active_container_state(&mut self.state, player_id))
-            }
-            CoreOp::TickDroppedItem { entity_id } => AppliedCoreOp::DroppedItemTick(
-                tick_dropped_item_state(&mut self.state, entity_id, self.now_ms),
-            ),
-            CoreOp::SetBlock { position, block } => {
-                AppliedCoreOp::SetBlock(state_set_block(&mut self.state, position, block))
-            }
-            CoreOp::SpawnDroppedItem {
-                expected_entity_id,
-                position,
-                item,
-            } => AppliedCoreOp::SpawnDroppedItem(state_spawn_dropped_item(
-                &mut self.state,
-                expected_entity_id,
-                position,
-                item,
-                self.now_ms,
-            )),
-            CoreOp::KeepAliveRequested {
-                player_id,
-                keep_alive_id,
-            } => AppliedCoreOp::KeepAliveRequested(schedule_keep_alive_state(
-                &mut self.state,
-                player_id,
-                keep_alive_id,
-                self.now_ms,
-            )),
-            CoreOp::DisconnectPlayer { player_id } => {
-                AppliedCoreOp::DisconnectPlayer(disconnect_player_state(&mut self.state, player_id))
-            }
-            CoreOp::EmitEvent { target, event } => {
-                AppliedCoreOp::EmitEvent(TargetedEvent { target, event })
-            }
+        CoreOp::FinalizeLogin {
+            connection_id,
+            player_id,
+        } => AppliedCoreOp::FinalizeLogin {
+            player_id,
+            delta: finalize_login_delta(state, connection_id, player_id),
+        },
+        CoreOp::SetPlayerPose {
+            player_id,
+            position,
+            yaw,
+            pitch,
+            on_ground,
+        } => AppliedCoreOp::SetPlayerPose(state_player_pose(
+            state, player_id, position, yaw, pitch, on_ground,
+        )),
+        CoreOp::SetSelectedHotbarSlot { player_id, slot } => {
+            AppliedCoreOp::SetSelectedHotbarSlot(state_selected_hotbar_slot(state, player_id, slot))
+        }
+        CoreOp::SetInventorySlot {
+            player_id,
+            slot,
+            stack,
+        } => AppliedCoreOp::SetInventorySlot(state_inventory_slot(state, player_id, slot, stack)),
+        CoreOp::SetViewDistance {
+            player_id,
+            view_distance,
+        } => AppliedCoreOp::SetViewDistance(state_update_client_settings(
+            state,
+            player_id,
+            view_distance,
+        )),
+        CoreOp::InventoryClick {
+            player_id,
+            transaction,
+            target,
+            button,
+            validation,
+        } => AppliedCoreOp::InventoryClick(apply_inventory_click_state(
+            state,
+            player_id,
+            transaction,
+            target,
+            button,
+            &validation,
+        )),
+        CoreOp::OpenWindow {
+            player_id,
+            window,
+            title,
+        } => AppliedCoreOp::OpenContainer(open_non_player_window_state(
+            state, player_id, window, title,
+        )),
+        CoreOp::OpenChest {
+            player_id,
+            position,
+        } => AppliedCoreOp::OpenContainer(open_world_chest_state(state, player_id, position)),
+        CoreOp::OpenFurnace {
+            player_id,
+            position,
+        } => AppliedCoreOp::OpenContainer(open_world_furnace_state(state, player_id, position)),
+        CoreOp::CloseContainer {
+            player_id,
+            window_id,
+            include_player_contents,
+        } => {
+            let delta = if window_id == 0 {
+                close_player_active_container_state(state, player_id, include_player_contents)
+            } else if include_player_contents {
+                close_inventory_window_state(state, player_id, window_id)
+            } else {
+                let active_window_id = state.player_session(player_id).and_then(|session| {
+                    session
+                        .active_container
+                        .as_ref()
+                        .map(|window| window.window_id)
+                });
+                (active_window_id == Some(window_id))
+                    .then(|| close_player_active_container_state(state, player_id, false))
+                    .flatten()
+            };
+            AppliedCoreOp::CloseContainer(delta)
+        }
+        CoreOp::ClearMining { player_id } => {
+            AppliedCoreOp::ClearMining(state_clear_active_mining(state, player_id))
+        }
+        CoreOp::BeginMining {
+            player_id,
+            position,
+            duration_ms,
+        } => AppliedCoreOp::BeginMining(state_begin_mining(
+            state,
+            player_id,
+            position,
+            duration_ms,
+            now_ms,
+        )),
+        CoreOp::AdvanceMiningStage {
+            player_id,
+            entity_id,
+            position,
+            stage,
+            duration_ms,
+        } => AppliedCoreOp::AdvanceMiningStage(state_advance_mining_stage(
+            state,
+            player_id,
+            entity_id,
+            position,
+            stage,
+            duration_ms,
+        )),
+        CoreOp::CompleteMining {
+            player_id,
+            position,
+        } => AppliedCoreOp::CompleteMining(state_complete_survival_mining(
+            state, player_id, position, now_ms,
+        )),
+        CoreOp::TickFurnaceWindow { player_id } => {
+            AppliedCoreOp::WindowDiff(tick_active_container_state(state, player_id))
+        }
+        CoreOp::TickDroppedItem { entity_id } => {
+            AppliedCoreOp::DroppedItemTick(tick_dropped_item_state(state, entity_id, now_ms))
+        }
+        CoreOp::SetBlock { position, block } => {
+            AppliedCoreOp::SetBlock(state_set_block(state, position, block))
+        }
+        CoreOp::SpawnDroppedItem {
+            expected_entity_id,
+            position,
+            item,
+        } => AppliedCoreOp::SpawnDroppedItem(state_spawn_dropped_item(
+            state,
+            expected_entity_id,
+            position,
+            item,
+            now_ms,
+        )),
+        CoreOp::KeepAliveRequested {
+            player_id,
+            keep_alive_id,
+        } => AppliedCoreOp::KeepAliveRequested(schedule_keep_alive_state(
+            state,
+            player_id,
+            keep_alive_id,
+            now_ms,
+        )),
+        CoreOp::DisconnectPlayer { player_id } => {
+            AppliedCoreOp::DisconnectPlayer(disconnect_player_state(state, player_id))
+        }
+        CoreOp::EmitEvent { target, event } => {
+            AppliedCoreOp::EmitEvent(TargetedEvent { target, event })
         }
     }
 }
 
+pub(super) fn build_applied_core_events(
+    core: &ServerCore,
+    applied_ops: impl IntoIterator<Item = AppliedCoreOp>,
+    options: ApplyCoreOpsOptions,
+) -> CoreEvents {
+    let mut builder = CoreEventBuilder::new(options.hidden_players);
+    let mut events = Vec::new();
+    for applied in applied_ops {
+        events.extend(builder.build(core, applied));
+    }
+    events
+}
+
 impl CoreEventBuilder {
     fn new(hidden_players: BTreeSet<PlayerId>) -> Self {
-        Self { hidden_players }
+        Self {
+            hidden_players,
+            hidden_player_entities: BTreeMap::new(),
+        }
     }
 
     fn build(&mut self, core: &ServerCore, applied: AppliedCoreOp) -> Vec<TargetedEvent> {
         let events = match applied {
             AppliedCoreOp::PrepareLogin {
                 player_id,
-                materialized,
+                entity_id,
             } => {
-                if materialized {
-                    self.hidden_players.insert(player_id);
-                }
+                self.hidden_players.insert(player_id);
+                self.hidden_player_entities.insert(player_id, entity_id);
                 Vec::new()
             }
             AppliedCoreOp::FinalizeLogin { player_id, delta } => {
                 self.hidden_players.remove(&player_id);
+                self.hidden_player_entities.remove(&player_id);
                 delta
                     .map(|delta| self.build_finalize_login(core, delta))
                     .unwrap_or_default()
@@ -1032,11 +990,16 @@ impl CoreEventBuilder {
         core: &ServerCore,
         events: Vec<TargetedEvent>,
     ) -> Vec<TargetedEvent> {
-        let hidden_entities = self
-            .hidden_players
-            .iter()
-            .filter_map(|player_id| core.player_entity_id(*player_id))
+        let mut hidden_entities = self
+            .hidden_player_entities
+            .values()
+            .copied()
             .collect::<BTreeSet<_>>();
+        hidden_entities.extend(
+            self.hidden_players
+                .iter()
+                .filter_map(|player_id| core.player_entity_id(*player_id)),
+        );
 
         events
             .into_iter()

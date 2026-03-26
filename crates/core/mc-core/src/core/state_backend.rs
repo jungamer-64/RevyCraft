@@ -168,6 +168,111 @@ pub(super) struct OverlayStateRef<'a> {
     overlay: &'a TxOverlay,
 }
 
+impl TxOverlay {
+    pub(super) fn materialize_into(
+        self,
+        base: &mut ServerCore,
+        prepared_players: &BTreeMap<PlayerId, EntityId>,
+        finalized_players: &BTreeSet<PlayerId>,
+    ) {
+        let skipped_players = prepared_players
+            .keys()
+            .filter(|player_id| !finalized_players.contains(player_id))
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let skipped_entities = prepared_players
+            .iter()
+            .filter(|(player_id, _)| !finalized_players.contains(player_id))
+            .map(|(_, entity_id)| *entity_id)
+            .collect::<BTreeSet<_>>();
+
+        for (chunk_pos, chunk) in self.chunks {
+            base.world.chunks.insert(chunk_pos, chunk);
+        }
+        for (position, block_entity) in self.block_entities {
+            apply_optional_entry(&mut base.world.block_entities, position, block_entity);
+        }
+        for (position, viewers) in self.chest_viewers {
+            apply_optional_entry(&mut base.world.chest_viewers, position, viewers);
+        }
+        for (player_id, snapshot) in self.saved_players {
+            apply_optional_entry(&mut base.world.saved_players, player_id, snapshot);
+        }
+        for (player_id, session) in self.player_sessions {
+            if skipped_players.contains(&player_id) {
+                continue;
+            }
+            apply_optional_entry(&mut base.sessions.player_sessions, player_id, session);
+        }
+        for (player_id, entity_id) in self.players_by_player_id {
+            if skipped_players.contains(&player_id) {
+                continue;
+            }
+            apply_optional_entry(
+                &mut base.entities.players_by_player_id,
+                player_id,
+                entity_id,
+            );
+        }
+        for (entity_id, kind) in self.entity_kinds {
+            if skipped_entities.contains(&entity_id) {
+                continue;
+            }
+            apply_optional_entry(&mut base.entities.entity_kinds, entity_id, kind);
+        }
+        for (entity_id, identity) in self.player_identity {
+            if skipped_entities.contains(&entity_id) {
+                continue;
+            }
+            apply_optional_entry(&mut base.entities.player_identity, entity_id, identity);
+        }
+        for (entity_id, transform) in self.player_transform {
+            if skipped_entities.contains(&entity_id) {
+                continue;
+            }
+            apply_optional_entry(&mut base.entities.player_transform, entity_id, transform);
+        }
+        for (entity_id, vitals) in self.player_vitals {
+            if skipped_entities.contains(&entity_id) {
+                continue;
+            }
+            apply_optional_entry(&mut base.entities.player_vitals, entity_id, vitals);
+        }
+        for (entity_id, inventory) in self.player_inventory {
+            if skipped_entities.contains(&entity_id) {
+                continue;
+            }
+            apply_optional_entry(&mut base.entities.player_inventory, entity_id, inventory);
+        }
+        for (entity_id, selected_hotbar) in self.player_selected_hotbar {
+            if skipped_entities.contains(&entity_id) {
+                continue;
+            }
+            apply_optional_entry(
+                &mut base.entities.player_selected_hotbar,
+                entity_id,
+                selected_hotbar,
+            );
+        }
+        for (entity_id, mining_state) in self.player_active_mining {
+            if skipped_entities.contains(&entity_id) {
+                continue;
+            }
+            apply_optional_entry(
+                &mut base.entities.player_active_mining,
+                entity_id,
+                mining_state,
+            );
+        }
+        for (entity_id, dropped_item) in self.dropped_items {
+            apply_optional_entry(&mut base.entities.dropped_items, entity_id, dropped_item);
+        }
+        if let Some(next_entity_id) = self.next_entity_id {
+            base.entities.next_entity_id = next_entity_id;
+        }
+    }
+}
+
 impl<'a> BaseState<'a> {
     pub(super) fn new(core: &'a mut ServerCore) -> Self {
         Self { core }
@@ -524,10 +629,74 @@ impl CoreStateMut for BaseState<'_> {
         now_ms: u64,
         expected_entity_id: Option<EntityId>,
     ) -> EntityId {
-        let entity_id = self.core.spawn_online_player(player, now_ms);
-        if let Some(expected_entity_id) = expected_entity_id {
-            debug_assert_eq!(entity_id, expected_entity_id);
+        let player_id = player.id;
+        let entity_id = expected_entity_id.unwrap_or_else(|| {
+            let entity_id = EntityId(self.core.entities.next_entity_id);
+            self.core.entities.next_entity_id = self.core.entities.next_entity_id.saturating_add(1);
+            entity_id
+        });
+        if self.core.entities.next_entity_id <= entity_id.0 {
+            self.core.entities.next_entity_id = entity_id.0.saturating_add(1);
         }
+        let view = ClientView::new(
+            player.position.chunk_pos(),
+            self.core.world.config.view_distance,
+        );
+        self.core
+            .entities
+            .entity_kinds
+            .insert(entity_id, EntityKind::Player);
+        self.core
+            .entities
+            .players_by_player_id
+            .insert(player_id, entity_id);
+        self.core.entities.player_identity.insert(
+            entity_id,
+            PlayerIdentity {
+                player_id,
+                username: player.username.clone(),
+            },
+        );
+        self.core.entities.player_transform.insert(
+            entity_id,
+            PlayerTransform {
+                position: player.position,
+                yaw: player.yaw,
+                pitch: player.pitch,
+                on_ground: player.on_ground,
+                dimension: player.dimension,
+            },
+        );
+        self.core.entities.player_vitals.insert(
+            entity_id,
+            PlayerVitals {
+                health: player.health,
+                food: player.food,
+                food_saturation: player.food_saturation,
+            },
+        );
+        self.core
+            .entities
+            .player_inventory
+            .insert(entity_id, player.inventory);
+        self.core
+            .entities
+            .player_selected_hotbar
+            .insert(entity_id, player.selected_hotbar_slot);
+        self.core.entities.player_active_mining.remove(&entity_id);
+        self.core.sessions.player_sessions.insert(
+            player_id,
+            PlayerSessionState {
+                entity_id,
+                cursor: None,
+                active_container: None,
+                next_non_player_window_id: 1,
+                view,
+                pending_keep_alive_id: None,
+                last_keep_alive_sent_at: None,
+                next_keep_alive_at: now_ms.saturating_add(self.core.sessions.keepalive_interval_ms),
+            },
+        );
         entity_id
     }
 
@@ -972,9 +1141,11 @@ impl CoreStateMut for OverlayState<'_> {
         expected_entity_id: Option<EntityId>,
     ) -> EntityId {
         let player_id = player.id;
-        let entity_id = self.allocate_entity_id();
-        if let Some(expected_entity_id) = expected_entity_id {
-            debug_assert_eq!(entity_id, expected_entity_id);
+        let entity_id = expected_entity_id.unwrap_or_else(|| self.allocate_entity_id());
+        if let Some(next_entity_id) = &mut self.overlay.next_entity_id {
+            *next_entity_id = (*next_entity_id).max(entity_id.0.saturating_add(1));
+        } else if self.base.entities.next_entity_id <= entity_id.0 {
+            self.overlay.next_entity_id = Some(entity_id.0.saturating_add(1));
         }
         let view = ClientView::new(
             player.position.chunk_pos(),
@@ -1047,6 +1218,20 @@ impl CoreStateMut for OverlayState<'_> {
         self.overlay.player_selected_hotbar.insert(entity_id, None);
         self.overlay.player_active_mining.insert(entity_id, None);
         Some(session)
+    }
+}
+
+fn apply_optional_entry<K, V>(map: &mut BTreeMap<K, V>, key: K, value: Option<V>)
+where
+    K: Ord + Clone,
+{
+    match value {
+        Some(value) => {
+            map.insert(key, value);
+        }
+        None => {
+            map.remove(&key);
+        }
     }
 }
 
