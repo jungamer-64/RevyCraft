@@ -1,16 +1,18 @@
 use crate::RuntimeError;
-use crate::runtime::{RuntimeServer, SessionControl, SessionMessage, SessionState, now_ms};
+use crate::runtime::{
+    RuntimeServer, SessionControl, SessionMessage, SessionRuntimeContext, SharedSessionState,
+    now_ms,
+};
 use mc_core::{
     CoreCommand, CoreEvent, EventTarget, PlayerSummary, RuntimeCommand, SessionCommand,
     TargetedEvent,
 };
-use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 
 impl RuntimeServer {
     pub(in crate::runtime) async fn apply_runtime_command(
         &self,
         command: RuntimeCommand,
-        session: Option<&SessionState>,
+        session: Option<SessionRuntimeContext>,
     ) -> Result<(), RuntimeError> {
         let _consistency_guard = self.reload.read_consistency().await;
         self.apply_runtime_command_guarded(command, session).await
@@ -19,7 +21,7 @@ impl RuntimeServer {
     async fn apply_runtime_command_guarded(
         &self,
         command: RuntimeCommand,
-        session: Option<&SessionState>,
+        session: Option<SessionRuntimeContext>,
     ) -> Result<(), RuntimeError> {
         match command {
             RuntimeCommand::Core(command) => self.apply_command_guarded(command, session).await,
@@ -32,7 +34,7 @@ impl RuntimeServer {
     pub(in crate::runtime) async fn apply_command(
         &self,
         command: CoreCommand,
-        session: Option<&SessionState>,
+        session: Option<SessionRuntimeContext>,
     ) -> Result<(), RuntimeError> {
         let _consistency_guard = self.reload.read_consistency().await;
         self.apply_command_guarded(command, session).await
@@ -41,10 +43,14 @@ impl RuntimeServer {
     async fn apply_command_guarded(
         &self,
         command: CoreCommand,
-        session: Option<&SessionState>,
+        session: Option<SessionRuntimeContext>,
     ) -> Result<(), RuntimeError> {
-        let session_capabilities = session.and_then(|session| session.session_capabilities.clone());
-        let gameplay = session.and_then(|session| session.gameplay.clone());
+        let session_capabilities = session
+            .as_ref()
+            .and_then(|session| session.session_capabilities.clone());
+        let gameplay = session
+            .as_ref()
+            .and_then(|session| session.gameplay.clone());
         if session.is_some() {
             debug_assert!(
                 session_capabilities.is_some() == gameplay.is_some()
@@ -66,7 +72,7 @@ impl RuntimeServer {
     async fn apply_session_command_guarded(
         &self,
         command: SessionCommand,
-        session: Option<&SessionState>,
+        session: Option<SessionRuntimeContext>,
     ) -> Result<(), RuntimeError> {
         debug_assert!(
             session.is_some(),
@@ -124,7 +130,7 @@ impl RuntimeServer {
             ) = (&target, &payload)
             {
                 self.sessions
-                    .set_login_player(*connection_id, *player_id)
+                    .record_login_acceptance(*connection_id, *player_id)
                     .await;
             }
             let payload = std::sync::Arc::new(payload);
@@ -156,40 +162,39 @@ impl RuntimeServer {
     pub(in crate::runtime) async fn unregister_session(
         &self,
         connection_id: mc_core::ConnectionId,
-        session: &SessionState,
+        shared_state: &SharedSessionState,
     ) -> Result<(), RuntimeError> {
         let _consistency_guard = self.reload.read_consistency().await;
-        self.unregister_session_guarded(connection_id, session)
+        self.unregister_session_guarded(connection_id, shared_state)
             .await
     }
 
     async fn unregister_session_guarded(
         &self,
         connection_id: mc_core::ConnectionId,
-        session: &SessionState,
+        shared_state: &SharedSessionState,
     ) -> Result<(), RuntimeError> {
-        if let Some(adapter) = session.adapter.as_ref() {
+        let (view, context, adapter) = {
+            let session = shared_state.read().await;
+            (
+                Self::session_view(&session),
+                Self::session_runtime_context(&session),
+                session.adapter.clone(),
+            )
+        };
+        if let Some(adapter) = adapter.as_ref() {
             adapter
-                .session_closed(&Self::protocol_session_snapshot(connection_id, session))
+                .session_closed(&Self::protocol_session_snapshot(connection_id, &view))
                 .map_err(|error| RuntimeError::Config(error.to_string()))?;
         }
-        if let (Some(gameplay), Some(session_capabilities), Some(player_id)) = (
-            session.gameplay.as_ref(),
-            session.session_capabilities.as_ref(),
-            session.player_id,
+        if let (Some(gameplay), Some(snapshot)) = (
+            context.gameplay.as_ref(),
+            Self::gameplay_session_snapshot(&view, &context),
         ) {
-            gameplay.session_closed(&GameplaySessionSnapshot {
-                phase: session.phase,
-                player_id: Some(player_id),
-                entity_id: session.entity_id,
-                protocol: session_capabilities.protocol.clone(),
-                gameplay_profile: session_capabilities.gameplay_profile.clone(),
-                protocol_generation: session_capabilities.protocol_generation,
-                gameplay_generation: session_capabilities.gameplay_generation,
-            })?;
+            gameplay.session_closed(&snapshot)?;
         }
         self.sessions.remove(connection_id).await;
-        if let Some(player_id) = session.player_id {
+        if let Some(player_id) = view.player_id {
             self.apply_command_guarded(CoreCommand::Disconnect { player_id }, None)
                 .await?;
         }

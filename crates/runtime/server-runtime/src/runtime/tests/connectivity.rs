@@ -488,6 +488,45 @@ async fn running_server_session_status_reports_live_sessions() -> Result<(), Run
 }
 
 #[tokio::test]
+async fn session_status_tracks_handshake_phase_without_registry_sync() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        loopback_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let codec = MinecraftWireCodec;
+
+    let mut stream = connect_tcp(addr).await?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &encode_handshake(TestJavaProtocol::Je5.protocol_version(), 1)?,
+    )
+    .await?;
+
+    let sessions = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let sessions = server.session_status().await;
+            if sessions.len() == 1 && sessions[0].phase == ConnectionPhase::Status {
+                break sessions;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| RuntimeError::Config("status handshake did not become visible".into()))?;
+
+    assert_eq!(sessions[0].adapter_id.as_deref(), Some(JE_5_ADAPTER_ID));
+    assert_eq!(sessions[0].player_id, None);
+    assert_eq!(sessions[0].entity_id, None);
+
+    drop(stream);
+    server.shutdown().await
+}
+
+#[tokio::test]
 async fn default_bedrock_adapter_requires_listener_metadata() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));

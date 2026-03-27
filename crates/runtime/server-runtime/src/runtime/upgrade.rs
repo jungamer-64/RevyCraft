@@ -399,7 +399,7 @@ impl RuntimeServer {
     ) -> Result<Vec<SessionHandle>, RuntimeError> {
         let handles = self.sessions.all_handles().await;
         for handle in &handles {
-            if handle.transport != TransportKind::Tcp {
+            if handle.shared_state.read().await.transport != TransportKind::Tcp {
                 return Err(RuntimeError::Unsupported(
                     "runtime upgrade only supports tcp sessions".to_string(),
                 ));
@@ -590,36 +590,26 @@ impl RuntimeServer {
                 session_capabilities: None,
             };
             Self::refresh_session_capabilities(&mut session);
+            let view = Self::session_view(&session);
+            let context = Self::session_runtime_context(&session);
             if let (Some(adapter), Some(blob)) = (
                 adapter.as_ref(),
                 imported.state.protocol_session_blob.as_ref(),
             ) {
                 adapter
                     .import_session_state(
-                        &Self::protocol_session_snapshot(imported.state.connection_id, &session),
+                        &Self::protocol_session_snapshot(imported.state.connection_id, &view),
                         blob,
                     )
                     .map_err(|error| RuntimeError::Config(error.to_string()))?;
             }
-            if let (Some(gameplay), Some(session_capabilities), Some(player_id), Some(blob)) = (
+            if let (Some(gameplay), Some(snapshot), Some(blob)) = (
                 gameplay.as_ref(),
-                session.session_capabilities.as_ref(),
-                session.player_id,
+                Self::gameplay_session_snapshot(&view, &context),
                 imported.state.gameplay_session_blob.as_ref(),
             ) {
                 gameplay
-                    .import_session_state(
-                        &mc_plugin_api::codec::gameplay::GameplaySessionSnapshot {
-                            phase: session.phase,
-                            player_id: Some(player_id),
-                            entity_id: session.entity_id,
-                            protocol: session_capabilities.protocol.clone(),
-                            gameplay_profile: session_capabilities.gameplay_profile.clone(),
-                            protocol_generation: session_capabilities.protocol_generation,
-                            gameplay_generation: session_capabilities.gameplay_generation,
-                        },
-                        blob,
-                    )
+                    .import_session_state(&snapshot, blob)
                     .map_err(|error| RuntimeError::Config(error.to_string()))?;
             }
             let queued_messages = imported

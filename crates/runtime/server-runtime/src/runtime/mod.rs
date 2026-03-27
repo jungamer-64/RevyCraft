@@ -42,7 +42,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{RwLock as AsyncRwLock, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 pub use self::admin::{
@@ -373,14 +373,33 @@ impl RuntimeServer {
 pub(crate) struct SessionHandle {
     pub(crate) tx: mpsc::Sender<SessionMessage>,
     pub(crate) control_tx: mpsc::Sender<SessionControl>,
-    pub(crate) generation: Arc<ActiveGeneration>,
+    pub(crate) shared_state: SharedSessionState,
+}
+
+#[derive(Clone)]
+pub(crate) struct SessionRecipient {
+    pub(crate) tx: mpsc::Sender<SessionMessage>,
+    pub(crate) control_tx: mpsc::Sender<SessionControl>,
+}
+
+pub(crate) type SharedSessionState = Arc<AsyncRwLock<SessionState>>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionView {
+    pub(crate) generation_id: GenerationId,
     pub(crate) transport: TransportKind,
     pub(crate) phase: ConnectionPhase,
-    pub(crate) adapter: Option<Arc<dyn ProtocolAdapter>>,
     pub(crate) adapter_id: Option<String>,
     pub(crate) player_id: Option<PlayerId>,
     pub(crate) entity_id: Option<EntityId>,
     pub(crate) gameplay_profile: Option<GameplayProfileId>,
+    pub(crate) protocol_generation: Option<PluginGenerationId>,
+    pub(crate) gameplay_generation: Option<PluginGenerationId>,
+}
+
+#[derive(Clone)]
+pub(crate) struct SessionRuntimeContext {
+    pub(crate) player_id: Option<PlayerId>,
     pub(crate) gameplay: Option<Arc<dyn GameplayProfileHandle>>,
     pub(crate) session_capabilities: Option<SessionCapabilitySet>,
 }

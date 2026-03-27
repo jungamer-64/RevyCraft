@@ -1,6 +1,6 @@
 use super::crypto::{decrypt_login_blob, minecraft_server_hash, random_verify_token};
 use crate::RuntimeError;
-use crate::runtime::{LOGIN_SERVER_ID, LoginChallengeState, RuntimeServer, SessionState};
+use crate::runtime::{LOGIN_SERVER_ID, LoginChallengeState, RuntimeServer, SharedSessionState};
 use crate::transport::{TransportSessionIo, write_payload};
 use mc_core::{ConnectionId, CoreCommand};
 use mc_plugin_api::codec::auth::{AuthMode, BedrockAuthResult};
@@ -21,13 +21,12 @@ impl RuntimeServer {
 
     async fn handle_bedrock_network_settings_request(
         &self,
-        connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
-        session: &mut SessionState,
+        shared_state: &SharedSessionState,
         current: &Arc<dyn mc_proto_common::ProtocolAdapter>,
         protocol_number: i32,
     ) -> Result<bool, RuntimeError> {
-        let topology = Arc::clone(&session.generation);
+        let topology = Arc::clone(&shared_state.read().await.generation);
         let Some(next_adapter) = topology.protocol_registry.resolve_route(
             TransportKind::Udp,
             Edition::Be,
@@ -43,10 +42,12 @@ impl RuntimeServer {
         let gameplay = self
             .resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)
             .await?;
-        session.adapter = Some(next_adapter.clone());
-        session.gameplay = Some(gameplay);
-        Self::refresh_session_capabilities(session);
-        self.sync_session_handle(connection_id, session).await;
+        {
+            let mut session = shared_state.write().await;
+            session.adapter = Some(next_adapter.clone());
+            session.gameplay = Some(gameplay);
+            Self::refresh_session_capabilities(&mut session);
+        }
 
         let response = next_adapter.encode_network_settings(1)?;
         write_payload(transport_io, next_adapter.wire_codec(), &response).await?;
@@ -57,7 +58,7 @@ impl RuntimeServer {
     async fn handle_bedrock_login(
         &self,
         connection_id: ConnectionId,
-        session: &mut SessionState,
+        shared_state: &SharedSessionState,
         current: &Arc<dyn mc_proto_common::ProtocolAdapter>,
         login: LoginRequest,
     ) -> Result<bool, RuntimeError> {
@@ -75,7 +76,7 @@ impl RuntimeServer {
         {
             Arc::clone(current)
         } else {
-            let topology = Arc::clone(&session.generation);
+            let topology = Arc::clone(&shared_state.read().await.generation);
             topology
                 .protocol_registry
                 .resolve_route(TransportKind::Udp, Edition::Be, protocol_number)
@@ -88,10 +89,12 @@ impl RuntimeServer {
         let gameplay = self
             .resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)
             .await?;
-        session.adapter = Some(next_adapter);
-        session.gameplay = Some(gameplay);
-        Self::refresh_session_capabilities(session);
-        self.sync_session_handle(connection_id, session).await;
+        {
+            let mut session = shared_state.write().await;
+            session.adapter = Some(next_adapter);
+            session.gameplay = Some(gameplay);
+            Self::refresh_session_capabilities(&mut session);
+        }
 
         let auth_profile = self.resolve_bedrock_auth_profile().await?;
         let authenticated = match auth_profile.mode()? {
@@ -105,7 +108,7 @@ impl RuntimeServer {
                 )));
             }
         };
-        self.apply_bedrock_login(connection_id, session, authenticated, display_name)
+        self.apply_bedrock_login(connection_id, shared_state, authenticated, display_name)
             .await?;
         Ok(false)
     }
@@ -114,12 +117,12 @@ impl RuntimeServer {
         &self,
         connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
-        session: &mut SessionState,
+        shared_state: &SharedSessionState,
         current: &Arc<dyn mc_proto_common::ProtocolAdapter>,
         username: String,
     ) -> Result<bool, RuntimeError> {
         if self.reload.static_config().bootstrap.online_mode {
-            if session.login_challenge.is_some() {
+            if shared_state.read().await.login_challenge.is_some() {
                 return Self::disconnect_login(
                     transport_io,
                     current,
@@ -140,7 +143,7 @@ impl RuntimeServer {
                 &online_auth_keys.public_key_der,
                 &verify_token,
             )?;
-            session.login_challenge = Some(LoginChallengeState {
+            shared_state.write().await.login_challenge = Some(LoginChallengeState {
                 username,
                 verify_token,
                 auth_generation,
@@ -151,13 +154,14 @@ impl RuntimeServer {
 
         let auth_profile = self.selection.auth_profile().await;
         let authenticated = auth_profile.authenticate_offline(&username)?;
+        let context = Self::read_session_runtime_context(shared_state).await;
         self.apply_command(
             CoreCommand::LoginStart {
                 connection_id,
                 username,
                 player_id: authenticated,
             },
-            Some(session),
+            Some(context),
         )
         .await?;
         Ok(false)
@@ -167,7 +171,7 @@ impl RuntimeServer {
         &self,
         connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
-        session: &mut SessionState,
+        shared_state: &SharedSessionState,
         current: &Arc<dyn mc_proto_common::ProtocolAdapter>,
         shared_secret_encrypted: Vec<u8>,
         verify_token_encrypted: Vec<u8>,
@@ -181,7 +185,7 @@ impl RuntimeServer {
             .await;
         }
 
-        let Some(challenge) = session.login_challenge.take() else {
+        let Some(challenge) = shared_state.write().await.login_challenge.take() else {
             return Self::disconnect_login(transport_io, current, "Unexpected encryption response")
                 .await;
         };
@@ -248,13 +252,14 @@ impl RuntimeServer {
             }
             Err(error) => return Err(RuntimeError::Join(error)),
         };
+        let context = Self::read_session_runtime_context(shared_state).await;
         self.apply_command(
             CoreCommand::LoginStart {
                 connection_id,
                 username: login_username,
                 player_id: authenticated,
             },
-            Some(session),
+            Some(context),
         )
         .await?;
         Ok(false)
@@ -264,21 +269,23 @@ impl RuntimeServer {
         &self,
         connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
-        session: &mut SessionState,
+        shared_state: &SharedSessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let current = Arc::clone(
-            session
-                .adapter
-                .as_ref()
-                .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?,
-        );
+        let current = {
+            let session = shared_state.read().await;
+            Arc::clone(
+                session
+                    .adapter
+                    .as_ref()
+                    .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?,
+            )
+        };
         match current.decode_login(frame)? {
             LoginRequest::BedrockNetworkSettingsRequest { protocol_number } => {
                 self.handle_bedrock_network_settings_request(
-                    connection_id,
                     transport_io,
-                    session,
+                    shared_state,
                     &current,
                     protocol_number,
                 )
@@ -292,7 +299,7 @@ impl RuntimeServer {
             } => {
                 self.handle_bedrock_login(
                     connection_id,
-                    session,
+                    shared_state,
                     &current,
                     LoginRequest::BedrockLogin {
                         protocol_number,
@@ -304,8 +311,14 @@ impl RuntimeServer {
                 .await
             }
             LoginRequest::LoginStart { username } => {
-                self.handle_login_start(connection_id, transport_io, session, &current, username)
-                    .await
+                self.handle_login_start(
+                    connection_id,
+                    transport_io,
+                    shared_state,
+                    &current,
+                    username,
+                )
+                .await
             }
             LoginRequest::EncryptionResponse {
                 shared_secret_encrypted,
@@ -314,7 +327,7 @@ impl RuntimeServer {
                 self.handle_encryption_response(
                     connection_id,
                     transport_io,
-                    session,
+                    shared_state,
                     &current,
                     shared_secret_encrypted,
                     verify_token_encrypted,
@@ -327,10 +340,11 @@ impl RuntimeServer {
     async fn apply_bedrock_login(
         &self,
         connection_id: ConnectionId,
-        session: &SessionState,
+        shared_state: &SharedSessionState,
         authenticated: BedrockAuthResult,
         fallback_display_name: String,
     ) -> Result<(), RuntimeError> {
+        let context = Self::read_session_runtime_context(shared_state).await;
         self.apply_command(
             CoreCommand::LoginStart {
                 connection_id,
@@ -341,7 +355,7 @@ impl RuntimeServer {
                 },
                 player_id: authenticated.player_id,
             },
-            Some(session),
+            Some(context),
         )
         .await
     }

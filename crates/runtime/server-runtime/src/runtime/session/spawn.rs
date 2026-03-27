@@ -4,7 +4,7 @@ use crate::runtime::{
     RuntimeUpgradeLoginChallenge, RuntimeUpgradePhase, RuntimeUpgradeQueuedMessage,
     RuntimeUpgradeRole, RuntimeUpgradeSessionHandle, RuntimeUpgradeSessionState,
     RuntimeUpgradeStateView, SESSION_OUTBOUND_QUEUE_CAPACITY, SessionControl, SessionMessage,
-    SessionState,
+    SessionState, SharedSessionState,
 };
 use crate::transport::{AcceptedTransportSession, TransportSessionIo, default_wire_codec};
 use bytes::BytesMut;
@@ -137,9 +137,10 @@ impl RuntimeServer {
         for message in queued_messages {
             let _ = tx.try_send(message);
         }
+        let shared_state: SharedSessionState = Arc::new(tokio::sync::RwLock::new(session));
         self.sessions.observe_connection_id(connection_id);
         self.sessions
-            .insert(connection_id, tx, control_tx, &session)
+            .insert(connection_id, tx, control_tx, Arc::clone(&shared_state))
             .await;
 
         let server = Arc::clone(self);
@@ -151,7 +152,7 @@ impl RuntimeServer {
                         .run_session(
                             connection_id,
                             transport_session.io,
-                            session,
+                            shared_state,
                             initial_read_buffer,
                             rx,
                             control_rx,
@@ -166,19 +167,23 @@ impl RuntimeServer {
         &self,
         connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
-        session: &mut SessionState,
+        shared_state: &SharedSessionState,
         read_buffer: &mut BytesMut,
     ) -> Result<bool, RuntimeError> {
         loop {
-            let codec: &dyn WireCodec = match session.adapter.as_ref() {
+            let (adapter, transport) = {
+                let session = shared_state.read().await;
+                (session.adapter.clone(), session.transport)
+            };
+            let codec: &dyn WireCodec = match adapter.as_ref() {
                 Some(current) => current.wire_codec(),
-                None => default_wire_codec(session.transport)?,
+                None => default_wire_codec(transport)?,
             };
             let Some(frame) = codec.try_decode_frame(read_buffer)? else {
                 break;
             };
             let should_close = self
-                .handle_incoming_frame(connection_id, transport_io, session, frame)
+                .handle_incoming_frame(connection_id, transport_io, shared_state, frame)
                 .await?;
             if should_close {
                 return Ok(true);
@@ -191,7 +196,7 @@ impl RuntimeServer {
         self: Arc<Self>,
         connection_id: ConnectionId,
         transport_io: TransportSessionIo,
-        mut session: SessionState,
+        shared_state: SharedSessionState,
         mut read_buffer: BytesMut,
         mut rx: mpsc::Receiver<SessionMessage>,
         mut control_rx: mpsc::Receiver<SessionControl>,
@@ -216,7 +221,7 @@ impl RuntimeServer {
                         .handle_session_control(
                             connection_id,
                             &mut transport_io,
-                            &mut session,
+                            &shared_state,
                             &read_buffer,
                             &mut rx,
                             control,
@@ -241,7 +246,7 @@ impl RuntimeServer {
                             .handle_session_control(
                                 connection_id,
                                 &mut transport_io,
-                                &mut session,
+                                &shared_state,
                                 &read_buffer,
                                 &mut rx,
                                 control,
@@ -269,7 +274,7 @@ impl RuntimeServer {
                             let should_exit = self.handle_session_control(
                                 connection_id,
                                 &mut transport_io,
-                                &mut session,
+                                &shared_state,
                                 &read_buffer,
                                 &mut rx,
                                 control,
@@ -293,7 +298,7 @@ impl RuntimeServer {
                                 transport_io
                                     .as_mut()
                                     .expect("transport should exist while session is active"),
-                                &mut session,
+                                &shared_state,
                                 &mut read_buffer,
                             )
                             .await
@@ -311,7 +316,7 @@ impl RuntimeServer {
                         let should_exit = self.handle_session_control(
                             connection_id,
                             &mut transport_io,
-                            &mut session,
+                            &shared_state,
                             &read_buffer,
                             &mut rx,
                             control,
@@ -351,7 +356,7 @@ impl RuntimeServer {
                                 transport_io
                                     .as_mut()
                                     .expect("transport should exist while session is active"),
-                                &mut session,
+                                &shared_state,
                                 message,
                             )
                             .await?;
@@ -369,7 +374,7 @@ impl RuntimeServer {
             self.sessions.remove(connection_id).await;
             Ok(())
         } else {
-            self.unregister_session(connection_id, &session).await
+            self.unregister_session(connection_id, &shared_state).await
         };
         match (result, cleanup) {
             (Ok(()), Ok(())) => Ok(()),
@@ -392,7 +397,7 @@ impl RuntimeServer {
         &self,
         connection_id: ConnectionId,
         transport_io: &mut Option<TransportSessionIo>,
-        session: &mut SessionState,
+        shared_state: &SharedSessionState,
         read_buffer: &BytesMut,
         rx: &mut mpsc::Receiver<SessionMessage>,
         control: SessionControl,
@@ -407,7 +412,7 @@ impl RuntimeServer {
                         transport_io
                             .as_mut()
                             .expect("transport should exist while session is active"),
-                        session,
+                        shared_state,
                         SessionMessage::Terminate { reason },
                     )
                     .await?;
@@ -440,7 +445,7 @@ impl RuntimeServer {
                         transport_io
                             .as_mut()
                             .expect("transport should exist while session is active"),
-                        session,
+                        shared_state,
                         instruction,
                     )
                     .await;
@@ -454,7 +459,12 @@ impl RuntimeServer {
                     return Ok(false);
                 }
                 let prepared = self
-                    .prepare_session_export_for_upgrade(connection_id, session, read_buffer, rx)
+                    .prepare_session_export_for_upgrade(
+                        connection_id,
+                        shared_state,
+                        read_buffer,
+                        rx,
+                    )
                     .await;
                 let result = prepared.map(|mut state| {
                     let exported_transport = transport_io
@@ -482,36 +492,40 @@ impl RuntimeServer {
     async fn prepare_session_export_for_upgrade(
         &self,
         connection_id: ConnectionId,
-        session: &SessionState,
+        shared_state: &SharedSessionState,
         read_buffer: &BytesMut,
         rx: &mut mpsc::Receiver<SessionMessage>,
     ) -> Result<RuntimeUpgradeSessionState, RuntimeError> {
-        let protocol_session_blob = match session.adapter.as_ref() {
+        let (view, context, adapter, login_challenge) = {
+            let session = shared_state.read().await;
+            (
+                Self::session_view(&session),
+                Self::session_runtime_context(&session),
+                session.adapter.clone(),
+                session
+                    .login_challenge
+                    .as_ref()
+                    .map(|challenge| RuntimeUpgradeLoginChallenge {
+                        username: challenge.username.clone(),
+                        verify_token: challenge.verify_token,
+                    }),
+            )
+        };
+        let protocol_session_blob = match adapter.as_ref() {
             Some(adapter) => Some(
                 adapter
-                    .export_session_state(&Self::protocol_session_snapshot(connection_id, session))
+                    .export_session_state(&Self::protocol_session_snapshot(connection_id, &view))
                     .map_err(|error| RuntimeError::Config(error.to_string()))?,
             ),
             None => None,
         };
         let gameplay_session_blob = match (
-            session.gameplay.as_ref(),
-            session.session_capabilities.as_ref(),
-            session.player_id,
+            context.gameplay.as_ref(),
+            Self::gameplay_session_snapshot(&view, &context),
         ) {
-            (Some(gameplay), Some(session_capabilities), Some(player_id)) => Some(
+            (Some(gameplay), Some(snapshot)) => Some(
                 gameplay
-                    .export_session_state(
-                        &mc_plugin_api::codec::gameplay::GameplaySessionSnapshot {
-                            phase: session.phase,
-                            player_id: Some(player_id),
-                            entity_id: session.entity_id,
-                            protocol: session_capabilities.protocol.clone(),
-                            gameplay_profile: session_capabilities.gameplay_profile.clone(),
-                            protocol_generation: session_capabilities.protocol_generation,
-                            gameplay_generation: session_capabilities.gameplay_generation,
-                        },
-                    )
+                    .export_session_state(&snapshot)
                     .map_err(|error| RuntimeError::Config(error.to_string()))?,
             ),
             _ => None,
@@ -529,33 +543,16 @@ impl RuntimeServer {
         }
         Ok(RuntimeUpgradeSessionState {
             connection_id,
-            generation_id: session.generation.generation_id,
-            transport: session.transport,
-            phase: session.phase,
-            adapter_id: session
-                .adapter
-                .as_ref()
-                .map(|adapter| adapter.descriptor().adapter_id),
-            player_id: session.player_id,
-            entity_id: session.entity_id,
-            gameplay_profile: session
-                .session_capabilities
-                .as_ref()
-                .map(|session_capabilities| session_capabilities.gameplay_profile.clone()),
-            protocol_generation: session
-                .session_capabilities
-                .as_ref()
-                .and_then(|session_capabilities| session_capabilities.protocol_generation),
-            gameplay_generation: session
-                .session_capabilities
-                .as_ref()
-                .and_then(|session_capabilities| session_capabilities.gameplay_generation),
-            login_challenge: session.login_challenge.as_ref().map(|challenge| {
-                RuntimeUpgradeLoginChallenge {
-                    username: challenge.username.clone(),
-                    verify_token: challenge.verify_token,
-                }
-            }),
+            generation_id: view.generation_id,
+            transport: view.transport,
+            phase: view.phase,
+            adapter_id: view.adapter_id,
+            player_id: view.player_id,
+            entity_id: view.entity_id,
+            gameplay_profile: view.gameplay_profile,
+            protocol_generation: view.protocol_generation,
+            gameplay_generation: view.gameplay_generation,
+            login_challenge,
             read_buffer: read_buffer.to_vec(),
             queued_messages,
             encryption: None,

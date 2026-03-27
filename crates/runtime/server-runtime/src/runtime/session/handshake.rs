@@ -1,5 +1,5 @@
 use crate::RuntimeError;
-use crate::runtime::{RuntimeServer, SessionState};
+use crate::runtime::{RuntimeServer, SharedSessionState};
 use crate::transport::{TransportSessionIo, write_payload};
 use mc_core::ConnectionId;
 use mc_proto_common::{ConnectionPhase, HandshakeNextState, ServerListStatus, StatusRequest};
@@ -10,38 +10,43 @@ impl RuntimeServer {
         &self,
         connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
-        session: &mut SessionState,
+        shared_state: &SharedSessionState,
         frame: Vec<u8>,
     ) -> Result<bool, RuntimeError> {
-        Self::refresh_session_capabilities(session);
-        match session.phase {
+        let phase = shared_state.read().await.phase;
+        match phase {
             ConnectionPhase::Handshaking => {
-                self.handle_handshake_frame(connection_id, transport_io, session, &frame)
+                self.handle_handshake_frame(transport_io, shared_state, &frame)
                     .await
             }
             ConnectionPhase::Status => {
-                self.handle_status_frame(transport_io, session, &frame)
+                self.handle_status_frame(transport_io, shared_state, &frame)
                     .await
             }
             ConnectionPhase::Login => {
-                self.handle_login_frame(connection_id, transport_io, session, &frame)
+                self.handle_login_frame(connection_id, transport_io, shared_state, &frame)
                     .await
             }
-            ConnectionPhase::Play => self.handle_play_frame(connection_id, session, &frame).await,
+            ConnectionPhase::Play => {
+                self.handle_play_frame(connection_id, shared_state, &frame)
+                    .await
+            }
         }
     }
 
     async fn handle_handshake_frame(
         &self,
-        connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
-        session: &mut SessionState,
+        shared_state: &SharedSessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let topology = Arc::clone(&session.generation);
+        let (topology, transport) = {
+            let session = shared_state.read().await;
+            (Arc::clone(&session.generation), session.transport)
+        };
         let Some(intent) = topology
             .protocol_registry
-            .route_handshake(session.transport, frame)?
+            .route_handshake(transport, frame)?
         else {
             return Ok(true);
         };
@@ -50,18 +55,18 @@ impl RuntimeServer {
             HandshakeNextState::Login => ConnectionPhase::Login,
         };
         if let Some(next_adapter) = topology.protocol_registry.resolve_route(
-            session.transport,
+            transport,
             intent.edition,
             intent.protocol_number,
         ) {
             let gameplay = self
                 .resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)
                 .await?;
+            let mut session = shared_state.write().await;
             session.adapter = Some(next_adapter);
             session.gameplay = Some(gameplay);
             session.phase = next_phase;
-            Self::refresh_session_capabilities(session);
-            self.sync_session_handle(connection_id, session).await;
+            Self::refresh_session_capabilities(&mut session);
             return Ok(false);
         }
 
@@ -72,11 +77,11 @@ impl RuntimeServer {
                 let gameplay = self
                     .resolve_gameplay_for_adapter(&fallback.descriptor().adapter_id)
                     .await?;
+                let mut session = shared_state.write().await;
                 session.adapter = Some(fallback);
                 session.gameplay = Some(gameplay);
                 session.phase = ConnectionPhase::Status;
-                Self::refresh_session_capabilities(session);
-                self.sync_session_handle(connection_id, session).await;
+                Self::refresh_session_capabilities(&mut session);
                 Ok(false)
             }
             ConnectionPhase::Login => {
@@ -97,14 +102,17 @@ impl RuntimeServer {
     async fn handle_status_frame(
         &self,
         transport_io: &mut TransportSessionIo,
-        session: &SessionState,
+        shared_state: &SharedSessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let topology = Arc::clone(&session.generation);
-        let current = session
-            .adapter
-            .as_ref()
-            .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
+        let (topology, current) = {
+            let session = shared_state.read().await;
+            let current = session
+                .adapter
+                .clone()
+                .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
+            (Arc::clone(&session.generation), current)
+        };
         match current.decode_status(frame)? {
             StatusRequest::Query => {
                 let summary = self.player_summary().await;
