@@ -28,7 +28,7 @@
 - `RuntimeKernel`
   単なる `ServerCore` owner ではなく、reloadable `core runtime` owner として `ServerCore`、kernel revision、snapshot-isolated gameplay journal commit、tick / save、dirty flag、world_dir、`core` migration の export / materialize / reattach / swap / rollback を持ちます。
 - `SessionRegistry`
-  live session handle、accepted queue、connection id、session task を持ちます。
+  live session handle、accepted queue、connection id、session task、routing-only の pending login route を持ちます。
 - `ReloadCoordinator`
   config source、static reload boundary、reload host、consistency gate、shutdown request を持ちます。
 
@@ -131,6 +131,11 @@ play phase では次の流れになります。
 4. gameplay plugin は snapshot-isolated な `GameplayTransaction` 上で read / write し、journal を返す
 5. runtime / `mc-core` が live core に対して journal を validate/apply し、成功した commit だけ canonical `CoreEvent` を生成する
 6. protocol plugin が `CoreEvent` を wire packet 群へ encode
+
+`CoreEvent::LoginAccepted` は core 側の accept pointですが、shared session state の authoritative
+な `Login -> Play` 遷移は session task が login success packet を実際に write できたあとに commit
+します。その短いあいだだけ `SessionRegistry` の pending login route が `EventTarget::Player`
+配送を bridge します。
 
 型の細かい流れは [`core-command-event-flow.md`](core-command-event-flow.md) を参照してください。
 

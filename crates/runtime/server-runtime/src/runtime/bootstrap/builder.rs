@@ -84,6 +84,8 @@ pub(crate) async fn boot_server(
         fail_nth_reattach_send: std::sync::atomic::AtomicUsize::new(0),
         #[cfg(test)]
         reload_stage_pause_hook: tokio::sync::Mutex::new(None),
+        #[cfg(test)]
+        login_accept_commit_pause_hook: tokio::sync::Mutex::new(None),
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -208,6 +210,8 @@ pub(crate) async fn boot_server_from_upgrade(
         fail_nth_reattach_send: std::sync::atomic::AtomicUsize::new(0),
         #[cfg(test)]
         reload_stage_pause_hook: tokio::sync::Mutex::new(None),
+        #[cfg(test)]
+        login_accept_commit_pause_hook: tokio::sync::Mutex::new(None),
     });
     server.reload.set_upgrade_state(
         RuntimeUpgradeRole::Child,

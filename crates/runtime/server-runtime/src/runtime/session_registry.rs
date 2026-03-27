@@ -19,6 +19,7 @@ static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) struct SessionRegistry {
     sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
+    pending_login_routes: Mutex<HashMap<ConnectionId, PlayerId>>,
     session_tasks: Mutex<JoinSet<(ConnectionId, Result<(), RuntimeError>)>>,
     queued_accepts: QueuedAcceptTracker,
     accepted_tx: mpsc::Sender<AcceptedGenerationSession>,
@@ -28,6 +29,7 @@ impl SessionRegistry {
     pub(crate) fn new(accepted_tx: mpsc::Sender<AcceptedGenerationSession>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            pending_login_routes: Mutex::new(HashMap::new()),
             session_tasks: Mutex::new(JoinSet::new()),
             queued_accepts: QueuedAcceptTracker::default(),
             accepted_tx,
@@ -79,25 +81,30 @@ impl SessionRegistry {
         );
     }
 
-    pub(crate) async fn record_login_acceptance(
+    pub(crate) async fn record_pending_login_route(
         &self,
         connection_id: ConnectionId,
         player_id: PlayerId,
     ) {
-        let shared_state = {
-            self.sessions
+        let sessions = self.sessions.lock().await;
+        if sessions.contains_key(&connection_id) {
+            self.pending_login_routes
                 .lock()
                 .await
-                .get(&connection_id)
-                .map(|handle| handle.shared_state.clone())
-        };
-        if let Some(shared_state) = shared_state {
-            shared_state.write().await.player_id = Some(player_id);
+                .insert(connection_id, player_id);
         }
+    }
+
+    pub(crate) async fn clear_pending_login_route(&self, connection_id: ConnectionId) {
+        self.pending_login_routes
+            .lock()
+            .await
+            .remove(&connection_id);
     }
 
     pub(crate) async fn remove(&self, connection_id: ConnectionId) {
         self.sessions.lock().await.remove(&connection_id);
+        self.clear_pending_login_route(connection_id).await;
     }
 
     async fn session_entries(&self) -> Vec<(ConnectionId, SessionHandle)> {
@@ -107,6 +114,10 @@ impl SessionRegistry {
             .iter()
             .map(|(connection_id, handle)| (*connection_id, handle.clone()))
             .collect()
+    }
+
+    async fn pending_login_routes_snapshot(&self) -> HashMap<ConnectionId, PlayerId> {
+        self.pending_login_routes.lock().await.clone()
     }
 
     pub(crate) async fn recipients_for_target(&self, target: EventTarget) -> Vec<SessionRecipient> {
@@ -124,8 +135,12 @@ impl SessionRegistry {
                 .collect(),
             EventTarget::Player(target_player_id) => {
                 let mut recipients = Vec::new();
-                for (_, handle) in self.session_entries().await {
-                    if handle.shared_state.read().await.player_id == Some(target_player_id) {
+                let pending_login_routes = self.pending_login_routes_snapshot().await;
+                for (connection_id, handle) in self.session_entries().await {
+                    let committed_player_id = handle.shared_state.read().await.player_id;
+                    let routed_player_id = committed_player_id
+                        .or_else(|| pending_login_routes.get(&connection_id).copied());
+                    if routed_player_id == Some(target_player_id) {
                         recipients.push(SessionRecipient {
                             tx: handle.tx,
                             control_tx: handle.control_tx,
@@ -136,9 +151,12 @@ impl SessionRegistry {
             }
             EventTarget::EveryoneExcept(excluded_player_id) => {
                 let mut recipients = Vec::new();
-                for (_, handle) in self.session_entries().await {
-                    let player_id = handle.shared_state.read().await.player_id;
-                    if player_id.is_some() && player_id != Some(excluded_player_id) {
+                let pending_login_routes = self.pending_login_routes_snapshot().await;
+                for (connection_id, handle) in self.session_entries().await {
+                    let committed_player_id = handle.shared_state.read().await.player_id;
+                    let routed_player_id = committed_player_id
+                        .or_else(|| pending_login_routes.get(&connection_id).copied());
+                    if routed_player_id.is_some() && routed_player_id != Some(excluded_player_id) {
                         recipients.push(SessionRecipient {
                             tx: handle.tx,
                             control_tx: handle.control_tx,
@@ -263,6 +281,11 @@ impl SessionRegistry {
     #[cfg(test)]
     pub(crate) async fn is_empty(&self) -> bool {
         self.sessions.lock().await.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn pending_login_route_count_for_test(&self) -> usize {
+        self.pending_login_routes.lock().await.len()
     }
 
     pub(crate) async fn live_generation_ids(&self) -> HashSet<GenerationId> {

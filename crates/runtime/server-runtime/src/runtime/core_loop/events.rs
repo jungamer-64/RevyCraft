@@ -145,7 +145,7 @@ impl RuntimeServer {
         Ok(())
     }
 
-    async fn dispatch_events(&self, events: Vec<TargetedEvent>) {
+    pub(in crate::runtime) async fn dispatch_events(&self, events: Vec<TargetedEvent>) {
         for event in events {
             let TargetedEvent {
                 target,
@@ -157,7 +157,7 @@ impl RuntimeServer {
             ) = (&target, &payload)
             {
                 self.sessions
-                    .record_login_acceptance(*connection_id, *player_id)
+                    .record_pending_login_route(*connection_id, *player_id)
                     .await;
             }
             let payload = std::sync::Arc::new(payload);

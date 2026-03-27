@@ -1,6 +1,8 @@
 use super::*;
+use mc_core::{CoreEvent, EventTarget, PlayerId, TargetedEvent};
 use mc_proto_common::ConnectionPhase;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use uuid::Uuid;
 
 fn ipv6_loopback_available() -> bool {
     std::net::TcpListener::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0)).is_ok()
@@ -523,6 +525,273 @@ async fn session_status_tracks_handshake_phase_without_registry_sync() -> Result
     assert_eq!(sessions[0].entity_id, None);
 
     drop(stream);
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn login_accept_commit_is_owned_by_session_task_until_login_success_commits()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        loopback_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+    let mut pause = server
+        .runtime
+        .arm_login_accept_commit_pause_for_test()
+        .await;
+
+    let login = tokio::spawn(async move {
+        connect_and_login_java_client_until(
+            addr,
+            &MinecraftWireCodec,
+            TestJavaProtocol::Je5,
+            "pending-login",
+            TestJavaPacket::LoginSuccess,
+        )
+        .await
+    });
+
+    pause.wait_until_reached().await;
+    let (mut stream, mut buffer, _) = login.await.map_err(RuntimeError::from)??;
+    assert_eq!(
+        server
+            .runtime
+            .sessions
+            .pending_login_route_count_for_test()
+            .await,
+        1
+    );
+
+    let sessions = server.session_status().await;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].phase, ConnectionPhase::Login);
+    assert_eq!(sessions[0].player_id, None);
+    assert_eq!(sessions[0].entity_id, None);
+
+    let player_id = server
+        .runtime
+        .kernel
+        .export_core_runtime_state()
+        .await
+        .blob
+        .online_players
+        .keys()
+        .copied()
+        .next()
+        .expect("login should create one online player before session commit");
+
+    server
+        .runtime
+        .dispatch_events(vec![TargetedEvent {
+            target: EventTarget::Player(player_id),
+            event: CoreEvent::SelectedHotbarSlotChanged { slot: 4 },
+        }])
+        .await;
+
+    assert_no_java_packet(
+        &mut stream,
+        &MinecraftWireCodec,
+        &mut buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+
+    pause.release();
+
+    let mut observed_slots = Vec::new();
+    for _ in 0..2 {
+        let packet = read_until_java_packet(
+            &mut stream,
+            &MinecraftWireCodec,
+            &mut buffer,
+            TestJavaProtocol::Je5,
+            TestJavaPacket::HeldItemChange,
+        )
+        .await?;
+        observed_slots.push(held_item_from_packet_for_protocol(
+            TestJavaProtocol::Je5,
+            &packet,
+        )?);
+        if observed_slots.contains(&4) {
+            break;
+        }
+    }
+    assert!(
+        observed_slots.contains(&4),
+        "pending player-targeted event should flush after login commit, got {observed_slots:?}"
+    );
+
+    let sessions = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let sessions = server.session_status().await;
+            if sessions.len() == 1
+                && sessions[0].phase == ConnectionPhase::Play
+                && sessions[0].player_id == Some(player_id)
+                && sessions[0].entity_id.is_some()
+            {
+                break sessions;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        RuntimeError::Config("play phase did not become visible after login commit".into())
+    })?;
+
+    assert_eq!(sessions[0].player_id, Some(player_id));
+    assert_eq!(
+        server
+            .runtime
+            .sessions
+            .pending_login_route_count_for_test()
+            .await,
+        0
+    );
+
+    drop(stream);
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn pending_login_routes_do_not_duplicate_player_or_broadcast_recipients()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        loopback_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+
+    let (stream, _buffer, _) = connect_and_login_java_client_until(
+        addr,
+        &MinecraftWireCodec,
+        TestJavaProtocol::Je5,
+        "dedup",
+        TestJavaPacket::ChunkData,
+    )
+    .await?;
+
+    let sessions = server.session_status().await;
+    assert_eq!(sessions.len(), 1);
+    let connection_id = sessions[0].connection_id;
+    let player_id = sessions[0]
+        .player_id
+        .expect("committed session should expose a player id");
+
+    server
+        .runtime
+        .sessions
+        .record_pending_login_route(connection_id, player_id)
+        .await;
+
+    assert_eq!(
+        server
+            .runtime
+            .sessions
+            .pending_login_route_count_for_test()
+            .await,
+        1
+    );
+
+    let player_recipients = server
+        .runtime
+        .sessions
+        .recipients_for_target(EventTarget::Player(player_id))
+        .await;
+    assert_eq!(player_recipients.len(), 1);
+
+    let everyone_recipients = server
+        .runtime
+        .sessions
+        .recipients_for_target(EventTarget::EveryoneExcept(PlayerId(Uuid::nil())))
+        .await;
+    assert_eq!(everyone_recipients.len(), 1);
+
+    let excluded_recipients = server
+        .runtime
+        .sessions
+        .recipients_for_target(EventTarget::EveryoneExcept(player_id))
+        .await;
+    assert!(excluded_recipients.is_empty());
+
+    server
+        .runtime
+        .sessions
+        .clear_pending_login_route(connection_id)
+        .await;
+
+    drop(stream);
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn pending_login_route_is_cleared_when_session_closes() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        loopback_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+    let addr = listener_addr(&server);
+
+    let (stream, _buffer, _) = connect_and_login_java_client_until(
+        addr,
+        &MinecraftWireCodec,
+        TestJavaProtocol::Je5,
+        "cleanup",
+        TestJavaPacket::ChunkData,
+    )
+    .await?;
+
+    let sessions = server.session_status().await;
+    assert_eq!(sessions.len(), 1);
+    let connection_id = sessions[0].connection_id;
+    let player_id = sessions[0]
+        .player_id
+        .expect("committed session should expose a player id");
+
+    server
+        .runtime
+        .sessions
+        .record_pending_login_route(connection_id, player_id)
+        .await;
+    assert_eq!(
+        server
+            .runtime
+            .sessions
+            .pending_login_route_count_for_test()
+            .await,
+        1
+    );
+
+    drop(stream);
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if server.session_status().await.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| RuntimeError::Config("session did not close after dropping client".into()))?;
+
+    assert_eq!(
+        server
+            .runtime
+            .sessions
+            .pending_login_route_count_for_test()
+            .await,
+        0
+    );
+
     server.shutdown().await
 }
 

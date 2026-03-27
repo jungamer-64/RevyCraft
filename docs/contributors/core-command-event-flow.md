@@ -96,6 +96,12 @@ runtime 側の本体は [`../../crates/runtime/server-runtime/src/runtime/kernel
 
 この順番を追いたいときは [`../../crates/core/mc-core/src/core/transaction.rs`](../../crates/core/mc-core/src/core/transaction.rs) を読むのが最短です。
 
+ただし `LoginAccepted` は core の accept pointであって、その場で shared session state を `Play`
+へ進めるわけではありません。runtime は `LoginAccepted` をまず connection-targeted event として
+queue に積み、session task が login success packet を write できた時点で
+`player_id / entity_id / phase / session_capabilities` を commit します。commit 前の短い window は
+`SessionRegistry` の pending login route が `EventTarget::Player` 配送だけを bridge します。
+
 ## runtime 側の受け渡し
 
 core の前後で見るべき runtime 側の入口は次です。

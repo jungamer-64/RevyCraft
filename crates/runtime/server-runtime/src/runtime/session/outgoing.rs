@@ -98,11 +98,15 @@ impl RuntimeServer {
                         entity_id: accepted_entity_id,
                         ..
                     } => {
+                        #[cfg(test)]
+                        self.maybe_pause_before_login_accept_commit_for_test().await;
                         let mut session = shared_state.write().await;
                         session.player_id = Some(*accepted_player_id);
                         session.entity_id = Some(*accepted_entity_id);
                         session.phase = ConnectionPhase::Play;
                         Self::refresh_session_capabilities(&mut session);
+                        drop(session);
+                        self.sessions.clear_pending_login_route(connection_id).await;
                     }
                     CoreEvent::Disconnect { .. } => return Ok(true),
                     _ => {}
