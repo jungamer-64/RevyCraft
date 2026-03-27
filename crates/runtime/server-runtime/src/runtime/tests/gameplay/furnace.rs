@@ -10,6 +10,7 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
     .await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
+    let furnace_packet_timeout = Duration::from_secs(10);
 
     let (mut stream, mut buffer, _) = login_modern_1_12(addr, "alpha").await?;
     write_packet(
@@ -113,14 +114,14 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
         assert_eq!(
             decode_window_property(
                 TestJavaProtocol::Je340,
-                &read_until_window_property(
+                &read_until_window_property_with_timeout(
                     &mut stream,
                     &codec,
                     &mut buffer,
                     TestJavaProtocol::Je340,
                     1,
                     property_id,
-                    16,
+                    furnace_packet_timeout,
                 )
                 .await?,
             )?,
@@ -210,17 +211,19 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
 
     server.runtime.tick().await?;
 
+    // Parallel suite runs can delay outbound flushes, so this test gives the furnace transcript a
+    // larger deadline while still asserting the same property and slot sequence.
     assert_eq!(
         decode_window_property(
             TestJavaProtocol::Je340,
-            &read_until_window_property(
+            &read_until_window_property_with_timeout(
                 &mut stream,
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
                 1,
                 0,
-                16,
+                furnace_packet_timeout,
             )
             .await?,
         )?,
@@ -229,14 +232,14 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
     assert_eq!(
         decode_window_property(
             TestJavaProtocol::Je340,
-            &read_until_window_property(
+            &read_until_window_property_with_timeout(
                 &mut stream,
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
                 1,
                 1,
-                16,
+                furnace_packet_timeout,
             )
             .await?,
         )?,
@@ -245,14 +248,14 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
     assert_eq!(
         decode_window_property(
             TestJavaProtocol::Je340,
-            &read_until_window_property(
+            &read_until_window_property_with_timeout(
                 &mut stream,
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
                 1,
                 2,
-                16,
+                furnace_packet_timeout,
             )
             .await?,
         )?,
@@ -261,24 +264,24 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
 
     for _ in 2..200 {
         server.runtime.tick().await?;
-        let _ = read_until_window_property(
+        let _ = read_until_window_property_with_timeout(
             &mut stream,
             &codec,
             &mut buffer,
             TestJavaProtocol::Je340,
             1,
             0,
-            16,
+            furnace_packet_timeout,
         )
         .await?;
-        let _ = read_until_window_property(
+        let _ = read_until_window_property_with_timeout(
             &mut stream,
             &codec,
             &mut buffer,
             TestJavaProtocol::Je340,
             1,
             2,
-            16,
+            furnace_packet_timeout,
         )
         .await?;
     }
@@ -288,14 +291,14 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
     assert_eq!(
         decode_set_slot(
             TestJavaProtocol::Je340,
-            &read_until_set_slot(
+            &read_until_set_slot_with_timeout(
                 &mut stream,
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
                 1,
                 0,
-                16,
+                furnace_packet_timeout,
             )
             .await?,
         )?,
@@ -304,14 +307,14 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
     assert_eq!(
         decode_set_slot(
             TestJavaProtocol::Je340,
-            &read_until_set_slot(
+            &read_until_set_slot_with_timeout(
                 &mut stream,
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
                 1,
                 2,
-                16,
+                furnace_packet_timeout,
             )
             .await?,
         )?,

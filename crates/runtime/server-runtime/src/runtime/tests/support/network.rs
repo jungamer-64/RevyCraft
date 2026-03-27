@@ -107,6 +107,119 @@ pub(crate) async fn read_packet(
     }
 }
 
+enum PacketWaitObservation {
+    Matched,
+    Related(String),
+    Unrelated,
+}
+
+fn packet_wait_timeout_from_attempts(max_attempts: usize) -> Duration {
+    Duration::from_millis(250 * max_attempts.max(64) as u64)
+}
+
+fn packet_wait_timeout_error(target: &str, last_related: Option<&str>) -> RuntimeError {
+    RuntimeError::Config(match last_related {
+        Some(last_related) => format!(
+            "deadline expired waiting for {target}; no matching packet arrived before timeout; last related packet: {last_related}"
+        ),
+        None => format!(
+            "deadline expired waiting for {target}; no matching packet arrived before timeout"
+        ),
+    })
+}
+
+fn restore_preserved_packets(
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    packets: Vec<Vec<u8>>,
+) -> Result<(), RuntimeError> {
+    if packets.is_empty() {
+        return Ok(());
+    }
+    let mut restored = BytesMut::new();
+    for packet in packets {
+        restored.extend_from_slice(&codec.encode_frame(&packet)?);
+    }
+    let current = std::mem::take(buffer);
+    restored.extend_from_slice(&current);
+    *buffer = restored;
+    Ok(())
+}
+
+async fn read_until_matching_packet_until<F>(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    deadline: Instant,
+    target: &str,
+    preserve_related_packets: bool,
+    mut classify: F,
+) -> Result<Vec<u8>, RuntimeError>
+where
+    F: FnMut(&[u8]) -> PacketWaitObservation,
+{
+    let mut last_related = None;
+    let mut preserved_related_packets = Vec::new();
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            restore_preserved_packets(codec, buffer, preserved_related_packets)?;
+            return Err(packet_wait_timeout_error(target, last_related.as_deref()));
+        };
+        let packet = match tokio::time::timeout(remaining, read_packet(stream, codec, buffer)).await
+        {
+            Ok(Ok(packet)) => packet,
+            Ok(Err(error)) => {
+                restore_preserved_packets(codec, buffer, preserved_related_packets)?;
+                return Err(error);
+            }
+            Err(_) => {
+                restore_preserved_packets(codec, buffer, preserved_related_packets)?;
+                return Err(packet_wait_timeout_error(target, last_related.as_deref()));
+            }
+        };
+        match classify(&packet) {
+            PacketWaitObservation::Matched => {
+                restore_preserved_packets(codec, buffer, preserved_related_packets)?;
+                return Ok(packet);
+            }
+            PacketWaitObservation::Related(summary) => {
+                last_related = Some(summary);
+                if preserve_related_packets {
+                    preserved_related_packets.push(packet);
+                }
+            }
+            PacketWaitObservation::Unrelated => {}
+        }
+    }
+}
+
+async fn read_until_packet_id_with_timeout(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    wanted_packet_id: i32,
+    timeout: Duration,
+) -> Result<Vec<u8>, RuntimeError> {
+    let target = format!("packet id 0x{wanted_packet_id:02x}");
+    read_until_matching_packet_until(
+        stream,
+        codec,
+        buffer,
+        Instant::now() + timeout,
+        &target,
+        false,
+        |packet| {
+            let observed_packet_id = packet_id(packet);
+            if observed_packet_id == wanted_packet_id {
+                PacketWaitObservation::Matched
+            } else {
+                PacketWaitObservation::Related(format!("packet id 0x{observed_packet_id:02x}"))
+            }
+        },
+    )
+    .await
+}
+
 pub(crate) async fn read_until_packet_id(
     stream: &mut tokio::net::TcpStream,
     codec: &MinecraftWireCodec,
@@ -114,25 +227,14 @@ pub(crate) async fn read_until_packet_id(
     wanted_packet_id: i32,
     max_attempts: usize,
 ) -> Result<Vec<u8>, RuntimeError> {
-    let max_attempts = max_attempts.max(64);
-    for _ in 0..max_attempts {
-        let packet = tokio::time::timeout(
-            Duration::from_millis(250),
-            read_packet(stream, codec, buffer),
-        )
-        .await
-        .map_err(|_| {
-            RuntimeError::Config(format!(
-                "timed out waiting for packet id 0x{wanted_packet_id:02x}"
-            ))
-        })??;
-        if packet_id(&packet) == wanted_packet_id {
-            return Ok(packet);
-        }
-    }
-    Err(RuntimeError::Config(format!(
-        "did not receive packet id 0x{wanted_packet_id:02x}"
-    )))
+    read_until_packet_id_with_timeout(
+        stream,
+        codec,
+        buffer,
+        wanted_packet_id,
+        packet_wait_timeout_from_attempts(max_attempts),
+    )
+    .await
 }
 
 pub(crate) async fn read_until_java_packet(
@@ -157,28 +259,48 @@ pub(crate) async fn read_until_set_slot(
     wanted_slot: i16,
     max_attempts: usize,
 ) -> Result<Vec<u8>, RuntimeError> {
-    let max_attempts = max_attempts.max(64);
-    for _ in 0..max_attempts {
-        let packet = tokio::time::timeout(
-            Duration::from_millis(250),
-            read_packet(stream, codec, buffer),
-        )
-        .await
-        .map_err(|_| {
-            RuntimeError::Config(format!(
-                "timed out waiting for set slot window {wanted_window_id} slot {wanted_slot}"
-            ))
-        })??;
-        if let Ok((window_id, slot, _)) = decode_set_slot(protocol, &packet)
-            && window_id == wanted_window_id
-            && slot == wanted_slot
-        {
-            return Ok(packet);
-        }
-    }
-    Err(RuntimeError::Config(format!(
-        "did not receive set slot window {wanted_window_id} slot {wanted_slot}"
-    )))
+    read_until_set_slot_with_timeout(
+        stream,
+        codec,
+        buffer,
+        protocol,
+        wanted_window_id,
+        wanted_slot,
+        packet_wait_timeout_from_attempts(max_attempts),
+    )
+    .await
+}
+
+pub(crate) async fn read_until_set_slot_with_timeout(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    wanted_window_id: i8,
+    wanted_slot: i16,
+    timeout: Duration,
+) -> Result<Vec<u8>, RuntimeError> {
+    let target = format!("set slot window {wanted_window_id} slot {wanted_slot}");
+    read_until_matching_packet_until(
+        stream,
+        codec,
+        buffer,
+        Instant::now() + timeout,
+        &target,
+        true,
+        |packet| match decode_set_slot(protocol, packet) {
+            Ok((window_id, slot, _item))
+                if window_id == wanted_window_id && slot == wanted_slot =>
+            {
+                PacketWaitObservation::Matched
+            }
+            Ok((window_id, slot, item)) => PacketWaitObservation::Related(format!(
+                "set slot window {window_id} slot {slot} item {item:?}"
+            )),
+            Err(_) => PacketWaitObservation::Unrelated,
+        },
+    )
+    .await
 }
 
 pub(crate) async fn read_until_confirm_transaction(
@@ -223,28 +345,48 @@ pub(crate) async fn read_until_window_property(
     wanted_property_id: i16,
     max_attempts: usize,
 ) -> Result<Vec<u8>, RuntimeError> {
-    let max_attempts = max_attempts.max(64);
-    for _ in 0..max_attempts {
-        let packet = tokio::time::timeout(
-            Duration::from_millis(250),
-            read_packet(stream, codec, buffer),
-        )
-        .await
-        .map_err(|_| {
-            RuntimeError::Config(format!(
-                "timed out waiting for window property window {wanted_window_id} property {wanted_property_id}"
-            ))
-        })??;
-        if let Ok((window_id, property_id, _)) = decode_window_property(protocol, &packet)
-            && window_id == wanted_window_id
-            && property_id == wanted_property_id
-        {
-            return Ok(packet);
-        }
-    }
-    Err(RuntimeError::Config(format!(
-        "did not receive window property window {wanted_window_id} property {wanted_property_id}"
-    )))
+    read_until_window_property_with_timeout(
+        stream,
+        codec,
+        buffer,
+        protocol,
+        wanted_window_id,
+        wanted_property_id,
+        packet_wait_timeout_from_attempts(max_attempts),
+    )
+    .await
+}
+
+pub(crate) async fn read_until_window_property_with_timeout(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    wanted_window_id: u8,
+    wanted_property_id: i16,
+    timeout: Duration,
+) -> Result<Vec<u8>, RuntimeError> {
+    let target = format!("window property window {wanted_window_id} property {wanted_property_id}");
+    read_until_matching_packet_until(
+        stream,
+        codec,
+        buffer,
+        Instant::now() + timeout,
+        &target,
+        true,
+        |packet| match decode_window_property(protocol, packet) {
+            Ok((window_id, property_id, _value))
+                if window_id == wanted_window_id && property_id == wanted_property_id =>
+            {
+                PacketWaitObservation::Matched
+            }
+            Ok((window_id, property_id, value)) => PacketWaitObservation::Related(format!(
+                "window property window {window_id} property {property_id} value {value}"
+            )),
+            Err(_) => PacketWaitObservation::Unrelated,
+        },
+    )
+    .await
 }
 
 pub(crate) async fn assert_no_java_packet(
