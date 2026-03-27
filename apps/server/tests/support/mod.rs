@@ -1,15 +1,30 @@
 #![allow(dead_code)]
 
-use mc_proto_common::{MinecraftWireCodec, PacketWriter, WireCodec};
+use aes::Aes128;
+use aes::cipher::{BlockEncrypt, KeyInit};
+use bytes::BytesMut;
+use mc_plugin_test_support::PackagedPluginHarness;
+use mc_proto_common::{MinecraftWireCodec, PacketReader, PacketWriter, WireCodec};
+use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol};
+use rsa::pkcs8::DecodePublicKey;
+use rsa::rand_core::{OsRng, RngCore};
+use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
+use std::collections::BTreeSet;
 use std::fs;
+use std::fs::File;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener as StdTcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+
+pub type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+static LOG_CAPTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub const DEFAULT_LOCAL_CONSOLE_PERMISSIONS: &[&str] =
     &["status", "sessions", "reload-runtime", "shutdown"];
@@ -31,6 +46,20 @@ pub const UPGRADE_REMOTE_PERMISSIONS: &[&str] = &[
 ];
 pub const OPS_TOKEN: &str = "ops-token";
 
+pub struct PersistedServerLogCapture {
+    pub stdout_path: PathBuf,
+    pub stderr_path: PathBuf,
+}
+
+impl PersistedServerLogCapture {
+    pub fn read(&self) -> TestResult<(String, String)> {
+        Ok((
+            fs::read_to_string(&self.stdout_path).unwrap_or_default(),
+            fs::read_to_string(&self.stderr_path).unwrap_or_default(),
+        ))
+    }
+}
+
 pub struct ServerTomlOptions<'a> {
     pub admin_grpc_enabled: bool,
     pub server_port: u16,
@@ -38,6 +67,9 @@ pub struct ServerTomlOptions<'a> {
     pub motd: &'a str,
     pub online_mode: bool,
     pub bedrock_enabled: bool,
+    pub auth_profile: &'a str,
+    pub extra_plugin_allowlist: &'a [&'a str],
+    pub plugins_dir_override: Option<PathBuf>,
     pub local_console_permissions: &'a [&'a str],
     pub remote_permissions: &'a [&'a str],
 }
@@ -57,8 +89,72 @@ impl<'a> ServerTomlOptions<'a> {
             motd,
             online_mode: false,
             bedrock_enabled: false,
+            auth_profile: "offline-v1",
+            extra_plugin_allowlist: &[],
+            plugins_dir_override: None,
             local_console_permissions: DEFAULT_LOCAL_CONSOLE_PERMISSIONS,
             remote_permissions: DEFAULT_REMOTE_PERMISSIONS,
+        }
+    }
+}
+
+pub struct ProcessTestClientEncryptionState {
+    pub encrypt: ProcessTestStreamCipher,
+    pub decrypt: ProcessTestStreamCipher,
+}
+
+pub struct ProcessTestStreamCipher {
+    cipher: Aes128,
+    shift_register: [u8; 16],
+}
+
+impl ProcessTestClientEncryptionState {
+    #[must_use]
+    pub fn new(shared_secret: [u8; 16]) -> Self {
+        Self {
+            encrypt: ProcessTestStreamCipher::new(shared_secret),
+            decrypt: ProcessTestStreamCipher::new(shared_secret),
+        }
+    }
+}
+
+impl ProcessTestStreamCipher {
+    #[must_use]
+    pub fn new(shared_secret: [u8; 16]) -> Self {
+        Self::from_parts(shared_secret, shared_secret)
+    }
+
+    #[must_use]
+    pub fn from_parts(shared_secret: [u8; 16], shift_register: [u8; 16]) -> Self {
+        Self {
+            cipher: Aes128::new_from_slice(&shared_secret)
+                .expect("AES-128 key length should be exactly 16 bytes"),
+            shift_register,
+        }
+    }
+
+    pub fn apply_encrypt(&mut self, bytes: &mut [u8]) {
+        for byte in bytes {
+            let mut block = aes::Block::default();
+            block.copy_from_slice(&self.shift_register);
+            self.cipher.encrypt_block(&mut block);
+            let ciphertext = *byte ^ block[0];
+            self.shift_register.copy_within(1.., 0);
+            self.shift_register[15] = ciphertext;
+            *byte = ciphertext;
+        }
+    }
+
+    pub fn apply_decrypt(&mut self, bytes: &mut [u8]) {
+        for byte in bytes {
+            let ciphertext = *byte;
+            let mut block = aes::Block::default();
+            block.copy_from_slice(&self.shift_register);
+            self.cipher.encrypt_block(&mut block);
+            let plaintext = ciphertext ^ block[0];
+            self.shift_register.copy_within(1.., 0);
+            self.shift_register[15] = ciphertext;
+            *byte = plaintext;
         }
     }
 }
@@ -102,7 +198,10 @@ pub fn write_server_toml_at(
     let runtime_dir = config_path
         .parent()
         .ok_or("config path should have a parent directory")?;
-    let plugins_dir = repo_root.join("runtime").join("plugins");
+    let plugins_dir = options
+        .plugins_dir_override
+        .clone()
+        .unwrap_or_else(|| repo_root.join("runtime").join("plugins"));
     fs::create_dir_all(runtime_dir)?;
     let (principal_block, admin_bind_addr) = if options.admin_grpc_enabled {
         let token_path = temp_root.join("admin").join("ops.token");
@@ -136,11 +235,27 @@ pub fn write_server_toml_at(
             .collect::<Vec<_>>()
             .join(", ")
     );
-    let plugin_allowlist = if options.bedrock_enabled {
-        "[\"je-5\", \"be-924\", \"gameplay-canonical\", \"storage-je-anvil-1_7_10\", \"auth-offline\", \"auth-bedrock-offline\"]"
-    } else {
-        "[\"je-5\", \"gameplay-canonical\", \"storage-je-anvil-1_7_10\", \"auth-offline\"]"
-    };
+    let mut plugin_allowlist = BTreeSet::from([
+        "auth-offline",
+        "gameplay-canonical",
+        "je-5",
+        "storage-je-anvil-1_7_10",
+    ]);
+    if options.bedrock_enabled {
+        plugin_allowlist.insert("auth-bedrock-offline");
+        plugin_allowlist.insert("be-924");
+    }
+    for plugin_id in options.extra_plugin_allowlist {
+        plugin_allowlist.insert(plugin_id);
+    }
+    let plugin_allowlist = format!(
+        "[{}]",
+        plugin_allowlist
+            .iter()
+            .map(|plugin_id| toml_string(plugin_id))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let bedrock_adapter_block = if options.bedrock_enabled {
         "\ndefault_bedrock_adapter = \"be-924\"\nenabled_bedrock_adapters = [\"be-924\"]"
     } else {
@@ -197,7 +312,7 @@ auth = \"skip\"
 admin_ui = \"skip\"
 
 [live.profiles]
-auth = \"offline-v1\"
+auth = {}
 bedrock_auth = \"bedrock-offline-v1\"
 default_gameplay = \"canonical\"
 
@@ -216,10 +331,87 @@ local_console_permissions = {}
             options.bedrock_enabled,
             bedrock_adapter_block,
             plugin_allowlist,
+            toml_string(options.auth_profile),
             local_console_permissions,
         ),
     )?;
     Ok(())
+}
+
+pub fn prepare_online_auth_runtime_plugins(
+    temp_root: &Path,
+    scenario: &str,
+) -> TestResult<PathBuf> {
+    let dist_dir = temp_root.join("runtime").join("plugins");
+    let harness = PackagedPluginHarness::shared()?;
+    harness.seed_subset(
+        &dist_dir,
+        &[
+            "je-5",
+            "gameplay-canonical",
+            "storage-je-anvil-1_7_10",
+            "auth-offline",
+        ],
+    )?;
+    harness.install_auth_plugin(
+        "mc-plugin-auth-online-stub",
+        "auth-online-stub",
+        &dist_dir,
+        &harness.scoped_target_dir(scenario),
+        "process-online-auth-v1",
+    )?;
+    Ok(dist_dir)
+}
+
+fn sanitize_log_name(name: &str) -> String {
+    name.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+pub fn create_persisted_server_log_capture(name: &str) -> TestResult<PersistedServerLogCapture> {
+    let capture_id = LOG_CAPTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let capture_dir = repo_root()?
+        .join("target")
+        .join("upgrade-runtime-logs")
+        .join(format!(
+            "{}-{}-{}",
+            sanitize_log_name(name),
+            std::process::id(),
+            capture_id
+        ));
+    fs::create_dir_all(&capture_dir)?;
+    Ok(PersistedServerLogCapture {
+        stdout_path: capture_dir.join("stdout.log"),
+        stderr_path: capture_dir.join("stderr.log"),
+    })
+}
+
+pub fn spawn_server_with_log_capture_and_envs(
+    temp_dir: &Path,
+    stdin: Stdio,
+    config_path: Option<&Path>,
+    extra_envs: &[(&str, &str)],
+    capture_name: &str,
+) -> TestResult<(Child, PersistedServerLogCapture)> {
+    let logs = create_persisted_server_log_capture(capture_name)?;
+    let stdout_file = File::create(&logs.stdout_path)?;
+    let stderr_file = File::create(&logs.stderr_path)?;
+    let child = spawn_server_with_config_path_and_envs(
+        temp_dir,
+        stdin,
+        Stdio::from(stdout_file),
+        Stdio::from(stderr_file),
+        config_path,
+        extra_envs,
+    )?;
+    Ok((child, logs))
 }
 
 pub fn spawn_server(
@@ -344,11 +536,362 @@ pub fn write_packet(
     Ok(())
 }
 
+pub fn connect_tcp(addr: SocketAddr) -> TestResult<TcpStream> {
+    let stream = TcpStream::connect(addr)?;
+    stream.set_nodelay(true)?;
+    Ok(stream)
+}
+
+pub fn status_request() -> Vec<u8> {
+    vec![0x00]
+}
+
+pub fn status_ping(value: i64) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x01);
+    writer.write_i64(value);
+    writer.into_inner()
+}
+
+pub fn held_item_change(slot: i16) -> Vec<u8> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x09);
+    writer.write_i16(slot);
+    writer.into_inner()
+}
+
+pub fn packet_id(frame: &[u8]) -> TestResult<i32> {
+    let mut reader = PacketReader::new(frame);
+    Ok(reader.read_varint()?)
+}
+
+pub fn parse_status_response(packet: &[u8]) -> TestResult<String> {
+    let mut reader = PacketReader::new(packet);
+    if reader.read_varint()? != 0x00 {
+        return Err("expected status response packet".into());
+    }
+    Ok(reader.read_string(32 * 1024)?)
+}
+
+pub fn parse_status_pong(packet: &[u8]) -> TestResult<i64> {
+    let mut reader = PacketReader::new(packet);
+    if reader.read_varint()? != 0x01 {
+        return Err("expected status pong packet".into());
+    }
+    Ok(reader.read_i64()?)
+}
+
+pub fn parse_encryption_request(packet: &[u8]) -> TestResult<(String, Vec<u8>, Vec<u8>)> {
+    let mut reader = PacketReader::new(packet);
+    if reader.read_varint()? != 0x01 {
+        return Err("expected login encryption request packet".into());
+    }
+    let server_id = reader.read_string(20)?;
+    let public_key_len =
+        usize::try_from(reader.read_varint()?).map_err(|_| "negative public key length")?;
+    let public_key_der = reader.read_bytes(public_key_len)?.to_vec();
+    let verify_token_len =
+        usize::try_from(reader.read_varint()?).map_err(|_| "negative verify token length")?;
+    let verify_token = reader.read_bytes(verify_token_len)?.to_vec();
+    Ok((server_id, public_key_der, verify_token))
+}
+
+pub fn login_encryption_response(
+    shared_secret_encrypted: &[u8],
+    verify_token_encrypted: &[u8],
+) -> TestResult<Vec<u8>> {
+    let mut writer = PacketWriter::default();
+    writer.write_varint(0x01);
+    writer.write_varint(
+        i32::try_from(shared_secret_encrypted.len())
+            .map_err(|_| "encrypted shared secret too large")?,
+    );
+    writer.write_bytes(shared_secret_encrypted);
+    writer.write_varint(
+        i32::try_from(verify_token_encrypted.len())
+            .map_err(|_| "encrypted verify token too large")?,
+    );
+    writer.write_bytes(verify_token_encrypted);
+    Ok(writer.into_inner())
+}
+
+pub fn held_item_from_packet(protocol: TestJavaProtocol, packet: &[u8]) -> TestResult<i8> {
+    let mut reader = PacketReader::new(packet);
+    let expected_packet_id = protocol
+        .clientbound_packet_id(TestJavaPacket::HeldItemChange)
+        .ok_or("held item change packet is unsupported")?;
+    if reader.read_varint()? != expected_packet_id {
+        return Err("expected held item change packet".into());
+    }
+    Ok(reader.read_i8()?)
+}
+
+fn read_packet_with_timeout_impl(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    deadline: Instant,
+) -> TestResult<Vec<u8>> {
+    loop {
+        if let Some(frame) = codec.try_decode_frame(buffer)? {
+            return Ok(frame);
+        }
+        if Instant::now() >= deadline {
+            return Err("timed out waiting for packet".into());
+        }
+        let read_timeout = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(250));
+        stream.set_read_timeout(Some(read_timeout))?;
+        let mut chunk = [0_u8; 8192];
+        match stream.read(&mut chunk) {
+            Ok(0) => return Err("connection closed".into()),
+            Ok(bytes_read) => buffer.extend_from_slice(&chunk[..bytes_read]),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(Box::new(error)),
+        }
+    }
+}
+
+pub fn read_packet(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    timeout: Duration,
+) -> TestResult<Vec<u8>> {
+    read_packet_with_timeout_impl(stream, codec, buffer, Instant::now() + timeout)
+}
+
+pub fn read_until_packet_id(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    wanted_packet_id: i32,
+    timeout: Duration,
+    max_attempts: usize,
+) -> TestResult<Vec<u8>> {
+    let attempts = max_attempts.max(1);
+    let deadline = Instant::now() + timeout;
+    for _ in 0..attempts {
+        let packet = read_packet_with_timeout_impl(stream, codec, buffer, deadline)?;
+        if packet_id(&packet)? == wanted_packet_id {
+            return Ok(packet);
+        }
+    }
+    Err(format!("did not receive packet id 0x{wanted_packet_id:02x}").into())
+}
+
+pub fn read_until_java_packet(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    wanted_packet: TestJavaPacket,
+    timeout: Duration,
+    max_attempts: usize,
+) -> TestResult<Vec<u8>> {
+    let wanted_packet_id = protocol
+        .clientbound_packet_id(wanted_packet)
+        .ok_or("wanted packet is unsupported")?;
+    read_until_packet_id(
+        stream,
+        codec,
+        buffer,
+        wanted_packet_id,
+        timeout,
+        max_attempts,
+    )
+}
+
+pub fn assert_no_packet_id(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    unwanted_packet_id: i32,
+    timeout: Duration,
+) -> TestResult<()> {
+    let result = read_until_packet_id(stream, codec, buffer, unwanted_packet_id, timeout, 2);
+    match result {
+        Err(error) if error.to_string().contains("timed out waiting for packet") => Ok(()),
+        Err(error) if error.to_string().contains("did not receive packet id") => Ok(()),
+        Ok(packet) => Err(format!(
+            "unexpected packet id 0x{unwanted_packet_id:02x}: got 0x{:02x}",
+            packet_id(&packet)?
+        )
+        .into()),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn connect_and_login_java_client_until(
+    addr: SocketAddr,
+    codec: &MinecraftWireCodec,
+    protocol: TestJavaProtocol,
+    username: &str,
+    wanted_packet: TestJavaPacket,
+) -> TestResult<(TcpStream, BytesMut, Vec<u8>)> {
+    let mut stream = connect_tcp(addr)?;
+    write_packet(
+        &mut stream,
+        codec,
+        &encode_handshake(protocol.protocol_version(), 2)?,
+    )?;
+    write_packet(&mut stream, codec, &login_start(username)?)?;
+    let mut buffer = BytesMut::new();
+    let packet = read_until_java_packet(
+        &mut stream,
+        codec,
+        &mut buffer,
+        protocol,
+        wanted_packet,
+        Duration::from_secs(5),
+        24,
+    )?;
+    Ok((stream, buffer, packet))
+}
+
+pub fn connect_and_login_java_client(
+    addr: SocketAddr,
+    codec: &MinecraftWireCodec,
+    protocol: TestJavaProtocol,
+    username: &str,
+) -> TestResult<(TcpStream, BytesMut)> {
+    let (stream, buffer, _) = connect_and_login_java_client_until(
+        addr,
+        codec,
+        protocol,
+        username,
+        TestJavaPacket::WindowItems,
+    )?;
+    Ok((stream, buffer))
+}
+
+pub fn begin_online_login(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    protocol: TestJavaProtocol,
+    username: &str,
+) -> TestResult<(BytesMut, RsaPublicKey, Vec<u8>)> {
+    write_packet(
+        stream,
+        codec,
+        &encode_handshake(protocol.protocol_version(), 2)?,
+    )?;
+    write_packet(stream, codec, &login_start(username)?)?;
+    let mut buffer = BytesMut::new();
+    let request = read_packet(stream, codec, &mut buffer, Duration::from_secs(5))?;
+    let (_server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;
+    let public_key = RsaPublicKey::from_public_key_der(&public_key_der)?;
+    Ok((buffer, public_key, verify_token))
+}
+
+pub fn complete_online_login(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    public_key: &RsaPublicKey,
+    verify_token: &[u8],
+) -> TestResult<ProcessTestClientEncryptionState> {
+    let mut shared_secret = [0_u8; 16];
+    OsRng.fill_bytes(&mut shared_secret);
+    let shared_secret_encrypted =
+        public_key.encrypt(&mut OsRng, Pkcs1v15Encrypt, &shared_secret)?;
+    let verify_token_encrypted = public_key.encrypt(&mut OsRng, Pkcs1v15Encrypt, verify_token)?;
+    let response = login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
+    write_packet(stream, codec, &response)?;
+    Ok(ProcessTestClientEncryptionState::new(shared_secret))
+}
+
+pub fn perform_online_login(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    protocol: TestJavaProtocol,
+    username: &str,
+) -> TestResult<(ProcessTestClientEncryptionState, BytesMut)> {
+    let (mut buffer, public_key, verify_token) =
+        begin_online_login(stream, codec, protocol, username)?;
+    let encryption = complete_online_login(stream, codec, &public_key, &verify_token)?;
+    Ok((encryption, std::mem::take(&mut buffer)))
+}
+
+pub fn write_packet_encrypted(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    payload: &[u8],
+    encryption: &mut ProcessTestClientEncryptionState,
+) -> TestResult<()> {
+    let mut frame = codec.encode_frame(payload)?;
+    encryption.encrypt.apply_encrypt(&mut frame);
+    stream.write_all(&frame)?;
+    Ok(())
+}
+
+fn read_packet_encrypted_with_timeout_impl(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    encryption: &mut ProcessTestClientEncryptionState,
+    deadline: Instant,
+) -> TestResult<Vec<u8>> {
+    loop {
+        if let Some(frame) = codec.try_decode_frame(buffer)? {
+            return Ok(frame);
+        }
+        if Instant::now() >= deadline {
+            return Err("timed out waiting for encrypted packet".into());
+        }
+        let read_timeout = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(250));
+        stream.set_read_timeout(Some(read_timeout))?;
+        let mut chunk = [0_u8; 8192];
+        match stream.read(&mut chunk) {
+            Ok(0) => return Err("connection closed".into()),
+            Ok(bytes_read) => {
+                let bytes = &mut chunk[..bytes_read];
+                encryption.decrypt.apply_decrypt(bytes);
+                buffer.extend_from_slice(bytes);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(Box::new(error)),
+        }
+    }
+}
+
+pub fn read_until_java_packet_encrypted(
+    stream: &mut TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    wanted_packet: TestJavaPacket,
+    timeout: Duration,
+    max_attempts: usize,
+    encryption: &mut ProcessTestClientEncryptionState,
+) -> TestResult<Vec<u8>> {
+    let attempts = max_attempts.max(1);
+    let deadline = Instant::now() + timeout;
+    let wanted_packet_id = protocol
+        .clientbound_packet_id(wanted_packet)
+        .ok_or("wanted encrypted packet is unsupported")?;
+    for _ in 0..attempts {
+        let packet =
+            read_packet_encrypted_with_timeout_impl(stream, codec, buffer, encryption, deadline)?;
+        if packet_id(&packet)? == wanted_packet_id {
+            return Ok(packet);
+        }
+    }
+    Err(format!("did not receive encrypted packet id 0x{wanted_packet_id:02x}").into())
+}
+
 #[cfg(unix)]
-pub fn set_world_read_only(
-    path: &Path,
-    read_only: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn set_world_read_only(path: &Path, read_only: bool) -> Result<(), Box<dyn std::error::Error>> {
     let mut permissions = fs::metadata(path)?.permissions();
     permissions.set_mode(if read_only { 0o555 } else { 0o755 });
     fs::set_permissions(path, permissions)?;

@@ -206,7 +206,9 @@ impl TopologyManager {
                 .state
                 .write()
                 .expect("runtime topology lock should not be poisoned");
-            generation_state.listener_workers.remove(&TransportKind::Tcp)
+            generation_state
+                .listener_workers
+                .remove(&TransportKind::Tcp)
         }
         .ok_or_else(|| RuntimeError::Config("tcp listener worker is not active".to_string()))?;
         let mut worker = worker;
@@ -256,7 +258,9 @@ impl TopologyManager {
                 .state
                 .write()
                 .expect("runtime topology lock should not be poisoned");
-            generation_state.listener_workers.insert(TransportKind::Tcp, worker)
+            generation_state
+                .listener_workers
+                .insert(TransportKind::Tcp, worker)
         };
         if let Some(replaced) = replaced {
             Self::shutdown_workers(vec![replaced]).await;

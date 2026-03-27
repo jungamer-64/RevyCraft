@@ -14,10 +14,10 @@ use crate::runtime::{
     ACCEPT_QUEUE_CAPACITY, ActiveGeneration, GenerationId, RunningServer, RuntimeServer,
     RuntimeUpgradeImport,
 };
+use mc_core::ServerCore;
+use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_host::registry::LoadedPluginSet;
 use mc_plugin_host::runtime::RuntimePluginHost;
-use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
-use mc_core::ServerCore;
 use mc_proto_common::TransportKind;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
@@ -148,7 +148,8 @@ pub(crate) async fn boot_server_from_upgrade(
             })
         })
         .collect::<Vec<_>>();
-    let selection = SelectionResolver::resolve(config.clone(), loaded_plugins.clone(), &gameplay_sessions)?;
+    let selection =
+        SelectionResolver::resolve(config.clone(), loaded_plugins.clone(), &gameplay_sessions)?;
     let storage_profile = SelectionResolver::resolve_storage_profile(&config, &loaded_plugins)?;
     let online_auth_keys = import
         .payload
@@ -162,10 +163,12 @@ pub(crate) async fn boot_server_from_upgrade(
         import.payload.core.clone(),
     );
     let adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Tcp);
-    let bound_listeners = vec![crate::transport::BoundTransportListener::import_tcp_listener(
-        import.game_listener,
-        adapter_ids,
-    )?];
+    let bound_listeners = vec![
+        crate::transport::BoundTransportListener::import_tcp_listener(
+            import.game_listener,
+            adapter_ids,
+        )?,
+    ];
     let listener_bindings = bound_listeners
         .iter()
         .map(crate::transport::BoundTransportListener::listener_binding)

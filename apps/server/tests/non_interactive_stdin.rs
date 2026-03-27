@@ -1,11 +1,11 @@
 mod support;
 
-use support::*;
 use std::fs;
 use std::io::Write;
 use std::process::Stdio;
 use std::thread;
 use std::time::Duration;
+use support::*;
 use tempfile::tempdir;
 
 #[test]

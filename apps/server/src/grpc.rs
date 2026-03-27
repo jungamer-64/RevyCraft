@@ -58,16 +58,18 @@ impl AdminGrpcServerHandle {
     }
 
     pub(crate) async fn wait_for_server_exit(&mut self) -> Result<(), RuntimeError> {
-        (&mut self.server_done_rx)
-            .await
-            .map_err(|_| RuntimeError::Config("admin gRPC server task ended unexpectedly".to_string()))?
+        (&mut self.server_done_rx).await.map_err(|_| {
+            RuntimeError::Config("admin gRPC server task ended unexpectedly".to_string())
+        })?
     }
 
     pub(crate) fn try_clone_listener(&self) -> Result<std::net::TcpListener, RuntimeError> {
         self.listener.try_clone().map_err(Into::into)
     }
 
-    pub(crate) async fn pause_for_upgrade(&mut self) -> Result<std::net::TcpListener, RuntimeError> {
+    pub(crate) async fn pause_for_upgrade(
+        &mut self,
+    ) -> Result<std::net::TcpListener, RuntimeError> {
         match std::mem::replace(&mut self.accept_state, AdminGrpcAcceptState::Paused) {
             AdminGrpcAcceptState::Accepting {
                 control_tx,

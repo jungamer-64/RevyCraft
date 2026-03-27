@@ -9,8 +9,8 @@ use super::{
 use crate::RuntimeError;
 use crate::runtime::selection::AdminCredentialTag;
 use mc_plugin_api::codec::admin_ui as plugin_admin;
-use std::future::Future;
 use std::fmt::{Debug, Display, Formatter};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
@@ -693,10 +693,9 @@ fn render_builtin_local_response(response: &AdminResponse) -> String {
             sessions.sessions.len(),
         ),
         AdminResponse::ReloadRuntime(result) => render_builtin_runtime_reload_response(result),
-        AdminResponse::UpgradeRuntime(result) => format!(
-            "upgrade runtime: executable={}",
-            result.executable_path
-        ),
+        AdminResponse::UpgradeRuntime(result) => {
+            format!("upgrade runtime: executable={}", result.executable_path)
+        }
         AdminResponse::ShutdownScheduled => "shutdown: scheduled".to_string(),
         AdminResponse::PermissionDenied {
             principal,

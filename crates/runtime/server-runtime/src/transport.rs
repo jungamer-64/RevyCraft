@@ -168,7 +168,10 @@ impl TransportSessionIo {
                 stream: stream
                     .into_std()
                     .expect("live tcp session should convert into a std stream during upgrade"),
-                encryption: encryption.as_ref().as_ref().map(TransportEncryptionState::snapshot),
+                encryption: encryption
+                    .as_ref()
+                    .as_ref()
+                    .map(TransportEncryptionState::snapshot),
             },
             Self::Bedrock { .. } => {
                 panic!("runtime upgrade should never attempt to export a udp session")

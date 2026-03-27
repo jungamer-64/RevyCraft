@@ -202,16 +202,17 @@ impl RuntimeServer {
             loop {
                 match control_rx.try_recv() {
                     Ok(control) => {
-                        let should_exit = self.handle_session_control(
-                            connection_id,
-                            &mut transport_io,
-                            &mut session,
-                            &read_buffer,
-                            &mut rx,
-                            control,
-                            &mut exported_for_upgrade,
-                        )
-                        .await?;
+                        let should_exit = self
+                            .handle_session_control(
+                                connection_id,
+                                &mut transport_io,
+                                &mut session,
+                                &read_buffer,
+                                &mut rx,
+                                control,
+                                &mut exported_for_upgrade,
+                            )
+                            .await?;
                         if should_exit {
                             if exported_for_upgrade {
                                 break;
@@ -375,7 +376,10 @@ impl RuntimeServer {
                     return Ok(true);
                 }
             }
-            SessionControl::Reattach { instruction, ack_tx } => {
+            SessionControl::Reattach {
+                instruction,
+                ack_tx,
+            } => {
                 let result = self
                     .handle_session_reattach(
                         connection_id,
@@ -437,15 +441,17 @@ impl RuntimeServer {
         ) {
             (Some(gameplay), Some(session_capabilities), Some(player_id)) => Some(
                 gameplay
-                    .export_session_state(&mc_plugin_api::codec::gameplay::GameplaySessionSnapshot {
-                        phase: session.phase,
-                        player_id: Some(player_id),
-                        entity_id: session.entity_id,
-                        protocol: session_capabilities.protocol.clone(),
-                        gameplay_profile: session_capabilities.gameplay_profile.clone(),
-                        protocol_generation: session_capabilities.protocol_generation,
-                        gameplay_generation: session_capabilities.gameplay_generation,
-                    })
+                    .export_session_state(
+                        &mc_plugin_api::codec::gameplay::GameplaySessionSnapshot {
+                            phase: session.phase,
+                            player_id: Some(player_id),
+                            entity_id: session.entity_id,
+                            protocol: session_capabilities.protocol.clone(),
+                            gameplay_profile: session_capabilities.gameplay_profile.clone(),
+                            protocol_generation: session_capabilities.protocol_generation,
+                            gameplay_generation: session_capabilities.gameplay_generation,
+                        },
+                    )
                     .map_err(|error| RuntimeError::Config(error.to_string()))?,
             ),
             _ => None,
@@ -453,8 +459,12 @@ impl RuntimeServer {
         let mut queued_messages = Vec::new();
         while let Ok(message) = rx.try_recv() {
             queued_messages.push(match message {
-                SessionMessage::Event(event) => RuntimeUpgradeQueuedMessage::Event((*event).clone()),
-                SessionMessage::Terminate { reason } => RuntimeUpgradeQueuedMessage::Terminate { reason },
+                SessionMessage::Event(event) => {
+                    RuntimeUpgradeQueuedMessage::Event((*event).clone())
+                }
+                SessionMessage::Terminate { reason } => {
+                    RuntimeUpgradeQueuedMessage::Terminate { reason }
+                }
             });
         }
         Ok(RuntimeUpgradeSessionState {
@@ -480,9 +490,11 @@ impl RuntimeServer {
                 .session_capabilities
                 .as_ref()
                 .and_then(|session_capabilities| session_capabilities.gameplay_generation),
-            login_challenge: session.login_challenge.as_ref().map(|challenge| RuntimeUpgradeLoginChallenge {
-                username: challenge.username.clone(),
-                verify_token: challenge.verify_token,
+            login_challenge: session.login_challenge.as_ref().map(|challenge| {
+                RuntimeUpgradeLoginChallenge {
+                    username: challenge.username.clone(),
+                    verify_token: challenge.verify_token,
+                }
             }),
             read_buffer: read_buffer.to_vec(),
             queued_messages,

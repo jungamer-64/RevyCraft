@@ -1,0 +1,59 @@
+name: Upgrade Runtime
+
+on:
+  pull_request:
+    paths:
+      - "apps/server/**"
+      - "crates/runtime/**"
+      - "crates/testing/**"
+      - "plugins/admin-ui/**"
+      - "plugins/auth/**"
+      - "runtime/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/upgrade-runtime.yml"
+  push:
+    paths:
+      - "apps/server/**"
+      - "crates/runtime/**"
+      - "crates/testing/**"
+      - "plugins/admin-ui/**"
+      - "plugins/auth/**"
+      - "runtime/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/upgrade-runtime.yml"
+  workflow_dispatch:
+
+jobs:
+  linux-upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p server-bootstrap
+      - run: cargo test -p server-runtime core_reload_preserves_live_java_session
+      - run: cargo test -p server-runtime full_reload_preserves_live_java_session
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upgrade-runtime-logs-linux
+          path: target/upgrade-runtime-logs
+          if-no-files-found: ignore
+
+  windows-upgrade:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p server-bootstrap --test upgrade_runtime
+      - run: cargo test -p server-runtime core_reload_preserves_live_java_session
+      - run: cargo test -p server-runtime full_reload_preserves_live_java_session
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upgrade-runtime-logs-windows
+          path: target/upgrade-runtime-logs
+          if-no-files-found: ignore

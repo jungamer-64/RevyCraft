@@ -69,7 +69,10 @@ impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
             AdminResponse::Sessions(sessions) => render_sessions(sessions),
             AdminResponse::ReloadRuntime(result) => render_runtime_reload(result),
             AdminResponse::UpgradeRuntime(result) => {
-                format!("upgrade runtime: scheduled executable={}", result.executable_path)
+                format!(
+                    "upgrade runtime: scheduled executable={}",
+                    result.executable_path
+                )
             }
             AdminResponse::ShutdownScheduled => "shutdown scheduled".to_string(),
             AdminResponse::PermissionDenied {

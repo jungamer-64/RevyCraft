@@ -31,10 +31,12 @@ use {
     std::mem::{size_of, zeroed},
     std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawSocket, RawSocket},
     std::sync::OnceLock,
-    tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions},
+    tokio::net::windows::named_pipe::{
+        ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+    },
     windows_sys::Win32::Networking::WinSock::{
-        FROM_PROTOCOL_INFO, INVALID_SOCKET, SOCKET, WSADATA, WSADuplicateSocketW, WSAGetLastError,
-        WSAPROTOCOL_INFOW, WSAStartup, WSASocketW, WSA_FLAG_OVERLAPPED,
+        FROM_PROTOCOL_INFO, INVALID_SOCKET, SOCKET, WSA_FLAG_OVERLAPPED, WSADATA,
+        WSADuplicateSocketW, WSAGetLastError, WSAPROTOCOL_INFOW, WSASocketW, WSAStartup,
     },
 };
 
@@ -63,7 +65,7 @@ pub(crate) struct UpgradeCoordinator {
 }
 
 struct CommittedUpgrade {
-    _hold: RuntimeUpgradeCommitHold,
+    hold: RuntimeUpgradeCommitHold,
 }
 
 pub(crate) struct PendingUpgradeChild {
@@ -81,7 +83,9 @@ enum UpgradeChildCommitGate {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum UpgradeControlMessage {
-    ChildHello { auth_token: String },
+    ChildHello {
+        auth_token: String,
+    },
     Bootstrap {
         payload: RuntimeUpgradePayload,
         has_admin_listener: bool,
@@ -89,7 +93,17 @@ enum UpgradeControlMessage {
     },
     Ready,
     Commit,
-    Error { message: String },
+    Error {
+        message: String,
+    },
+}
+
+#[cfg(any(unix, windows))]
+fn normalize_pre_ready_child_error(error: RuntimeError) -> RuntimeError {
+    match error {
+        RuntimeError::Config(_) | RuntimeError::Unsupported(_) => error,
+        other => RuntimeError::Config(format!("upgrade child failed before readiness: {other}")),
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -132,11 +146,16 @@ impl UpgradeCoordinator {
         *self.surface_control_tx.lock().await = Some(surface_control_tx);
     }
 
-    pub(crate) async fn set_process_shutdown_sender(
-        &self,
-        shutdown_tx: watch::Sender<bool>,
-    ) {
+    pub(crate) async fn set_process_shutdown_sender(&self, shutdown_tx: watch::Sender<bool>) {
         *self.process_shutdown_tx.lock().await = Some(shutdown_tx);
+    }
+
+    pub(crate) async fn take_committed_upgrade(&self) -> Option<RuntimeUpgradeCommitHold> {
+        self.committed
+            .lock()
+            .await
+            .take()
+            .map(|committed| committed.hold)
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -159,7 +178,9 @@ impl UpgradeCoordinator {
         let _upgrade_guard = self.upgrade_lock.lock().await;
         validate_upgrade_executable(&executable_path)?;
 
-        let paused_surfaces = self.pause_process_surfaces(subject.is_local_console()).await?;
+        let paused_surfaces = self
+            .pause_process_surfaces(subject.is_local_console())
+            .await?;
         let runtime_upgrade = self.server.begin_runtime_upgrade().await;
         let guard = match runtime_upgrade {
             Ok(guard) => guard,
@@ -183,14 +204,15 @@ impl UpgradeCoordinator {
             .await;
         match result {
             Ok(mut transport) => {
-                transport.write_message(&UpgradeControlMessage::Commit).await?;
+                transport
+                    .write_message(&UpgradeControlMessage::Commit)
+                    .await?;
                 if let Some(shutdown_tx) = self.process_shutdown_tx.lock().await.as_ref() {
                     let _ = shutdown_tx.send(true);
                 }
                 *self.committed.lock().await = Some(CommittedUpgrade {
-                    _hold: guard.commit(),
+                    hold: guard.commit(),
                 });
-                let _ = self.server.request_shutdown();
                 Ok(AdminUpgradeRuntimeView { executable_path })
             }
             Err(error) => {
@@ -215,7 +237,10 @@ impl UpgradeCoordinator {
         let (mut child, mut transport) =
             spawn_parent_upgrade_transport(executable_path, &auth_token).await?;
         let transaction = async {
-            transport.await_child_hello(&auth_token).await?;
+            transport
+                .await_child_hello(&auth_token)
+                .await
+                .map_err(normalize_pre_ready_child_error)?;
             transport
                 .write_message(&UpgradeControlMessage::Bootstrap {
                     payload,
@@ -230,19 +255,21 @@ impl UpgradeCoordinator {
                 paused_surfaces.admin_listener_for_child.as_ref(),
                 &sessions,
             )?;
-            let child_ready = tokio::time::timeout(upgrade_ready_timeout(), transport.read_message())
-                .await;
+            let child_ready =
+                tokio::time::timeout(upgrade_ready_timeout(), transport.read_message()).await;
             match child_ready {
                 Ok(Ok(UpgradeControlMessage::Ready)) => Ok(transport),
                 Ok(Ok(UpgradeControlMessage::Error { message })) => {
                     Err(RuntimeError::Config(message))
                 }
-                Ok(Ok(UpgradeControlMessage::ChildHello { .. }
+                Ok(Ok(
+                    UpgradeControlMessage::ChildHello { .. }
                     | UpgradeControlMessage::Bootstrap { .. }
-                    | UpgradeControlMessage::Commit)) => Err(RuntimeError::Config(
+                    | UpgradeControlMessage::Commit,
+                )) => Err(RuntimeError::Config(
                     "upgrade child returned an unexpected control message".to_string(),
                 )),
-                Ok(Err(error)) => Err(error),
+                Ok(Err(error)) => Err(normalize_pre_ready_child_error(error)),
                 Err(_) => Err(RuntimeError::Config(
                     "upgrade child did not report readiness before timeout".to_string(),
                 )),
@@ -334,7 +361,9 @@ impl UpgradeChildCommitGate {
         match self {
             #[cfg(unix)]
             Self::Unix(transport) => {
-                transport.write_message(&UpgradeControlMessage::Ready).await?;
+                transport
+                    .write_message(&UpgradeControlMessage::Ready)
+                    .await?;
                 match transport.read_message().await? {
                     UpgradeControlMessage::Commit => Ok(()),
                     UpgradeControlMessage::ChildHello { .. }
@@ -347,7 +376,9 @@ impl UpgradeChildCommitGate {
             }
             #[cfg(windows)]
             Self::Windows(transport) => {
-                transport.write_message(&UpgradeControlMessage::Ready).await?;
+                transport
+                    .write_message(&UpgradeControlMessage::Ready)
+                    .await?;
                 match transport.read_message().await? {
                     UpgradeControlMessage::Commit => Ok(()),
                     UpgradeControlMessage::ChildHello { .. }
@@ -406,26 +437,24 @@ pub(crate) async fn try_boot_upgrade_child(
         | UpgradeControlMessage::Ready
         | UpgradeControlMessage::Commit
         | UpgradeControlMessage::Error { .. } => {
-            transport
+            let message = "upgrade child expected bootstrap payload on control socket".to_string();
+            let _ = transport
                 .write_message(&UpgradeControlMessage::Error {
-                    message: "upgrade child expected bootstrap payload on control socket"
-                        .to_string(),
+                    message: message.clone(),
                 })
-                .await?;
-            return Err(RuntimeError::Config(
-                "upgrade child expected bootstrap payload on control socket".to_string(),
-            ));
+                .await;
+            return Err(RuntimeError::Config(message));
         }
     };
 
     #[cfg(debug_assertions)]
     if UpgradeTestFault::current() == Some(UpgradeTestFault::ChildImportFailure) {
         let message = "injected child import failure".to_string();
-        transport
+        let _ = transport
             .write_message(&UpgradeControlMessage::Error {
                 message: message.clone(),
             })
-            .await?;
+            .await;
         return Err(RuntimeError::Config(message));
     }
 
@@ -606,7 +635,9 @@ impl ParentUpgradeTransport {
     ) -> Result<(), RuntimeError> {
         match self {
             #[cfg(unix)]
-            Self::Unix(transport) => transport.send_handles(game_listener, admin_listener, sessions),
+            Self::Unix(transport) => {
+                transport.send_handles(game_listener, admin_listener, sessions)
+            }
             #[cfg(windows)]
             Self::Windows(transport) => {
                 transport.send_handles(game_listener, admin_listener, sessions)
@@ -665,8 +696,9 @@ async fn write_control_message<IO>(
 where
     IO: AsyncWrite + Unpin,
 {
-    let bytes = serde_json::to_vec(message)
-        .map_err(|error| RuntimeError::Config(format!("failed to serialize upgrade message: {error}")))?;
+    let bytes = serde_json::to_vec(message).map_err(|error| {
+        RuntimeError::Config(format!("failed to serialize upgrade message: {error}"))
+    })?;
     io.write_u32(bytes.len() as u32).await?;
     io.write_all(&bytes).await?;
     io.flush().await?;
@@ -739,7 +771,9 @@ impl UnixChildUpgradeTransport {
         let mut handles = handles.into_iter();
         let game_listener = unsafe {
             std::net::TcpListener::from_raw_fd(handles.next().ok_or_else(|| {
-                RuntimeError::Config("upgrade child did not receive a game listener handle".to_string())
+                RuntimeError::Config(
+                    "upgrade child did not receive a game listener handle".to_string(),
+                )
             })?)
         };
         let admin_listener = if has_admin_listener {
@@ -774,7 +808,10 @@ async fn spawn_parent_upgrade_transport(
 
     let mut command = std::process::Command::new(OsStr::new(executable_path));
     command.arg(UPGRADE_CHILD_ARG);
-    command.env(UPGRADE_CONTROL_FD_ENV, child_control.as_raw_fd().to_string());
+    command.env(
+        UPGRADE_CONTROL_FD_ENV,
+        child_control.as_raw_fd().to_string(),
+    );
     command.env(UPGRADE_AUTH_TOKEN_ENV, auth_token);
     let child = command.spawn().map_err(|error| {
         RuntimeError::Config(format!(
@@ -793,8 +830,11 @@ async fn spawn_parent_upgrade_transport(
 #[cfg(unix)]
 async fn open_child_upgrade_transport() -> Result<ChildUpgradeTransport, RuntimeError> {
     let control_fd = read_env_fd(UPGRADE_CONTROL_FD_ENV)?;
-    let auth_token = std::env::var(UPGRADE_AUTH_TOKEN_ENV)
-        .map_err(|_| RuntimeError::Config(format!("missing required upgrade env `{UPGRADE_AUTH_TOKEN_ENV}`")))?;
+    let auth_token = std::env::var(UPGRADE_AUTH_TOKEN_ENV).map_err(|_| {
+        RuntimeError::Config(format!(
+            "missing required upgrade env `{UPGRADE_AUTH_TOKEN_ENV}`"
+        ))
+    })?;
     let mut transport = UnixChildUpgradeTransport {
         stream: into_tokio_unix_stream(unsafe { StdUnixStream::from_raw_fd(control_fd) })?,
     };
@@ -820,7 +860,9 @@ fn read_env_fd(name: &str) -> Result<i32, RuntimeError> {
 #[cfg(unix)]
 fn parse_fd_env(name: &str, value: &str) -> Result<i32, RuntimeError> {
     value.parse::<i32>().map_err(|error| {
-        RuntimeError::Config(format!("invalid fd value for `{name}` (`{value}`): {error}"))
+        RuntimeError::Config(format!(
+            "invalid fd value for `{name}` (`{value}`): {error}"
+        ))
     })
 }
 
@@ -880,9 +922,9 @@ fn send_rights_once(socket_fd: RawFd, handles: &[RawFd]) -> Result<(), RuntimeEr
     message.msg_controllen = control.len();
 
     unsafe {
-        let header = libc::CMSG_FIRSTHDR(&message)
-            .as_ref()
-            .ok_or_else(|| RuntimeError::Config("failed to allocate upgrade rights header".to_string()))?;
+        let header = libc::CMSG_FIRSTHDR(&message).as_ref().ok_or_else(|| {
+            RuntimeError::Config("failed to allocate upgrade rights header".to_string())
+        })?;
         let header = header as *const libc::cmsghdr as *mut libc::cmsghdr;
         (*header).cmsg_level = libc::SOL_SOCKET;
         (*header).cmsg_type = libc::SCM_RIGHTS;
@@ -909,7 +951,8 @@ fn receive_rights_once(socket_fd: RawFd, expected: usize) -> Result<Vec<RawFd>, 
         iov_base: data.as_mut_ptr().cast(),
         iov_len: data.len(),
     };
-    let mut control = vec![0_u8; unsafe { libc::CMSG_SPACE((expected * size_of::<RawFd>()) as _) as usize }];
+    let mut control =
+        vec![0_u8; unsafe { libc::CMSG_SPACE((expected * size_of::<RawFd>()) as _) as usize }];
     let mut message: libc::msghdr = unsafe { zeroed() };
     message.msg_iov = &mut iov;
     message.msg_iovlen = 1;
@@ -969,7 +1012,8 @@ impl WindowsParentUpgradeTransport {
         sessions: &[RuntimeUpgradeSessionHandle],
     ) -> Result<(), RuntimeError> {
         ensure_winsock_started()?;
-        let mut infos = Vec::with_capacity(1 + usize::from(admin_listener.is_some()) + sessions.len());
+        let mut infos =
+            Vec::with_capacity(1 + usize::from(admin_listener.is_some()) + sessions.len());
         infos.push(duplicate_socket_protocol_info(
             game_listener.as_raw_socket(),
             self.child_pid,
@@ -1070,29 +1114,31 @@ async fn spawn_parent_upgrade_transport(
         ))
     })?;
     let child_pid = child.id();
-    pipe.connect()
-        .await
-        .map_err(|error| RuntimeError::Config(format!("failed to connect upgrade pipe: {error}")))?;
+    pipe.connect().await.map_err(|error| {
+        RuntimeError::Config(format!("failed to connect upgrade pipe: {error}"))
+    })?;
     Ok((
         child,
-        ParentUpgradeTransport::Windows(WindowsParentUpgradeTransport {
-            pipe,
-            child_pid,
-        }),
+        ParentUpgradeTransport::Windows(WindowsParentUpgradeTransport { pipe, child_pid }),
     ))
 }
 
 #[cfg(windows)]
 async fn open_child_upgrade_transport() -> Result<ChildUpgradeTransport, RuntimeError> {
     let pipe_name = std::env::var(UPGRADE_PIPE_NAME_ENV).map_err(|_| {
-        RuntimeError::Config(format!("missing required upgrade env `{UPGRADE_PIPE_NAME_ENV}`"))
+        RuntimeError::Config(format!(
+            "missing required upgrade env `{UPGRADE_PIPE_NAME_ENV}`"
+        ))
     })?;
-    let auth_token = std::env::var(UPGRADE_AUTH_TOKEN_ENV)
-        .map_err(|_| RuntimeError::Config(format!("missing required upgrade env `{UPGRADE_AUTH_TOKEN_ENV}`")))?;
+    let auth_token = std::env::var(UPGRADE_AUTH_TOKEN_ENV).map_err(|_| {
+        RuntimeError::Config(format!(
+            "missing required upgrade env `{UPGRADE_AUTH_TOKEN_ENV}`"
+        ))
+    })?;
     let mut transport = WindowsChildUpgradeTransport {
-        pipe: ClientOptions::new()
-            .open(&pipe_name)
-            .map_err(|error| RuntimeError::Config(format!("failed to open upgrade pipe: {error}")))?,
+        pipe: ClientOptions::new().open(&pipe_name).map_err(|error| {
+            RuntimeError::Config(format!("failed to open upgrade pipe: {error}"))
+        })?,
     };
     transport
         .write_message(&UpgradeControlMessage::ChildHello { auth_token })

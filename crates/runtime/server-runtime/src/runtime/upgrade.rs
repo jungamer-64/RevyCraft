@@ -126,7 +126,9 @@ impl RuntimeUpgradeGuard {
     pub fn clone_game_listener(&self) -> Result<std::net::TcpListener, RuntimeError> {
         self.game_listener
             .as_ref()
-            .ok_or_else(|| RuntimeError::Config("upgrade game listener is no longer available".to_string()))?
+            .ok_or_else(|| {
+                RuntimeError::Config("upgrade game listener is no longer available".to_string())
+            })?
             .try_clone()
             .map_err(Into::into)
     }
@@ -134,7 +136,9 @@ impl RuntimeUpgradeGuard {
     /// # Errors
     ///
     /// Returns [`RuntimeError`] when any exported tcp session socket cannot be cloned for the child process.
-    pub fn clone_sessions_for_child(&self) -> Result<Vec<RuntimeUpgradeSessionHandle>, RuntimeError> {
+    pub fn clone_sessions_for_child(
+        &self,
+    ) -> Result<Vec<RuntimeUpgradeSessionHandle>, RuntimeError> {
         self.sessions
             .iter()
             .map(|session| {
@@ -197,15 +201,11 @@ impl ServerSupervisor {
                         import.payload.config.bootstrap.plugins_dir.display()
                     ))
                 })?;
-        let loaded_plugins =
-            plugin_host.load_plugin_set(&import.payload.config.plugin_host_runtime_selection_config())?;
-        let running = boot_server_from_upgrade(
-            config_source,
-            import,
-            loaded_plugins,
-            Some(plugin_host),
-        )
-        .await?;
+        let loaded_plugins = plugin_host
+            .load_plugin_set(&import.payload.config.plugin_host_runtime_selection_config())?;
+        let running =
+            boot_server_from_upgrade(config_source, import, loaded_plugins, Some(plugin_host))
+                .await?;
         Ok(Self { running })
     }
 }
@@ -219,7 +219,11 @@ impl RunningServer {
             ));
         }
 
-        let game_listener = self.runtime.topology.export_tcp_listener_for_upgrade().await?;
+        let game_listener = self
+            .runtime
+            .topology
+            .export_tcp_listener_for_upgrade()
+            .await?;
         while self.runtime.sessions.queued_accepts().total_count() != 0 {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -230,7 +234,10 @@ impl RunningServer {
             Err(error) => {
                 self.runtime
                     .topology
-                    .import_tcp_listener_after_upgrade_rollback(game_listener, &self.runtime.sessions)
+                    .import_tcp_listener_after_upgrade_rollback(
+                        game_listener,
+                        &self.runtime.sessions,
+                    )
                     .await?;
                 return Err(error);
             }
@@ -247,7 +254,10 @@ impl RunningServer {
                 .online_auth_keys()
                 .map(|keys| keys.snapshot())
                 .transpose()?,
-            sessions: sessions.iter().map(|session| session.state.clone()).collect(),
+            sessions: sessions
+                .iter()
+                .map(|session| session.state.clone())
+                .collect(),
         };
         Ok(RuntimeUpgradeGuard {
             runtime: Arc::clone(&self.runtime),
@@ -352,7 +362,10 @@ impl RuntimeServer {
                 session_capabilities: None,
             };
             Self::refresh_session_capabilities(&mut session);
-            if let (Some(adapter), Some(blob)) = (adapter.as_ref(), imported.state.protocol_session_blob.as_ref()) {
+            if let (Some(adapter), Some(blob)) = (
+                adapter.as_ref(),
+                imported.state.protocol_session_blob.as_ref(),
+            ) {
                 adapter
                     .import_session_state(
                         &Self::protocol_session_snapshot(imported.state.connection_id, &session),
@@ -360,12 +373,7 @@ impl RuntimeServer {
                     )
                     .map_err(|error| RuntimeError::Config(error.to_string()))?;
             }
-            if let (
-                Some(gameplay),
-                Some(session_capabilities),
-                Some(player_id),
-                Some(blob),
-            ) = (
+            if let (Some(gameplay), Some(session_capabilities), Some(player_id), Some(blob)) = (
                 gameplay.as_ref(),
                 session.session_capabilities.as_ref(),
                 session.player_id,

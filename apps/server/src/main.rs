@@ -268,12 +268,12 @@ fn upgrade_control_plane(
     coordinator: &Arc<UpgradeCoordinator>,
 ) -> AdminControlPlaneHandle {
     let coordinator = Arc::clone(coordinator);
-    server
-        .admin_control_plane()
-        .with_runtime_upgrader(Arc::new(move |subject: AdminSubject, executable_path| {
+    server.admin_control_plane().with_runtime_upgrader(Arc::new(
+        move |subject: AdminSubject, executable_path| {
             let coordinator = Arc::clone(&coordinator);
             Box::pin(async move { coordinator.upgrade(subject, executable_path).await })
-        }))
+        },
+    ))
 }
 
 async fn run_server_process(
@@ -360,7 +360,7 @@ async fn run_server_process(
 
     if let ProcessStartupMode::UpgradeChild(pending_child) = &mut startup_mode {
         if let Some(error) = upgrade::child_upgrade_fault_before_ready() {
-            pending_child.report_error(error.to_string()).await?;
+            let _ = pending_child.report_error(error.to_string()).await;
             return Err(error);
         }
         upgrade::child_upgrade_ready_delay_if_needed().await;
@@ -440,9 +440,6 @@ async fn run_server_process(
                 match result? {
                     ConsoleLoopExit::ShutdownRequested => {
                         let _ = shutdown_tx.send(true);
-                        if let Some(grpc) = grpc.take() {
-                            grpc.join().await?;
-                        }
                         break;
                     }
                     ConsoleLoopExit::Detached => {
@@ -474,14 +471,20 @@ async fn run_server_process(
             result = wait_for_exit_signal(shutdown_rx.clone()) => {
                 result?;
                 let _ = shutdown_tx.send(true);
-                if let Some(grpc) = grpc.take() {
-                    grpc.join().await?;
-                }
                 break;
             }
         }
     }
 
+    let committed_upgrade = upgrade_coordinator.take_committed_upgrade().await;
+    if let Some(_committed_upgrade) = committed_upgrade {
+        if let Some(grpc) = grpc.take() {
+            grpc.join().await?;
+        }
+        drop(control_plane);
+        drop(upgrade_coordinator);
+        return Ok(());
+    }
     if let Some(grpc) = grpc.take() {
         grpc.join().await?;
     }
