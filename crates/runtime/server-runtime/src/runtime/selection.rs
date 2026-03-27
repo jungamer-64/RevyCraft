@@ -96,19 +96,9 @@ impl SelectionManager {
         *self.state.write().await = selection;
     }
 
-    pub(crate) async fn update_generation_config(&self, candidate_config: &ServerConfig) {
+    pub(crate) async fn replace_config(&self, next_active_config: ServerConfig) {
         let mut selection_state = self.state.write().await;
-        selection_state.config.network = candidate_config.network.clone();
-        selection_state.config.topology = candidate_config.topology.clone();
-    }
-
-    pub(crate) async fn update_core_reload_config(&self, candidate_config: &ServerConfig) {
-        let mut selection_state = self.state.write().await;
-        selection_state.config.bootstrap.level_name = candidate_config.bootstrap.level_name.clone();
-        selection_state.config.bootstrap.game_mode = candidate_config.bootstrap.game_mode;
-        selection_state.config.bootstrap.difficulty = candidate_config.bootstrap.difficulty;
-        selection_state.config.bootstrap.view_distance = candidate_config.bootstrap.view_distance;
-        selection_state.config.network.max_players = candidate_config.network.max_players;
+        selection_state.config = next_active_config;
     }
 
     pub(crate) async fn current_admin_ui(&self) -> Option<Arc<dyn AdminUiProfileHandle>> {

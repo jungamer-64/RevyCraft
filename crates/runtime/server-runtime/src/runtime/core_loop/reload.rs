@@ -29,42 +29,6 @@ struct CoreReloadPlanFailure {
 }
 
 impl RuntimeServer {
-    fn validate_static_reload_candidate(
-        &self,
-        candidate: &crate::config::ServerConfig,
-        allow_core_bootstrap_reload: bool,
-    ) -> Result<(), RuntimeError> {
-        let active_static = self.reload.static_config();
-        let candidate_static = candidate.static_config();
-        if active_static.admin_grpc != candidate_static.admin_grpc {
-            return Err(RuntimeError::Config(
-                "admin.grpc transport changes require a restart".to_string(),
-            ));
-        }
-
-        let active_bootstrap = &active_static.bootstrap;
-        let candidate_bootstrap = &candidate_static.bootstrap;
-        let restart_required_bootstrap_diff = active_bootstrap.online_mode
-            != candidate_bootstrap.online_mode
-            || active_bootstrap.level_type != candidate_bootstrap.level_type
-            || active_bootstrap.world_dir != candidate_bootstrap.world_dir
-            || active_bootstrap.storage_profile != candidate_bootstrap.storage_profile
-            || active_bootstrap.plugins_dir != candidate_bootstrap.plugins_dir
-            || active_bootstrap.plugin_abi_min != candidate_bootstrap.plugin_abi_min
-            || active_bootstrap.plugin_abi_max != candidate_bootstrap.plugin_abi_max
-            || (!allow_core_bootstrap_reload
-                && (active_bootstrap.level_name != candidate_bootstrap.level_name
-                    || active_bootstrap.game_mode != candidate_bootstrap.game_mode
-                    || active_bootstrap.difficulty != candidate_bootstrap.difficulty
-                    || active_bootstrap.view_distance != candidate_bootstrap.view_distance));
-        if restart_required_bootstrap_diff {
-            return Err(RuntimeError::Config(
-                "bootstrap config changes require a restart".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
     #[cfg(test)]
     pub(crate) fn fail_nth_reattach_send_for_test(&self, ordinal: usize) {
         self.fail_nth_reattach_send.store(ordinal, Ordering::SeqCst);
@@ -157,18 +121,15 @@ impl RuntimeServer {
     async fn prepare_selection_reload(
         &self,
         reload_host: &dyn RuntimePluginHost,
-        loaded_config: crate::config::ServerConfig,
+        previous_selection: ResolvedRuntimeSelection,
+        full_reload_plan: &crate::config::FullReloadPlan,
         consistency_guard: &RwLockWriteGuard<'_, ()>,
     ) -> Result<PreparedSelectionReload, RuntimeError> {
-        self.validate_static_reload_candidate(&loaded_config, true)?;
         let context = self.reload_context(consistency_guard).await;
-        let previous_selection = self.selection_state().await;
-        let prepared_selection = reload_host.prepare_runtime_selection(
-            &loaded_config.plugin_host_runtime_selection_config(),
-            &context,
-        )?;
+        let prepared_selection = reload_host
+            .prepare_runtime_selection(&full_reload_plan.plugin_host_selection, &context)?;
         let candidate_selection = match SelectionResolver::resolve(
-            loaded_config.clone(),
+            full_reload_plan.next_active_config.clone(),
             prepared_selection.loaded_plugins().clone(),
             &context.gameplay_sessions,
         ) {
@@ -213,28 +174,31 @@ impl RuntimeServer {
         mode: RuntimeReloadMode,
     ) -> Result<RuntimeReloadResult, RuntimeError> {
         if matches!(mode, RuntimeReloadMode::Topology) {
-            self.validate_static_reload_candidate(&loaded_config, false)?;
-            let mut candidate_config = self.selection_state().await.config;
-            candidate_config.network = loaded_config.network;
-            candidate_config.topology = loaded_config.topology;
+            let active_config = self.selection_state().await.config;
+            let reload_plan = active_config.plan_topology_reload(&loaded_config)?;
             let result = self
-                .reload_generation_with_config(reload_host, candidate_config.clone(), false)
+                .reload_generation_with_config(
+                    reload_host,
+                    reload_plan.next_active_config.clone(),
+                    false,
+                )
                 .await
                 .map(RuntimeReloadResult::Topology)?;
-            self.update_generation_config(&candidate_config).await;
+            self.replace_active_config(reload_plan.next_active_config)
+                .await;
             return Ok(result);
         }
 
         if matches!(mode, RuntimeReloadMode::Core) {
-            self.validate_static_reload_candidate(&loaded_config, true)?;
-            let active_selection = self.selection_state().await;
             let consistency_guard = self.reload.write_consistency().await;
+            let active_selection = self.selection_state().await;
+            let reload_plan = active_selection.config.plan_core_reload(&loaded_config)?;
             let active_generation = self.topology.active_generation();
             let (candidate_core, dirty, rollback) = match self
                 .reload_core_with_plan(
                     &consistency_guard,
                     SelectionResolver::core_config(&active_selection.config),
-                    SelectionResolver::core_config(&loaded_config),
+                    reload_plan.core_config.clone(),
                     Arc::clone(&active_generation),
                     &active_selection,
                 )
@@ -252,19 +216,27 @@ impl RuntimeServer {
                 }
             };
             self.kernel.swap_core(candidate_core, dirty).await;
-            self.update_core_reload_config(&loaded_config).await;
+            self.replace_active_config(reload_plan.next_active_config)
+                .await;
             drop(rollback);
             return Ok(RuntimeReloadResult::Core(CoreReloadResult {}));
         }
 
         let consistency_guard = self.reload.write_consistency().await;
+        let active_selection = self.selection_state().await;
+        let reload_plan = active_selection.config.plan_full_reload(&loaded_config)?;
         let prepared = self
-            .prepare_selection_reload(reload_host, loaded_config.clone(), &consistency_guard)
+            .prepare_selection_reload(
+                reload_host,
+                active_selection,
+                &reload_plan,
+                &consistency_guard,
+            )
             .await?;
         let prepared_topology = match self
             .topology
             .prepare_generation_reload(
-                loaded_config.clone(),
+                reload_plan.next_active_config.clone(),
                 false,
                 prepared.prepared_selection.protocol_topology(),
             )
@@ -279,7 +251,7 @@ impl RuntimeServer {
             .reload_core_with_plan(
                 &consistency_guard,
                 SelectionResolver::core_config(&prepared.previous_selection.config),
-                SelectionResolver::core_config(&loaded_config),
+                reload_plan.core_config.clone(),
                 candidate_generation,
                 &prepared.candidate_selection,
             )

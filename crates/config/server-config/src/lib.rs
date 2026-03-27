@@ -1,4 +1,6 @@
-use mc_core::{AdapterId, AdminUiProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
+use mc_core::{
+    AdapterId, AdminUiProfileId, AuthProfileId, CoreConfig, GameplayProfileId, StorageProfileId,
+};
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use mc_plugin_host::config::{
     BootstrapConfig as PluginHostBootstrapConfig, PluginBufferLimits as PluginHostBufferLimits,
@@ -314,6 +316,24 @@ pub struct ServerConfig {
 pub type ValidatedServerConfig = ServerConfig;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TopologyReloadPlan {
+    pub next_active_config: ServerConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoreReloadPlan {
+    pub next_active_config: ServerConfig,
+    pub core_config: CoreConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FullReloadPlan {
+    pub next_active_config: ServerConfig,
+    pub core_config: CoreConfig,
+    pub plugin_host_selection: PluginHostRuntimeSelectionConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct NormalizedServerConfig {
     server: ServerConfig,
 }
@@ -460,6 +480,59 @@ impl ServerConfig {
     #[must_use]
     pub fn plugin_host_runtime_selection_config(&self) -> PluginHostRuntimeSelectionConfig {
         NormalizedServerConfig::from(self.clone()).plugin_host_runtime_selection_config()
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`ServerConfigError`] when the candidate changes restart-only state.
+    pub fn plan_topology_reload(
+        &self,
+        candidate: &Self,
+    ) -> Result<TopologyReloadPlan, ServerConfigError> {
+        self.static_config()
+            .validate_reload_compatibility(&candidate.static_config())?;
+        let mut next_active_config = self.clone();
+        next_active_config.network.clone_from(&candidate.network);
+        next_active_config.topology.clone_from(&candidate.topology);
+        Ok(TopologyReloadPlan { next_active_config })
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`ServerConfigError`] when the candidate changes restart-only state.
+    pub fn plan_core_reload(&self, candidate: &Self) -> Result<CoreReloadPlan, ServerConfigError> {
+        validate_core_reload_static_compatibility(
+            &self.static_config(),
+            &candidate.static_config(),
+        )?;
+        let mut next_active_config = self.clone();
+        next_active_config
+            .bootstrap
+            .level_name
+            .clone_from(&candidate.bootstrap.level_name);
+        next_active_config.bootstrap.game_mode = candidate.bootstrap.game_mode;
+        next_active_config.bootstrap.difficulty = candidate.bootstrap.difficulty;
+        next_active_config.bootstrap.view_distance = candidate.bootstrap.view_distance;
+        next_active_config.network.max_players = candidate.network.max_players;
+        Ok(CoreReloadPlan {
+            core_config: runtime_core_config(&next_active_config),
+            next_active_config,
+        })
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`ServerConfigError`] when the candidate changes restart-only state.
+    pub fn plan_full_reload(&self, candidate: &Self) -> Result<FullReloadPlan, ServerConfigError> {
+        validate_core_reload_static_compatibility(
+            &self.static_config(),
+            &candidate.static_config(),
+        )?;
+        Ok(FullReloadPlan {
+            next_active_config: candidate.clone(),
+            core_config: runtime_core_config(candidate),
+            plugin_host_selection: candidate.plugin_host_runtime_selection_config(),
+        })
     }
 
     /// # Errors
@@ -827,6 +900,47 @@ fn parse_admin_grpc_config(
     Ok(config)
 }
 
+fn validate_core_reload_static_compatibility(
+    active: &StaticConfig,
+    candidate: &StaticConfig,
+) -> Result<(), ServerConfigError> {
+    if active.admin_grpc != candidate.admin_grpc {
+        return Err(ServerConfigError::Config(
+            "admin.grpc transport changes require a restart".to_string(),
+        ));
+    }
+
+    let active_bootstrap = &active.bootstrap;
+    let candidate_bootstrap = &candidate.bootstrap;
+    let restart_required_bootstrap_diff = active_bootstrap.online_mode
+        != candidate_bootstrap.online_mode
+        || active_bootstrap.level_type != candidate_bootstrap.level_type
+        || active_bootstrap.world_dir != candidate_bootstrap.world_dir
+        || active_bootstrap.storage_profile != candidate_bootstrap.storage_profile
+        || active_bootstrap.plugins_dir != candidate_bootstrap.plugins_dir
+        || active_bootstrap.plugin_abi_min != candidate_bootstrap.plugin_abi_min
+        || active_bootstrap.plugin_abi_max != candidate_bootstrap.plugin_abi_max;
+    if restart_required_bootstrap_diff {
+        return Err(ServerConfigError::Config(
+            "bootstrap config changes require a restart".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn runtime_core_config(config: &ServerConfig) -> CoreConfig {
+    CoreConfig {
+        level_name: config.bootstrap.level_name.clone(),
+        seed: 0,
+        max_players: config.network.max_players,
+        view_distance: config.bootstrap.view_distance,
+        game_mode: config.bootstrap.game_mode,
+        difficulty: config.bootstrap.difficulty,
+        ..CoreConfig::default()
+    }
+}
+
 fn normalize_optional_vec<T>(values: Option<Vec<T>>) -> Option<Vec<T>> {
     match values {
         Some(values) if values.is_empty() => None,
@@ -1028,4 +1142,214 @@ fn parse_plugin_abi(
                 .map_err(|_| ServerConfigError::Config(format!("invalid {key} `{value}`")))
         })
         .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn configured_server_config() -> ServerConfig {
+        let mut config = ServerConfig::default();
+        config.bootstrap.level_name = "active-world".to_string();
+        config.bootstrap.world_dir = PathBuf::from("runtime").join("active-world");
+        config.bootstrap.plugins_dir = PathBuf::from("runtime").join("active-plugins");
+        config.network.server_port = 25570;
+        config.network.motd = "active-motd".to_string();
+        config.network.max_players = 16;
+        config.topology.default_adapter = AdapterId::new("je-47");
+        config.topology.enabled_adapters = Some(vec![AdapterId::new("je-47")]);
+        config.plugins.allowlist = Some(vec!["proto-initial".to_string()]);
+        config.profiles.default_gameplay = GameplayProfileId::new("canonical");
+        config.admin.ui_profile = AdminUiProfileId::new("console-v1");
+        config.admin.grpc.enabled = true;
+        config.admin.grpc.bind_addr = "127.0.0.1:50051"
+            .parse()
+            .expect("loopback admin grpc addr should parse");
+        config.admin.grpc.principals.insert(
+            "ops".to_string(),
+            AdminGrpcPrincipalConfig {
+                token_file: PathBuf::from("runtime").join("ops.token"),
+                token: "ops-token".to_string(),
+                permissions: vec![AdminPermission::Status],
+            },
+        );
+        config
+    }
+
+    fn assert_config_error_contains(error: ServerConfigError, expected_fragment: &str) {
+        match error {
+            ServerConfigError::Config(message) => {
+                assert!(
+                    message.contains(expected_fragment),
+                    "unexpected config error: {message}"
+                );
+            }
+            other => panic!("unexpected config error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn topology_reload_plan_updates_only_network_and_topology() -> Result<(), ServerConfigError> {
+        let active = configured_server_config();
+        let mut candidate = active.clone();
+        candidate.network.server_port = 25571;
+        candidate.network.motd = "candidate-motd".to_string();
+        candidate.network.max_players = 24;
+        candidate.topology.be_enabled = true;
+        candidate.topology.default_adapter = AdapterId::new("je-5");
+        candidate.topology.enabled_adapters = Some(vec![AdapterId::new("je-5")]);
+        candidate.plugins.allowlist = Some(vec!["proto-candidate".to_string()]);
+        candidate.profiles.default_gameplay = GameplayProfileId::new("readonly");
+        candidate.admin.ui_profile = AdminUiProfileId::new("console-v2");
+
+        let plan = active.plan_topology_reload(&candidate)?;
+
+        assert_eq!(plan.next_active_config.network, candidate.network);
+        assert_eq!(plan.next_active_config.topology, candidate.topology);
+        assert_eq!(plan.next_active_config.bootstrap, active.bootstrap);
+        assert_eq!(plan.next_active_config.plugins, active.plugins);
+        assert_eq!(plan.next_active_config.profiles, active.profiles);
+        assert_eq!(plan.next_active_config.admin, active.admin);
+        Ok(())
+    }
+
+    #[test]
+    fn topology_reload_plan_rejects_bootstrap_diff() {
+        let active = configured_server_config();
+        let mut candidate = active.clone();
+        candidate.bootstrap.world_dir = PathBuf::from("runtime").join("other-world");
+
+        let error = active
+            .plan_topology_reload(&candidate)
+            .expect_err("topology reload should reject bootstrap diffs");
+        assert_config_error_contains(error, "bootstrap config changes require a restart");
+    }
+
+    #[test]
+    fn topology_reload_plan_rejects_admin_grpc_transport_diff() {
+        let active = configured_server_config();
+        let mut candidate = active.clone();
+        candidate.admin.grpc.allow_non_loopback = true;
+
+        let error = active
+            .plan_topology_reload(&candidate)
+            .expect_err("topology reload should reject admin transport diffs");
+        assert_config_error_contains(error, "admin.grpc transport changes require a restart");
+    }
+
+    #[test]
+    fn core_reload_plan_updates_only_core_reloadable_fields() -> Result<(), ServerConfigError> {
+        let active = configured_server_config();
+        let mut candidate = active.clone();
+        candidate.bootstrap.level_name = "candidate-world".to_string();
+        candidate.bootstrap.game_mode = 1;
+        candidate.bootstrap.difficulty = 3;
+        candidate.bootstrap.view_distance = 5;
+        candidate.network.max_players = 31;
+        candidate.network.motd = "candidate-motd".to_string();
+        candidate.plugins.allowlist = Some(vec!["proto-candidate".to_string()]);
+        candidate.profiles.default_gameplay = GameplayProfileId::new("readonly");
+        candidate.admin.ui_profile = AdminUiProfileId::new("console-v2");
+
+        let plan = active.plan_core_reload(&candidate)?;
+
+        assert_eq!(
+            plan.next_active_config.bootstrap.level_name,
+            candidate.bootstrap.level_name
+        );
+        assert_eq!(
+            plan.next_active_config.bootstrap.game_mode,
+            candidate.bootstrap.game_mode
+        );
+        assert_eq!(
+            plan.next_active_config.bootstrap.difficulty,
+            candidate.bootstrap.difficulty
+        );
+        assert_eq!(
+            plan.next_active_config.bootstrap.view_distance,
+            candidate.bootstrap.view_distance
+        );
+        assert_eq!(
+            plan.next_active_config.network.max_players,
+            candidate.network.max_players
+        );
+        assert_eq!(plan.next_active_config.network.motd, active.network.motd);
+        assert_eq!(plan.next_active_config.topology, active.topology);
+        assert_eq!(plan.next_active_config.plugins, active.plugins);
+        assert_eq!(plan.next_active_config.profiles, active.profiles);
+        assert_eq!(plan.next_active_config.admin, active.admin);
+        assert_eq!(plan.core_config.level_name, "candidate-world");
+        assert_eq!(plan.core_config.game_mode, 1);
+        assert_eq!(plan.core_config.difficulty, 3);
+        assert_eq!(plan.core_config.view_distance, 5);
+        assert_eq!(plan.core_config.max_players, 31);
+        Ok(())
+    }
+
+    #[test]
+    fn core_reload_plan_rejects_restart_required_bootstrap_diff() {
+        let active = configured_server_config();
+        let mut candidate = active.clone();
+        candidate.bootstrap.plugins_dir = PathBuf::from("runtime").join("other-plugins");
+
+        let error = active
+            .plan_core_reload(&candidate)
+            .expect_err("core reload should reject plugins_dir diffs");
+        assert_config_error_contains(error, "bootstrap config changes require a restart");
+    }
+
+    #[test]
+    fn core_reload_plan_rejects_admin_grpc_transport_diff() {
+        let active = configured_server_config();
+        let mut candidate = active.clone();
+        candidate.admin.grpc.bind_addr = "127.0.0.1:50052"
+            .parse()
+            .expect("loopback admin grpc addr should parse");
+
+        let error = active
+            .plan_core_reload(&candidate)
+            .expect_err("core reload should reject admin transport diffs");
+        assert_config_error_contains(error, "admin.grpc transport changes require a restart");
+    }
+
+    #[test]
+    fn full_reload_plan_adopts_candidate_config_and_selection() -> Result<(), ServerConfigError> {
+        let active = configured_server_config();
+        let mut candidate = active.clone();
+        candidate.bootstrap.level_name = "candidate-world".to_string();
+        candidate.bootstrap.game_mode = 1;
+        candidate.bootstrap.difficulty = 3;
+        candidate.bootstrap.view_distance = 5;
+        candidate.network.max_players = 31;
+        candidate.network.motd = "candidate-motd".to_string();
+        candidate.plugins.allowlist = Some(vec!["proto-candidate".to_string()]);
+        candidate.profiles.default_gameplay = GameplayProfileId::new("readonly");
+        candidate.admin.ui_profile = AdminUiProfileId::new("console-v2");
+
+        let plan = active.plan_full_reload(&candidate)?;
+
+        assert_eq!(plan.next_active_config, candidate);
+        assert_eq!(plan.core_config.level_name, "candidate-world");
+        assert_eq!(plan.core_config.game_mode, 1);
+        assert_eq!(plan.core_config.difficulty, 3);
+        assert_eq!(plan.core_config.view_distance, 5);
+        assert_eq!(plan.core_config.max_players, 31);
+        assert_eq!(
+            plan.plugin_host_selection,
+            candidate.plugin_host_runtime_selection_config()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn full_reload_plan_rejects_restart_required_static_diff() {
+        let active = configured_server_config();
+        let mut candidate = active.clone();
+        candidate.bootstrap.storage_profile = StorageProfileId::new("other-storage");
+
+        let error = active
+            .plan_full_reload(&candidate)
+            .expect_err("full reload should reject storage profile diffs");
+        assert_config_error_contains(error, "bootstrap config changes require a restart");
+    }
 }

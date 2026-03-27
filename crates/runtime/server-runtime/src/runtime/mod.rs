@@ -364,16 +364,8 @@ impl RuntimeServer {
         self.selection.current().await
     }
 
-    pub(crate) async fn update_generation_config(&self, candidate_config: &ServerConfig) {
-        self.selection
-            .update_generation_config(candidate_config)
-            .await;
-    }
-
-    pub(crate) async fn update_core_reload_config(&self, candidate_config: &ServerConfig) {
-        self.selection
-            .update_core_reload_config(candidate_config)
-            .await;
+    pub(crate) async fn replace_active_config(&self, next_active_config: ServerConfig) {
+        self.selection.replace_config(next_active_config).await;
     }
 }
 

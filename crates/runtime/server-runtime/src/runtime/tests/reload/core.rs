@@ -76,6 +76,10 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
     updated.bootstrap.game_mode = 0;
     updated.bootstrap.difficulty = 3;
     updated.network.max_players = 31;
+    updated.network.motd = "ignored-core-motd".to_string();
+    updated.plugins.buffer_limits.protocol_response_bytes = 8192;
+    updated.profiles.default_gameplay = "readonly".into();
+    updated.admin.ui_profile = "console-v2".into();
     write_server_toml_for_reload(&config_path, &updated)?;
 
     let result = server.reload_runtime_core().await?;
@@ -112,6 +116,20 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
     assert_eq!(selection.config.bootstrap.game_mode, 0);
     assert_eq!(selection.config.bootstrap.difficulty, 3);
     assert_eq!(selection.config.network.max_players, 31);
+    assert_eq!(selection.config.network.motd, initial.network.motd);
+    assert_eq!(
+        selection
+            .config
+            .plugins
+            .buffer_limits
+            .protocol_response_bytes,
+        initial.plugins.buffer_limits.protocol_response_bytes
+    );
+    assert_eq!(
+        selection.config.profiles.default_gameplay,
+        initial.profiles.default_gameplay
+    );
+    assert_eq!(selection.config.admin.ui_profile, initial.admin.ui_profile);
 
     server.shutdown().await
 }
