@@ -471,7 +471,7 @@ async fn run_server_process(
     let committed_upgrade = upgrade_coordinator.take_committed_upgrade().await;
     if let Some(_committed_upgrade) = committed_upgrade {
         if let Some(grpc) = grpc.take() {
-            grpc.join().await?;
+            grpc.teardown_after_upgrade_commit().await?;
         }
         drop(control_plane);
         drop(upgrade_coordinator);

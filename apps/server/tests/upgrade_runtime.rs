@@ -194,10 +194,35 @@ async fn reload_runtime_full(client: &mut AdminClient) -> Result<(), Box<dyn std
     Ok(())
 }
 
+fn persisted_log_diagnostics(logs: &PersistedServerLogCapture) -> String {
+    match logs.read() {
+        Ok((stdout, stderr)) => format!("stdout:\n{stdout}\nstderr:\n{stderr}"),
+        Err(error) => format!("failed to read persisted server logs: {error}"),
+    }
+}
+
+fn wait_for_clean_parent_exit(
+    parent: &mut std::process::Child,
+    logs: &PersistedServerLogCapture,
+    timeout: Duration,
+    expectation: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let exit_status = wait_for_exit(parent, timeout)?;
+    let diagnostics = persisted_log_diagnostics(logs);
+    let Some(exit_status) = exit_status else {
+        return Err(format!("{expectation}; {diagnostics}").into());
+    };
+    if !exit_status.success() {
+        return Err(format!("{expectation}; status={exit_status}; {diagnostics}").into());
+    }
+    Ok(())
+}
+
 async fn shutdown_runtime_via_grpc(
     client: &mut AdminClient,
     grpc_addr: SocketAddr,
     parent: &mut std::process::Child,
+    logs: &PersistedServerLogCapture,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Err(error) = client
         .shutdown(authorized_request(proto::ShutdownRequest {}))
@@ -210,13 +235,18 @@ async fn shutdown_runtime_via_grpc(
             return Err(Box::new(error));
         }
     }
-    wait_for_tcp_closed(grpc_addr, Duration::from_secs(10))?;
-    let exit_status = wait_for_exit(parent, Duration::from_secs(10))?
-        .ok_or("parent process should exit once the upgraded child shuts down")?;
-    assert!(
-        exit_status.success(),
-        "parent process should exit cleanly; status={exit_status}"
-    );
+    wait_for_tcp_closed(grpc_addr, Duration::from_secs(10)).map_err(|error| {
+        format!(
+            "upgraded child gRPC listener should close after shutdown: {error}; {}",
+            persisted_log_diagnostics(logs)
+        )
+    })?;
+    wait_for_clean_parent_exit(
+        parent,
+        logs,
+        Duration::from_secs(10),
+        "original parent process should exit cleanly after successful cutover",
+    )?;
     Ok(())
 }
 
@@ -362,7 +392,7 @@ async fn grpc_upgrade_play_session_survives_cutover_and_accepts_new_connections(
     let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-play-continuity");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
-    let (mut child, _logs) = spawn_logged_server(temp_dir.path(), "grpc-upgrade-play-continuity")?;
+    let (mut child, logs) = spawn_logged_server(temp_dir.path(), "grpc-upgrade-play-continuity")?;
     let grpc_addr = SocketAddr::from(([127, 0, 0, 1], grpc_port));
     let mut client = wait_for_grpc_client(grpc_addr, Duration::from_secs(5)).await?;
     let game_addr = fetch_runtime_tcp_listener_addr(&mut client).await?;
@@ -431,7 +461,7 @@ async fn grpc_upgrade_play_session_survives_cutover_and_accepts_new_connections(
     let (_fresh_stream, _fresh_buffer) =
         connect_and_login_java_client(upgraded_game_addr, &codec, protocol, "up-play-b")
             .map_err(|error| format!("fresh post-upgrade login failed: {error}"))?;
-    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child).await
+    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child, &logs).await
 }
 
 #[tokio::test]
@@ -446,7 +476,7 @@ async fn grpc_upgrade_freeze_blocks_mutating_admin_requests_and_preserves_buffer
     let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-freeze-phase");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
-    let (mut child, _logs) = spawn_logged_server_with_envs(
+    let (mut child, logs) = spawn_logged_server_with_envs(
         temp_dir.path(),
         "grpc-upgrade-freeze-phase",
         &[("REVY_UPGRADE_TEST_HOLD_AFTER_SESSION_FREEZE_MS", "600")],
@@ -548,7 +578,7 @@ async fn grpc_upgrade_freeze_blocks_mutating_admin_requests_and_preserves_buffer
     })?;
     assert_eq!(held_item_from_packet(protocol, &held_item)?, 8);
 
-    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child).await
+    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child, &logs).await
 }
 
 #[tokio::test]
@@ -562,8 +592,7 @@ async fn grpc_upgrade_status_session_survives_cutover() -> Result<(), Box<dyn st
     let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-status-continuity");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
-    let (mut child, _logs) =
-        spawn_logged_server(temp_dir.path(), "grpc-upgrade-status-continuity")?;
+    let (mut child, logs) = spawn_logged_server(temp_dir.path(), "grpc-upgrade-status-continuity")?;
     let grpc_addr = SocketAddr::from(([127, 0, 0, 1], grpc_port));
     let mut client = wait_for_grpc_client(grpc_addr, Duration::from_secs(5)).await?;
     let game_addr = fetch_runtime_tcp_listener_addr(&mut client).await?;
@@ -593,6 +622,12 @@ async fn grpc_upgrade_status_session_survives_cutover() -> Result<(), Box<dyn st
         fetch_runtime_tcp_listener_addr(&mut child_client).await?,
         game_addr
     );
+    wait_for_clean_parent_exit(
+        &mut child,
+        &logs,
+        Duration::from_secs(5),
+        "original parent process should exit after successful cutover even while the pre-cutover status session stays open",
+    )?;
 
     write_packet(&mut stream, &codec, &status_ping(12_345))?;
     let pong = read_until_java_packet(
@@ -607,7 +642,7 @@ async fn grpc_upgrade_status_session_survives_cutover() -> Result<(), Box<dyn st
     assert_eq!(parse_status_pong(&pong)?, 12_345);
 
     drop(stream);
-    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child).await
+    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child, &logs).await
 }
 
 #[tokio::test]
@@ -628,7 +663,7 @@ async fn grpc_upgrade_online_login_session_survives_cutover()
     options.plugins_dir_override = Some(runtime_plugins_dir);
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
-    let (mut child, _logs) = spawn_logged_server(temp_dir.path(), "grpc-upgrade-online-login")?;
+    let (mut child, logs) = spawn_logged_server(temp_dir.path(), "grpc-upgrade-online-login")?;
     let grpc_addr = SocketAddr::from(([127, 0, 0, 1], grpc_port));
     let mut client = wait_for_grpc_client(grpc_addr, Duration::from_secs(10)).await?;
     let game_addr = fetch_runtime_tcp_listener_addr(&mut client).await?;
@@ -696,7 +731,7 @@ async fn grpc_upgrade_online_login_session_survives_cutover()
     .map_err(|error| format!("encrypted held-item echo after cutover failed: {error}"))?;
     assert_eq!(held_item_from_packet(protocol, &changed_slot)?, 5);
 
-    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child).await
+    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child, &logs).await
 }
 
 #[tokio::test]
@@ -711,8 +746,7 @@ async fn grpc_upgrade_after_full_reload_preserves_play_session()
     let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-after-full-reload");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
-    let (mut child, _logs) =
-        spawn_logged_server(temp_dir.path(), "grpc-upgrade-after-full-reload")?;
+    let (mut child, logs) = spawn_logged_server(temp_dir.path(), "grpc-upgrade-after-full-reload")?;
     let grpc_addr = SocketAddr::from(([127, 0, 0, 1], grpc_port));
     let mut client = wait_for_grpc_client(grpc_addr, Duration::from_secs(5)).await?;
     reload_runtime_full(&mut client).await?;
@@ -775,7 +809,7 @@ async fn grpc_upgrade_after_full_reload_preserves_play_session()
     .map_err(|error| format!("post-reload post-upgrade held-item echo failed: {error}"))?;
     assert_eq!(held_item_from_packet(protocol, &changed_slot)?, 6);
 
-    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child).await
+    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child, &logs).await
 }
 
 #[tokio::test]

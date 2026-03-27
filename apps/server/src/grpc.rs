@@ -15,9 +15,12 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
+use tokio::time::{Duration, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
+
+const UPGRADE_COMMIT_GRPC_TEARDOWN_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub(crate) struct AdminGrpcServerHandle {
@@ -26,6 +29,7 @@ pub(crate) struct AdminGrpcServerHandle {
     shutdown_rx: watch::Receiver<bool>,
     incoming_tx: mpsc::Sender<Result<TcpListenerStream, std::io::Error>>,
     accept_state: AdminGrpcAcceptState,
+    server_join_handle: JoinHandle<()>,
     server_done_rx: oneshot::Receiver<Result<(), RuntimeError>>,
 }
 
@@ -121,6 +125,26 @@ impl AdminGrpcServerHandle {
             join_handle.await.map_err(RuntimeError::from)??;
         }
         self.wait_for_server_exit().await
+    }
+
+    pub(crate) async fn teardown_after_upgrade_commit(mut self) -> Result<(), RuntimeError> {
+        if let AdminGrpcAcceptState::Accepting { join_handle, .. } =
+            std::mem::replace(&mut self.accept_state, AdminGrpcAcceptState::Paused)
+        {
+            join_handle.abort();
+        }
+        match timeout(
+            UPGRADE_COMMIT_GRPC_TEARDOWN_GRACE,
+            self.wait_for_server_exit(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                self.server_join_handle.abort();
+                Ok(())
+            }
+        }
     }
 }
 
@@ -246,7 +270,7 @@ pub(crate) async fn spawn_admin_grpc_server_from_std_listener(
         shutdown_tx,
     };
     let (server_done_tx, server_done_rx) = oneshot::channel();
-    tokio::spawn(async move {
+    let server_join_handle = tokio::spawn(async move {
         let result = async move {
             tonic::transport::Server::builder()
                 .add_service(AdminControlPlaneServer::new(service))
@@ -269,6 +293,7 @@ pub(crate) async fn spawn_admin_grpc_server_from_std_listener(
             control_tx: spawned_accept.control_tx,
             join_handle: spawned_accept.join_handle,
         },
+        server_join_handle,
         server_done_rx,
     })
 }
