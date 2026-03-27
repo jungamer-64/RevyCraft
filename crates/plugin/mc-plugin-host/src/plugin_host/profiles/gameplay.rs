@@ -2,11 +2,11 @@ use super::{
     Arc, ConnectionPhase, GameplayCapabilitySet, GameplayCommand, GameplayProfileHandle,
     GameplayProfileId, GameplayRequest, GameplayResponse, GameplaySessionSnapshot, PlayerId,
     PluginFailureAction, PluginFailureDispatch, PluginGenerationId, PluginKind,
-    ReloadableGenerationSlot, ServerCore, SessionCapabilitySet, TargetedEvent,
+    ReloadableGenerationSlot, ServerCore, SessionCapabilitySet,
     with_gameplay_transaction_and_limits,
 };
 use crate::PluginHostError;
-use mc_core::ConnectionId;
+use mc_core::{ConnectionId, GameplayJournal, GameplayTransaction};
 
 pub(crate) struct HotSwappableGameplayProfile {
     plugin_id: String,
@@ -76,29 +76,33 @@ impl HotSwappableGameplayProfile {
         }
     }
 
-    fn invoke_request(
+    fn prepare_request(
         &self,
-        core: &mut ServerCore,
+        core: ServerCore,
         now_ms: u64,
         request: GameplayRequest,
-    ) -> Result<Option<Vec<TargetedEvent>>, PluginHostError> {
+    ) -> Result<GameplayJournal, PluginHostError> {
         self.generation.with_reload_read(|generation| {
             if self.failures.is_active_quarantined(&self.plugin_id) {
-                return Ok(Some(Vec::new()));
+                return Ok(GameplayJournal::empty(now_ms));
             }
 
-            let mut tx = core.begin_gameplay_transaction(now_ms);
+            let mut tx = GameplayTransaction::detached(core, now_ms);
             let response =
                 with_gameplay_transaction_and_limits(&mut tx, generation.buffer_limits, || {
                     generation.invoke(&request)
                 });
             match response {
-                Ok(GameplayResponse::Empty) => Ok(Some(tx.commit())),
-                Ok(other) => self.handle_runtime_failure::<Option<Vec<TargetedEvent>>>(format!(
-                    "unexpected gameplay response payload: {other:?}"
-                )),
+                Ok(GameplayResponse::Empty) => Ok(tx.into_journal()),
+                Ok(other) => {
+                    self.handle_runtime_failure::<()>(format!(
+                        "unexpected gameplay response payload: {other:?}"
+                    ))?;
+                    Ok(GameplayJournal::empty(now_ms))
+                }
                 Err(error) => {
-                    self.handle_runtime_failure::<Option<Vec<TargetedEvent>>>(error.to_string())
+                    self.handle_runtime_failure::<()>(error.to_string())?;
+                    Ok(GameplayJournal::empty(now_ms))
                 }
             }
         })
@@ -134,21 +138,24 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
         Some(self.generation.generation_id())
     }
 
-    fn handle_player_join(
+    fn prepare_player_join(
         &self,
-        core: &mut ServerCore,
+        core: ServerCore,
         session: &SessionCapabilitySet,
         connection_id: ConnectionId,
         username: String,
         player_id: PlayerId,
         now_ms: u64,
-    ) -> Result<Vec<TargetedEvent>, PluginHostError> {
-        let mut tx = core.begin_gameplay_transaction(now_ms);
+    ) -> Result<GameplayJournal, PluginHostError> {
+        let mut tx = GameplayTransaction::detached(core, now_ms);
         if let Some(rejection) = tx
             .begin_login(connection_id, username, player_id)
             .map_err(PluginHostError::Config)?
         {
-            return Ok(rejection);
+            for event in rejection {
+                tx.emit_event(event.target, event.event);
+            }
+            return Ok(tx.into_journal());
         }
         let request = GameplayRequest::HandlePlayerJoin {
             session: self.session_snapshot(ConnectionPhase::Login, session, Some(player_id)),
@@ -158,7 +165,7 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
             if self.failures.is_active_quarantined(&self.plugin_id) {
                 tx.finalize_login(connection_id, player_id)
                     .map_err(PluginHostError::Config)?;
-                return Ok(tx.commit());
+                return Ok(tx.into_journal());
             }
             let response =
                 with_gameplay_transaction_and_limits(&mut tx, generation.buffer_limits, || {
@@ -168,41 +175,33 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
                 Ok(GameplayResponse::Empty) => {
                     tx.finalize_login(connection_id, player_id)
                         .map_err(PluginHostError::Config)?;
-                    Ok(tx.commit())
+                    Ok(tx.into_journal())
                 }
-                Ok(other) => self
-                    .handle_runtime_failure(format!("unexpected gameplay join payload: {other:?}"))
-                    .map(|events: Vec<TargetedEvent>| {
-                        if events.is_empty() {
-                            tx.finalize_login(connection_id, player_id)
-                                .expect("login finalize should succeed after prepared login");
-                            tx.commit()
-                        } else {
-                            events
-                        }
-                    }),
-                Err(error) => self
-                    .handle_runtime_failure::<Vec<TargetedEvent>>(error.to_string())
-                    .map(|events: Vec<TargetedEvent>| {
-                        if events.is_empty() {
-                            tx.finalize_login(connection_id, player_id)
-                                .expect("login finalize should succeed after prepared login");
-                            tx.commit()
-                        } else {
-                            events
-                        }
-                    }),
+                Ok(other) => {
+                    self.handle_runtime_failure::<()>(format!(
+                        "unexpected gameplay join payload: {other:?}"
+                    ))?;
+                    tx.finalize_login(connection_id, player_id)
+                        .map_err(PluginHostError::Config)?;
+                    Ok(tx.into_journal())
+                }
+                Err(error) => {
+                    self.handle_runtime_failure::<()>(error.to_string())?;
+                    tx.finalize_login(connection_id, player_id)
+                        .map_err(PluginHostError::Config)?;
+                    Ok(tx.into_journal())
+                }
             }
         })
     }
 
-    fn handle_command(
+    fn prepare_command(
         &self,
-        core: &mut ServerCore,
+        core: ServerCore,
         session: &SessionCapabilitySet,
         command: &GameplayCommand,
         now_ms: u64,
-    ) -> Result<Vec<TargetedEvent>, PluginHostError> {
+    ) -> Result<GameplayJournal, PluginHostError> {
         let request = GameplayRequest::HandleCommand {
             session: self.session_snapshot(
                 ConnectionPhase::Play,
@@ -211,25 +210,21 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
             ),
             command: command.clone(),
         };
-        Ok(self
-            .invoke_request(core, now_ms, request)?
-            .unwrap_or_default())
+        self.prepare_request(core, now_ms, request)
     }
 
-    fn handle_tick(
+    fn prepare_tick(
         &self,
-        core: &mut ServerCore,
+        core: ServerCore,
         session: &SessionCapabilitySet,
         player_id: PlayerId,
         now_ms: u64,
-    ) -> Result<Vec<TargetedEvent>, PluginHostError> {
+    ) -> Result<GameplayJournal, PluginHostError> {
         let request = GameplayRequest::HandleTick {
             session: self.session_snapshot(ConnectionPhase::Play, session, Some(player_id)),
             now_ms,
         };
-        Ok(self
-            .invoke_request(core, now_ms, request)?
-            .unwrap_or_default())
+        self.prepare_request(core, now_ms, request)
     }
 
     fn session_closed(&self, session: &GameplaySessionSnapshot) -> Result<(), PluginHostError> {

@@ -1,7 +1,7 @@
 use crate::RuntimeError;
 use crate::runtime::{
-    RuntimeServer, SessionControl, SessionMessage, SessionRuntimeContext, SharedSessionState,
-    now_ms,
+    KernelCommandOutcome, RuntimeServer, SessionControl, SessionMessage, SessionRuntimeContext,
+    SharedSessionState, now_ms,
 };
 use mc_core::{
     CoreCommand, CoreEvent, EventTarget, PlayerSummary, RuntimeCommand, SessionCommand,
@@ -65,7 +65,24 @@ impl RuntimeServer {
             .kernel
             .apply_command(command, session_capabilities, gameplay, now_ms())
             .await?;
-        self.dispatch_events(events).await;
+        match events {
+            KernelCommandOutcome::Events(events) => self.dispatch_events(events).await,
+            KernelCommandOutcome::StaleGameplayCommand { player_id } => {
+                let events = self.kernel.session_resync_events(player_id).await;
+                self.dispatch_events(events).await;
+            }
+            KernelCommandOutcome::StaleLogin { connection_id } => {
+                self.dispatch_events(vec![TargetedEvent {
+                    target: EventTarget::Connection(connection_id),
+                    event: CoreEvent::Disconnect {
+                        reason:
+                            "login state changed while processing your request; please try again"
+                                .to_string(),
+                    },
+                }])
+                .await;
+            }
+        }
         Ok(())
     }
 
@@ -113,8 +130,18 @@ impl RuntimeServer {
 
     async fn tick_guarded(&self) -> Result<(), RuntimeError> {
         let gameplay_sessions = self.sessions.gameplay_sessions_for_tick().await;
-        let events = self.kernel.tick(&gameplay_sessions, now_ms()).await?;
+        let now_ms = now_ms();
+        let events = self.kernel.apply_builtin_tick(now_ms).await?;
         self.dispatch_events(events).await;
+        for (player_id, session_capabilities, gameplay) in gameplay_sessions {
+            if let Some(events) = self
+                .kernel
+                .apply_gameplay_tick(player_id, session_capabilities, gameplay, now_ms)
+                .await?
+            {
+                self.dispatch_events(events).await;
+            }
+        }
         Ok(())
     }
 

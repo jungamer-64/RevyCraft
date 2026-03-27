@@ -68,6 +68,96 @@ pub(super) mod entity_id_probe_gameplay_plugin {
     export_plugin!(gameplay, EntityIdProbeGameplayPlugin, MANIFEST);
 }
 
+pub(super) mod counting_gameplay_plugin {
+    use mc_core::{
+        GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
+    };
+    use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
+    use mc_plugin_sdk_rust::export_plugin;
+    use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin};
+    use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    static COMMAND_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Default)]
+    pub struct CountingGameplayPlugin;
+
+    pub fn reset_invocations() {
+        COMMAND_INVOCATIONS.store(0, Ordering::SeqCst);
+    }
+
+    pub fn command_invocations() -> usize {
+        COMMAND_INVOCATIONS.load(Ordering::SeqCst)
+    }
+
+    fn test_lock_slot() -> &'static Mutex<()> {
+        static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        TEST_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    pub fn lock() -> MutexGuard<'static, ()> {
+        test_lock_slot()
+            .lock()
+            .expect("counting gameplay plugin test lock should not be poisoned")
+    }
+
+    impl RustGameplayPlugin for CountingGameplayPlugin {
+        fn descriptor(&self) -> GameplayDescriptor {
+            GameplayDescriptor {
+                profile: GameplayProfileId::new("counting"),
+            }
+        }
+
+        fn capability_set(&self) -> GameplayCapabilitySet {
+            let mut capabilities = GameplayCapabilitySet::new();
+            let _ = capabilities.insert(GameplayCapability::RuntimeReload);
+            capabilities
+        }
+
+        fn handle_command(
+            &self,
+            host: &dyn GameplayHost,
+            _session: &GameplaySessionSnapshot,
+            command: &GameplayCommand,
+        ) -> Result<(), String> {
+            COMMAND_INVOCATIONS.fetch_add(1, Ordering::SeqCst);
+            match command {
+                GameplayCommand::SetHeldSlot { player_id, slot } => {
+                    host.read_player_snapshot(*player_id)?.ok_or_else(|| {
+                        "counting gameplay plugin expected a live player".to_string()
+                    })?;
+                    host.set_selected_hotbar_slot(
+                        *player_id,
+                        u8::try_from(*slot).map_err(|_| {
+                            "counting gameplay plugin expected a non-negative held slot".to_string()
+                        })?,
+                    )?;
+                    Ok(())
+                }
+                other => Err(format!(
+                    "counting gameplay plugin only supports SetHeldSlot, got {other:?}"
+                )),
+            }
+        }
+
+        fn handle_player_join(
+            &self,
+            _host: &dyn GameplayHost,
+            _session: &GameplaySessionSnapshot,
+            _player: PlayerId,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    const MANIFEST: StaticPluginManifest =
+        StaticPluginManifest::gameplay("gameplay-counting", "Counting Gameplay Plugin", "counting");
+
+    export_plugin!(gameplay, CountingGameplayPlugin, MANIFEST);
+}
+
 pub(super) mod custom_wire_codec_protocol_plugin {
     use mc_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use mc_plugin_api::abi::{

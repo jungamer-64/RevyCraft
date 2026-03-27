@@ -17,8 +17,8 @@ use super::{
     ProtocolError, ProtocolGeneration, ProtocolRequest, ProtocolResponse, RuntimeError, RwLock,
     ServerCore, ServerListStatus, SessionCapabilitySet, StatusRequest, StorageAdapter,
     StorageCapabilitySet, StorageError, StorageGeneration, StorageProfileHandle, StorageProfileId,
-    StorageRequest, StorageResponse, SystemTime, TargetedEvent, TransportKind, WireCodec,
-    WireFormatKind, WireFrameDecodeResult, WorldSnapshot, with_gameplay_transaction_and_limits,
+    StorageRequest, StorageResponse, SystemTime, TransportKind, WireCodec, WireFormatKind,
+    WireFrameDecodeResult, WorldSnapshot, with_gameplay_transaction_and_limits,
 };
 use mc_proto_common::Edition;
 

@@ -13,7 +13,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
-pub use self::core::transaction::GameplayTransaction;
+pub use self::core::transaction::{
+    GameplayJournal, GameplayJournalApplyResult, GameplayTransaction,
+};
 pub use self::core::{
     ActiveMiningState, ChestWindowBinding, ChestWindowState, ClientView, ContainerDescriptor,
     CoreConfig, CoreRuntimeStateBlob, DroppedItemState, FurnaceWindowBinding, FurnaceWindowState,

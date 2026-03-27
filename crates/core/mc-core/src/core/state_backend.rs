@@ -171,6 +171,7 @@ pub(super) struct OverlayStateRef<'a> {
 }
 
 impl TxOverlay {
+    #[allow(dead_code)]
     pub(super) fn materialize_into(
         self,
         base: &mut ServerCore,
@@ -1243,6 +1244,7 @@ impl CoreStateMut for OverlayState<'_> {
     }
 }
 
+#[allow(dead_code)]
 fn apply_optional_entry<K, V>(map: &mut BTreeMap<K, V>, key: K, value: Option<V>)
 where
     K: Ord + Clone,

@@ -172,6 +172,170 @@ fn gameplay_command_snapshot_preserves_entity_id() {
 }
 
 #[test]
+fn gameplay_prepare_command_journal_replays_host_mutations() {
+    use mc_core::{
+        ConnectionId, CoreCommand, CoreEvent, EventTarget, GameplayCapabilitySet, GameplayCommand,
+        GameplayJournalApplyResult, GameplayProfileId, ProtocolCapabilitySet, SessionCapabilitySet,
+    };
+
+    let _guard = counting_gameplay_plugin::lock();
+    counting_gameplay_plugin::reset_invocations();
+    let entrypoints = counting_gameplay_plugin::in_process_plugin_entrypoints();
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
+            plugin_id: "gameplay-counting".to_string(),
+            manifest: entrypoints.manifest,
+            api: entrypoints.api,
+        }),
+        PluginAbiRange::default(),
+        PluginFailureMatrix::default(),
+    );
+    host.activate_gameplay_profiles(&RuntimeSelectionConfig {
+        default_gameplay_profile: "counting".into(),
+        ..runtime_selection_config()
+    })
+    .expect("counting gameplay profile should activate");
+
+    let profile = host
+        .resolve_gameplay_profile("counting")
+        .expect("counting gameplay profile should resolve");
+    let player_id = PlayerId(Uuid::from_u128(17));
+    let mut core = ServerCore::new(CoreConfig::default());
+    let _ = core.apply_command(
+        CoreCommand::LoginStart {
+            connection_id: ConnectionId(1),
+            username: "counting".to_string(),
+            player_id,
+        },
+        0,
+    );
+    let runtime_state = core.export_runtime_state();
+    let entity_id = runtime_state
+        .online_players
+        .get(&player_id)
+        .expect("logged-in player should expose an entity id");
+    let journal = profile
+        .prepare_command(
+            core.clone(),
+            &SessionCapabilitySet {
+                protocol: ProtocolCapabilitySet::new(),
+                gameplay: GameplayCapabilitySet::new(),
+                gameplay_profile: GameplayProfileId::new("counting"),
+                entity_id: Some(entity_id.session.entity_id),
+                protocol_generation: None,
+                gameplay_generation: None,
+            },
+            &GameplayCommand::SetHeldSlot { player_id, slot: 4 },
+            0,
+        )
+        .expect("counting gameplay profile should prepare a detached journal");
+    let events = match core.validate_and_apply_gameplay_journal(journal) {
+        GameplayJournalApplyResult::Applied(events) => events,
+        GameplayJournalApplyResult::Conflict => {
+            panic!("prepared gameplay journal should replay against an unchanged core")
+        }
+    };
+
+    assert_eq!(counting_gameplay_plugin::command_invocations(), 1);
+    assert!(events.iter().any(|event| {
+        matches!(
+            (&event.target, &event.event),
+            (
+                EventTarget::Player(event_player_id),
+                CoreEvent::SelectedHotbarSlotChanged { slot: 4 }
+            ) if *event_player_id == player_id
+        )
+    }));
+    assert_eq!(
+        core.export_runtime_state()
+            .online_players
+            .get(&player_id)
+            .expect("player should remain online")
+            .player
+            .selected_hotbar_slot,
+        4
+    );
+}
+
+#[test]
+fn gameplay_prepare_command_conflict_does_not_reinvoke_callback() {
+    use mc_core::{
+        ConnectionId, CoreCommand, GameplayCapabilitySet, GameplayCommand,
+        GameplayJournalApplyResult, GameplayProfileId, ProtocolCapabilitySet, SessionCapabilitySet,
+    };
+
+    let _guard = counting_gameplay_plugin::lock();
+    counting_gameplay_plugin::reset_invocations();
+    let entrypoints = counting_gameplay_plugin::in_process_plugin_entrypoints();
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
+            plugin_id: "gameplay-counting".to_string(),
+            manifest: entrypoints.manifest,
+            api: entrypoints.api,
+        }),
+        PluginAbiRange::default(),
+        PluginFailureMatrix::default(),
+    );
+    host.activate_gameplay_profiles(&RuntimeSelectionConfig {
+        default_gameplay_profile: "counting".into(),
+        ..runtime_selection_config()
+    })
+    .expect("counting gameplay profile should activate");
+
+    let profile = host
+        .resolve_gameplay_profile("counting")
+        .expect("counting gameplay profile should resolve");
+    let player_id = PlayerId(Uuid::from_u128(18));
+    let mut core = ServerCore::new(CoreConfig::default());
+    let _ = core.apply_command(
+        CoreCommand::LoginStart {
+            connection_id: ConnectionId(2),
+            username: "counting-stale".to_string(),
+            player_id,
+        },
+        0,
+    );
+    let runtime_state = core.export_runtime_state();
+    let entity_id = runtime_state
+        .online_players
+        .get(&player_id)
+        .expect("logged-in player should expose an entity id");
+    let session = SessionCapabilitySet {
+        protocol: ProtocolCapabilitySet::new(),
+        gameplay: GameplayCapabilitySet::new(),
+        gameplay_profile: GameplayProfileId::new("counting"),
+        entity_id: Some(entity_id.session.entity_id),
+        protocol_generation: None,
+        gameplay_generation: None,
+    };
+    let journal = profile
+        .prepare_command(
+            core.clone(),
+            &session,
+            &GameplayCommand::SetHeldSlot { player_id, slot: 5 },
+            0,
+        )
+        .expect("counting gameplay profile should prepare a detached journal");
+
+    let _ = core.apply_command(CoreCommand::SetHeldSlot { player_id, slot: 1 }, 0);
+
+    assert_eq!(
+        core.validate_and_apply_gameplay_journal(journal),
+        GameplayJournalApplyResult::Conflict
+    );
+    assert_eq!(counting_gameplay_plugin::command_invocations(), 1);
+    assert_eq!(
+        core.export_runtime_state()
+            .online_players
+            .get(&player_id)
+            .expect("player should remain online")
+            .player
+            .selected_hotbar_slot,
+        1
+    );
+}
+
+#[test]
 fn unknown_gameplay_profile_fails_activation() {
     let canonical = canonical_gameplay_entrypoints();
     let host = build_test_plugin_host(

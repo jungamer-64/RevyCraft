@@ -543,6 +543,7 @@ pub(super) fn reduce_core_op(
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn build_applied_core_events(
     core: &ServerCore,
     applied_ops: impl IntoIterator<Item = AppliedCoreOp>,

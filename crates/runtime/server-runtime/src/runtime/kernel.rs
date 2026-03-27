@@ -1,7 +1,7 @@
 use crate::RuntimeError;
 use mc_core::{
-    CoreCommand, CoreEvent, CoreRuntimeStateBlob, PlayerId, PlayerSummary, ServerCore,
-    SessionCapabilitySet, TargetedEvent,
+    ConnectionId, CoreCommand, CoreEvent, CoreRuntimeStateBlob, GameplayJournalApplyResult,
+    PlayerId, PlayerSummary, ServerCore, SessionCapabilitySet, TargetedEvent,
 };
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_host::host::PluginFailureAction;
@@ -9,10 +9,13 @@ use mc_plugin_host::runtime::{GameplayProfileHandle, RuntimePluginHost, StorageP
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+#[cfg(test)]
+use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 struct KernelState {
     core: ServerCore,
     dirty: bool,
+    revision: u64,
 }
 
 pub(crate) struct ExportedCoreRuntimeState {
@@ -20,10 +23,18 @@ pub(crate) struct ExportedCoreRuntimeState {
     pub(crate) dirty: bool,
 }
 
+pub(crate) enum KernelCommandOutcome {
+    Events(Vec<TargetedEvent>),
+    StaleGameplayCommand { player_id: PlayerId },
+    StaleLogin { connection_id: ConnectionId },
+}
+
 pub(crate) struct RuntimeKernel {
     storage_profile: Arc<dyn StorageProfileHandle>,
     world_dir: PathBuf,
     state: Mutex<KernelState>,
+    #[cfg(test)]
+    detached_gameplay_pause_hook: AsyncMutex<Option<DetachedGameplayPauseHook>>,
 }
 
 impl RuntimeKernel {
@@ -35,7 +46,13 @@ impl RuntimeKernel {
         Self {
             storage_profile,
             world_dir,
-            state: Mutex::new(KernelState { core, dirty: false }),
+            state: Mutex::new(KernelState {
+                core,
+                dirty: false,
+                revision: 0,
+            }),
+            #[cfg(test)]
+            detached_gameplay_pause_hook: AsyncMutex::new(None),
         }
     }
 
@@ -45,7 +62,7 @@ impl RuntimeKernel {
         session_capabilities: Option<SessionCapabilitySet>,
         gameplay: Option<Arc<dyn GameplayProfileHandle>>,
         now_ms: u64,
-    ) -> Result<Vec<TargetedEvent>, RuntimeError> {
+    ) -> Result<KernelCommandOutcome, RuntimeError> {
         let should_persist = matches!(
             command,
             CoreCommand::LoginStart { .. }
@@ -59,8 +76,7 @@ impl RuntimeKernel {
                 | CoreCommand::UseBlock { .. }
                 | CoreCommand::Disconnect { .. }
         );
-        let mut state = self.state.lock().await;
-        let events = match command {
+        match command {
             CoreCommand::LoginStart {
                 connection_id,
                 username,
@@ -69,25 +85,38 @@ impl RuntimeKernel {
                 if let (Some(session_capabilities), Some(gameplay)) =
                     (session_capabilities.as_ref(), gameplay.as_ref())
                 {
-                    gameplay
-                        .handle_player_join(
-                            &mut state.core,
+                    let (snapshot, revision) = self.snapshot_for_detached_gameplay().await;
+                    let journal = gameplay
+                        .prepare_player_join(
+                            snapshot,
                             session_capabilities,
                             connection_id,
                             username,
                             player_id,
                             now_ms,
                         )
-                        .map_err(|error| RuntimeError::Config(error.to_string()))?
+                        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+                    Ok(self
+                        .commit_detached_gameplay_journal(
+                            revision,
+                            journal,
+                            should_persist,
+                            KernelCommandOutcome::StaleLogin { connection_id },
+                        )
+                        .await?)
                 } else {
-                    state.core.apply_command(
-                        CoreCommand::LoginStart {
-                            connection_id,
-                            username,
-                            player_id,
-                        },
-                        now_ms,
-                    )
+                    Ok(KernelCommandOutcome::Events(
+                        self.apply_direct_command(
+                            CoreCommand::LoginStart {
+                                connection_id,
+                                username,
+                                player_id,
+                            },
+                            now_ms,
+                            should_persist,
+                        )
+                        .await,
+                    ))
                 }
             }
             command => {
@@ -95,28 +124,42 @@ impl RuntimeKernel {
                     if let (Some(session_capabilities), Some(gameplay)) =
                         (session_capabilities.as_ref(), gameplay.as_ref())
                     {
-                        gameplay
-                            .handle_command(
-                                &mut state.core,
+                        let player_id = gameplay_command.player_id();
+                        let (snapshot, revision) = self.snapshot_for_detached_gameplay().await;
+                        let journal = gameplay
+                            .prepare_command(
+                                snapshot,
                                 session_capabilities,
                                 &gameplay_command,
                                 now_ms,
                             )
-                            .map_err(|error| RuntimeError::Config(error.to_string()))?
+                            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+                        Ok(self
+                            .commit_detached_gameplay_journal(
+                                revision,
+                                journal,
+                                should_persist,
+                                KernelCommandOutcome::StaleGameplayCommand { player_id },
+                            )
+                            .await?)
                     } else {
-                        state
-                            .core
-                            .apply_builtin_gameplay_command(gameplay_command, now_ms)
+                        Ok(KernelCommandOutcome::Events(
+                            self.apply_builtin_gameplay_command(
+                                gameplay_command,
+                                now_ms,
+                                should_persist,
+                            )
+                            .await,
+                        ))
                     }
                 } else {
-                    state.core.apply_command(command, now_ms)
+                    Ok(KernelCommandOutcome::Events(
+                        self.apply_direct_command(command, now_ms, should_persist)
+                            .await,
+                    ))
                 }
             }
-        };
-        if should_persist {
-            state.dirty = true;
         }
-        Ok(events)
     }
 
     #[cfg(test)]
@@ -133,31 +176,43 @@ impl RuntimeKernel {
             .open_crafting_table(player_id, window_id, title)
     }
 
-    pub(crate) async fn tick(
+    pub(crate) async fn apply_builtin_tick(
         &self,
-        gameplay_sessions: &[(
-            PlayerId,
-            SessionCapabilitySet,
-            Arc<dyn GameplayProfileHandle>,
-        )],
         now_ms: u64,
     ) -> Result<Vec<TargetedEvent>, RuntimeError> {
         let mut state = self.state.lock().await;
-        let mut events = state.core.tick(now_ms);
-        for (player_id, session_capabilities, gameplay) in gameplay_sessions {
-            events.extend(
-                gameplay
-                    .handle_tick(&mut state.core, session_capabilities, *player_id, now_ms)
-                    .map_err(|error| RuntimeError::Config(error.to_string()))?,
-            );
-        }
-        if events
-            .iter()
-            .any(|event| !matches!(event.event, CoreEvent::KeepAliveRequested { .. }))
-        {
-            state.dirty = true;
-        }
+        let events = state.core.tick(now_ms);
+        self.record_commit_side_effects(&mut state, &events, None);
         Ok(events)
+    }
+
+    pub(crate) async fn apply_gameplay_tick(
+        &self,
+        player_id: PlayerId,
+        session_capabilities: SessionCapabilitySet,
+        gameplay: Arc<dyn GameplayProfileHandle>,
+        now_ms: u64,
+    ) -> Result<Option<Vec<TargetedEvent>>, RuntimeError> {
+        let (snapshot, revision) = self.snapshot_for_detached_gameplay().await;
+        let journal = gameplay
+            .prepare_tick(snapshot, &session_capabilities, player_id, now_ms)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        #[cfg(test)]
+        self.maybe_pause_before_detached_gameplay_commit_for_test()
+            .await;
+        let mut state = self.state.lock().await;
+        let apply_result = if revision == state.revision {
+            state.core.validate_and_apply_gameplay_journal(journal)
+        } else {
+            state.core.validate_and_apply_gameplay_journal(journal)
+        };
+        match apply_result {
+            GameplayJournalApplyResult::Applied(events) => {
+                self.record_commit_side_effects(&mut state, &events, None);
+                Ok(Some(events))
+            }
+            GameplayJournalApplyResult::Conflict => Ok(None),
+        }
     }
 
     pub(crate) async fn snapshot(&self) -> mc_core::WorldSnapshot {
@@ -176,6 +231,7 @@ impl RuntimeKernel {
         let mut state = self.state.lock().await;
         state.core = candidate;
         state.dirty = dirty;
+        state.revision = state.revision.saturating_add(1);
     }
 
     pub(crate) async fn player_summary(&self) -> PlayerSummary {
@@ -191,7 +247,31 @@ impl RuntimeKernel {
     }
 
     pub(crate) async fn set_max_players(&self, max_players: u8) {
-        self.state.lock().await.core.set_max_players(max_players);
+        let mut state = self.state.lock().await;
+        state.core.set_max_players(max_players);
+        state.revision = state.revision.saturating_add(1);
+    }
+
+    pub(crate) async fn session_resync_events(&self, player_id: PlayerId) -> Vec<TargetedEvent> {
+        self.state
+            .lock()
+            .await
+            .core
+            .session_resync_events(player_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn arm_detached_gameplay_pause_for_test(&self) -> DetachedGameplayPauseHandle {
+        let (reached_tx, reached_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        *self.detached_gameplay_pause_hook.lock().await = Some(DetachedGameplayPauseHook {
+            reached_tx: Some(reached_tx),
+            release_rx,
+        });
+        DetachedGameplayPauseHandle {
+            reached_rx,
+            release_tx: Some(release_tx),
+        }
     }
 
     pub(crate) fn world_dir(&self) -> &std::path::Path {
@@ -247,5 +327,508 @@ impl RuntimeKernel {
             }
             Err(error) => Err(RuntimeError::Storage(error)),
         }
+    }
+
+    async fn snapshot_for_detached_gameplay(&self) -> (ServerCore, u64) {
+        let state = self.state.lock().await;
+        (state.core.clone(), state.revision)
+    }
+
+    async fn apply_direct_command(
+        &self,
+        command: CoreCommand,
+        now_ms: u64,
+        should_persist: bool,
+    ) -> Vec<TargetedEvent> {
+        let mut state = self.state.lock().await;
+        let events = state.core.apply_command(command, now_ms);
+        self.record_commit_side_effects(&mut state, &events, should_persist.then_some(()));
+        events
+    }
+
+    async fn apply_builtin_gameplay_command(
+        &self,
+        command: mc_core::GameplayCommand,
+        now_ms: u64,
+        should_persist: bool,
+    ) -> Vec<TargetedEvent> {
+        let mut state = self.state.lock().await;
+        let events = state.core.apply_builtin_gameplay_command(command, now_ms);
+        self.record_commit_side_effects(&mut state, &events, should_persist.then_some(()));
+        events
+    }
+
+    async fn commit_detached_gameplay_journal(
+        &self,
+        snapshot_revision: u64,
+        journal: mc_core::GameplayJournal,
+        should_persist: bool,
+        stale_outcome: KernelCommandOutcome,
+    ) -> Result<KernelCommandOutcome, RuntimeError> {
+        #[cfg(test)]
+        self.maybe_pause_before_detached_gameplay_commit_for_test()
+            .await;
+        let mut state = self.state.lock().await;
+        let apply_result = if snapshot_revision == state.revision {
+            state.core.validate_and_apply_gameplay_journal(journal)
+        } else {
+            state.core.validate_and_apply_gameplay_journal(journal)
+        };
+        Ok(match apply_result {
+            GameplayJournalApplyResult::Applied(events) => {
+                self.record_commit_side_effects(&mut state, &events, should_persist.then_some(()));
+                KernelCommandOutcome::Events(events)
+            }
+            GameplayJournalApplyResult::Conflict => stale_outcome,
+        })
+    }
+
+    fn record_commit_side_effects(
+        &self,
+        state: &mut KernelState,
+        events: &[TargetedEvent],
+        force_dirty: Option<()>,
+    ) {
+        if force_dirty.is_some()
+            || events
+                .iter()
+                .any(|event| !matches!(event.event, CoreEvent::KeepAliveRequested { .. }))
+        {
+            state.dirty = true;
+        }
+        if force_dirty.is_some() || !events.is_empty() {
+            state.revision = state.revision.saturating_add(1);
+        }
+    }
+
+    #[cfg(test)]
+    async fn maybe_pause_before_detached_gameplay_commit_for_test(&self) {
+        let hook = self.detached_gameplay_pause_hook.lock().await.take();
+        let Some(mut hook) = hook else {
+            return;
+        };
+        if let Some(reached_tx) = hook.reached_tx.take() {
+            let _ = reached_tx.send(());
+        }
+        let _ = hook.release_rx.await;
+    }
+}
+
+#[cfg(test)]
+struct DetachedGameplayPauseHook {
+    reached_tx: Option<oneshot::Sender<()>>,
+    release_rx: oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+pub(crate) struct DetachedGameplayPauseHandle {
+    reached_rx: oneshot::Receiver<()>,
+    release_tx: Option<oneshot::Sender<()>>,
+}
+
+#[cfg(test)]
+impl DetachedGameplayPauseHandle {
+    pub(crate) async fn wait_until_reached(&mut self) {
+        let _ = (&mut self.reached_rx).await;
+    }
+
+    pub(crate) fn release(mut self) {
+        if let Some(release_tx) = self.release_tx.take() {
+            let _ = release_tx.send(());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_core::{
+        ConnectionId, CoreConfig, EntityId, EventTarget, GameplayCapabilitySet, GameplayCommand,
+        GameplayJournal, GameplayProfileId, GameplayTransaction, PlayerId, ProtocolCapabilitySet,
+        SessionCapabilitySet, StorageCapabilitySet,
+    };
+    use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+    use mc_plugin_host::PluginHostError;
+    use mc_proto_common::StorageError;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use uuid::Uuid;
+
+    struct NullStorage;
+
+    impl StorageProfileHandle for NullStorage {
+        fn plugin_id(&self) -> &str {
+            "null-storage"
+        }
+
+        fn capability_set(&self) -> StorageCapabilitySet {
+            StorageCapabilitySet::new()
+        }
+
+        fn plugin_generation_id(&self) -> Option<mc_core::PluginGenerationId> {
+            None
+        }
+
+        fn load_snapshot(
+            &self,
+            _world_dir: &Path,
+        ) -> Result<Option<mc_core::WorldSnapshot>, StorageError> {
+            Ok(None)
+        }
+
+        fn save_snapshot(
+            &self,
+            _world_dir: &Path,
+            _snapshot: &mc_core::WorldSnapshot,
+        ) -> Result<(), StorageError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct TrackingGameplayProfile {
+        command_invocations: AtomicUsize,
+        join_invocations: AtomicUsize,
+        tick_invocations: AtomicUsize,
+    }
+
+    impl GameplayProfileHandle for TrackingGameplayProfile {
+        fn profile_id(&self) -> GameplayProfileId {
+            GameplayProfileId::new("tracking")
+        }
+
+        fn capability_set(&self) -> GameplayCapabilitySet {
+            GameplayCapabilitySet::new()
+        }
+
+        fn plugin_generation_id(&self) -> Option<mc_core::PluginGenerationId> {
+            None
+        }
+
+        fn prepare_player_join(
+            &self,
+            snapshot: ServerCore,
+            _session: &SessionCapabilitySet,
+            connection_id: ConnectionId,
+            username: String,
+            player_id: PlayerId,
+            now_ms: u64,
+        ) -> Result<GameplayJournal, PluginHostError> {
+            self.join_invocations.fetch_add(1, Ordering::SeqCst);
+            let mut tx = GameplayTransaction::detached(snapshot, now_ms);
+            if let Some(rejection) = tx
+                .begin_login(connection_id, username, player_id)
+                .map_err(PluginHostError::Config)?
+            {
+                for event in rejection {
+                    tx.emit_event(event.target, event.event);
+                }
+                return Ok(tx.into_journal());
+            }
+            tx.finalize_login(connection_id, player_id)
+                .map_err(PluginHostError::Config)?;
+            Ok(tx.into_journal())
+        }
+
+        fn prepare_command(
+            &self,
+            snapshot: ServerCore,
+            _session: &SessionCapabilitySet,
+            command: &GameplayCommand,
+            now_ms: u64,
+        ) -> Result<GameplayJournal, PluginHostError> {
+            self.command_invocations.fetch_add(1, Ordering::SeqCst);
+            let mut tx = GameplayTransaction::detached(snapshot, now_ms);
+            match command {
+                GameplayCommand::SetHeldSlot { player_id, slot } => {
+                    tx.player_snapshot(*player_id).ok_or_else(|| {
+                        PluginHostError::Config(
+                            "tracking profile expected a live player".to_string(),
+                        )
+                    })?;
+                    let slot = u8::try_from(*slot).map_err(|_| {
+                        PluginHostError::Config(
+                            "tracking profile expected a non-negative held slot".to_string(),
+                        )
+                    })?;
+                    tx.set_selected_hotbar_slot(*player_id, slot);
+                }
+                other => {
+                    return Err(PluginHostError::Config(format!(
+                        "tracking profile only supports SetHeldSlot, got {other:?}"
+                    )));
+                }
+            }
+            Ok(tx.into_journal())
+        }
+
+        fn prepare_tick(
+            &self,
+            snapshot: ServerCore,
+            _session: &SessionCapabilitySet,
+            player_id: PlayerId,
+            now_ms: u64,
+        ) -> Result<GameplayJournal, PluginHostError> {
+            self.tick_invocations.fetch_add(1, Ordering::SeqCst);
+            let mut tx = GameplayTransaction::detached(snapshot, now_ms);
+            tx.player_snapshot(player_id).ok_or_else(|| {
+                PluginHostError::Config("tracking tick expected a live player".to_string())
+            })?;
+            Ok(tx.into_journal())
+        }
+
+        fn session_closed(
+            &self,
+            _session: &GameplaySessionSnapshot,
+        ) -> Result<(), PluginHostError> {
+            Ok(())
+        }
+    }
+
+    fn tracking_player_id(name: &str) -> PlayerId {
+        PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, name.as_bytes()))
+    }
+
+    fn login_session_capabilities() -> SessionCapabilitySet {
+        SessionCapabilitySet {
+            protocol: ProtocolCapabilitySet::new(),
+            gameplay: GameplayCapabilitySet::new(),
+            gameplay_profile: GameplayProfileId::new("tracking"),
+            entity_id: None,
+            protocol_generation: None,
+            gameplay_generation: None,
+        }
+    }
+
+    fn play_session_capabilities(entity_id: EntityId) -> SessionCapabilitySet {
+        SessionCapabilitySet {
+            entity_id: Some(entity_id),
+            ..login_session_capabilities()
+        }
+    }
+
+    fn logged_in_kernel(name: &str) -> (Arc<RuntimeKernel>, PlayerId, SessionCapabilitySet) {
+        let mut core = ServerCore::new(CoreConfig::default());
+        let player_id = tracking_player_id(name);
+        let _events = core.apply_command(
+            CoreCommand::LoginStart {
+                connection_id: ConnectionId(1),
+                username: name.to_string(),
+                player_id,
+            },
+            0,
+        );
+        let runtime_state = core.export_runtime_state();
+        let entity_id = runtime_state
+            .online_players
+            .get(&player_id)
+            .expect("logged-in player should have an entity id");
+        (
+            Arc::new(RuntimeKernel::new(
+                core,
+                Arc::new(NullStorage),
+                PathBuf::from("world"),
+            )),
+            player_id,
+            play_session_capabilities(entity_id.session.entity_id),
+        )
+    }
+
+    async fn selected_hotbar_slot(kernel: &RuntimeKernel, player_id: PlayerId) -> u8 {
+        kernel
+            .export_core_runtime_state()
+            .await
+            .blob
+            .online_players
+            .get(&player_id)
+            .expect("tracking test expected a live player snapshot")
+            .player
+            .selected_hotbar_slot
+    }
+
+    #[tokio::test]
+    async fn detached_gameplay_command_pause_does_not_block_direct_commands()
+    -> Result<(), RuntimeError> {
+        let (kernel, player_id, session) = logged_in_kernel("detached-direct");
+        let gameplay = Arc::new(TrackingGameplayProfile::default());
+        let mut pause = kernel.arm_detached_gameplay_pause_for_test().await;
+        let task_kernel = Arc::clone(&kernel);
+        let task_gameplay = Arc::clone(&gameplay);
+        let task_session = session.clone();
+        let task = tokio::spawn(async move {
+            task_kernel
+                .apply_command(
+                    CoreCommand::SetHeldSlot { player_id, slot: 5 },
+                    Some(task_session),
+                    Some(task_gameplay),
+                    0,
+                )
+                .await
+        });
+
+        pause.wait_until_reached().await;
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            kernel.apply_direct_command(
+                CoreCommand::UpdateClientView {
+                    player_id,
+                    view_distance: 4,
+                },
+                0,
+                false,
+            ),
+        )
+        .await
+        .expect("detached gameplay pause should not hold the kernel lock");
+        pause.release();
+
+        let outcome = task.await.expect("detached gameplay task should join")?;
+        assert!(matches!(outcome, KernelCommandOutcome::Events(_)));
+        assert_eq!(gameplay.command_invocations.load(Ordering::SeqCst), 1);
+        assert_eq!(selected_hotbar_slot(kernel.as_ref(), player_id).await, 5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detached_gameplay_conflict_returns_stale_without_reinvoking_callback()
+    -> Result<(), RuntimeError> {
+        let (kernel, player_id, session) = logged_in_kernel("detached-stale");
+        let gameplay = Arc::new(TrackingGameplayProfile::default());
+        let mut pause = kernel.arm_detached_gameplay_pause_for_test().await;
+        let task_kernel = Arc::clone(&kernel);
+        let task_gameplay = Arc::clone(&gameplay);
+        let task_session = session.clone();
+        let task = tokio::spawn(async move {
+            task_kernel
+                .apply_command(
+                    CoreCommand::SetHeldSlot { player_id, slot: 5 },
+                    Some(task_session),
+                    Some(task_gameplay),
+                    0,
+                )
+                .await
+        });
+
+        pause.wait_until_reached().await;
+        let _events = kernel
+            .apply_builtin_gameplay_command(
+                GameplayCommand::SetHeldSlot { player_id, slot: 1 },
+                0,
+                true,
+            )
+            .await;
+        pause.release();
+
+        let outcome = task.await.expect("stale gameplay task should join")?;
+        assert!(matches!(
+            outcome,
+            KernelCommandOutcome::StaleGameplayCommand { player_id: stale_player_id }
+                if stale_player_id == player_id
+        ));
+        assert_eq!(gameplay.command_invocations.load(Ordering::SeqCst), 1);
+        assert_eq!(selected_hotbar_slot(kernel.as_ref(), player_id).await, 1);
+        let resync_events = kernel.session_resync_events(player_id).await;
+        assert!(resync_events.iter().any(|event| {
+            matches!(
+                (&event.target, &event.event),
+                (
+                    EventTarget::Player(event_player_id),
+                    CoreEvent::SelectedHotbarSlotChanged { slot: 1 }
+                ) if *event_player_id == player_id
+            )
+        }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detached_login_conflict_returns_stale_without_half_online_player()
+    -> Result<(), RuntimeError> {
+        let kernel = Arc::new(RuntimeKernel::new(
+            ServerCore::new(CoreConfig::default()),
+            Arc::new(NullStorage),
+            PathBuf::from("world"),
+        ));
+        let gameplay = Arc::new(TrackingGameplayProfile::default());
+        let player_id = tracking_player_id("detached-login");
+        let mut pause = kernel.arm_detached_gameplay_pause_for_test().await;
+        let task_kernel = Arc::clone(&kernel);
+        let task_gameplay = Arc::clone(&gameplay);
+        let task = tokio::spawn(async move {
+            task_kernel
+                .apply_command(
+                    CoreCommand::LoginStart {
+                        connection_id: ConnectionId(7),
+                        username: "detached-login".to_string(),
+                        player_id,
+                    },
+                    Some(login_session_capabilities()),
+                    Some(task_gameplay),
+                    0,
+                )
+                .await
+        });
+
+        pause.wait_until_reached().await;
+        let _events = kernel
+            .apply_direct_command(
+                CoreCommand::LoginStart {
+                    connection_id: ConnectionId(8),
+                    username: "detached-login".to_string(),
+                    player_id,
+                },
+                0,
+                true,
+            )
+            .await;
+        pause.release();
+
+        let outcome = task.await.expect("detached login task should join")?;
+        assert!(matches!(
+            outcome,
+            KernelCommandOutcome::StaleLogin { connection_id } if connection_id == ConnectionId(7)
+        ));
+        assert_eq!(gameplay.join_invocations.load(Ordering::SeqCst), 1);
+        let state = kernel.export_core_runtime_state().await;
+        assert!(state.blob.online_players.contains_key(&player_id));
+        assert_eq!(state.blob.online_players.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detached_gameplay_tick_pause_does_not_block_direct_commands()
+    -> Result<(), RuntimeError> {
+        let (kernel, player_id, session) = logged_in_kernel("detached-tick");
+        let gameplay = Arc::new(TrackingGameplayProfile::default());
+        let mut pause = kernel.arm_detached_gameplay_pause_for_test().await;
+        let task_kernel = Arc::clone(&kernel);
+        let task_gameplay = Arc::clone(&gameplay);
+        let task_session = session.clone();
+        let task = tokio::spawn(async move {
+            task_kernel
+                .apply_gameplay_tick(player_id, task_session, task_gameplay, 50)
+                .await
+        });
+
+        pause.wait_until_reached().await;
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            kernel.apply_direct_command(
+                CoreCommand::UpdateClientView {
+                    player_id,
+                    view_distance: 5,
+                },
+                0,
+                false,
+            ),
+        )
+        .await
+        .expect("paused gameplay ticks should leave the kernel lock available");
+        pause.release();
+
+        let events = task.await.expect("detached tick task should join")?;
+        assert_eq!(gameplay.tick_invocations.load(Ordering::SeqCst), 1);
+        assert_eq!(events, Some(Vec::new()));
+        Ok(())
     }
 }

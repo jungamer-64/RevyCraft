@@ -12,7 +12,7 @@ mod tests;
 mod topology_manager;
 mod upgrade;
 
-use self::kernel::RuntimeKernel;
+use self::kernel::{KernelCommandOutcome, RuntimeKernel};
 use self::reload_coordinator::ReloadCoordinator;
 use self::selection::{ResolvedRuntimeSelection, SelectionManager};
 use self::session_registry::SessionRegistry;

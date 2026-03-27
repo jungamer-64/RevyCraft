@@ -14,8 +14,9 @@ client packet
         -> Vec<TargetedEvent>
      -> gameplay-owned command
         -> GameplayCommand
+        -> snapshot clone + detached GameplayTransaction
         -> gameplay plugin callback
-        -> GameplayTransaction commit
+        -> validate_and_apply_gameplay_journal(...)
         -> Vec<TargetedEvent>
   -> runtime dispatch
   -> protocol plugin encode
@@ -30,7 +31,7 @@ login/auth flow
   -> GameplayTransaction::begin_login(...)
   -> gameplay plugin HandlePlayerJoin
   -> GameplayTransaction::finalize_login(...)
-  -> transaction commit
+  -> detached journal validate/apply
   -> CoreEvent 群
 ```
 
@@ -41,7 +42,7 @@ login/auth flow
 - `GameplayCommand`
   gameplay plugin に見せる gameplay-owned command だけを抜き出した入力です。`CoreCommand` から分離されます。定義は [`../../crates/core/mc-core/src/events.rs`](../../crates/core/mc-core/src/events.rs) にあります。
 - `GameplayTransaction`
-  gameplay callback 単位で host が開始する invocation-scoped transaction です。plugin はここを通じて world / player / inventory / block を読み書きします。`Ok(())` のときだけ commit されます。定義は [`../../crates/core/mc-core/src/core/transaction.rs`](../../crates/core/mc-core/src/core/transaction.rs) にあります。
+  gameplay callback 単位で host が開始する invocation-scoped transaction です。plugin はここを通じて world / player / inventory / block を読み書きします。runtime は live core を直接触らず、snapshot を読みながら `read-set + op journal` を積み、最後に live core へ validate/apply します。定義は [`../../crates/core/mc-core/src/core/transaction.rs`](../../crates/core/mc-core/src/core/transaction.rs) にあります。
 - `CoreEvent`
   core から外へ出る出力です。最終的に protocol plugin が encode します。定義は [`../../crates/core/mc-core/src/events.rs`](../../crates/core/mc-core/src/events.rs) にあります。
 - `TargetedEvent`
@@ -53,7 +54,7 @@ runtime 側の本体は [`../../crates/runtime/server-runtime/src/runtime/kernel
 
 ### login special-case
 
-`CoreCommand::LoginStart` は gameplay profile があれば `handle_player_join(...)` へ入り、transaction の `begin_login(...)` / `finalize_login(...)` を経由します。実装は [`../../crates/plugin/mc-plugin-host/src/plugin_host/profiles/gameplay.rs`](../../crates/plugin/mc-plugin-host/src/plugin_host/profiles/gameplay.rs) と [`../../crates/core/mc-core/src/core/transaction.rs`](../../crates/core/mc-core/src/core/transaction.rs) にあります。
+`CoreCommand::LoginStart` は gameplay profile があれば `prepare_player_join(...)` へ入り、transaction の `begin_login(...)` / `finalize_login(...)` を経由して detached journal を作ります。runtime はその journal を live core へ validate/apply します。実装は [`../../crates/plugin/mc-plugin-host/src/plugin_host/profiles/gameplay.rs`](../../crates/plugin/mc-plugin-host/src/plugin_host/profiles/gameplay.rs) と [`../../crates/core/mc-core/src/core/transaction.rs`](../../crates/core/mc-core/src/core/transaction.rs) にあります。
 
 ### direct-core command
 
@@ -80,7 +81,7 @@ runtime 側の本体は [`../../crates/runtime/server-runtime/src/runtime/kernel
 - `PlaceBlock`
 - `UseBlock`
 
-ここで runtime が `CoreCommand` を `GameplayCommand` へ落とし、gameplay plugin の `handle_command(...)` を transaction 上で実行します。plugin は host mutation API を通じて draft state を更新し、commit 時に canonical `CoreEvent` 群へ反映されます。
+ここで runtime が `CoreCommand` を `GameplayCommand` へ落とし、gameplay plugin の `prepare_command(...)` を detached transaction 上で 1 回だけ実行します。plugin は host mutation API を通じて draft state を更新し、runtime はその journal を live core に対して validate/apply します。read-set が stale なら callback は再実行せず、結果を authoritative resync/drop に寄せます。
 
 ## login 時に何が足されるか
 
@@ -111,6 +112,7 @@ core の前後で見るべき runtime 側の入口は次です。
 - raw slot や version ごとの inventory quirks は protocol plugin が吸収する
 - core が受け取るのは semantic な `CoreCommand`
 - gameplay plugin は `GameplayCommand` と host transaction API だけに集中する
+- gameplay callback は invocation 開始時点の snapshot を読み、runtime は callback を再実行しない
 - runtime は dispatch と session orchestration に徹する
 
 protocol / gameplay の責務境界を reload 観点で見たいときは [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md) を参照してください。

@@ -5,8 +5,9 @@ use crate::plugin_host::PreparedProtocolTopology;
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_core::{
     AdminUiCapabilitySet, AdminUiProfileId, AuthCapabilitySet, ConnectionId, GameplayCapabilitySet,
-    GameplayCommand, GameplayProfileId, PlayerId, PluginGenerationId, ServerCore,
-    SessionCapabilitySet, StorageCapabilitySet, TargetedEvent, WorldSnapshot,
+    GameplayCommand, GameplayJournal, GameplayJournalApplyResult, GameplayProfileId, PlayerId,
+    PluginGenerationId, ServerCore, SessionCapabilitySet, StorageCapabilitySet, TargetedEvent,
+    WorldSnapshot,
 };
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_api::codec::admin_ui::{AdminRequest, AdminResponse};
@@ -40,6 +41,32 @@ pub trait GameplayProfileHandle: Send + Sync {
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
 
+    fn prepare_player_join(
+        &self,
+        snapshot: ServerCore,
+        session: &SessionCapabilitySet,
+        connection_id: ConnectionId,
+        username: String,
+        player_id: PlayerId,
+        now_ms: u64,
+    ) -> Result<GameplayJournal, PluginHostError>;
+
+    fn prepare_command(
+        &self,
+        snapshot: ServerCore,
+        session: &SessionCapabilitySet,
+        command: &GameplayCommand,
+        now_ms: u64,
+    ) -> Result<GameplayJournal, PluginHostError>;
+
+    fn prepare_tick(
+        &self,
+        snapshot: ServerCore,
+        session: &SessionCapabilitySet,
+        player_id: PlayerId,
+        now_ms: u64,
+    ) -> Result<GameplayJournal, PluginHostError>;
+
     fn handle_player_join(
         &self,
         core: &mut ServerCore,
@@ -48,7 +75,22 @@ pub trait GameplayProfileHandle: Send + Sync {
         username: String,
         player_id: PlayerId,
         now_ms: u64,
-    ) -> Result<Vec<TargetedEvent>, PluginHostError>;
+    ) -> Result<Vec<TargetedEvent>, PluginHostError> {
+        let journal = self.prepare_player_join(
+            core.clone(),
+            session,
+            connection_id,
+            username,
+            player_id,
+            now_ms,
+        )?;
+        match core.validate_and_apply_gameplay_journal(journal) {
+            GameplayJournalApplyResult::Applied(events) => Ok(events),
+            GameplayJournalApplyResult::Conflict => Err(PluginHostError::Config(
+                "prepared gameplay join journal conflicted against the live core".to_string(),
+            )),
+        }
+    }
 
     fn handle_command(
         &self,
@@ -56,7 +98,15 @@ pub trait GameplayProfileHandle: Send + Sync {
         session: &SessionCapabilitySet,
         command: &GameplayCommand,
         now_ms: u64,
-    ) -> Result<Vec<TargetedEvent>, PluginHostError>;
+    ) -> Result<Vec<TargetedEvent>, PluginHostError> {
+        let journal = self.prepare_command(core.clone(), session, command, now_ms)?;
+        match core.validate_and_apply_gameplay_journal(journal) {
+            GameplayJournalApplyResult::Applied(events) => Ok(events),
+            GameplayJournalApplyResult::Conflict => Err(PluginHostError::Config(
+                "prepared gameplay command journal conflicted against the live core".to_string(),
+            )),
+        }
+    }
 
     fn handle_tick(
         &self,
@@ -64,7 +114,15 @@ pub trait GameplayProfileHandle: Send + Sync {
         session: &SessionCapabilitySet,
         player_id: PlayerId,
         now_ms: u64,
-    ) -> Result<Vec<TargetedEvent>, PluginHostError>;
+    ) -> Result<Vec<TargetedEvent>, PluginHostError> {
+        let journal = self.prepare_tick(core.clone(), session, player_id, now_ms)?;
+        match core.validate_and_apply_gameplay_journal(journal) {
+            GameplayJournalApplyResult::Applied(events) => Ok(events),
+            GameplayJournalApplyResult::Conflict => Err(PluginHostError::Config(
+                "prepared gameplay tick journal conflicted against the live core".to_string(),
+            )),
+        }
+    }
 
     /// # Errors
     ///

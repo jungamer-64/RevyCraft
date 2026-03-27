@@ -13,7 +13,7 @@ use mc_core::{
     AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId,
     PlayerId, PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet,
     ServerCore, SessionCapabilitySet, StorageCapability, StorageCapabilitySet, StorageProfileId,
-    TargetedEvent, WorldSnapshot,
+    WorldSnapshot,
 };
 use mc_plugin_api::abi::{
     ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind,

@@ -2540,3 +2540,134 @@ fn gameplay_transaction_commit_preserves_emit_event_order() {
     assert!(selected_index < marker_index);
     assert!(marker_index < inventory_index);
 }
+
+#[test]
+fn gameplay_journal_apply_matches_direct_transaction_commit() {
+    let mut direct_core = ServerCore::new(CoreConfig::default());
+    let mut journal_core = direct_core.clone();
+    let position = BlockPos::new(2, 4, 0);
+
+    let direct_events = {
+        let mut tx = direct_core.begin_gameplay_transaction(0);
+        assert_eq!(tx.block_state(position), BlockState::air());
+        tx.set_block(position, BlockState::glass());
+        tx.commit()
+    };
+
+    let journal = {
+        let mut tx = GameplayTransaction::detached(journal_core.clone(), 0);
+        assert_eq!(tx.block_state(position), BlockState::air());
+        tx.set_block(position, BlockState::glass());
+        tx.into_journal()
+    };
+    let journal_events = match journal_core.validate_and_apply_gameplay_journal(journal) {
+        GameplayJournalApplyResult::Applied(events) => events,
+        GameplayJournalApplyResult::Conflict => {
+            panic!("detached gameplay journal should replay against an unchanged core")
+        }
+    };
+
+    assert_eq!(journal_events, direct_events);
+    assert_eq!(snapshot_block(&journal_core, position), BlockState::glass());
+}
+
+#[test]
+fn gameplay_journal_apply_survives_unrelated_live_change() {
+    let mut core = ServerCore::new(CoreConfig::default());
+    let position = BlockPos::new(1, 4, 0);
+    let unrelated_position = BlockPos::new(5, 4, 0);
+    let journal = {
+        let mut tx = GameplayTransaction::detached(core.clone(), 0);
+        assert_eq!(tx.block_state(position), BlockState::air());
+        tx.set_block(position, BlockState::glass());
+        tx.into_journal()
+    };
+
+    let _ = set_block_via_tx(&mut core, unrelated_position, BlockState::chest(), 0);
+
+    let events = match core.validate_and_apply_gameplay_journal(journal) {
+        GameplayJournalApplyResult::Applied(events) => events,
+        GameplayJournalApplyResult::Conflict => {
+            panic!("unrelated live changes should not invalidate a detached gameplay journal")
+        }
+    };
+
+    let _ = events;
+    assert_eq!(
+        snapshot_block(&core, unrelated_position),
+        BlockState::chest()
+    );
+    assert_eq!(snapshot_block(&core, position), BlockState::glass());
+}
+
+#[test]
+fn gameplay_journal_conflict_drops_partial_mutation_when_player_snapshot_changes() {
+    let (mut core, player_id) = logged_in_creative_core("journal-conflict");
+    let before_hotbar = online_player(&core, player_id)
+        .snapshot
+        .inventory
+        .get_slot(InventorySlot::Hotbar(0))
+        .cloned();
+    let journal = {
+        let mut tx = GameplayTransaction::detached(core.clone(), 0);
+        let _ = tx.player_snapshot(player_id);
+        tx.set_selected_hotbar_slot(player_id, 6);
+        tx.set_inventory_slot(
+            player_id,
+            InventorySlot::Hotbar(0),
+            Some(item("minecraft:glass", 3)),
+        );
+        tx.into_journal()
+    };
+
+    let _ = set_held_slot(&mut core, player_id, 1);
+
+    assert_eq!(
+        core.validate_and_apply_gameplay_journal(journal),
+        GameplayJournalApplyResult::Conflict
+    );
+
+    let after_player = online_player(&core, player_id);
+    assert_eq!(after_player.snapshot.selected_hotbar_slot, 1);
+    assert_eq!(
+        after_player
+            .snapshot
+            .inventory
+            .get_slot(InventorySlot::Hotbar(0))
+            .cloned(),
+        before_hotbar
+    );
+}
+
+#[test]
+fn gameplay_journal_login_conflict_leaves_single_authoritative_player() {
+    let mut core = ServerCore::new(CoreConfig::default());
+    let joining = player_id("journal-login");
+    let journal = {
+        let mut tx = GameplayTransaction::detached(core.clone(), 0);
+        let prepared = tx
+            .begin_login(ConnectionId(7), "journal-login".to_string(), joining)
+            .expect("detached login prepare should succeed");
+        assert!(prepared.is_none());
+        tx.finalize_login(ConnectionId(7), joining)
+            .expect("detached login finalize should succeed");
+        tx.into_journal()
+    };
+
+    let _ = core.apply_command(
+        CoreCommand::LoginStart {
+            connection_id: ConnectionId(8),
+            username: "journal-login".to_string(),
+            player_id: joining,
+        },
+        0,
+    );
+
+    assert_eq!(
+        core.validate_and_apply_gameplay_journal(journal),
+        GameplayJournalApplyResult::Conflict
+    );
+    assert!(core.player_session(joining).is_some());
+    assert!(core.compose_player_snapshot(joining).is_some());
+    assert_eq!(core.player_summary().online_players, 1);
+}

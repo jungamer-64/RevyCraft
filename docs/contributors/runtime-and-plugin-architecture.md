@@ -26,7 +26,7 @@
 - `TopologyManager`
   active / draining generation、listener worker、generation swap を持ちます。
 - `RuntimeKernel`
-  単なる `ServerCore` owner ではなく、reloadable `core runtime` owner として `ServerCore`、tick / save、dirty flag、world_dir、`core` migration の export / materialize / reattach / swap / rollback を持ちます。
+  単なる `ServerCore` owner ではなく、reloadable `core runtime` owner として `ServerCore`、kernel revision、snapshot-isolated gameplay journal commit、tick / save、dirty flag、world_dir、`core` migration の export / materialize / reattach / swap / rollback を持ちます。
 - `SessionRegistry`
   live session handle、accepted queue、connection id、session task を持ちます。
 - `ReloadCoordinator`
@@ -80,7 +80,7 @@ Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host 
 - protocol plugin
   handshake routing、status / login / play packet の decode / encode、transport/version 固有の session state を持ちます。
 - gameplay plugin
-  semantic な `GameplayCommand` を評価し、invocation-scoped `GameplayTransaction` を通じて world / entity を直接更新します。
+  semantic な `GameplayCommand` を評価し、invocation-scoped `GameplayTransaction` を通じて snapshot を読みつつ op journal を積みます。live core への validate/apply は runtime / `mc-core` 側が担当します。
 - storage plugin
   world snapshot の load / save / import / export を担います。`core` migration blob は process-local であり、persistent storage schema とは共有しません。
 - auth plugin
@@ -127,12 +127,14 @@ play phase では次の流れになります。
 
 1. protocol plugin が wire packet を `CoreCommand` へ decode
 2. runtime が command を direct-core と gameplay-owned に分岐する
-3. gameplay-owned command は `GameplayCommand` として gameplay plugin callback へ渡される
-4. gameplay plugin は `GameplayTransaction` 上で read / write し、`Ok(())` のときだけ commit される
-5. `mc-core` / commit 層が canonical `CoreEvent` を生成
+3. gameplay-owned command は `GameplayCommand` として detached gameplay callback へ渡される
+4. gameplay plugin は snapshot-isolated な `GameplayTransaction` 上で read / write し、journal を返す
+5. runtime / `mc-core` が live core に対して journal を validate/apply し、成功した commit だけ canonical `CoreEvent` を生成する
 6. protocol plugin が `CoreEvent` を wire packet 群へ encode
 
 型の細かい流れは [`core-command-event-flow.md`](core-command-event-flow.md) を参照してください。
+
+stale snapshot conflict が起きた場合、runtime は gameplay callback を再実行しません。play command は authoritative resync/drop、login は transient failure disconnect、gameplay tick はその session の当該 tick だけ破棄して次 tick へ持ち越します。
 
 play 中 session は `reload runtime core` と `reload runtime full` の primary target です。protocol 固有 session blob、gameplay 固有 session blob、`core` runtime blob を別々に export / import しつつ、connection 自体は切らない前提で再アタッチします。
 

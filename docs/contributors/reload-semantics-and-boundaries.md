@@ -110,6 +110,8 @@ reload orchestration には 2 つの同期原語があります。
 
 この性質は protocol reload 系テストで検証されている性質をそのまま設計の基盤にし、`core` migration でも同じ gate を使います。
 
+gameplay callback の decontention は別の internal refactor で扱います。`RuntimeKernel` は gameplay callback を snapshot clone 上の journal transaction として lock 外で実行しますが、`consistency_gate` の read/write scope 自体はここでは変えません。
+
 ## rollback と transaction 境界
 
 `artifacts` と `topology` は現行実装に近い best-effort reload ですが、`core` と `full` は rollback-first で扱います。
