@@ -13,6 +13,6 @@ pub use self::api::{
     AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
     AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, AdminUpgradeRuntimeView,
     ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot,
-    RuntimeReloadMode,
+    RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole, RuntimeUpgradeStateView,
 };
 pub use self::error::RuntimeError;

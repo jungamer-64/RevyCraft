@@ -1,9 +1,10 @@
 use crate::RuntimeError;
 use crate::runtime::{
     AcceptedGenerationSession, GenerationAdmission, QueuedAcceptGuard, RuntimeServer,
-    RuntimeUpgradeLoginChallenge, RuntimeUpgradeQueuedMessage, RuntimeUpgradeSessionHandle,
-    RuntimeUpgradeSessionState, SESSION_OUTBOUND_QUEUE_CAPACITY, SessionControl, SessionMessage,
-    SessionState,
+    RuntimeUpgradeLoginChallenge, RuntimeUpgradePhase, RuntimeUpgradeQueuedMessage,
+    RuntimeUpgradeRole, RuntimeUpgradeSessionHandle,
+    RuntimeUpgradeSessionState, RuntimeUpgradeStateView, SESSION_OUTBOUND_QUEUE_CAPACITY,
+    SessionControl, SessionMessage, SessionState,
 };
 use crate::transport::{AcceptedTransportSession, TransportSessionIo, default_wire_codec};
 use bytes::BytesMut;
@@ -196,10 +197,44 @@ impl RuntimeServer {
         mut control_rx: mpsc::Receiver<SessionControl>,
     ) -> Result<(), RuntimeError> {
         let mut exported_for_upgrade = false;
+        let mut frozen_for_upgrade = matches!(
+            self.reload.current_upgrade_state(),
+            Some(RuntimeUpgradeStateView {
+                role: RuntimeUpgradeRole::Child,
+                phase: RuntimeUpgradePhase::ChildWaitingCommit,
+            })
+        );
         let mut transport_io = Some(transport_io);
 
         let result = async {
             loop {
+                if frozen_for_upgrade {
+                    let Some(control) = control_rx.recv().await else {
+                        break;
+                    };
+                    let should_exit = self
+                        .handle_session_control(
+                            connection_id,
+                            &mut transport_io,
+                            &mut session,
+                            &read_buffer,
+                            &mut rx,
+                            control,
+                            &mut frozen_for_upgrade,
+                            &mut exported_for_upgrade,
+                        )
+                        .await?;
+                    if should_exit {
+                        if exported_for_upgrade {
+                            break;
+                        }
+                        return Ok(());
+                    }
+                    if exported_for_upgrade {
+                        break;
+                    }
+                    continue;
+                }
                 match control_rx.try_recv() {
                     Ok(control) => {
                         let should_exit = self
@@ -210,6 +245,7 @@ impl RuntimeServer {
                                 &read_buffer,
                                 &mut rx,
                                 control,
+                                &mut frozen_for_upgrade,
                                 &mut exported_for_upgrade,
                             )
                             .await?;
@@ -237,6 +273,7 @@ impl RuntimeServer {
                                 &read_buffer,
                                 &mut rx,
                                 control,
+                                &mut frozen_for_upgrade,
                                 &mut exported_for_upgrade,
                             ).await?;
                             if should_exit {
@@ -278,6 +315,7 @@ impl RuntimeServer {
                             &read_buffer,
                             &mut rx,
                             control,
+                            &mut frozen_for_upgrade,
                             &mut exported_for_upgrade,
                         ).await?;
                         if should_exit {
@@ -358,6 +396,7 @@ impl RuntimeServer {
         read_buffer: &BytesMut,
         rx: &mut mpsc::Receiver<SessionMessage>,
         control: SessionControl,
+        frozen_for_upgrade: &mut bool,
         exported_for_upgrade: &mut bool,
     ) -> Result<bool, RuntimeError> {
         match control {
@@ -376,10 +415,25 @@ impl RuntimeServer {
                     return Ok(true);
                 }
             }
+            SessionControl::FreezeForUpgrade { ack_tx } => {
+                *frozen_for_upgrade = true;
+                let _ = ack_tx.send(Ok(()));
+            }
+            SessionControl::ResumeAfterUpgradeRollback { ack_tx } => {
+                *frozen_for_upgrade = false;
+                let _ = ack_tx.send(Ok(()));
+            }
             SessionControl::Reattach {
                 instruction,
                 ack_tx,
             } => {
+                if *frozen_for_upgrade {
+                    let _ = ack_tx.send(Err(RuntimeError::Config(
+                        "session reattach is unavailable while runtime upgrade freeze is active"
+                            .to_string(),
+                    )));
+                    return Ok(false);
+                }
                 let result = self
                     .handle_session_reattach(
                         connection_id,
@@ -393,6 +447,12 @@ impl RuntimeServer {
                 let _ = ack_tx.send(result);
             }
             SessionControl::Export { ack_tx } => {
+                if !*frozen_for_upgrade {
+                    let _ = ack_tx.send(Err(RuntimeError::Config(
+                        "session export requested before upgrade freeze completed".to_string(),
+                    )));
+                    return Ok(false);
+                }
                 let prepared = self
                     .prepare_session_export_for_upgrade(connection_id, session, read_buffer, rx)
                     .await;

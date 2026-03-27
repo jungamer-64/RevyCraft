@@ -95,6 +95,26 @@ impl AdminPermission {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RuntimeUpgradeRole {
+    Parent,
+    Child,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RuntimeUpgradePhase {
+    ParentFreezing,
+    ParentWaitingChildReady,
+    ParentRollingBack,
+    ChildWaitingCommit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeUpgradeStateView {
+    pub role: RuntimeUpgradeRole,
+    pub phase: RuntimeUpgradePhase,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdminRequest {
     Help,
@@ -186,6 +206,7 @@ pub struct AdminStatusView {
     pub session_summary: AdminSessionSummaryView,
     pub dirty: bool,
     pub plugin_host: Option<AdminPluginHostView>,
+    pub upgrade: Option<RuntimeUpgradeStateView>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

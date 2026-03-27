@@ -1,5 +1,8 @@
 use super::{GenerationId, RunningServer, RuntimeServer, now_ms};
-use crate::{ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot};
+use crate::{
+    ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot,
+    RuntimeUpgradeStateView,
+};
 use mc_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use mc_proto_common::{ConnectionPhase, TransportKind};
 use serde::{Deserialize, Serialize};
@@ -82,6 +85,7 @@ pub struct RuntimeStatusSnapshot {
     pub session_summary: SessionSummarySnapshot,
     pub dirty: bool,
     pub plugin_host: Option<PluginHostStatusSnapshot>,
+    pub upgrade: Option<RuntimeUpgradeStateView>,
 }
 
 impl RunningServer {
@@ -130,6 +134,7 @@ impl RuntimeServer {
                 .reload
                 .reload_host()
                 .map(|reload_host| summarize_plugin_host_status(reload_host.status())),
+            upgrade: self.reload.current_upgrade_state(),
         }
     }
 
@@ -206,6 +211,13 @@ pub fn format_runtime_status_summary(snapshot: &RuntimeStatusSnapshot) -> String
             plugin_host.active_quarantine_count,
             plugin_host.artifact_quarantine_count,
             plugin_host.pending_fatal_error.as_deref().unwrap_or("none"),
+        ));
+    }
+
+    if let Some(upgrade) = snapshot.upgrade {
+        lines.push(format!(
+            "upgrade role={:?} phase={:?}",
+            upgrade.role, upgrade.phase
         ));
     }
 

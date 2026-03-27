@@ -1,4 +1,6 @@
+use crate::RuntimeError;
 use crate::config::{ServerConfigSource, StaticConfig};
+use crate::{RuntimeUpgradePhase, RuntimeUpgradeRole, RuntimeUpgradeStateView};
 use mc_plugin_host::runtime::RuntimePluginHost;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -12,6 +14,8 @@ pub(crate) struct ReloadCoordinator {
     consistency_gate: Arc<AsyncRwLock<()>>,
     shutting_down: AtomicBool,
     shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    upgrade_state: std::sync::Mutex<Option<RuntimeUpgradeStateView>>,
+    child_upgrade_commit_hold: std::sync::Mutex<Option<OwnedRwLockWriteGuard<()>>>,
 }
 
 impl ReloadCoordinator {
@@ -27,6 +31,8 @@ impl ReloadCoordinator {
             consistency_gate: Arc::new(AsyncRwLock::new(())),
             shutting_down: AtomicBool::new(false),
             shutdown_tx: std::sync::Mutex::new(None),
+            upgrade_state: std::sync::Mutex::new(None),
+            child_upgrade_commit_hold: std::sync::Mutex::new(None),
         }
     }
 
@@ -83,5 +89,59 @@ impl ReloadCoordinator {
             .expect("shutdown mutex should not be poisoned")
             .take()
             .is_some_and(|shutdown_tx| shutdown_tx.send(()).is_ok())
+    }
+
+    pub(crate) fn current_upgrade_state(&self) -> Option<RuntimeUpgradeStateView> {
+        *self
+            .upgrade_state
+            .lock()
+            .expect("upgrade state mutex should not be poisoned")
+    }
+
+    pub(crate) fn set_upgrade_state(
+        &self,
+        role: RuntimeUpgradeRole,
+        phase: RuntimeUpgradePhase,
+    ) {
+        *self
+            .upgrade_state
+            .lock()
+            .expect("upgrade state mutex should not be poisoned") =
+            Some(RuntimeUpgradeStateView { role, phase });
+    }
+
+    pub(crate) fn clear_upgrade_state(&self) {
+        *self
+            .upgrade_state
+            .lock()
+            .expect("upgrade state mutex should not be poisoned") = None;
+    }
+
+    pub(crate) fn install_child_upgrade_commit_hold(&self, hold: OwnedRwLockWriteGuard<()>) {
+        *self
+            .child_upgrade_commit_hold
+            .lock()
+            .expect("child upgrade hold mutex should not be poisoned") = Some(hold);
+    }
+
+    pub(crate) fn release_child_upgrade_commit_hold(&self) {
+        let _ = self
+            .child_upgrade_commit_hold
+            .lock()
+            .expect("child upgrade hold mutex should not be poisoned")
+            .take();
+    }
+
+    pub(crate) fn reject_mutating_admin_action_during_upgrade(
+        &self,
+        action: &str,
+    ) -> Result<(), RuntimeError> {
+        let Some(state) = self.current_upgrade_state() else {
+            return Ok(());
+        };
+        Err(RuntimeError::Config(format!(
+            "admin action `{action}` is unavailable during runtime upgrade: role={:?} phase={:?}",
+            state.role, state.phase
+        )))
     }
 }

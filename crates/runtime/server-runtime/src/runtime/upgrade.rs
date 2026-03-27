@@ -1,6 +1,7 @@
 use super::{
     GenerationId, LoginChallengeState, OnlineAuthKeys, RunningServer, RuntimeServer,
-    ServerSupervisor, SessionControl, SessionMessage,
+    RuntimeUpgradePhase, RuntimeUpgradeRole, ServerSupervisor, SessionControl, SessionHandle,
+    SessionMessage,
 };
 use crate::RuntimeError;
 use crate::config::{ServerConfig, ServerConfigSource};
@@ -15,6 +16,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{OwnedRwLockWriteGuard, oneshot};
+
+#[cfg(debug_assertions)]
+const UPGRADE_TEST_HOLD_AFTER_SESSION_FREEZE_MS_ENV: &str =
+    "REVY_UPGRADE_TEST_HOLD_AFTER_SESSION_FREEZE_MS";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OnlineAuthKeysSnapshot {
@@ -154,6 +159,10 @@ impl RuntimeUpgradeGuard {
     ///
     /// Returns [`RuntimeError`] when listener/session rollback import fails.
     pub async fn rollback(mut self) -> Result<(), RuntimeError> {
+        self.runtime
+            .reload
+            .set_upgrade_state(RuntimeUpgradeRole::Parent, RuntimeUpgradePhase::ParentRollingBack);
+        eprintln!("runtime upgrade phase: parent rolling back");
         if let Some(listener) = self.game_listener.take() {
             self.runtime
                 .topology
@@ -164,11 +173,13 @@ impl RuntimeUpgradeGuard {
             .import_live_sessions_after_upgrade(std::mem::take(&mut self.sessions))
             .await?;
         let _ = self.consistency_guard.take();
+        self.runtime.reload.clear_upgrade_state();
         Ok(())
     }
 
     #[must_use]
     pub fn commit(mut self) -> RuntimeUpgradeCommitHold {
+        eprintln!("runtime upgrade phase: parent committed cutover");
         RuntimeUpgradeCommitHold {
             _consistency_guard: self
                 .consistency_guard
@@ -184,6 +195,13 @@ impl ServerSupervisor {
     /// Returns [`RuntimeError`] when the runtime cannot freeze and export a consistent upgrade snapshot.
     pub async fn begin_runtime_upgrade(&self) -> Result<RuntimeUpgradeGuard, RuntimeError> {
         self.running.begin_runtime_upgrade().await
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the child runtime cannot resume imported sessions after commit.
+    pub async fn finish_child_runtime_upgrade_commit(&self) -> Result<(), RuntimeError> {
+        self.running.finish_child_runtime_upgrade_commit().await
     }
 
     /// # Errors
@@ -206,6 +224,11 @@ impl ServerSupervisor {
         let running =
             boot_server_from_upgrade(config_source, import, loaded_plugins, Some(plugin_host))
                 .await?;
+        running
+            .runtime
+            .reload
+            .set_upgrade_state(RuntimeUpgradeRole::Child, RuntimeUpgradePhase::ChildWaitingCommit);
+        eprintln!("runtime upgrade phase: child waiting for commit");
         Ok(Self { running })
     }
 }
@@ -219,17 +242,41 @@ impl RunningServer {
             ));
         }
 
-        let game_listener = self
-            .runtime
-            .topology
-            .export_tcp_listener_for_upgrade()
-            .await?;
+        self.runtime
+            .reload
+            .set_upgrade_state(RuntimeUpgradeRole::Parent, RuntimeUpgradePhase::ParentFreezing);
+        eprintln!("runtime upgrade phase: parent freezing");
+
+        let game_listener = match self.runtime.topology.export_tcp_listener_for_upgrade().await {
+            Ok(listener) => listener,
+            Err(error) => {
+                self.runtime.reload.clear_upgrade_state();
+                return Err(error);
+            }
+        };
         while self.runtime.sessions.queued_accepts().total_count() != 0 {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
+        let frozen_sessions = match self.runtime.freeze_live_sessions_for_upgrade().await {
+            Ok(frozen) => frozen,
+            Err(error) => {
+                self.runtime
+                    .topology
+                    .import_tcp_listener_after_upgrade_rollback(game_listener, &self.runtime.sessions)
+                    .await?;
+                self.runtime.reload.clear_upgrade_state();
+                return Err(error);
+            }
+        };
+        #[cfg(debug_assertions)]
+        maybe_hold_after_session_freeze_for_test().await;
         let consistency_guard = self.runtime.reload.write_consistency_owned().await;
-        let sessions = match self.runtime.export_live_sessions_for_upgrade().await {
+        let sessions = match self
+            .runtime
+            .export_frozen_live_sessions_for_upgrade(frozen_sessions)
+            .await
+        {
             Ok(sessions) => sessions,
             Err(error) => {
                 self.runtime
@@ -239,26 +286,36 @@ impl RunningServer {
                         &self.runtime.sessions,
                     )
                     .await?;
+                drop(consistency_guard);
+                self.runtime.reload.clear_upgrade_state();
                 return Err(error);
             }
         };
-        let core = self.runtime.kernel.export_core_runtime_state().await;
-        let payload = RuntimeUpgradePayload {
-            config: active_config,
-            active_generation_id: self.runtime.topology.active_generation_id(),
-            core: core.blob,
-            dirty: core.dirty,
-            online_auth_keys: self
-                .runtime
-                .selection
-                .online_auth_keys()
-                .map(|keys| keys.snapshot())
-                .transpose()?,
-            sessions: sessions
-                .iter()
-                .map(|session| session.state.clone())
-                .collect(),
+        let payload = match self
+            .runtime
+            .build_runtime_upgrade_payload(&active_config, &sessions)
+            .await
+        {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.runtime
+                    .topology
+                    .import_tcp_listener_after_upgrade_rollback(
+                        game_listener,
+                        &self.runtime.sessions,
+                    )
+                    .await?;
+                self.runtime.import_live_sessions_after_upgrade(sessions).await?;
+                drop(consistency_guard);
+                self.runtime.reload.clear_upgrade_state();
+                return Err(error);
+            }
         };
+        self.runtime.reload.set_upgrade_state(
+            RuntimeUpgradeRole::Parent,
+            RuntimeUpgradePhase::ParentWaitingChildReady,
+        );
+        eprintln!("runtime upgrade phase: parent waiting for child readiness");
         Ok(RuntimeUpgradeGuard {
             runtime: Arc::clone(&self.runtime),
             consistency_guard: Some(consistency_guard),
@@ -267,35 +324,194 @@ impl RunningServer {
             payload,
         })
     }
+
+    async fn finish_child_runtime_upgrade_commit(&self) -> Result<(), RuntimeError> {
+        self.runtime.finish_child_runtime_upgrade_commit().await
+    }
+}
+
+#[cfg(debug_assertions)]
+async fn maybe_hold_after_session_freeze_for_test() {
+    let Ok(value) = std::env::var(UPGRADE_TEST_HOLD_AFTER_SESSION_FREEZE_MS_ENV) else {
+        return;
+    };
+    let Ok(delay_ms) = value.parse::<u64>() else {
+        return;
+    };
+    if delay_ms != 0 {
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+    }
 }
 
 impl RuntimeServer {
-    pub(super) async fn export_live_sessions_for_upgrade(
+    async fn finish_child_runtime_upgrade_commit(self: &Arc<Self>) -> Result<(), RuntimeError> {
+        self.reload.release_child_upgrade_commit_hold();
+        self.resume_all_live_sessions_after_upgrade_freeze().await?;
+        self.reload.clear_upgrade_state();
+        Ok(())
+    }
+
+    async fn resume_all_live_sessions_after_upgrade_freeze(
         self: &Arc<Self>,
-    ) -> Result<Vec<RuntimeUpgradeSessionHandle>, RuntimeError> {
+    ) -> Result<(), RuntimeError> {
+        self.resume_frozen_live_sessions_after_upgrade_rollback(self.sessions.all_handles().await)
+            .await
+    }
+
+    async fn build_runtime_upgrade_payload(
+        &self,
+        active_config: &ServerConfig,
+        sessions: &[RuntimeUpgradeSessionHandle],
+    ) -> Result<RuntimeUpgradePayload, RuntimeError> {
+        let core = self.kernel.export_core_runtime_state().await;
+        let online_auth_keys = self
+            .selection
+            .online_auth_keys()
+            .map(|keys| keys.snapshot())
+            .transpose()?;
+        Ok(RuntimeUpgradePayload {
+            config: active_config.clone(),
+            active_generation_id: self.topology.active_generation_id(),
+            core: core.blob,
+            dirty: core.dirty,
+            online_auth_keys,
+            sessions: sessions
+                .iter()
+                .map(|session| session.state.clone())
+                .collect(),
+        })
+    }
+
+    pub(super) async fn freeze_live_sessions_for_upgrade(
+        self: &Arc<Self>,
+    ) -> Result<Vec<SessionHandle>, RuntimeError> {
         let handles = self.sessions.all_handles().await;
-        let mut exported = Vec::with_capacity(handles.len());
-        for handle in handles {
+        for handle in &handles {
             if handle.transport != TransportKind::Tcp {
-                self.import_live_sessions_after_upgrade(exported).await?;
                 return Err(RuntimeError::Unsupported(
                     "runtime upgrade only supports tcp sessions".to_string(),
                 ));
             }
+        }
+        let mut frozen = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let (ack_tx, ack_rx) = oneshot::channel();
+            if handle
+                .control_tx
+                .send(SessionControl::FreezeForUpgrade { ack_tx })
+                .await
+                .is_err()
+            {
+                self.resume_frozen_live_sessions_after_upgrade_rollback(frozen)
+                    .await?;
+                return Err(RuntimeError::Config(
+                    "failed to freeze live session for upgrade".to_string(),
+                ));
+            }
+            match ack_rx.await.map_err(|_| {
+                RuntimeError::Config("session freeze channel closed unexpectedly".to_string())
+            })? {
+                Ok(()) => frozen.push(handle),
+                Err(error) => {
+                    self.resume_frozen_live_sessions_after_upgrade_rollback(frozen)
+                        .await?;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(frozen)
+    }
+
+    pub(super) async fn resume_frozen_live_sessions_after_upgrade_rollback(
+        self: &Arc<Self>,
+        sessions: Vec<SessionHandle>,
+    ) -> Result<(), RuntimeError> {
+        for handle in sessions {
             let (ack_tx, ack_rx) = oneshot::channel();
             handle
                 .control_tx
-                .send(SessionControl::Export { ack_tx })
+                .send(SessionControl::ResumeAfterUpgradeRollback { ack_tx })
                 .await
                 .map_err(|_| {
-                    RuntimeError::Config("failed to export live session for upgrade".to_string())
+                    RuntimeError::Config(
+                        "failed to resume frozen live session after upgrade rollback".to_string(),
+                    )
                 })?;
+            ack_rx.await.map_err(|_| {
+                RuntimeError::Config(
+                    "session resume acknowledgement channel closed unexpectedly".to_string(),
+                )
+            })??;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn export_frozen_live_sessions_for_upgrade(
+        self: &Arc<Self>,
+        handles: Vec<SessionHandle>,
+    ) -> Result<Vec<RuntimeUpgradeSessionHandle>, RuntimeError> {
+        let mut exported = Vec::with_capacity(handles.len());
+        let mut remaining = handles;
+        while let Some(handle) = remaining.pop() {
+            let (ack_tx, ack_rx) = oneshot::channel();
+            if handle
+                .control_tx
+                .send(SessionControl::Export { ack_tx })
+                .await
+                .is_err()
+            {
+                self.import_live_sessions_after_upgrade(exported).await?;
+                self.resume_frozen_live_sessions_after_upgrade_rollback(remaining)
+                    .await?;
+                let (resume_ack_tx, resume_ack_rx) = oneshot::channel();
+                handle
+                    .control_tx
+                    .send(SessionControl::ResumeAfterUpgradeRollback {
+                        ack_tx: resume_ack_tx,
+                    })
+                    .await
+                    .map_err(|_| {
+                        RuntimeError::Config(
+                            "failed to resume a frozen live session after export failure"
+                                .to_string(),
+                        )
+                    })?;
+                resume_ack_rx.await.map_err(|_| {
+                    RuntimeError::Config(
+                        "session resume acknowledgement channel closed unexpectedly".to_string(),
+                    )
+                })??;
+                return Err(RuntimeError::Config(
+                    "failed to export live session for upgrade".to_string(),
+                ));
+            }
             match ack_rx.await.map_err(|_| {
                 RuntimeError::Config("session export channel closed unexpectedly".to_string())
             })? {
                 Ok(session) => exported.push(session),
                 Err(error) => {
                     self.import_live_sessions_after_upgrade(exported).await?;
+                    self.resume_frozen_live_sessions_after_upgrade_rollback(remaining)
+                        .await?;
+                    let (resume_ack_tx, resume_ack_rx) = oneshot::channel();
+                    handle
+                        .control_tx
+                        .send(SessionControl::ResumeAfterUpgradeRollback {
+                            ack_tx: resume_ack_tx,
+                        })
+                        .await
+                        .map_err(|_| {
+                            RuntimeError::Config(
+                                "failed to resume a frozen live session after export failure"
+                                    .to_string(),
+                            )
+                        })?;
+                    resume_ack_rx.await.map_err(|_| {
+                        RuntimeError::Config(
+                            "session resume acknowledgement channel closed unexpectedly"
+                                .to_string(),
+                        )
+                    })??;
                     return Err(error);
                 }
             }

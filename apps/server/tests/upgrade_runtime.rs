@@ -122,13 +122,47 @@ fn runtime_tcp_listener_addr(
 async fn fetch_runtime_tcp_listener_addr(
     client: &mut AdminClient,
 ) -> Result<SocketAddr, Box<dyn std::error::Error>> {
-    let status = client
+    let status = fetch_status(client).await?;
+    runtime_tcp_listener_addr(&status)
+}
+
+async fn fetch_status(
+    client: &mut AdminClient,
+) -> Result<proto::AdminStatusView, Box<dyn std::error::Error>> {
+    Ok(client
         .get_status(authorized_request(proto::GetStatusRequest {}))
         .await?
         .into_inner()
         .status
-        .ok_or("status response was missing runtime status")?;
-    runtime_tcp_listener_addr(&status)
+        .ok_or("status response was missing runtime status")?)
+}
+
+async fn wait_for_upgrade_phase(
+    client: &mut AdminClient,
+    expected_role: proto::RuntimeUpgradeRole,
+    expected_phase: proto::RuntimeUpgradePhase,
+    timeout: Duration,
+) -> Result<proto::AdminStatusView, Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let status = fetch_status(client).await?;
+        if let Some(upgrade) = status.upgrade.as_ref() {
+            let role = proto::RuntimeUpgradeRole::try_from(upgrade.role)
+                .map_err(|_| "status upgrade role was invalid")?;
+            let phase = proto::RuntimeUpgradePhase::try_from(upgrade.phase)
+                .map_err(|_| "status upgrade phase was invalid")?;
+            if role == expected_role && phase == expected_phase {
+                return Ok(status);
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "timed out waiting for upgrade phase role={expected_role:?} phase={expected_phase:?}"
+            )
+            .into());
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 async fn upgrade_runtime_executable(
@@ -399,6 +433,121 @@ async fn grpc_upgrade_play_session_survives_cutover_and_accepts_new_connections(
 }
 
 #[tokio::test]
+async fn grpc_upgrade_freeze_blocks_mutating_admin_requests_and_preserves_buffered_bytes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let _guard = upgrade_test_lock().lock().await;
+    let temp_dir = tempdir()?;
+    let repo_root = repo_root()?;
+    let grpc_port = reserve_port()?;
+    let world_dir = temp_dir.path().join("world");
+    fs::create_dir_all(&world_dir)?;
+    let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-freeze-phase");
+    write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
+
+    let (mut child, _logs) = spawn_logged_server_with_envs(
+        temp_dir.path(),
+        "grpc-upgrade-freeze-phase",
+        &[("REVY_UPGRADE_TEST_HOLD_AFTER_SESSION_FREEZE_MS", "600")],
+    )?;
+    let grpc_addr = SocketAddr::from(([127, 0, 0, 1], grpc_port));
+    let mut upgrade_client = wait_for_grpc_client(grpc_addr, Duration::from_secs(5)).await?;
+    let mut status_client = grpc_client(grpc_addr).await?;
+    let mut reload_client = grpc_client(grpc_addr).await?;
+    let mut shutdown_client = grpc_client(grpc_addr).await?;
+    let mut second_upgrade_client = grpc_client(grpc_addr).await?;
+    let game_addr = fetch_runtime_tcp_listener_addr(&mut upgrade_client).await?;
+    let codec = MinecraftWireCodec;
+    let protocol = TestJavaProtocol::Je5;
+    let (mut stream, mut buffer) =
+        connect_and_login_java_client(game_addr, &codec, protocol, "freeze-play-a")
+            .map_err(|error| format!("freeze test login failed: {error}"))?;
+    let _ = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        protocol,
+        TestJavaPacket::HeldItemChange,
+        Duration::from_secs(5),
+        24,
+    )
+    .map_err(|error| format!("freeze bootstrap held-item read failed: {error}"))?;
+
+    let upgrade_task = tokio::spawn(async move {
+        upgrade_client
+            .upgrade_runtime(authorized_request(proto::UpgradeRuntimeRequest {
+                executable_path: env!("CARGO_BIN_EXE_server-bootstrap").to_string(),
+            }))
+            .await
+    });
+
+    let freeze_status = wait_for_upgrade_phase(
+        &mut status_client,
+        proto::RuntimeUpgradeRole::Parent,
+        proto::RuntimeUpgradePhase::ParentFreezing,
+        Duration::from_secs(5),
+    )
+    .await?;
+    assert!(freeze_status.upgrade.is_some());
+
+    let reload_error = reload_client
+        .reload_runtime(authorized_request(proto::ReloadRuntimeRequest {
+            mode: proto::RuntimeReloadMode::Full as i32,
+        }))
+        .await
+        .expect_err("reload should be rejected while upgrade freeze is active");
+    assert_eq!(reload_error.code(), Code::FailedPrecondition);
+
+    let shutdown_error = shutdown_client
+        .shutdown(authorized_request(proto::ShutdownRequest {}))
+        .await
+        .expect_err("shutdown should be rejected while upgrade freeze is active");
+    assert_eq!(shutdown_error.code(), Code::FailedPrecondition);
+
+    let second_upgrade_error = second_upgrade_client
+        .upgrade_runtime(authorized_request(proto::UpgradeRuntimeRequest {
+            executable_path: env!("CARGO_BIN_EXE_server-bootstrap").to_string(),
+        }))
+        .await
+        .expect_err("second upgrade should be rejected while upgrade freeze is active");
+    assert_eq!(second_upgrade_error.code(), Code::FailedPrecondition);
+
+    write_packet(&mut stream, &codec, &held_item_change(8))?;
+    assert_no_packet_id(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        protocol
+            .clientbound_packet_id(TestJavaPacket::HeldItemChange)
+            .ok_or("held item change packet should be supported")?,
+        Duration::from_millis(200),
+    )?;
+
+    let upgrade = upgrade_task.await??.into_inner();
+    let upgrade = upgrade
+        .result
+        .ok_or("upgrade response was missing result during freeze test")?;
+    assert_eq!(
+        upgrade.executable_path,
+        env!("CARGO_BIN_EXE_server-bootstrap")
+    );
+
+    let mut child_client = wait_for_grpc_client(grpc_addr, Duration::from_secs(5)).await?;
+    let held_item = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        protocol,
+        TestJavaPacket::HeldItemChange,
+        Duration::from_secs(5),
+        24,
+    )
+    .map_err(|error| format!("buffered held-item change was not delivered after cutover: {error}"))?;
+    assert_eq!(held_item_from_packet(protocol, &held_item)?, 8);
+
+    shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child).await
+}
+
+#[tokio::test]
 async fn grpc_upgrade_status_session_survives_cutover() -> Result<(), Box<dyn std::error::Error>> {
     let _guard = upgrade_test_lock().lock().await;
     let temp_dir = tempdir()?;
@@ -453,6 +602,7 @@ async fn grpc_upgrade_status_session_survives_cutover() -> Result<(), Box<dyn st
     )?;
     assert_eq!(parse_status_pong(&pong)?, 12_345);
 
+    drop(stream);
     shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child).await
 }
 
@@ -821,26 +971,73 @@ async fn grpc_upgrade_ready_timeout_rolls_back_and_keeps_grpc_available()
         "grpc-upgrade-ready-timeout",
         &[
             ("REVY_UPGRADE_TEST_FAULT", "child-ready-timeout"),
-            ("REVY_UPGRADE_TEST_READY_TIMEOUT_MS", "200"),
+            ("REVY_UPGRADE_TEST_READY_TIMEOUT_MS", "500"),
         ],
     )?;
     let grpc_addr = SocketAddr::from(([127, 0, 0, 1], grpc_port));
-    wait_for_tcp_ready(grpc_addr, Duration::from_secs(5))?;
-    let mut client = grpc_client(grpc_addr).await?;
+    let mut upgrade_client = wait_for_grpc_client(grpc_addr, Duration::from_secs(5)).await?;
+    let mut status_client = grpc_client(grpc_addr).await?;
+    let game_addr = fetch_runtime_tcp_listener_addr(&mut upgrade_client).await?;
+    let codec = MinecraftWireCodec;
+    let protocol = TestJavaProtocol::Je5;
+    let (mut stream, mut buffer) =
+        connect_and_login_java_client(game_addr, &codec, protocol, "timeout-play-a")
+            .map_err(|error| format!("ready-timeout login failed: {error}"))?;
+    let _ = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        protocol,
+        TestJavaPacket::HeldItemChange,
+        Duration::from_secs(5),
+        24,
+    )
+    .map_err(|error| format!("ready-timeout bootstrap held-item read failed: {error}"))?;
 
-    let error = client
-        .upgrade_runtime(authorized_request(proto::UpgradeRuntimeRequest {
-            executable_path: env!("CARGO_BIN_EXE_server-bootstrap").to_string(),
-        }))
-        .await
+    let upgrade_task = tokio::spawn(async move {
+        upgrade_client
+            .upgrade_runtime(authorized_request(proto::UpgradeRuntimeRequest {
+                executable_path: env!("CARGO_BIN_EXE_server-bootstrap").to_string(),
+            }))
+            .await
+    });
+
+    let waiting_status = wait_for_upgrade_phase(
+        &mut status_client,
+        proto::RuntimeUpgradeRole::Parent,
+        proto::RuntimeUpgradePhase::ParentWaitingChildReady,
+        Duration::from_secs(5),
+    )
+    .await?;
+    assert!(waiting_status.upgrade.is_some());
+
+    write_packet(&mut stream, &codec, &held_item_change(9))?;
+    assert_no_packet_id(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        protocol
+            .clientbound_packet_id(TestJavaPacket::HeldItemChange)
+            .ok_or("held item change packet should be supported")?,
+        Duration::from_millis(200),
+    )?;
+
+    let error = upgrade_task
+        .await?
         .expect_err("upgrade should fail with injected child ready timeout");
     assert_eq!(error.code(), Code::FailedPrecondition);
 
-    let status = client
-        .get_status(authorized_request(proto::GetStatusRequest {}))
-        .await?
-        .into_inner();
-    assert!(status.status.is_some());
+    let status = fetch_status(&mut status_client).await?;
+    assert!(status.upgrade.is_none());
+    assert_eq!(
+        status
+            .session_summary
+            .as_ref()
+            .ok_or("status session summary was missing after rollback")?
+            .total,
+        1,
+        "rollback should restore the existing play session"
+    );
 
     child.kill()?;
     let _ = child.wait()?;

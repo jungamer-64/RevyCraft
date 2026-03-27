@@ -8,7 +8,8 @@ use server_runtime::runtime::{
     AdminArtifactsReloadView, AdminAuthError, AdminCommandError, AdminControlPlaneHandle,
     AdminFullReloadView, AdminNamedCountView, AdminRuntimeReloadDetail, AdminRuntimeReloadView,
     AdminSessionSummaryView, AdminSessionsView, AdminStatusView, AdminSubject,
-    AdminTopologyReloadView, AdminUpgradeRuntimeView, RuntimeReloadMode,
+    AdminTopologyReloadView, AdminUpgradeRuntimeView, RuntimeReloadMode, RuntimeUpgradePhase,
+    RuntimeUpgradeRole,
 };
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -501,6 +502,32 @@ fn map_status_view(status: AdminStatusView) -> proto::AdminStatusView {
                 artifact_quarantine_count: count_to_u64(plugin_host.artifact_quarantine_count),
                 pending_fatal_error: plugin_host.pending_fatal_error,
             }),
+        upgrade: status.upgrade.map(|upgrade| proto::RuntimeUpgradeStateView {
+            role: map_upgrade_role(upgrade.role),
+            phase: map_upgrade_phase(upgrade.phase),
+        }),
+    }
+}
+
+fn map_upgrade_role(role: RuntimeUpgradeRole) -> i32 {
+    match role {
+        RuntimeUpgradeRole::Parent => proto::RuntimeUpgradeRole::Parent as i32,
+        RuntimeUpgradeRole::Child => proto::RuntimeUpgradeRole::Child as i32,
+    }
+}
+
+fn map_upgrade_phase(phase: RuntimeUpgradePhase) -> i32 {
+    match phase {
+        RuntimeUpgradePhase::ParentFreezing => proto::RuntimeUpgradePhase::ParentFreezing as i32,
+        RuntimeUpgradePhase::ParentWaitingChildReady => {
+            proto::RuntimeUpgradePhase::ParentWaitingChildReady as i32
+        }
+        RuntimeUpgradePhase::ParentRollingBack => {
+            proto::RuntimeUpgradePhase::ParentRollingBack as i32
+        }
+        RuntimeUpgradePhase::ChildWaitingCommit => {
+            proto::RuntimeUpgradePhase::ChildWaitingCommit as i32
+        }
     }
 }
 

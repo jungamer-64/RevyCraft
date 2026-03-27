@@ -12,7 +12,7 @@ use crate::runtime::session_registry::SessionRegistry;
 use crate::runtime::topology_manager::TopologyManager;
 use crate::runtime::{
     ACCEPT_QUEUE_CAPACITY, ActiveGeneration, GenerationId, RunningServer, RuntimeServer,
-    RuntimeUpgradeImport,
+    RuntimeUpgradeImport, RuntimeUpgradePhase, RuntimeUpgradeRole,
 };
 use mc_core::ServerCore;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
@@ -205,6 +205,13 @@ pub(crate) async fn boot_server_from_upgrade(
         #[cfg(test)]
         fail_nth_reattach_send: std::sync::atomic::AtomicUsize::new(0),
     });
+    server
+        .reload
+        .set_upgrade_state(RuntimeUpgradeRole::Child, RuntimeUpgradePhase::ChildWaitingCommit);
+    let child_commit_hold = server.reload.write_consistency_owned().await;
+    server
+        .reload
+        .install_child_upgrade_commit_hold(child_commit_hold);
     server.kernel.set_dirty(import.payload.dirty).await;
     server
         .import_live_sessions_after_upgrade(import.sessions)

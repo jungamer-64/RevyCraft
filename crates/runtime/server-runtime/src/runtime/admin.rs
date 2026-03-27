@@ -255,6 +255,8 @@ impl AdminService {
             .authorize(subject, AdminPermission::ReloadRuntime)
             .await?;
         self.runtime
+            .reject_mutating_admin_action_during_upgrade("reload runtime")?;
+        self.runtime
             .admin_reload_runtime_view(mode)
             .await
             .map_err(Into::into)
@@ -264,6 +266,8 @@ impl AdminService {
         self.runtime
             .authorize(subject, AdminPermission::Shutdown)
             .await?;
+        self.runtime
+            .reject_mutating_admin_action_during_upgrade("shutdown")?;
         let _ = self.runtime.request_shutdown();
         Ok(())
     }
@@ -276,6 +280,8 @@ impl AdminService {
         self.runtime
             .authorize(subject, AdminPermission::UpgradeRuntime)
             .await?;
+        self.runtime
+            .reject_mutating_admin_action_during_upgrade("upgrade runtime")?;
         let Some(upgrade_callback) = &self.upgrade_callback else {
             return Err(RuntimeError::Config(
                 "runtime upgrade is unavailable without an app-level upgrade coordinator"
@@ -357,6 +363,18 @@ impl RuntimeServer {
 
     pub(crate) fn request_shutdown(&self) -> bool {
         self.reload.request_shutdown()
+    }
+
+    pub(crate) fn clear_runtime_upgrade_state(&self) {
+        self.reload.clear_upgrade_state();
+    }
+
+    pub(crate) fn reject_mutating_admin_action_during_upgrade(
+        &self,
+        action: &str,
+    ) -> Result<(), RuntimeError> {
+        self.reload
+            .reject_mutating_admin_action_during_upgrade(action)
     }
 
     pub(crate) async fn authenticate_remote_token(
@@ -511,6 +529,7 @@ impl RuntimeServer {
                 artifact_quarantine_count: status.artifact_quarantine_count,
                 pending_fatal_error: status.pending_fatal_error,
             }),
+            upgrade: snapshot.upgrade,
         }
     }
 
@@ -796,6 +815,26 @@ fn plugin_status_view_from_runtime(status: &AdminStatusView) -> plugin_admin::Ad
                 artifact_quarantine_count: plugin_host.artifact_quarantine_count,
                 pending_fatal_error: plugin_host.pending_fatal_error.clone(),
             }
+        }),
+        upgrade: status.upgrade.map(|upgrade| plugin_admin::RuntimeUpgradeStateView {
+            role: match upgrade.role {
+                super::RuntimeUpgradeRole::Parent => plugin_admin::RuntimeUpgradeRole::Parent,
+                super::RuntimeUpgradeRole::Child => plugin_admin::RuntimeUpgradeRole::Child,
+            },
+            phase: match upgrade.phase {
+                super::RuntimeUpgradePhase::ParentFreezing => {
+                    plugin_admin::RuntimeUpgradePhase::ParentFreezing
+                }
+                super::RuntimeUpgradePhase::ParentWaitingChildReady => {
+                    plugin_admin::RuntimeUpgradePhase::ParentWaitingChildReady
+                }
+                super::RuntimeUpgradePhase::ParentRollingBack => {
+                    plugin_admin::RuntimeUpgradePhase::ParentRollingBack
+                }
+                super::RuntimeUpgradePhase::ChildWaitingCommit => {
+                    plugin_admin::RuntimeUpgradePhase::ChildWaitingCommit
+                }
+            },
         }),
     }
 }

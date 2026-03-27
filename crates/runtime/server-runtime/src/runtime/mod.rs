@@ -27,7 +27,7 @@ pub use crate::{
     AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
     AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, AdminUpgradeRuntimeView,
     ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot,
-    RuntimeReloadMode,
+    RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole, RuntimeUpgradeStateView,
 };
 use mc_core::{
     CoreEvent, EntityId, GameplayProfileId, PlayerId, PluginGenerationId, SessionCapabilitySet,
@@ -201,6 +201,10 @@ impl ServerSupervisor {
         self.running.request_shutdown()
     }
 
+    pub fn clear_runtime_upgrade_state(&self) {
+        self.running.clear_runtime_upgrade_state();
+    }
+
     /// # Errors
     ///
     /// Returns [`RuntimeError`] when the server task fails while shutting down.
@@ -337,6 +341,10 @@ impl RunningServer {
         self.runtime.request_shutdown()
     }
 
+    pub fn clear_runtime_upgrade_state(&self) {
+        self.runtime.clear_runtime_upgrade_state();
+    }
+
     pub async fn join_runtime(&self) -> Result<(), RuntimeError> {
         let join_handle = self.join_handle.lock().await.take();
         match join_handle {
@@ -405,6 +413,12 @@ pub(crate) struct SessionReattachInstruction {
 pub(crate) enum SessionControl {
     Terminate {
         reason: String,
+    },
+    FreezeForUpgrade {
+        ack_tx: oneshot::Sender<Result<(), RuntimeError>>,
+    },
+    ResumeAfterUpgradeRollback {
+        ack_tx: oneshot::Sender<Result<(), RuntimeError>>,
     },
     Reattach {
         instruction: SessionReattachInstruction,

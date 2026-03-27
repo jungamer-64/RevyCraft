@@ -365,6 +365,8 @@ async fn run_server_process(
         }
         upgrade::child_upgrade_ready_delay_if_needed().await;
         pending_child.report_ready_and_wait_for_commit().await?;
+        server.finish_child_runtime_upgrade_commit().await?;
+        eprintln!("runtime upgrade phase: child committed cutover");
         if enable_console {
             spawn_console_surface(
                 &control_plane,

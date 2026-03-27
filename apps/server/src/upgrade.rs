@@ -177,21 +177,39 @@ impl UpgradeCoordinator {
     ) -> Result<AdminUpgradeRuntimeView, RuntimeError> {
         let _upgrade_guard = self.upgrade_lock.lock().await;
         validate_upgrade_executable(&executable_path)?;
+        let auth_token = upgrade_auth_token();
+        let (mut child, mut transport) =
+            spawn_parent_upgrade_transport(&executable_path, &auth_token).await?;
+        if let Err(error) = transport.await_child_hello(&auth_token).await {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(normalize_pre_ready_child_error(error));
+        }
+        eprintln!("runtime upgrade handshake: child hello acknowledged");
 
-        let paused_surfaces = self
-            .pause_process_surfaces(subject.is_local_console())
-            .await?;
+        let paused_surfaces = match self.pause_process_surfaces(subject.is_local_console()).await {
+            Ok(paused) => paused,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
         let runtime_upgrade = self.server.begin_runtime_upgrade().await;
         let guard = match runtime_upgrade {
             Ok(guard) => guard,
             Err(error) => {
                 self.resume_process_surfaces(paused_surfaces).await?;
+                let _ = child.kill();
+                let _ = child.wait();
                 return Err(error);
             }
         };
 
         #[cfg(debug_assertions)]
         if UpgradeTestFault::current() == Some(UpgradeTestFault::SessionTransferFailure) {
+            let _ = child.kill();
+            let _ = child.wait();
             guard.rollback().await?;
             self.resume_process_surfaces(paused_surfaces).await?;
             return Err(RuntimeError::Config(
@@ -200,10 +218,11 @@ impl UpgradeCoordinator {
         }
 
         let result = self
-            .run_upgrade_transaction(&executable_path, &guard, &paused_surfaces)
+            .run_upgrade_transaction(&guard, &paused_surfaces, &mut transport)
             .await;
         match result {
-            Ok(mut transport) => {
+            Ok(()) => {
+                eprintln!("runtime upgrade handshake: parent sending commit");
                 transport
                     .write_message(&UpgradeControlMessage::Commit)
                     .await?;
@@ -216,6 +235,8 @@ impl UpgradeCoordinator {
                 Ok(AdminUpgradeRuntimeView { executable_path })
             }
             Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
                 guard.rollback().await?;
                 self.resume_process_surfaces(paused_surfaces).await?;
                 Err(error)
@@ -226,61 +247,48 @@ impl UpgradeCoordinator {
     #[cfg(any(unix, windows))]
     async fn run_upgrade_transaction(
         &self,
-        executable_path: &str,
         guard: &server_runtime::runtime::RuntimeUpgradeGuard,
         paused_surfaces: &PausedProcessSurfaces,
-    ) -> Result<ParentUpgradeTransport, RuntimeError> {
+        transport: &mut ParentUpgradeTransport,
+    ) -> Result<(), RuntimeError> {
         let game_listener = guard.clone_game_listener()?;
         let sessions = guard.clone_sessions_for_child()?;
         let payload = guard.payload().clone();
-        let auth_token = upgrade_auth_token();
-        let (mut child, mut transport) =
-            spawn_parent_upgrade_transport(executable_path, &auth_token).await?;
-        let transaction = async {
-            transport
-                .await_child_hello(&auth_token)
-                .await
-                .map_err(normalize_pre_ready_child_error)?;
-            transport
-                .write_message(&UpgradeControlMessage::Bootstrap {
-                    payload,
-                    has_admin_listener: paused_surfaces.admin_listener_for_child.is_some(),
-                    transferred_handle_count: 1
-                        + usize::from(paused_surfaces.admin_listener_for_child.is_some())
-                        + sessions.len(),
-                })
-                .await?;
-            transport.send_handles(
-                &game_listener,
-                paused_surfaces.admin_listener_for_child.as_ref(),
-                &sessions,
-            )?;
-            let child_ready =
-                tokio::time::timeout(upgrade_ready_timeout(), transport.read_message()).await;
-            match child_ready {
-                Ok(Ok(UpgradeControlMessage::Ready)) => Ok(transport),
-                Ok(Ok(UpgradeControlMessage::Error { message })) => {
-                    Err(RuntimeError::Config(message))
-                }
-                Ok(Ok(
-                    UpgradeControlMessage::ChildHello { .. }
-                    | UpgradeControlMessage::Bootstrap { .. }
-                    | UpgradeControlMessage::Commit,
-                )) => Err(RuntimeError::Config(
-                    "upgrade child returned an unexpected control message".to_string(),
-                )),
-                Ok(Err(error)) => Err(normalize_pre_ready_child_error(error)),
-                Err(_) => Err(RuntimeError::Config(
-                    "upgrade child did not report readiness before timeout".to_string(),
-                )),
+        eprintln!("runtime upgrade transfer: sending bootstrap payload");
+        transport
+            .write_message(&UpgradeControlMessage::Bootstrap {
+                payload,
+                has_admin_listener: paused_surfaces.admin_listener_for_child.is_some(),
+                transferred_handle_count: 1
+                    + usize::from(paused_surfaces.admin_listener_for_child.is_some())
+                    + sessions.len(),
+            })
+            .await?;
+        transport.send_handles(
+            &game_listener,
+            paused_surfaces.admin_listener_for_child.as_ref(),
+            &sessions,
+        )?;
+        eprintln!("runtime upgrade transfer: handles sent, waiting for child readiness");
+        let child_ready = tokio::time::timeout(upgrade_ready_timeout(), transport.read_message()).await;
+        match child_ready {
+            Ok(Ok(UpgradeControlMessage::Ready)) => {
+                eprintln!("runtime upgrade handshake: child reported ready");
+                Ok(())
             }
+            Ok(Ok(UpgradeControlMessage::Error { message })) => Err(RuntimeError::Config(message)),
+            Ok(Ok(
+                UpgradeControlMessage::ChildHello { .. }
+                | UpgradeControlMessage::Bootstrap { .. }
+                | UpgradeControlMessage::Commit,
+            )) => Err(RuntimeError::Config(
+                "upgrade child returned an unexpected control message".to_string(),
+            )),
+            Ok(Err(error)) => Err(normalize_pre_ready_child_error(error)),
+            Err(_) => Err(RuntimeError::Config(
+                "upgrade child did not report readiness before timeout".to_string(),
+            )),
         }
-        .await;
-        if transaction.is_err() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        transaction
     }
 
     #[cfg(any(unix, windows))]
@@ -358,6 +366,7 @@ impl PendingUpgradeChild {
 
 impl UpgradeChildCommitGate {
     async fn report_ready_and_wait_for_commit(&mut self) -> Result<(), RuntimeError> {
+        eprintln!("runtime upgrade handshake: child reporting ready");
         match self {
             #[cfg(unix)]
             Self::Unix(transport) => {
@@ -393,6 +402,7 @@ impl UpgradeChildCommitGate {
     }
 
     async fn report_error(&mut self, message: String) -> Result<(), RuntimeError> {
+        eprintln!("runtime upgrade handshake: child reported error: {message}");
         match self {
             #[cfg(unix)]
             Self::Unix(transport) => {

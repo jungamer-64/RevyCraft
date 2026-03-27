@@ -216,6 +216,108 @@ async fn shutdown_waits_for_active_handshaking_sessions() -> Result<(), RuntimeE
 }
 
 #[tokio::test]
+async fn runtime_upgrade_hold_blocks_tick_and_save() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = crate::runtime::ServerSupervisor {
+        running: build_test_server(
+            loopback_server_config(temp_dir.path().join("world")),
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?,
+    };
+    server.running.runtime.kernel.set_dirty(true).await;
+
+    let guard = server.begin_runtime_upgrade().await?;
+    let tick = tokio::spawn({
+        let runtime = std::sync::Arc::clone(&server.running.runtime);
+        async move { runtime.tick().await }
+    });
+    let save = tokio::spawn({
+        let runtime = std::sync::Arc::clone(&server.running.runtime);
+        async move { runtime.maybe_save().await }
+    });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(!tick.is_finished(), "tick should block while upgrade hold is active");
+    assert!(
+        !save.is_finished(),
+        "maybe_save should block while upgrade hold is active"
+    );
+
+    let status = server.status().await;
+    let upgrade = status
+        .upgrade
+        .ok_or_else(|| RuntimeError::Config("upgrade status should be visible".to_string()))?;
+    assert_eq!(upgrade.role, crate::RuntimeUpgradeRole::Parent);
+    assert_eq!(
+        upgrade.phase,
+        crate::RuntimeUpgradePhase::ParentWaitingChildReady
+    );
+
+    guard.rollback().await?;
+    tick.await.map_err(RuntimeError::from)??;
+    save.await.map_err(RuntimeError::from)??;
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn frozen_sessions_do_not_consume_tcp_bytes_until_resumed() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = crate::runtime::ServerSupervisor {
+        running: build_test_server(
+            loopback_server_config(temp_dir.path().join("world")),
+            plugin_test_registries_tcp_only()?,
+        )
+        .await?,
+    };
+    let codec = MinecraftWireCodec;
+    let protocol = TestJavaProtocol::Je5;
+    let addr = listener_addr(&server.running);
+    let (mut alpha, mut alpha_buffer) =
+        connect_and_login_java_client(addr, &codec, protocol, "freeze-check").await?;
+    let _ = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        protocol,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+
+    let frozen = server
+        .running
+        .runtime
+        .freeze_live_sessions_for_upgrade()
+        .await?;
+    write_packet(&mut alpha, &codec, &held_item_change(7)).await?;
+    assert_no_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        protocol,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+
+    server
+        .running
+        .runtime
+        .resume_frozen_live_sessions_after_upgrade_rollback(frozen)
+        .await?;
+    let held_item = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        protocol,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+    assert_eq!(held_item_from_packet(&held_item)?, 7);
+
+    server.shutdown().await
+}
+
+#[tokio::test]
 async fn runtime_loop_storage_error_shuts_down_listeners_and_sessions() -> Result<(), RuntimeError>
 {
     let temp_dir = tempdir()?;

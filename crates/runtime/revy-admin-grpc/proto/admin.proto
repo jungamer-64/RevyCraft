@@ -32,6 +32,25 @@ enum RuntimeReloadMode {
   RUNTIME_RELOAD_MODE_FULL = 4;
 }
 
+enum RuntimeUpgradeRole {
+  RUNTIME_UPGRADE_ROLE_UNSPECIFIED = 0;
+  RUNTIME_UPGRADE_ROLE_PARENT = 1;
+  RUNTIME_UPGRADE_ROLE_CHILD = 2;
+}
+
+enum RuntimeUpgradePhase {
+  RUNTIME_UPGRADE_PHASE_UNSPECIFIED = 0;
+  RUNTIME_UPGRADE_PHASE_PARENT_FREEZING = 1;
+  RUNTIME_UPGRADE_PHASE_PARENT_WAITING_CHILD_READY = 2;
+  RUNTIME_UPGRADE_PHASE_PARENT_ROLLING_BACK = 3;
+  RUNTIME_UPGRADE_PHASE_CHILD_WAITING_COMMIT = 4;
+}
+
+message RuntimeUpgradeStateView {
+  RuntimeUpgradeRole role = 1;
+  RuntimeUpgradePhase phase = 2;
+}
+
 message AdminUpgradeRuntimeView {
   string executable_path = 1;
 }
@@ -95,6 +114,7 @@ message AdminStatusView {
   AdminSessionSummaryView session_summary = 10;
   bool dirty = 11;
   optional AdminPluginHostView plugin_host = 12;
+  optional RuntimeUpgradeStateView upgrade = 13;
 }
 
 message AdminSessionView {
