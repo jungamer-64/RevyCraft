@@ -71,6 +71,29 @@ pub trait GameplayProfileHandle: Send + Sync {
     /// Returns [`PluginHostError`] when the gameplay plugin rejects the session
     /// close notification.
     fn session_closed(&self, session: &GameplaySessionSnapshot) -> Result<(), PluginHostError>;
+
+    /// # Errors
+    ///
+    /// Returns [`PluginHostError`] when the gameplay plugin cannot export its
+    /// session-owned runtime state for process handoff.
+    fn export_session_state(
+        &self,
+        _session: &GameplaySessionSnapshot,
+    ) -> Result<Vec<u8>, PluginHostError> {
+        Ok(Vec::new())
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`PluginHostError`] when the gameplay plugin cannot import a
+    /// previously exported session-owned runtime state blob.
+    fn import_session_state(
+        &self,
+        _session: &GameplaySessionSnapshot,
+        _blob: &[u8],
+    ) -> Result<(), PluginHostError> {
+        Ok(())
+    }
 }
 
 pub trait StorageProfileHandle: Send + Sync {

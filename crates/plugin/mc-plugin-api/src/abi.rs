@@ -1,10 +1,11 @@
 use crate::codec::protocol::ProtocolCodecError;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const CURRENT_PLUGIN_ABI: PluginAbiVersion = PluginAbiVersion { major: 4, minor: 0 };
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PluginAbiVersion {
     pub major: u16,
     pub minor: u16,

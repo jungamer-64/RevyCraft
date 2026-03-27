@@ -1,10 +1,11 @@
 use crate::host::{PluginFailureAction, PluginFailureMatrix};
 use mc_core::{AdapterId, AdminUiProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginBufferLimits {
     pub protocol_response_bytes: usize,
     pub gameplay_response_bytes: usize,

@@ -10,6 +10,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 mod topology_manager;
+mod upgrade;
 
 use self::kernel::RuntimeKernel;
 use self::reload_coordinator::ReloadCoordinator;
@@ -24,8 +25,9 @@ pub use crate::{
     AdminListenerBindingView, AdminNamedCountView, AdminPermission, AdminPhaseCountView,
     AdminPluginHostView, AdminPrincipal, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
     AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
-    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, ListenerBinding,
-    PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot, RuntimeReloadMode,
+    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, AdminUpgradeRuntimeView,
+    ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot,
+    RuntimeReloadMode,
 };
 use mc_core::{
     CoreEvent, EntityId, GameplayProfileId, PlayerId, PluginGenerationId, SessionCapabilitySet,
@@ -43,11 +45,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
-pub use self::admin::{AdminAuthError, AdminCommandError, AdminControlPlaneHandle, AdminSubject};
+pub use self::admin::{
+    AdminAuthError, AdminCommandError, AdminControlPlaneHandle, AdminSubject,
+    RuntimeUpgradeCallback, RuntimeUpgradeFuture,
+};
 pub use self::status::{
     GenerationCountSnapshot, GenerationStatusSnapshot, GenerationStatusState,
     OptionalNamedCountSnapshot, PhaseCountSnapshot, RuntimeStatusSnapshot, SessionStatusSnapshot,
     SessionSummarySnapshot, TransportCountSnapshot, format_runtime_status_summary,
+};
+pub use self::upgrade::{
+    RuntimeUpgradeCommitHold, RuntimeUpgradeGuard, RuntimeUpgradeImport, RuntimeUpgradeLoginChallenge,
+    RuntimeUpgradePayload, RuntimeUpgradeQueuedMessage, RuntimeUpgradeSessionHandle,
+    RuntimeUpgradeSessionState,
 };
 
 pub(crate) const LOGIN_SERVER_ID: &str = "";
@@ -182,6 +192,17 @@ impl ServerSupervisor {
 
     /// # Errors
     ///
+    /// Returns [`RuntimeError`] when the runtime task exits with an error or the join fails.
+    pub async fn join_runtime(&self) -> Result<(), RuntimeError> {
+        self.running.join_runtime().await
+    }
+
+    pub fn request_shutdown(&self) -> bool {
+        self.running.request_shutdown()
+    }
+
+    /// # Errors
+    ///
     /// Returns [`RuntimeError`] when the server task fails while shutting down.
     pub async fn shutdown(self) -> Result<(), RuntimeError> {
         self.running.shutdown().await
@@ -190,7 +211,7 @@ impl ServerSupervisor {
 
 pub(crate) struct RunningServer {
     pub(crate) runtime: Arc<RuntimeServer>,
-    pub(crate) join_handle: JoinHandle<Result<(), RuntimeError>>,
+    pub(crate) join_handle: tokio::sync::Mutex<Option<JoinHandle<Result<(), RuntimeError>>>>,
     pub(crate) runtime_completion_rx: watch::Receiver<bool>,
 }
 
@@ -309,7 +330,19 @@ impl RunningServer {
     /// Returns [`RuntimeError`] when the server task fails while shutting down.
     pub async fn shutdown(self) -> Result<(), RuntimeError> {
         let _ = self.runtime.request_shutdown();
-        self.join_handle.await?
+        self.join_runtime().await
+    }
+
+    pub fn request_shutdown(&self) -> bool {
+        self.runtime.request_shutdown()
+    }
+
+    pub async fn join_runtime(&self) -> Result<(), RuntimeError> {
+        let join_handle = self.join_handle.lock().await.take();
+        match join_handle {
+            Some(join_handle) => join_handle.await?,
+            None => self.wait_for_runtime_completion().await,
+        }
     }
 }
 
@@ -376,6 +409,9 @@ pub(crate) enum SessionControl {
     Reattach {
         instruction: SessionReattachInstruction,
         ack_tx: oneshot::Sender<Result<(), RuntimeError>>,
+    },
+    Export {
+        ack_tx: oneshot::Sender<Result<RuntimeUpgradeSessionHandle, RuntimeError>>,
     },
 }
 
@@ -494,8 +530,15 @@ pub(crate) enum GenerationAdmission {
 pub(crate) struct TopologyListenerWorker {
     pub(crate) transport: TransportKind,
     pub(crate) generation_tx: watch::Sender<GenerationId>,
+    pub(crate) control_tx: mpsc::Sender<ListenerWorkerControl>,
     pub(crate) shutdown_tx: Option<oneshot::Sender<()>>,
     pub(crate) join_handle: Option<JoinHandle<()>>,
+}
+
+pub(crate) enum ListenerWorkerControl {
+    Export {
+        ack_tx: oneshot::Sender<Result<std::net::TcpListener, RuntimeError>>,
+    },
 }
 
 pub(crate) struct RuntimeGenerationState {
@@ -576,6 +619,15 @@ impl QueuedAcceptTracker {
             .keys()
             .copied()
             .collect()
+    }
+
+    pub(crate) fn total_count(&self) -> usize {
+        self.counts
+            .lock()
+            .expect("queued accept tracker should not be poisoned")
+            .values()
+            .copied()
+            .sum()
     }
 }
 

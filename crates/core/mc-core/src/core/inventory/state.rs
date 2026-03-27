@@ -1,5 +1,6 @@
 use crate::inventory::{InventoryContainer, InventoryWindowContents, ItemStack, PlayerInventory};
 use crate::world::{BlockEntityState, BlockPos};
+use serde::{Deserialize, Serialize};
 
 pub(super) const CRAFTING_TABLE_LOCAL_SLOT_COUNT: usize = 10;
 pub(super) const CHEST_LOCAL_SLOT_COUNT: usize = 27;
@@ -16,39 +17,39 @@ pub struct ContainerDescriptor {
     pub hotbar_start: i16,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenInventoryWindow {
     pub window_id: u8,
     pub container: InventoryContainer,
     pub state: OpenInventoryWindowState,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpenInventoryWindowState {
     CraftingTable { slots: Vec<Option<ItemStack>> },
     Chest(ChestWindowState),
     Furnace(FurnaceWindowState),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChestWindowState {
     pub binding: ChestWindowBinding,
     pub slots: Vec<Option<ItemStack>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChestWindowBinding {
     Virtual,
     Block(BlockPos),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FurnaceWindowBinding {
     Virtual,
     Block(BlockPos),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FurnaceWindowState {
     pub binding: FurnaceWindowBinding,
     pub input: Option<ItemStack>,

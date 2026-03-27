@@ -3,13 +3,13 @@ use mc_plugin_host::runtime::RuntimePluginHost;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{RwLock as AsyncRwLock, oneshot};
+use tokio::sync::{OwnedRwLockWriteGuard, RwLock as AsyncRwLock, oneshot};
 
 pub(crate) struct ReloadCoordinator {
     static_config: StaticConfig,
     config_source: ServerConfigSource,
     reload_host: Option<Arc<dyn RuntimePluginHost>>,
-    consistency_gate: AsyncRwLock<()>,
+    consistency_gate: Arc<AsyncRwLock<()>>,
     shutting_down: AtomicBool,
     shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
 }
@@ -24,7 +24,7 @@ impl ReloadCoordinator {
             static_config,
             config_source,
             reload_host,
-            consistency_gate: AsyncRwLock::new(()),
+            consistency_gate: Arc::new(AsyncRwLock::new(())),
             shutting_down: AtomicBool::new(false),
             shutdown_tx: std::sync::Mutex::new(None),
         }
@@ -55,6 +55,10 @@ impl ReloadCoordinator {
 
     pub(crate) async fn write_consistency(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
         self.consistency_gate.write().await
+    }
+
+    pub(crate) async fn write_consistency_owned(&self) -> OwnedRwLockWriteGuard<()> {
+        Arc::clone(&self.consistency_gate).write_owned().await
     }
 
     pub(crate) fn install_shutdown_tx(&self, shutdown_tx: oneshot::Sender<()>) {

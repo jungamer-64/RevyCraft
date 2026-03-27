@@ -15,8 +15,16 @@ mc-proto-common = { path = "../../crates/protocol/mc-proto-common" }
 revy-admin-grpc = { path = "../../crates/runtime/revy-admin-grpc" }
 server-config = { path = "../../crates/config/server-config" }
 server-runtime = { path = "../../crates/runtime/server-runtime" }
+serde_json.workspace = true
+serde.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
 tonic.workspace = true
+libc = "0.2"
+rand = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Networking_WinSock", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [dev-dependencies]
 mc-plugin-test-support = { path = "../../crates/testing/mc-plugin-test-support" }

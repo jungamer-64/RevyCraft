@@ -46,6 +46,22 @@ impl SessionRegistry {
         ConnectionId(NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed))
     }
 
+    pub(crate) fn observe_connection_id(&self, connection_id: ConnectionId) {
+        let target = connection_id.0.saturating_add(1);
+        let mut next = NEXT_CONNECTION_ID.load(Ordering::Relaxed);
+        while next < target {
+            match NEXT_CONNECTION_ID.compare_exchange_weak(
+                next,
+                target,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => next = observed,
+            }
+        }
+    }
+
     pub(crate) async fn insert(
         &self,
         connection_id: ConnectionId,

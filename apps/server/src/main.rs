@@ -1,18 +1,26 @@
 #![allow(clippy::multiple_crate_versions)]
 
 mod grpc;
+mod process_surfaces;
+mod upgrade;
 
-use crate::grpc::{spawn_admin_grpc_server, wait_for_shutdown_signal};
+use crate::grpc::{
+    spawn_admin_grpc_server, spawn_admin_grpc_server_from_std_listener, wait_for_shutdown_signal,
+};
+use crate::process_surfaces::{ConsoleControl, PausedProcessSurfaces, ProcessSurfaceCommand};
+use crate::upgrade::UpgradeCoordinator;
 use server_runtime::RuntimeError;
 use server_runtime::config::ServerConfigSource;
 use server_runtime::runtime::{
-    AdminControlPlaneHandle, AdminResponse, ServerSupervisor, format_runtime_status_summary,
+    AdminControlPlaneHandle, AdminRequest, AdminResponse, AdminSubject, ServerSupervisor,
+    format_runtime_status_summary,
 };
 use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, oneshot, watch};
 
 const DEFAULT_SERVER_CONFIG_PATH: &str = "runtime/server.toml";
 const SERVER_CONFIG_ENV: &str = "REVY_SERVER_CONFIG";
@@ -23,6 +31,7 @@ enum ConsoleLoopExit {
     Detached,
     NoAdminSurface,
     ExternalShutdown,
+    PausedForUpgrade,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,10 +78,19 @@ async fn run_console_loop(
     has_other_admin_surface: bool,
     shutdown_tx: &watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
+    mut control_rx: mpsc::Receiver<ConsoleControl>,
 ) -> Result<ConsoleLoopExit, RuntimeError> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     loop {
         tokio::select! {
+            Some(control) = control_rx.recv() => {
+                match control {
+                    ConsoleControl::PauseForUpgrade { ack_tx } => {
+                        let _ = ack_tx.send(());
+                        return Ok(ConsoleLoopExit::PausedForUpgrade);
+                    }
+                }
+            }
             signal = wait_for_ctrl_c() => {
                 signal?;
                 let _ = shutdown_tx.send(true);
@@ -109,8 +127,10 @@ async fn run_console_loop(
                         continue;
                     }
                 };
+                let upgrade_requested = matches!(request, AdminRequest::UpgradeRuntime { .. });
                 let response = control_plane.execute_local_console(request).await;
                 let shutdown_requested = matches!(response, AdminResponse::ShutdownScheduled);
+                let upgrade_committed = upgrade_requested && matches!(response, AdminResponse::UpgradeRuntime(_));
                 match control_plane.render_local_response(&response).await {
                     Ok(text) => println!("{text}"),
                     Err(error) => eprintln!("{error}"),
@@ -119,9 +139,37 @@ async fn run_console_loop(
                     let _ = shutdown_tx.send(true);
                     return Ok(ConsoleLoopExit::ShutdownRequested);
                 }
+                if upgrade_committed {
+                    return Ok(ConsoleLoopExit::PausedForUpgrade);
+                }
             }
         }
     }
+}
+
+fn spawn_console_monitor(
+    control_plane: AdminControlPlaneHandle,
+    input_mode: ConsoleInputMode,
+    has_other_admin_surface: bool,
+    shutdown_tx: watch::Sender<bool>,
+    shutdown_rx: watch::Receiver<bool>,
+) -> (
+    mpsc::Sender<ConsoleControl>,
+    tokio::task::JoinHandle<Result<ConsoleLoopExit, RuntimeError>>,
+) {
+    let (control_tx, control_rx) = mpsc::channel(4);
+    let monitor = tokio::spawn(async move {
+        run_console_loop(
+            &control_plane,
+            input_mode,
+            has_other_admin_surface,
+            &shutdown_tx,
+            shutdown_rx,
+            control_rx,
+        )
+        .await
+    });
+    (control_tx, monitor)
 }
 
 async fn wait_for_runtime_completion(server: &ServerSupervisor) -> Result<(), RuntimeError> {
@@ -135,20 +183,63 @@ async fn wait_for_exit_signal(shutdown_rx: watch::Receiver<bool>) -> Result<(), 
     }
 }
 
-async fn wait_for_grpc_server(
-    grpc_monitor: &mut tokio::task::JoinHandle<Result<(), RuntimeError>>,
-) -> Result<(), RuntimeError> {
-    let result = grpc_monitor.await.map_err(RuntimeError::from)?;
-    if let Err(error) = &result {
-        eprintln!("admin gRPC server exited with an error: {error}");
-    }
-    result
-}
-
 async fn wait_for_console_loop(
     console_monitor: &mut tokio::task::JoinHandle<Result<ConsoleLoopExit, RuntimeError>>,
 ) -> Result<ConsoleLoopExit, RuntimeError> {
     console_monitor.await.map_err(RuntimeError::from)?
+}
+
+enum ProcessStartupMode {
+    Normal,
+    UpgradeChild(upgrade::PendingUpgradeChild),
+}
+
+async fn pause_console_for_upgrade(
+    console_control_tx: &mut Option<mpsc::Sender<ConsoleControl>>,
+    console_monitor: &mut Option<tokio::task::JoinHandle<Result<ConsoleLoopExit, RuntimeError>>>,
+) -> Result<bool, RuntimeError> {
+    let Some(control_tx) = console_control_tx.take() else {
+        return Ok(false);
+    };
+    let Some(mut monitor) = console_monitor.take() else {
+        return Ok(false);
+    };
+    let (ack_tx, ack_rx) = oneshot::channel();
+    control_tx
+        .send(ConsoleControl::PauseForUpgrade { ack_tx })
+        .await
+        .map_err(|_| RuntimeError::Config("failed to pause console for upgrade".to_string()))?;
+    let _ = ack_rx.await;
+    match wait_for_console_loop(&mut monitor).await? {
+        ConsoleLoopExit::PausedForUpgrade | ConsoleLoopExit::ExternalShutdown => Ok(true),
+        ConsoleLoopExit::Detached => Ok(false),
+        ConsoleLoopExit::ShutdownRequested => Err(RuntimeError::Config(
+            "console requested shutdown while pausing for upgrade".to_string(),
+        )),
+        ConsoleLoopExit::NoAdminSurface => Err(RuntimeError::Config(
+            "console lost stdin while pausing for upgrade".to_string(),
+        )),
+    }
+}
+
+fn spawn_console_surface(
+    control_plane: &AdminControlPlaneHandle,
+    console_input_mode: ConsoleInputMode,
+    has_other_admin_surface: bool,
+    shutdown_tx: &watch::Sender<bool>,
+    shutdown_rx: &watch::Receiver<bool>,
+    console_control_tx: &mut Option<mpsc::Sender<ConsoleControl>>,
+    console_monitor: &mut Option<tokio::task::JoinHandle<Result<ConsoleLoopExit, RuntimeError>>>,
+) {
+    let (control_tx, monitor) = spawn_console_monitor(
+        control_plane.clone(),
+        console_input_mode,
+        has_other_admin_surface,
+        shutdown_tx.clone(),
+        shutdown_rx.clone(),
+    );
+    *console_control_tx = Some(control_tx);
+    *console_monitor = Some(monitor);
 }
 
 fn selected_server_config_path(env_override: Option<OsString>) -> PathBuf {
@@ -172,13 +263,27 @@ fn resolve_server_config_source() -> (ServerConfigSource, Option<String>) {
     (ServerConfigSource::Toml(config_path), warning)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), RuntimeError> {
-    let (config_source, missing_config_warning) = resolve_server_config_source();
-    if let Some(warning) = missing_config_warning {
-        eprintln!("{warning}");
-    }
-    let server = ServerSupervisor::boot(config_source).await?;
+fn upgrade_control_plane(
+    server: &Arc<ServerSupervisor>,
+    coordinator: &Arc<UpgradeCoordinator>,
+) -> AdminControlPlaneHandle {
+    let coordinator = Arc::clone(coordinator);
+    server
+        .admin_control_plane()
+        .with_runtime_upgrader(Arc::new(move |subject: AdminSubject, executable_path| {
+            let coordinator = Arc::clone(&coordinator);
+            Box::pin(async move { coordinator.upgrade(subject, executable_path).await })
+        }))
+}
+
+async fn run_server_process(
+    server: Arc<ServerSupervisor>,
+    control_plane: AdminControlPlaneHandle,
+    grpc_listener_override: Option<std::net::TcpListener>,
+    enable_console: bool,
+    mut startup_mode: ProcessStartupMode,
+    upgrade_coordinator: Arc<UpgradeCoordinator>,
+) -> Result<(), RuntimeError> {
     for binding in server.listener_bindings() {
         println!(
             "server listening on {} via {:?} for {:?}",
@@ -187,50 +292,140 @@ async fn main() -> Result<(), RuntimeError> {
     }
     println!("{}", format_runtime_status_summary(&server.status().await));
 
-    let control_plane = server.admin_control_plane();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let grpc = if let Some(bind_addr) = server.admin_grpc_bind_addr() {
-        Some(
-            spawn_admin_grpc_server(
-                bind_addr,
-                control_plane.clone(),
-                shutdown_tx.clone(),
-                shutdown_rx.clone(),
-            )
-            .await?,
+    upgrade_coordinator
+        .set_process_shutdown_sender(shutdown_tx.clone())
+        .await;
+    let (surface_control_tx, mut surface_control_rx) = mpsc::channel(4);
+    upgrade_coordinator
+        .set_surface_control_sender(surface_control_tx)
+        .await;
+    let grpc = if let Some(listener) = grpc_listener_override {
+        match spawn_admin_grpc_server_from_std_listener(
+            listener,
+            control_plane.clone(),
+            shutdown_tx.clone(),
+            shutdown_rx.clone(),
         )
+        .await
+        {
+            Ok(grpc) => Some(grpc),
+            Err(error) => {
+                if let ProcessStartupMode::UpgradeChild(pending_child) = &mut startup_mode {
+                    let _ = pending_child.report_error(error.to_string()).await;
+                }
+                return Err(error);
+            }
+        }
+    } else if let Some(bind_addr) = server.admin_grpc_bind_addr() {
+        match spawn_admin_grpc_server(
+            bind_addr,
+            control_plane.clone(),
+            shutdown_tx.clone(),
+            shutdown_rx.clone(),
+        )
+        .await
+        {
+            Ok(grpc) => Some(grpc),
+            Err(error) => {
+                if let ProcessStartupMode::UpgradeChild(pending_child) = &mut startup_mode {
+                    let _ = pending_child.report_error(error.to_string()).await;
+                }
+                return Err(error);
+            }
+        }
     } else {
         None
     };
     if let Some(grpc) = grpc.as_ref() {
         println!("admin gRPC listening on {}", grpc.local_addr());
     }
-    let mut grpc_monitor = grpc.map(|grpc| tokio::spawn(async move { grpc.join().await }));
+    let mut grpc = grpc;
     let console_input_mode = console_input_mode();
-    let has_other_admin_surface = grpc_monitor.is_some();
-    let mut console_monitor = Some({
-        let control_plane = control_plane.clone();
-        let shutdown_tx = shutdown_tx.clone();
-        let shutdown_rx = shutdown_rx.clone();
-        tokio::spawn(async move {
-            run_console_loop(
+    let mut has_other_admin_surface = grpc.is_some();
+    let mut console_control_tx = None;
+    let mut console_monitor = None;
+
+    if matches!(startup_mode, ProcessStartupMode::Normal) && enable_console {
+        spawn_console_surface(
+            &control_plane,
+            console_input_mode,
+            has_other_admin_surface,
+            &shutdown_tx,
+            &shutdown_rx,
+            &mut console_control_tx,
+            &mut console_monitor,
+        );
+    }
+
+    if let ProcessStartupMode::UpgradeChild(pending_child) = &mut startup_mode {
+        if let Some(error) = upgrade::child_upgrade_fault_before_ready() {
+            pending_child.report_error(error.to_string()).await?;
+            return Err(error);
+        }
+        upgrade::child_upgrade_ready_delay_if_needed().await;
+        pending_child.report_ready_and_wait_for_commit().await?;
+        if enable_console {
+            spawn_console_surface(
                 &control_plane,
                 console_input_mode,
                 has_other_admin_surface,
                 &shutdown_tx,
-                shutdown_rx,
-            )
-            .await
-        })
-    });
+                &shutdown_rx,
+                &mut console_control_tx,
+                &mut console_monitor,
+            );
+        }
+    }
 
     loop {
         tokio::select! {
+            Some(surface_command) = surface_control_rx.recv() => {
+                match surface_command {
+                    ProcessSurfaceCommand::PauseForUpgrade { skip_console, ack_tx } => {
+                        let admin_listener_for_child = if let Some(grpc) = grpc.as_mut() {
+                            Some(grpc.pause_for_upgrade().await?)
+                        } else {
+                            None
+                        };
+                        let console_was_paused = if skip_console {
+                            false
+                        } else {
+                            pause_console_for_upgrade(&mut console_control_tx, &mut console_monitor).await?
+                        };
+                        let _ = ack_tx.send(Ok(PausedProcessSurfaces {
+                            admin_listener_for_child,
+                            console_was_paused,
+                            grpc_accept_was_paused: grpc.is_some(),
+                        }));
+                    }
+                    ProcessSurfaceCommand::ResumeAfterUpgradeRollback { paused, ack_tx } => {
+                        if paused.grpc_accept_was_paused
+                            && let Some(grpc) = grpc.as_mut()
+                        {
+                            grpc.resume_after_upgrade_rollback()?;
+                        }
+                        has_other_admin_surface = grpc.is_some();
+                        if paused.console_was_paused {
+                            spawn_console_surface(
+                                &control_plane,
+                                console_input_mode,
+                                has_other_admin_surface,
+                                &shutdown_tx,
+                                &shutdown_rx,
+                                &mut console_control_tx,
+                                &mut console_monitor,
+                            );
+                        }
+                        let _ = ack_tx.send(Ok(()));
+                    }
+                }
+            }
             result = async {
-                let Some(grpc_monitor) = grpc_monitor.as_mut() else {
+                let Some(grpc) = grpc.as_mut() else {
                     std::future::pending().await
                 };
-                wait_for_grpc_server(grpc_monitor).await
+                grpc.wait_for_server_exit().await
             } => {
                 let _ = shutdown_tx.send(true);
                 result?;
@@ -245,12 +440,13 @@ async fn main() -> Result<(), RuntimeError> {
                 match result? {
                     ConsoleLoopExit::ShutdownRequested => {
                         let _ = shutdown_tx.send(true);
-                        if let Some(grpc_monitor) = grpc_monitor.as_mut() {
-                            wait_for_grpc_server(grpc_monitor).await?;
+                        if let Some(grpc) = grpc.take() {
+                            grpc.join().await?;
                         }
                         break;
                     }
                     ConsoleLoopExit::Detached => {
+                        console_control_tx = None;
                         console_monitor = None;
                     }
                     ConsoleLoopExit::NoAdminSurface => {
@@ -261,6 +457,11 @@ async fn main() -> Result<(), RuntimeError> {
                         break;
                     }
                     ConsoleLoopExit::ExternalShutdown => {
+                        console_control_tx = None;
+                        console_monitor = None;
+                    }
+                    ConsoleLoopExit::PausedForUpgrade => {
+                        console_control_tx = None;
                         console_monitor = None;
                     }
                 }
@@ -273,15 +474,58 @@ async fn main() -> Result<(), RuntimeError> {
             result = wait_for_exit_signal(shutdown_rx.clone()) => {
                 result?;
                 let _ = shutdown_tx.send(true);
-                if let Some(grpc_monitor) = grpc_monitor.as_mut() {
-                    wait_for_grpc_server(grpc_monitor).await?;
+                if let Some(grpc) = grpc.take() {
+                    grpc.join().await?;
                 }
                 break;
             }
         }
     }
 
-    server.shutdown().await
+    if let Some(grpc) = grpc.take() {
+        grpc.join().await?;
+    }
+    drop(control_plane);
+    drop(upgrade_coordinator);
+    let _ = server.request_shutdown();
+    server.join_runtime().await
+}
+
+#[tokio::main]
+async fn main() -> Result<(), RuntimeError> {
+    let args = std::env::args().collect::<Vec<_>>();
+    if let Some(mut pending_child) = upgrade::try_boot_upgrade_child(&args).await? {
+        let server = pending_child.server();
+        let grpc_listener_override = pending_child.take_grpc_listener_override();
+        let coordinator = Arc::new(UpgradeCoordinator::new(Arc::clone(&server)));
+        let control_plane = upgrade_control_plane(&server, &coordinator);
+        return run_server_process(
+            server,
+            control_plane,
+            grpc_listener_override,
+            true,
+            ProcessStartupMode::UpgradeChild(pending_child),
+            coordinator,
+        )
+        .await;
+    }
+
+    let (config_source, missing_config_warning) = resolve_server_config_source();
+    if let Some(warning) = missing_config_warning {
+        eprintln!("{warning}");
+    }
+    let server = Arc::new(ServerSupervisor::boot(config_source).await?);
+    let coordinator = Arc::new(UpgradeCoordinator::new(Arc::clone(&server)));
+    let control_plane = upgrade_control_plane(&server, &coordinator);
+    run_server_process(
+        server,
+        control_plane,
+        None,
+        true,
+        ProcessStartupMode::Normal,
+        coordinator,
+    )
+    .await
 }
 
 #[cfg(test)]

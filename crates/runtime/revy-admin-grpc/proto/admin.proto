@@ -6,6 +6,7 @@ service AdminControlPlane {
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc ReloadRuntime(ReloadRuntimeRequest) returns (ReloadRuntimeResponse);
+  rpc UpgradeRuntime(UpgradeRuntimeRequest) returns (UpgradeRuntimeResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
@@ -29,6 +30,10 @@ enum RuntimeReloadMode {
   RUNTIME_RELOAD_MODE_TOPOLOGY = 2;
   RUNTIME_RELOAD_MODE_CORE = 3;
   RUNTIME_RELOAD_MODE_FULL = 4;
+}
+
+message AdminUpgradeRuntimeView {
+  string executable_path = 1;
 }
 
 message AdminListenerBindingView {
@@ -156,6 +161,14 @@ message ReloadRuntimeRequest {
 
 message ReloadRuntimeResponse {
   AdminRuntimeReloadView result = 1;
+}
+
+message UpgradeRuntimeRequest {
+  string executable_path = 1;
+}
+
+message UpgradeRuntimeResponse {
+  AdminUpgradeRuntimeView result = 1;
 }
 
 message ShutdownRequest {}

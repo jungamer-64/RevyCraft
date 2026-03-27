@@ -14,6 +14,7 @@ use bytes::BytesMut;
 use mc_core::AdapterId;
 use mc_plugin_host::registry::ProtocolRegistry;
 use mc_proto_common::{MinecraftWireCodec, TransportKind, WireCodec};
+use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::io;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
@@ -40,6 +41,18 @@ pub struct BedrockBindMetadata {
 pub struct AcceptedTransportSession {
     pub transport: TransportKind,
     pub io: TransportSessionIo,
+}
+
+pub struct ExportedTcpTransportSession {
+    pub stream: std::net::TcpStream,
+    pub encryption: Option<TransportEncryptionSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransportEncryptionSnapshot {
+    pub shared_secret: [u8; 16],
+    pub encrypt_shift_register: [u8; 16],
+    pub decrypt_shift_register: [u8; 16],
 }
 
 pub enum TransportSessionIo {
@@ -148,6 +161,31 @@ impl TransportSessionIo {
             });
         }
     }
+
+    pub fn export_tcp_for_upgrade(self) -> ExportedTcpTransportSession {
+        match self {
+            Self::Tcp { stream, encryption } => ExportedTcpTransportSession {
+                stream: stream
+                    .into_std()
+                    .expect("live tcp session should convert into a std stream during upgrade"),
+                encryption: encryption.as_ref().as_ref().map(TransportEncryptionState::snapshot),
+            },
+            Self::Bedrock { .. } => {
+                panic!("runtime upgrade should never attempt to export a udp session")
+            }
+        }
+    }
+
+    pub fn import_tcp_for_upgrade(
+        stream: std::net::TcpStream,
+        encryption: Option<TransportEncryptionSnapshot>,
+    ) -> Result<Self, RuntimeError> {
+        stream.set_nonblocking(true)?;
+        Ok(Self::Tcp {
+            stream: TcpStream::from_std(stream)?,
+            encryption: Box::new(encryption.map(TransportEncryptionState::from_snapshot)),
+        })
+    }
 }
 
 pub enum BoundTransportListener {
@@ -184,9 +222,21 @@ impl BoundTransportListener {
             }),
         }
     }
+
+    pub fn import_tcp_listener(
+        listener: std::net::TcpListener,
+        adapter_ids: Vec<AdapterId>,
+    ) -> Result<Self, RuntimeError> {
+        listener.set_nonblocking(true)?;
+        Ok(Self::Tcp {
+            listener: TcpListener::from_std(listener)?,
+            adapter_ids,
+        })
+    }
 }
 
 pub struct TransportEncryptionState {
+    shared_secret: [u8; 16],
     encrypt: MinecraftStreamCipher,
     decrypt: MinecraftStreamCipher,
 }
@@ -194,8 +244,31 @@ pub struct TransportEncryptionState {
 impl TransportEncryptionState {
     fn new(shared_secret: [u8; 16]) -> Self {
         Self {
+            shared_secret,
             encrypt: MinecraftStreamCipher::new(shared_secret),
             decrypt: MinecraftStreamCipher::new(shared_secret),
+        }
+    }
+
+    fn snapshot(&self) -> TransportEncryptionSnapshot {
+        TransportEncryptionSnapshot {
+            shared_secret: self.shared_secret,
+            encrypt_shift_register: self.encrypt.shift_register,
+            decrypt_shift_register: self.decrypt.shift_register,
+        }
+    }
+
+    fn from_snapshot(snapshot: TransportEncryptionSnapshot) -> Self {
+        Self {
+            shared_secret: snapshot.shared_secret,
+            encrypt: MinecraftStreamCipher::from_parts(
+                snapshot.shared_secret,
+                snapshot.encrypt_shift_register,
+            ),
+            decrypt: MinecraftStreamCipher::from_parts(
+                snapshot.shared_secret,
+                snapshot.decrypt_shift_register,
+            ),
         }
     }
 }
@@ -247,10 +320,14 @@ async fn bind_tcp_listener(bind_addr: SocketAddr) -> Result<TcpListener, io::Err
 
 impl MinecraftStreamCipher {
     pub fn new(shared_secret: [u8; 16]) -> Self {
+        Self::from_parts(shared_secret, shared_secret)
+    }
+
+    pub fn from_parts(shared_secret: [u8; 16], shift_register: [u8; 16]) -> Self {
         Self {
             cipher: Aes128::new_from_slice(&shared_secret)
                 .expect("AES-128 key length should be exactly 16 bytes"),
-            shift_register: shared_secret,
+            shift_register,
         }
     }
 

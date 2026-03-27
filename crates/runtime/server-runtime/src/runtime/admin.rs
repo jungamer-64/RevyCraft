@@ -3,15 +3,22 @@ use super::{
     AdminListenerBindingView, AdminNamedCountView, AdminPermission, AdminPhaseCountView,
     AdminPluginHostView, AdminPrincipal, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
     AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
-    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, RuntimeReloadMode,
-    RuntimeReloadResult, RuntimeServer,
+    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, AdminUpgradeRuntimeView,
+    RuntimeReloadMode, RuntimeReloadResult, RuntimeServer,
 };
 use crate::RuntimeError;
 use crate::runtime::selection::AdminCredentialTag;
 use mc_plugin_api::codec::admin_ui as plugin_admin;
+use std::future::Future;
 use std::fmt::{Debug, Display, Formatter};
+use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
+
+pub type RuntimeUpgradeFuture =
+    Pin<Box<dyn Future<Output = Result<AdminUpgradeRuntimeView, RuntimeError>> + Send>>;
+pub type RuntimeUpgradeCallback =
+    Arc<dyn Fn(AdminSubject, String) -> RuntimeUpgradeFuture + Send + Sync>;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct AdminSubject {
@@ -115,6 +122,7 @@ pub struct AdminControlPlaneHandle {
 #[derive(Clone)]
 struct AdminService {
     runtime: Arc<RuntimeServer>,
+    upgrade_callback: Option<RuntimeUpgradeCallback>,
 }
 
 #[derive(Clone)]
@@ -127,9 +135,16 @@ impl AdminControlPlaneHandle {
         Self {
             service: AdminService {
                 runtime: Arc::clone(&runtime),
+                upgrade_callback: None,
             },
             ui_adapter: AdminUiAdapter { runtime },
         }
+    }
+
+    #[must_use]
+    pub fn with_runtime_upgrader(mut self, upgrade_callback: RuntimeUpgradeCallback) -> Self {
+        self.service.upgrade_callback = Some(upgrade_callback);
+        self
     }
 
     pub async fn authenticate_remote_token(
@@ -159,6 +174,14 @@ impl AdminControlPlaneHandle {
         mode: RuntimeReloadMode,
     ) -> Result<AdminRuntimeReloadView, AdminCommandError> {
         self.service.reload_runtime(subject, mode).await
+    }
+
+    pub async fn upgrade_runtime(
+        &self,
+        subject: &AdminSubject,
+        executable_path: String,
+    ) -> Result<AdminUpgradeRuntimeView, AdminCommandError> {
+        self.service.upgrade_runtime(subject, executable_path).await
     }
 
     pub async fn shutdown(&self, subject: &AdminSubject) -> Result<(), AdminCommandError> {
@@ -245,6 +268,26 @@ impl AdminService {
         Ok(())
     }
 
+    async fn upgrade_runtime(
+        &self,
+        subject: &AdminSubject,
+        executable_path: String,
+    ) -> Result<AdminUpgradeRuntimeView, AdminCommandError> {
+        self.runtime
+            .authorize(subject, AdminPermission::UpgradeRuntime)
+            .await?;
+        let Some(upgrade_callback) = &self.upgrade_callback else {
+            return Err(RuntimeError::Config(
+                "runtime upgrade is unavailable without an app-level upgrade coordinator"
+                    .to_string(),
+            )
+            .into());
+        };
+        upgrade_callback(subject.clone(), executable_path)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn execute_local_console(&self, request: AdminRequest) -> AdminResponse {
         let subject = AdminSubject::local_console();
         match request {
@@ -263,6 +306,11 @@ impl AdminService {
                 .reload_runtime(&subject, mode)
                 .await
                 .map(AdminResponse::ReloadRuntime)
+                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
+            AdminRequest::UpgradeRuntime { executable_path } => self
+                .upgrade_runtime(&subject, executable_path)
+                .await
+                .map(AdminResponse::UpgradeRuntime)
                 .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
             AdminRequest::Shutdown => self
                 .shutdown(&subject)
@@ -571,12 +619,16 @@ fn runtime_request_from_plugin_request(request: plugin_admin::AdminRequest) -> A
         plugin_admin::AdminRequest::ReloadRuntime { mode } => AdminRequest::ReloadRuntime {
             mode: runtime_reload_mode_from_plugin(mode),
         },
+        plugin_admin::AdminRequest::UpgradeRuntime { executable_path } => {
+            AdminRequest::UpgradeRuntime { executable_path }
+        }
         plugin_admin::AdminRequest::Shutdown => AdminRequest::Shutdown,
     }
 }
 
 fn parse_builtin_local_command(line: &str) -> Result<AdminRequest, String> {
-    let normalized = line
+    let trimmed = line.trim();
+    let normalized = trimmed
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -598,6 +650,16 @@ fn parse_builtin_local_command(line: &str) -> Result<AdminRequest, String> {
         "reload runtime full" => Ok(AdminRequest::ReloadRuntime {
             mode: RuntimeReloadMode::Full,
         }),
+        _ if normalized.starts_with("upgrade runtime executable ") => {
+            let executable_path = trimmed["upgrade runtime executable ".len()..].trim();
+            if executable_path.is_empty() {
+                Err(format!("unknown command: {line}"))
+            } else {
+                Ok(AdminRequest::UpgradeRuntime {
+                    executable_path: executable_path.to_string(),
+                })
+            }
+        }
         "shutdown" | "stop" => Ok(AdminRequest::Shutdown),
         _ => Err(format!("unknown command: {line}")),
     }
@@ -613,6 +675,7 @@ fn render_builtin_local_response(response: &AdminResponse) -> String {
             "  reload runtime topology",
             "  reload runtime core",
             "  reload runtime full",
+            "  upgrade runtime executable <path>",
             "  shutdown",
         ]
         .join("\n"),
@@ -630,6 +693,10 @@ fn render_builtin_local_response(response: &AdminResponse) -> String {
             sessions.sessions.len(),
         ),
         AdminResponse::ReloadRuntime(result) => render_builtin_runtime_reload_response(result),
+        AdminResponse::UpgradeRuntime(result) => format!(
+            "upgrade runtime: executable={}",
+            result.executable_path
+        ),
         AdminResponse::ShutdownScheduled => "shutdown: scheduled".to_string(),
         AdminResponse::PermissionDenied {
             principal,
@@ -662,6 +729,7 @@ fn plugin_permission_from_runtime(permission: AdminPermission) -> plugin_admin::
         AdminPermission::Status => plugin_admin::AdminPermission::Status,
         AdminPermission::Sessions => plugin_admin::AdminPermission::Sessions,
         AdminPermission::ReloadRuntime => plugin_admin::AdminPermission::ReloadRuntime,
+        AdminPermission::UpgradeRuntime => plugin_admin::AdminPermission::UpgradeRuntime,
         AdminPermission::Shutdown => plugin_admin::AdminPermission::Shutdown,
     }
 }
@@ -678,6 +746,11 @@ fn plugin_response_from_runtime_response(response: &AdminResponse) -> plugin_adm
         AdminResponse::ReloadRuntime(result) => plugin_admin::AdminResponse::ReloadRuntime(
             plugin_runtime_reload_view_from_runtime(result),
         ),
+        AdminResponse::UpgradeRuntime(result) => {
+            plugin_admin::AdminResponse::UpgradeRuntime(plugin_admin::AdminUpgradeRuntimeView {
+                executable_path: result.executable_path.clone(),
+            })
+        }
         AdminResponse::ShutdownScheduled => plugin_admin::AdminResponse::ShutdownScheduled,
         AdminResponse::PermissionDenied {
             principal,
@@ -807,6 +880,7 @@ const fn runtime_permission_from_config(
         crate::config::AdminPermission::Status => AdminPermission::Status,
         crate::config::AdminPermission::Sessions => AdminPermission::Sessions,
         crate::config::AdminPermission::ReloadRuntime => AdminPermission::ReloadRuntime,
+        crate::config::AdminPermission::UpgradeRuntime => AdminPermission::UpgradeRuntime,
         crate::config::AdminPermission::Shutdown => AdminPermission::Shutdown,
     }
 }

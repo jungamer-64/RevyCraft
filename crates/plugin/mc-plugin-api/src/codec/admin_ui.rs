@@ -48,6 +48,7 @@ pub enum AdminPermission {
     Status,
     Sessions,
     ReloadRuntime,
+    UpgradeRuntime,
     Shutdown,
 }
 
@@ -58,6 +59,7 @@ impl AdminPermission {
             Self::Status => "status",
             Self::Sessions => "sessions",
             Self::ReloadRuntime => "reload-runtime",
+            Self::UpgradeRuntime => "upgrade-runtime",
             Self::Shutdown => "shutdown",
         }
     }
@@ -97,6 +99,7 @@ pub enum AdminRequest {
     Status,
     Sessions,
     ReloadRuntime { mode: RuntimeReloadMode },
+    UpgradeRuntime { executable_path: String },
     Shutdown,
 }
 
@@ -108,6 +111,7 @@ impl AdminRequest {
             Self::Status => Some(AdminPermission::Status),
             Self::Sessions => Some(AdminPermission::Sessions),
             Self::ReloadRuntime { .. } => Some(AdminPermission::ReloadRuntime),
+            Self::UpgradeRuntime { .. } => Some(AdminPermission::UpgradeRuntime),
             Self::Shutdown => Some(AdminPermission::Shutdown),
         }
     }
@@ -239,11 +243,17 @@ pub struct AdminRuntimeReloadView {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminUpgradeRuntimeView {
+    pub executable_path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdminResponse {
     Help,
     Status(AdminStatusView),
     Sessions(AdminSessionsView),
     ReloadRuntime(AdminRuntimeReloadView),
+    UpgradeRuntime(AdminUpgradeRuntimeView),
     ShutdownScheduled,
     PermissionDenied {
         principal: AdminPrincipal,

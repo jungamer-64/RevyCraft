@@ -235,4 +235,44 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
     fn session_closed(&self, session: &GameplaySessionSnapshot) -> Result<(), PluginHostError> {
         Self::session_closed(self, session)
     }
+
+    fn export_session_state(
+        &self,
+        session: &GameplaySessionSnapshot,
+    ) -> Result<Vec<u8>, PluginHostError> {
+        self.generation.with_reload_read(|generation| {
+            match generation
+                .invoke(&GameplayRequest::ExportSessionState {
+                    session: session.clone(),
+                })
+                .map_err(PluginHostError::Config)?
+            {
+                GameplayResponse::SessionTransferBlob(blob) => Ok(blob),
+                other => Err(PluginHostError::Config(format!(
+                    "unexpected gameplay export_session_state payload: {other:?}"
+                ))),
+            }
+        })
+    }
+
+    fn import_session_state(
+        &self,
+        session: &GameplaySessionSnapshot,
+        blob: &[u8],
+    ) -> Result<(), PluginHostError> {
+        self.generation.with_reload_read(|generation| {
+            match generation
+                .invoke(&GameplayRequest::ImportSessionState {
+                    session: session.clone(),
+                    blob: blob.to_vec(),
+                })
+                .map_err(PluginHostError::Config)?
+            {
+                GameplayResponse::Empty => Ok(()),
+                other => Err(PluginHostError::Config(format!(
+                    "unexpected gameplay import_session_state payload: {other:?}"
+                ))),
+            }
+        })
+    }
 }

@@ -16,6 +16,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::oneshot;
 
 pub(crate) struct TopologyManager {
     state: std::sync::RwLock<RuntimeGenerationState>,
@@ -195,6 +196,72 @@ impl TopologyManager {
                 .collect::<Vec<_>>()
         };
         Self::shutdown_workers(workers).await;
+    }
+
+    pub(crate) async fn export_tcp_listener_for_upgrade(
+        &self,
+    ) -> Result<std::net::TcpListener, RuntimeError> {
+        let worker = {
+            let mut generation_state = self
+                .state
+                .write()
+                .expect("runtime topology lock should not be poisoned");
+            generation_state.listener_workers.remove(&TransportKind::Tcp)
+        }
+        .ok_or_else(|| RuntimeError::Config("tcp listener worker is not active".to_string()))?;
+        let mut worker = worker;
+        let (ack_tx, ack_rx) = oneshot::channel();
+        worker
+            .control_tx
+            .send(super::ListenerWorkerControl::Export { ack_tx })
+            .await
+            .map_err(|_| {
+                RuntimeError::Config(
+                    "failed to request tcp listener export from topology worker".to_string(),
+                )
+            })?;
+        let listener = ack_rx.await.map_err(|_| {
+            RuntimeError::Config("tcp listener export worker closed unexpectedly".to_string())
+        })??;
+        if let Some(join_handle) = worker.join_handle.take() {
+            let _ = join_handle.await;
+        }
+        Ok(listener)
+    }
+
+    pub(crate) async fn import_tcp_listener_after_upgrade_rollback(
+        &self,
+        listener: std::net::TcpListener,
+        sessions: &SessionRegistry,
+    ) -> Result<(), RuntimeError> {
+        let active = self.active_generation();
+        let adapter_ids = active
+            .listener_bindings
+            .iter()
+            .find(|binding| binding.transport == TransportKind::Tcp)
+            .map(|binding| binding.adapter_ids.clone())
+            .unwrap_or_else(|| {
+                active
+                    .protocol_registry
+                    .adapter_ids_for_transport(TransportKind::Tcp)
+            });
+        let worker = spawn_listener_worker(
+            crate::transport::BoundTransportListener::import_tcp_listener(listener, adapter_ids)?,
+            active.generation_id,
+            sessions.accepted_sender(),
+            sessions.queued_accepts(),
+        )?;
+        let replaced = {
+            let mut generation_state = self
+                .state
+                .write()
+                .expect("runtime topology lock should not be poisoned");
+            generation_state.listener_workers.insert(TransportKind::Tcp, worker)
+        };
+        if let Some(replaced) = replaced {
+            Self::shutdown_workers(vec![replaced]).await;
+        }
+        Ok(())
     }
 
     pub(crate) async fn reload_generation_with_config(

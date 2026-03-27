@@ -2,7 +2,8 @@ use crate::ListenerBinding;
 use crate::RuntimeError;
 use crate::config::ServerConfig;
 use crate::runtime::{
-    AcceptedGenerationSession, GenerationId, QueuedAcceptTracker, TopologyListenerWorker,
+    AcceptedGenerationSession, GenerationId, ListenerWorkerControl, QueuedAcceptTracker,
+    TopologyListenerWorker,
 };
 use crate::transport::{
     AcceptedTransportSession, BoundTransportListener, TransportSessionIo, bind_transport_listener,
@@ -96,14 +97,33 @@ pub(in crate::runtime) fn spawn_listener_worker(
     let binding = listener.listener_binding()?;
     let transport = binding.transport;
     let (generation_tx, generation_rx) = watch::channel(generation_id);
+    let (control_tx, mut control_rx) = mpsc::channel(1);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
     let join_handle = match listener {
         BoundTransportListener::Tcp { listener, .. } => tokio::spawn(async move {
+            let mut listener = Some(listener);
             let generation_rx = generation_rx;
             loop {
                 tokio::select! {
                     _ = &mut shutdown_rx => break,
-                    accepted = listener.accept() => {
+                    Some(control) = control_rx.recv() => {
+                        match control {
+                            ListenerWorkerControl::Export { ack_tx } => {
+                                let result = listener
+                                    .take()
+                                    .ok_or_else(|| RuntimeError::Config("tcp listener was already exported".to_string()))
+                                    .and_then(|listener| listener.into_std().map_err(Into::into));
+                                let _ = ack_tx.send(result);
+                                break;
+                            }
+                        }
+                    }
+                    accepted = async {
+                        let listener = listener
+                            .as_ref()
+                            .expect("tcp listener should be present while worker is running");
+                        listener.accept().await
+                    } => {
                         let Ok((stream, _)) = accepted else {
                             break;
                         };
@@ -136,6 +156,16 @@ pub(in crate::runtime) fn spawn_listener_worker(
             loop {
                 tokio::select! {
                     _ = &mut shutdown_rx => break,
+                    Some(control) = control_rx.recv() => {
+                        match control {
+                            ListenerWorkerControl::Export { ack_tx } => {
+                                let _ = ack_tx.send(Err(RuntimeError::Unsupported(
+                                    "runtime upgrade does not support bedrock listener transfer".to_string(),
+                                )));
+                                break;
+                            }
+                        }
+                    }
                     accepted = listener.accept() => {
                         let Ok(connection) = accepted else {
                             break;
@@ -168,6 +198,7 @@ pub(in crate::runtime) fn spawn_listener_worker(
     Ok(TopologyListenerWorker {
         transport,
         generation_tx,
+        control_tx,
         shutdown_tx: Some(shutdown_tx),
         join_handle: Some(join_handle),
     })

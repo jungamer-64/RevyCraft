@@ -25,7 +25,8 @@ impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
     }
 
     fn parse_line(&self, line: &str) -> Result<AdminRequest, String> {
-        let normalized = line
+        let trimmed = line.trim();
+        let normalized = trimmed
             .split_whitespace()
             .map(str::to_ascii_lowercase)
             .collect::<Vec<_>>()
@@ -46,6 +47,16 @@ impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
             "reload runtime full" => Ok(AdminRequest::ReloadRuntime {
                 mode: RuntimeReloadMode::Full,
             }),
+            _ if normalized.starts_with("upgrade runtime executable ") => {
+                let executable_path = trimmed["upgrade runtime executable ".len()..].trim();
+                if executable_path.is_empty() {
+                    Err(format!("unknown command `{line}`; try `help`"))
+                } else {
+                    Ok(AdminRequest::UpgradeRuntime {
+                        executable_path: executable_path.to_string(),
+                    })
+                }
+            }
             "shutdown" => Ok(AdminRequest::Shutdown),
             _ => Err(format!("unknown command `{line}`; try `help`")),
         }
@@ -57,6 +68,9 @@ impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
             AdminResponse::Status(status) => render_status(status),
             AdminResponse::Sessions(sessions) => render_sessions(sessions),
             AdminResponse::ReloadRuntime(result) => render_runtime_reload(result),
+            AdminResponse::UpgradeRuntime(result) => {
+                format!("upgrade runtime: scheduled executable={}", result.executable_path)
+            }
             AdminResponse::ShutdownScheduled => "shutdown scheduled".to_string(),
             AdminResponse::PermissionDenied {
                 principal,
@@ -83,6 +97,7 @@ fn render_help() -> String {
         "reload runtime topology",
         "reload runtime core",
         "reload runtime full",
+        "upgrade runtime executable <path>",
         "shutdown",
     ]
     .join("\n")
@@ -273,3 +288,46 @@ fn render_runtime_reload(result: &AdminRuntimeReloadView) -> String {
 }
 
 export_plugin!(admin_ui, ConsoleAdminUiPlugin, MANIFEST);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_plugin_api::codec::admin_ui::{
+        AdminPermission, AdminPrincipal, AdminUpgradeRuntimeView,
+    };
+
+    #[test]
+    fn parses_upgrade_runtime_executable_command() {
+        let plugin = ConsoleAdminUiPlugin;
+        assert_eq!(
+            plugin
+                .parse_line("upgrade runtime executable /tmp/server-bootstrap")
+                .expect("upgrade command should parse"),
+            AdminRequest::UpgradeRuntime {
+                executable_path: "/tmp/server-bootstrap".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn renders_upgrade_runtime_and_permission_denied_responses() {
+        let plugin = ConsoleAdminUiPlugin;
+        assert_eq!(
+            plugin
+                .render_response(&AdminResponse::UpgradeRuntime(AdminUpgradeRuntimeView {
+                    executable_path: "/tmp/server-bootstrap".to_string(),
+                }))
+                .expect("upgrade response should render"),
+            "upgrade runtime: scheduled executable=/tmp/server-bootstrap"
+        );
+        assert_eq!(
+            plugin
+                .render_response(&AdminResponse::PermissionDenied {
+                    principal: AdminPrincipal::LocalConsole,
+                    permission: AdminPermission::UpgradeRuntime,
+                })
+                .expect("permission denied response should render"),
+            "permission denied: principal=local-console permission=upgrade-runtime"
+        );
+    }
+}

@@ -1,6 +1,6 @@
 use revy_admin_grpc::admin::{
     self as proto, GetStatusResponse, ListSessionsResponse, ReloadRuntimeResponse,
-    ShutdownResponse,
+    ShutdownResponse, UpgradeRuntimeResponse,
     admin_control_plane_server::{AdminControlPlane, AdminControlPlaneServer},
 };
 use server_runtime::RuntimeError;
@@ -8,19 +8,46 @@ use server_runtime::runtime::{
     AdminArtifactsReloadView, AdminAuthError, AdminCommandError, AdminControlPlaneHandle,
     AdminFullReloadView, AdminNamedCountView, AdminRuntimeReloadDetail, AdminRuntimeReloadView,
     AdminSessionSummaryView, AdminSessionsView, AdminStatusView, AdminSubject,
-    AdminTopologyReloadView, RuntimeReloadMode,
+    AdminTopologyReloadView, AdminUpgradeRuntimeView, RuntimeReloadMode,
 };
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::metadata::MetadataMap;
-use tonic::transport::server::TcpIncoming;
 use tonic::{Request, Response, Status};
 
 #[derive(Debug)]
 pub(crate) struct AdminGrpcServerHandle {
     local_addr: SocketAddr,
+    listener: std::net::TcpListener,
+    shutdown_rx: watch::Receiver<bool>,
+    incoming_tx: mpsc::Sender<Result<TcpListenerStream, std::io::Error>>,
+    accept_state: AdminGrpcAcceptState,
+    server_done_rx: oneshot::Receiver<Result<(), RuntimeError>>,
+}
+
+#[derive(Debug)]
+enum AdminGrpcAcceptState {
+    Accepting {
+        control_tx: mpsc::Sender<AdminGrpcAcceptControl>,
+        join_handle: JoinHandle<Result<(), RuntimeError>>,
+    },
+    Paused,
+}
+
+#[derive(Debug)]
+enum AdminGrpcAcceptControl {
+    PauseForUpgrade { ack_tx: oneshot::Sender<()> },
+    Shutdown,
+}
+
+type TcpListenerStream = tokio::net::TcpStream;
+
+#[derive(Debug)]
+struct SpawnedAcceptLoop {
+    control_tx: mpsc::Sender<AdminGrpcAcceptControl>,
     join_handle: JoinHandle<Result<(), RuntimeError>>,
 }
 
@@ -30,8 +57,67 @@ impl AdminGrpcServerHandle {
         self.local_addr
     }
 
-    pub(crate) async fn join(self) -> Result<(), RuntimeError> {
-        self.join_handle.await?
+    pub(crate) async fn wait_for_server_exit(&mut self) -> Result<(), RuntimeError> {
+        (&mut self.server_done_rx)
+            .await
+            .map_err(|_| RuntimeError::Config("admin gRPC server task ended unexpectedly".to_string()))?
+    }
+
+    pub(crate) fn try_clone_listener(&self) -> Result<std::net::TcpListener, RuntimeError> {
+        self.listener.try_clone().map_err(Into::into)
+    }
+
+    pub(crate) async fn pause_for_upgrade(&mut self) -> Result<std::net::TcpListener, RuntimeError> {
+        match std::mem::replace(&mut self.accept_state, AdminGrpcAcceptState::Paused) {
+            AdminGrpcAcceptState::Accepting {
+                control_tx,
+                join_handle,
+            } => {
+                let (ack_tx, ack_rx) = oneshot::channel();
+                control_tx
+                    .send(AdminGrpcAcceptControl::PauseForUpgrade { ack_tx })
+                    .await
+                    .map_err(|_| {
+                        RuntimeError::Config(
+                            "admin gRPC accept loop stopped before upgrade pause".to_string(),
+                        )
+                    })?;
+                let _ = ack_rx.await;
+                join_handle.await.map_err(RuntimeError::from)??;
+                self.try_clone_listener()
+            }
+            AdminGrpcAcceptState::Paused => Err(RuntimeError::Config(
+                "admin gRPC listener is already paused for upgrade".to_string(),
+            )),
+        }
+    }
+
+    pub(crate) fn resume_after_upgrade_rollback(&mut self) -> Result<(), RuntimeError> {
+        if matches!(self.accept_state, AdminGrpcAcceptState::Accepting { .. }) {
+            return Ok(());
+        }
+        let spawned = spawn_accept_loop(
+            self.listener.try_clone()?,
+            self.incoming_tx.clone(),
+            self.shutdown_rx.clone(),
+        )?;
+        self.accept_state = AdminGrpcAcceptState::Accepting {
+            control_tx: spawned.control_tx,
+            join_handle: spawned.join_handle,
+        };
+        Ok(())
+    }
+
+    pub(crate) async fn join(mut self) -> Result<(), RuntimeError> {
+        if let AdminGrpcAcceptState::Accepting {
+            control_tx,
+            join_handle,
+        } = std::mem::replace(&mut self.accept_state, AdminGrpcAcceptState::Paused)
+        {
+            let _ = control_tx.send(AdminGrpcAcceptControl::Shutdown).await;
+            join_handle.await.map_err(RuntimeError::from)??;
+        }
+        self.wait_for_server_exit().await
     }
 }
 
@@ -92,6 +178,22 @@ impl AdminControlPlane for AdminGrpcService {
             .map_err(map_command_error)
     }
 
+    async fn upgrade_runtime(
+        &self,
+        request: Request<proto::UpgradeRuntimeRequest>,
+    ) -> Result<Response<UpgradeRuntimeResponse>, Status> {
+        let subject = authenticate_request(&self.control_plane, request.metadata()).await?;
+        self.control_plane
+            .upgrade_runtime(&subject, request.into_inner().executable_path)
+            .await
+            .map(|result| {
+                Response::new(UpgradeRuntimeResponse {
+                    result: Some(map_upgrade_runtime_view(result)),
+                })
+            })
+            .map_err(map_command_error)
+    }
+
     async fn shutdown(
         &self,
         request: Request<proto::ShutdownRequest>,
@@ -112,29 +214,59 @@ pub(crate) async fn spawn_admin_grpc_server(
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
 ) -> Result<AdminGrpcServerHandle, RuntimeError> {
-    let listener = TcpListener::bind(bind_addr).await.map_err(|error| {
+    let listener = std::net::TcpListener::bind(bind_addr).map_err(|error| {
         RuntimeError::Config(format!(
             "failed to bind admin gRPC listener on {bind_addr}: {error}"
         ))
     })?;
+    spawn_admin_grpc_server_from_std_listener(listener, control_plane, shutdown_tx, shutdown_rx)
+        .await
+}
+
+pub(crate) async fn spawn_admin_grpc_server_from_std_listener(
+    listener: std::net::TcpListener,
+    control_plane: AdminControlPlaneHandle,
+    shutdown_tx: watch::Sender<bool>,
+    shutdown_rx: watch::Receiver<bool>,
+) -> Result<AdminGrpcServerHandle, RuntimeError> {
     let local_addr = listener.local_addr()?;
+    listener.set_nonblocking(true)?;
+    let server_shutdown_rx = shutdown_rx.clone();
+    let (incoming_tx, incoming_rx) = mpsc::channel(64);
+    let spawned_accept = spawn_accept_loop(
+        listener.try_clone()?,
+        incoming_tx.clone(),
+        shutdown_rx.clone(),
+    )?;
     let service = AdminGrpcService {
         control_plane,
         shutdown_tx,
     };
-    let join_handle = tokio::spawn(async move {
-        tonic::transport::Server::builder()
-            .add_service(AdminControlPlaneServer::new(service))
-            .serve_with_incoming_shutdown(
-                TcpIncoming::from(listener),
-                wait_for_shutdown_signal(shutdown_rx),
-            )
-            .await
-            .map_err(|error| RuntimeError::Config(format!("admin gRPC server failed: {error}")))
+    let (server_done_tx, server_done_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let result = async move {
+            tonic::transport::Server::builder()
+                .add_service(AdminControlPlaneServer::new(service))
+                .serve_with_incoming_shutdown(
+                    ReceiverStream::new(incoming_rx),
+                    wait_for_shutdown_signal(server_shutdown_rx),
+                )
+                .await
+                .map_err(|error| RuntimeError::Config(format!("admin gRPC server failed: {error}")))
+        }
+        .await;
+        let _ = server_done_tx.send(result);
     });
     Ok(AdminGrpcServerHandle {
         local_addr,
-        join_handle,
+        listener,
+        shutdown_rx,
+        incoming_tx,
+        accept_state: AdminGrpcAcceptState::Accepting {
+            control_tx: spawned_accept.control_tx,
+            join_handle: spawned_accept.join_handle,
+        },
+        server_done_rx,
     })
 }
 
@@ -147,6 +279,47 @@ pub(crate) async fn wait_for_shutdown_signal(mut shutdown_rx: watch::Receiver<bo
             break;
         }
     }
+}
+
+fn spawn_accept_loop(
+    listener: std::net::TcpListener,
+    incoming_tx: mpsc::Sender<Result<TcpListenerStream, std::io::Error>>,
+    shutdown_rx: watch::Receiver<bool>,
+) -> Result<SpawnedAcceptLoop, RuntimeError> {
+    let (control_tx, mut control_rx) = mpsc::channel(4);
+    let join_handle = tokio::spawn(async move {
+        let listener = TcpListener::from_std(listener)?;
+        let shutdown = wait_for_shutdown_signal(shutdown_rx);
+        tokio::pin!(shutdown);
+        loop {
+            tokio::select! {
+                _ = &mut shutdown => {
+                    return Ok(());
+                }
+                Some(control) = control_rx.recv() => {
+                    match control {
+                        AdminGrpcAcceptControl::PauseForUpgrade { ack_tx } => {
+                            let _ = ack_tx.send(());
+                            return Ok(());
+                        }
+                        AdminGrpcAcceptControl::Shutdown => {
+                            return Ok(());
+                        }
+                    }
+                }
+                accepted = listener.accept() => {
+                    let (stream, _) = accepted?;
+                    if incoming_tx.send(Ok(stream)).await.is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    });
+    Ok(SpawnedAcceptLoop {
+        control_tx,
+        join_handle,
+    })
 }
 
 async fn authenticate_request(
@@ -388,6 +561,12 @@ fn map_runtime_reload_view(result: AdminRuntimeReloadView) -> proto::AdminRuntim
     proto::AdminRuntimeReloadView {
         mode: map_reload_mode(result.mode),
         detail: Some(detail),
+    }
+}
+
+fn map_upgrade_runtime_view(result: AdminUpgradeRuntimeView) -> proto::AdminUpgradeRuntimeView {
+    proto::AdminUpgradeRuntimeView {
+        executable_path: result.executable_path,
     }
 }
 

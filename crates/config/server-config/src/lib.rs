@@ -5,7 +5,7 @@ use mc_plugin_host::config::{
     RuntimeSelectionConfig as PluginHostRuntimeSelectionConfig,
 };
 use mc_plugin_host::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::fs;
@@ -53,11 +53,12 @@ impl ServerConfigSource {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AdminPermission {
     Status,
     Sessions,
     ReloadRuntime,
+    UpgradeRuntime,
     Shutdown,
 }
 
@@ -68,12 +69,13 @@ impl AdminPermission {
             Self::Status => "status",
             Self::Sessions => "sessions",
             Self::ReloadRuntime => "reload-runtime",
+            Self::UpgradeRuntime => "upgrade-runtime",
             Self::Shutdown => "shutdown",
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LevelType {
     Flat,
 }
@@ -90,7 +92,7 @@ impl LevelType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BootstrapConfig {
     pub online_mode: bool,
     pub level_name: String,
@@ -123,7 +125,7 @@ impl Default for BootstrapConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkConfig {
     pub server_ip: Option<IpAddr>,
     pub server_port: u16,
@@ -142,7 +144,7 @@ impl Default for NetworkConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TopologyConfig {
     pub be_enabled: bool,
     pub default_adapter: AdapterId,
@@ -167,7 +169,7 @@ impl Default for TopologyConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginsConfig {
     pub allowlist: Option<Vec<String>>,
     pub reload_watch: bool,
@@ -186,7 +188,7 @@ impl Default for PluginsConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfilesConfig {
     pub auth: AuthProfileId,
     pub bedrock_auth: AuthProfileId,
@@ -205,7 +207,7 @@ impl Default for ProfilesConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminConfig {
     pub ui_profile: AdminUiProfileId,
     pub local_console_permissions: Vec<AdminPermission>,
@@ -222,7 +224,7 @@ impl Default for AdminConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminGrpcConfig {
     pub enabled: bool,
     pub bind_addr: SocketAddr,
@@ -241,7 +243,7 @@ impl Default for AdminGrpcConfig {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminGrpcPrincipalConfig {
     pub token_file: PathBuf,
     pub token: String,
@@ -258,14 +260,14 @@ impl Debug for AdminGrpcPrincipalConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminGrpcTransportConfig {
     pub enabled: bool,
     pub bind_addr: SocketAddr,
     pub allow_non_loopback: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StaticConfig {
     pub bootstrap: BootstrapConfig,
     pub admin_grpc: AdminGrpcTransportConfig,
@@ -290,7 +292,7 @@ impl StaticConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LiveConfig {
     pub network: NetworkConfig,
     pub topology: TopologyConfig,
@@ -299,7 +301,7 @@ pub struct LiveConfig {
     pub admin: AdminConfig,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub bootstrap: BootstrapConfig,
     pub network: NetworkConfig,
@@ -962,11 +964,12 @@ where
     }
 }
 
-const fn all_admin_permissions() -> [AdminPermission; 4] {
+const fn all_admin_permissions() -> [AdminPermission; 5] {
     [
         AdminPermission::Status,
         AdminPermission::Sessions,
         AdminPermission::ReloadRuntime,
+        AdminPermission::UpgradeRuntime,
         AdminPermission::Shutdown,
     ]
 }
@@ -995,6 +998,7 @@ fn parse_admin_permissions(
             "status" => AdminPermission::Status,
             "sessions" => AdminPermission::Sessions,
             "reload-runtime" => AdminPermission::ReloadRuntime,
+            "upgrade-runtime" => AdminPermission::UpgradeRuntime,
             "shutdown" => AdminPermission::Shutdown,
             _ => {
                 return Err(ServerConfigError::Config(format!(

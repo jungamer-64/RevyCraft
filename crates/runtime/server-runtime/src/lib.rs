@@ -11,7 +11,8 @@ pub use self::api::{
     AdminListenerBindingView, AdminNamedCountView, AdminPermission, AdminPhaseCountView,
     AdminPluginHostView, AdminPrincipal, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
     AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
-    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, ListenerBinding,
-    PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot, RuntimeReloadMode,
+    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, AdminUpgradeRuntimeView,
+    ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot,
+    RuntimeReloadMode,
 };
 pub use self::error::RuntimeError;

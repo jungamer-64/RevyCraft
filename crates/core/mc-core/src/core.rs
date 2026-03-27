@@ -143,7 +143,7 @@ pub(super) struct EntityStore {
     pub(super) next_entity_id: i32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlayerSessionState {
     pub entity_id: EntityId,
     pub cursor: Option<ItemStack>,
@@ -174,7 +174,7 @@ pub struct ServerCore {
     pub(super) scheduler: SystemScheduler,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DroppedItemState {
     pub snapshot: DroppedItemSnapshot,
     pub last_updated_at_ms: u64,
@@ -182,7 +182,7 @@ pub struct DroppedItemState {
     pub despawn_at_ms: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ActiveMiningState {
     pub position: BlockPos,
     pub started_at_ms: u64,
@@ -191,14 +191,14 @@ pub struct ActiveMiningState {
     pub tool_context: Option<MiningToolSpec>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OnlinePlayerRuntimeState {
     pub player: PlayerSnapshot,
     pub session: PlayerSessionState,
     pub active_mining: Option<ActiveMiningState>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CoreRuntimeStateBlob {
     pub snapshot: crate::WorldSnapshot,
     pub online_players: BTreeMap<PlayerId, OnlinePlayerRuntimeState>,

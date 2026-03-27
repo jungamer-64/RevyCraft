@@ -312,7 +312,7 @@ impl SelectionResolver {
         Ok(())
     }
 
-    fn resolve_storage_profile(
+    pub(crate) fn resolve_storage_profile(
         config: &ServerConfig,
         loaded_plugins: &LoadedPluginSet,
     ) -> Result<Arc<dyn StorageProfileHandle>, RuntimeError> {
@@ -334,6 +334,7 @@ const fn runtime_permission_from_config(
         crate::config::AdminPermission::Status => AdminPermission::Status,
         crate::config::AdminPermission::Sessions => AdminPermission::Sessions,
         crate::config::AdminPermission::ReloadRuntime => AdminPermission::ReloadRuntime,
+        crate::config::AdminPermission::UpgradeRuntime => AdminPermission::UpgradeRuntime,
         crate::config::AdminPermission::Shutdown => AdminPermission::Shutdown,
     }
 }

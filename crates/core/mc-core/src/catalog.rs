@@ -1,4 +1,5 @@
 use crate::{BlockState, ItemStack};
+use serde::{Deserialize, Serialize};
 
 pub const STONE: &str = "minecraft:stone";
 pub const DIRT: &str = "minecraft:dirt";
@@ -15,14 +16,14 @@ pub const STICK: &str = "minecraft:stick";
 pub const CHEST: &str = "minecraft:chest";
 pub const FURNACE: &str = "minecraft:furnace";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolClass {
     Pickaxe,
     Shovel,
     Axe,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiningToolSpec {
     pub class: ToolClass,
     pub tier: u8,

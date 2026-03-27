@@ -186,7 +186,6 @@ impl RuntimeKernel {
         self.state.lock().await.dirty
     }
 
-    #[cfg(test)]
     pub(crate) async fn set_dirty(&self, dirty: bool) {
         self.state.lock().await.dirty = dirty;
     }

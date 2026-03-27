@@ -1,262 +1,12 @@
-use mc_proto_common::{MinecraftWireCodec, PacketWriter, WireCodec};
+mod support;
+
+use support::*;
 use std::fs;
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener as StdTcpListener, TcpStream};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::io::Write;
+use std::process::Stdio;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tempfile::tempdir;
-
-fn toml_string(value: &str) -> String {
-    format!("{value:?}")
-}
-
-fn reserve_port() -> Result<u16, Box<dyn std::error::Error>> {
-    Ok(StdTcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
-}
-
-fn repo_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()?)
-}
-
-fn write_server_toml(
-    temp_dir: &Path,
-    repo_root: &Path,
-    world_dir: &Path,
-    admin_grpc_enabled: bool,
-    server_port: u16,
-    admin_grpc_port: u16,
-    motd: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    write_server_toml_at(
-        temp_dir,
-        &temp_dir.join("runtime").join("server.toml"),
-        repo_root,
-        world_dir,
-        admin_grpc_enabled,
-        server_port,
-        admin_grpc_port,
-        motd,
-    )
-}
-
-fn write_server_toml_at(
-    temp_root: &Path,
-    config_path: &Path,
-    repo_root: &Path,
-    world_dir: &Path,
-    admin_grpc_enabled: bool,
-    server_port: u16,
-    admin_grpc_port: u16,
-    motd: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let runtime_dir = config_path
-        .parent()
-        .ok_or("config path should have a parent directory")?;
-    let plugins_dir = repo_root.join("runtime").join("plugins");
-    fs::create_dir_all(&runtime_dir)?;
-    let (principal_block, admin_bind_addr) = if admin_grpc_enabled {
-        let token_path = temp_root.join("admin").join("ops.token");
-        fs::create_dir_all(token_path.parent().expect("token parent should exist"))?;
-        fs::write(&token_path, "ops-token\n")?;
-        (
-            format!(
-                "\n[static.admin.grpc.principals.ops]\ntoken_file = {}\npermissions = [\"status\", \"sessions\", \"reload-runtime\", \"shutdown\"]\n",
-                toml_string(&token_path.display().to_string())
-            ),
-            format!("127.0.0.1:{admin_grpc_port}"),
-        )
-    } else {
-        (String::new(), "127.0.0.1:50051".to_string())
-    };
-
-    fs::write(
-        config_path,
-        format!(
-            "\
-[static.bootstrap]
-online_mode = false
-level_name = \"world\"
-level_type = \"flat\"
-game_mode = 0
-difficulty = 1
-view_distance = 2
-world_dir = {}
-storage_profile = \"je-anvil-1_7_10\"
-
-[static.plugins]
-plugins_dir = {}
-plugin_abi_min = \"4.0\"
-plugin_abi_max = \"4.0\"
-
-[static.admin.grpc]
-enabled = {}
-bind_addr = {}
-allow_non_loopback = false
-{}\
-[live.network]
-server_ip = \"127.0.0.1\"
-server_port = {}
-motd = {}
-max_players = 20
-
-[live.topology]
-be_enabled = false
-default_adapter = \"je-5\"
-enabled_adapters = [\"je-5\"]
-reload_watch = false
-drain_grace_secs = 30
-
-[live.plugins]
-allowlist = [\"je-5\", \"gameplay-canonical\", \"storage-je-anvil-1_7_10\", \"auth-offline\"]
-reload_watch = false
-
-[live.plugins.failure_policy]
-protocol = \"quarantine\"
-gameplay = \"quarantine\"
-storage = \"fail-fast\"
-auth = \"skip\"
-admin_ui = \"skip\"
-
-[live.profiles]
-auth = \"offline-v1\"
-bedrock_auth = \"bedrock-offline-v1\"
-default_gameplay = \"canonical\"
-
-[live.admin]
-ui_profile = \"console-v1\"
-local_console_permissions = [\"status\", \"sessions\", \"reload-runtime\", \"shutdown\"]
-",
-            toml_string(&world_dir.display().to_string()),
-            toml_string(&plugins_dir.display().to_string()),
-            admin_grpc_enabled,
-            toml_string(&admin_bind_addr),
-            principal_block,
-            server_port,
-            toml_string(motd),
-        ),
-    )?;
-    Ok(())
-}
-
-fn spawn_server(
-    temp_dir: &Path,
-    stdin: Stdio,
-    stdout: Stdio,
-    stderr: Stdio,
-) -> Result<Child, Box<dyn std::error::Error>> {
-    spawn_server_with_config_path(temp_dir, stdin, stdout, stderr, None)
-}
-
-fn spawn_server_with_config_path(
-    temp_dir: &Path,
-    stdin: Stdio,
-    stdout: Stdio,
-    stderr: Stdio,
-    config_path: Option<&Path>,
-) -> Result<Child, Box<dyn std::error::Error>> {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_server-bootstrap"));
-    command
-        .current_dir(temp_dir)
-        .stdin(stdin)
-        .stdout(stdout)
-        .stderr(stderr);
-    if let Some(config_path) = config_path {
-        command.env("REVY_SERVER_CONFIG", config_path);
-    }
-    Ok(command.spawn()?)
-}
-
-fn wait_for_exit(
-    child: &mut Child,
-    timeout: Duration,
-) -> Result<Option<ExitStatus>, Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Some(status));
-        }
-        if Instant::now() >= deadline {
-            return Ok(None);
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn read_child_output(child: &mut Child) -> Result<(String, String), Box<dyn std::error::Error>> {
-    let mut stdout = String::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        pipe.read_to_string(&mut stdout)?;
-    }
-    let mut stderr = String::new();
-    if let Some(mut pipe) = child.stderr.take() {
-        pipe.read_to_string(&mut stderr)?;
-    }
-    Ok((stdout, stderr))
-}
-
-fn wait_for_tcp_ready(
-    addr: SocketAddr,
-    timeout: Duration,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match TcpStream::connect_timeout(&addr, Duration::from_millis(100)) {
-            Ok(stream) => {
-                drop(stream);
-                return Ok(());
-            }
-            Err(error) if Instant::now() < deadline => {
-                let _ = error;
-                thread::sleep(Duration::from_millis(25));
-            }
-            Err(error) => return Err(Box::new(error)),
-        }
-    }
-}
-
-fn encode_handshake(
-    protocol_version: i32,
-    next_state: i32,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let mut writer = PacketWriter::default();
-    writer.write_varint(0x00);
-    writer.write_varint(protocol_version);
-    writer.write_string("localhost")?;
-    writer.write_u16(25565);
-    writer.write_varint(next_state);
-    Ok(writer.into_inner())
-}
-
-fn login_start(username: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let mut writer = PacketWriter::default();
-    writer.write_varint(0x00);
-    writer.write_string(username)?;
-    Ok(writer.into_inner())
-}
-
-fn write_packet(
-    stream: &mut TcpStream,
-    codec: &MinecraftWireCodec,
-    payload: &[u8],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let frame = codec.encode_frame(payload)?;
-    stream.write_all(&frame)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_world_read_only(path: &Path, read_only: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_mode(if read_only { 0o555 } else { 0o755 });
-    fs::set_permissions(path, permissions)?;
-    Ok(())
-}
 
 #[test]
 fn stdin_null_with_admin_grpc_keeps_server_running() -> Result<(), Box<dyn std::error::Error>> {
@@ -269,10 +19,7 @@ fn stdin_null_with_admin_grpc_keeps_server_running() -> Result<(), Box<dyn std::
         temp_dir.path(),
         &repo_root,
         &world_dir,
-        true,
-        0,
-        grpc_port,
-        "stdin-null-admin",
+        &ServerTomlOptions::new(true, 0, grpc_port, "stdin-null-admin"),
     )?;
 
     let mut child = spawn_server(temp_dir.path(), Stdio::null(), Stdio::null(), Stdio::null())?;
@@ -298,10 +45,7 @@ fn stdin_null_without_other_admin_surface_warns_and_exits() -> Result<(), Box<dy
         temp_dir.path(),
         &repo_root,
         &world_dir,
-        false,
-        0,
-        50051,
-        "stdin-null-no-admin",
+        &ServerTomlOptions::new(false, 0, 50051, "stdin-null-no-admin"),
     )?;
 
     let mut child = spawn_server(
@@ -333,10 +77,7 @@ fn piped_status_command_detaches_after_eof_when_admin_grpc_is_available()
         temp_dir.path(),
         &repo_root,
         &world_dir,
-        true,
-        0,
-        grpc_port,
-        "stdin-pipe-admin",
+        &ServerTomlOptions::new(true, 0, grpc_port, "stdin-pipe-admin"),
     )?;
 
     let mut child = spawn_server(
@@ -378,10 +119,7 @@ fn runtime_failure_exits_even_when_admin_grpc_is_available()
         temp_dir.path(),
         &repo_root,
         &world_dir,
-        true,
-        server_port,
-        grpc_port,
-        "runtime-failure-admin",
+        &ServerTomlOptions::new(true, server_port, grpc_port, "runtime-failure-admin"),
     )?;
 
     let mut child = spawn_server(
@@ -391,11 +129,11 @@ fn runtime_failure_exits_even_when_admin_grpc_is_available()
         Stdio::piped(),
     )?;
 
-    let server_addr = SocketAddr::from(([127, 0, 0, 1], server_port));
+    let server_addr = std::net::SocketAddr::from(([127, 0, 0, 1], server_port));
     wait_for_tcp_ready(server_addr, Duration::from_secs(3))?;
 
-    let codec = MinecraftWireCodec;
-    let mut stream = TcpStream::connect(server_addr)?;
+    let codec = mc_proto_common::MinecraftWireCodec;
+    let mut stream = std::net::TcpStream::connect(server_addr)?;
     write_packet(&mut stream, &codec, &encode_handshake(5, 2)?)?;
     write_packet(&mut stream, &codec, &login_start("runtime-failure")?)?;
 
@@ -426,10 +164,7 @@ fn revy_server_config_override_boots_from_custom_path() -> Result<(), Box<dyn st
         &custom_config_path,
         &repo_root,
         &world_dir,
-        true,
-        0,
-        grpc_port,
-        "env-override-admin",
+        &ServerTomlOptions::new(true, 0, grpc_port, "env-override-admin"),
     )?;
 
     let mut child = spawn_server_with_config_path(

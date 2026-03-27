@@ -4,7 +4,7 @@ use mc_core::{ConnectionId, SessionCapabilitySet};
 use mc_proto_common::ProtocolSessionSnapshot;
 
 impl RuntimeServer {
-    pub(in crate::runtime::session) fn refresh_session_capabilities(session: &mut SessionState) {
+    pub(in crate::runtime) fn refresh_session_capabilities(session: &mut SessionState) {
         let Some(adapter) = session.adapter.as_ref() else {
             session.session_capabilities = None;
             return;
