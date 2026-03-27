@@ -19,7 +19,7 @@ cargo run -p server-bootstrap
 
 このとき `live.plugins.allowlist` に含まれる plugin だけを package します。allowlist が無い、または空の場合は失敗します。managed plugin のうち allowlist から外れたものは packaging 対象から外れますが、workspace 外から持ち込んだ third-party plugin directory は消しません。
 
-`server-bootstrap` は `REVY_SERVER_CONFIG` があればその path、無ければ `runtime/server.toml` を選びます。選ばれた path が存在しない場合は warning を出し、`ServerConfig::default()` を使って起動します。この built-in default では `runtime/plugins` と `runtime/world` が使われます。
+`server-bootstrap` は `REVY_SERVER_CONFIG` があればその path、無ければ `runtime/server.toml` を選びます。選ばれた path が存在しない場合は fail-fast で起動失敗します。
 
 ## package と boot が読む config の違い
 
@@ -28,10 +28,10 @@ cargo run -p server-bootstrap
 | コマンド | 既定の config source | path が無い場合 |
 | --- | --- | --- |
 | `cargo run -p xtask -- package-plugins` | `runtime/server.toml` を優先し、無ければ `runtime/server.toml.example` | error |
-| `cargo run -p server-bootstrap` | `REVY_SERVER_CONFIG` または `runtime/server.toml` | warning を出して built-in default config |
+| `cargo run -p server-bootstrap` | `REVY_SERVER_CONFIG` または `runtime/server.toml` | error |
 | `cargo run -p xtask -- build-release-bundles` | `runtime/server.toml.example` | error |
 
-この差は意図的です。開発 packaging は active config に寄せ、runtime boot は「config が無くても default で起動できる」設計にし、release bundle は sample config を既定の source of truth としています。
+この差は意図的です。開発 packaging は active config に寄せ、runtime boot と release bundle はどちらも選ばれた config の存在を必須にしています。
 
 ## optional plugin を含めて全量 package したいとき
 

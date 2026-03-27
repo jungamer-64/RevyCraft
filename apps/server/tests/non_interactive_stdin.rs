@@ -187,7 +187,32 @@ fn revy_server_config_override_boots_from_custom_path() -> Result<(), Box<dyn st
 }
 
 #[test]
-fn missing_revy_server_config_emits_warning() -> Result<(), Box<dyn std::error::Error>> {
+fn missing_default_server_config_fails_fast() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+
+    let mut child = spawn_server(
+        temp_dir.path(),
+        Stdio::null(),
+        Stdio::null(),
+        Stdio::piped(),
+    )?;
+    let Some(status) = wait_for_exit(&mut child, Duration::from_secs(5))? else {
+        child.kill()?;
+        let _ = child.wait()?;
+        return Err("server did not exit after missing default config".into());
+    };
+    let (_stdout, stderr) = read_child_output(&mut child)?;
+
+    assert!(!status.success());
+    assert!(stderr.contains("server config path"));
+    assert!(stderr.contains("runtime/server.toml"));
+    assert!(stderr.contains("was not found"));
+    assert!(!stderr.contains("booting with default config"));
+    Ok(())
+}
+
+#[test]
+fn missing_revy_server_config_fails_fast() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let missing_config_path = temp_dir.path().join("missing-server.toml");
 
@@ -198,11 +223,17 @@ fn missing_revy_server_config_emits_warning() -> Result<(), Box<dyn std::error::
         Stdio::piped(),
         Some(&missing_config_path),
     )?;
-    let _ = wait_for_exit(&mut child, Duration::from_secs(5))?;
+    let Some(status) = wait_for_exit(&mut child, Duration::from_secs(5))? else {
+        child.kill()?;
+        let _ = child.wait()?;
+        return Err("server did not exit after missing REVY_SERVER_CONFIG".into());
+    };
     let (_stdout, stderr) = read_child_output(&mut child)?;
 
+    assert!(!status.success());
     assert!(stderr.contains("server config path"));
-    assert!(stderr.contains("booting with default config"));
     assert!(stderr.contains("missing-server.toml"));
+    assert!(stderr.contains("was not found"));
+    assert!(!stderr.contains("booting with default config"));
     Ok(())
 }

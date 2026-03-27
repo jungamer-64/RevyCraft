@@ -11,7 +11,7 @@
 1. `REVY_SERVER_CONFIG`
 2. `runtime/server.toml`
 
-選ばれた path が存在しない場合は warning を出し、`ServerConfig::default()` を使って boot します。これは「空の TOML を読む」のではなく、構造体 default をそのまま使う挙動です。
+選ばれた path が存在しない場合は fail-fast で boot error になります。`ServerConfig::default()` への fallback は行いません。manual reload / watch reload が config を再読込するときも同じで、選ばれた path が無ければ reload error になります。
 
 `package-plugins` と `build-release-bundles` は別の既定 path を持ちます。そちらは [`getting-started.md`](getting-started.md) を参照してください。
 
@@ -28,8 +28,6 @@ TOML file が存在して読み込まれる場合、relative path はその TOML
 - `static.bootstrap.world_dir` を省略すると、`<config-dir>/<level_name>` が使われます。`level_name` の既定値は `"world"` です。
 - `static.plugins.plugins_dir` を省略すると、`<config-dir>/plugins` が使われます。
 - `token_file` は non-empty token へ解決される必要があります。空 token、重複 token、空 permission list は config error です。
-
-一方で、選ばれた config path が存在せず built-in default config で boot する場合は、relative 解決は発生しません。このときの built-in default は `runtime/world` と `runtime/plugins` を使います。
 
 ## 設定セクションと restart 境界
 

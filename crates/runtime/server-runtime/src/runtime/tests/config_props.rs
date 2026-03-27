@@ -725,6 +725,21 @@ fn server_config_splits_static_and_live_views() {
 }
 
 #[test]
+fn missing_server_toml_reports_selected_path() {
+    let temp_dir = tempdir().expect("tempdir should be available");
+    let path = temp_dir.path().join("missing-server.toml");
+
+    let error = ServerConfig::from_toml(&path).expect_err("missing server.toml should fail fast");
+    match error {
+        crate::config::ServerConfigError::Config(message) => {
+            assert!(message.contains("server config path"));
+            assert!(message.contains(&path.display().to_string()));
+        }
+        other => panic!("unexpected config error: {other:?}"),
+    }
+}
+
+#[test]
 fn server_toml_parse_topology_reload_settings() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = ServerConfig::default();

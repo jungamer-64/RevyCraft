@@ -135,6 +135,56 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
 }
 
 #[tokio::test]
+async fn reload_paths_fail_fast_when_server_toml_disappears() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let config_path = temp_dir.path().join("server.toml");
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
+
+    let initial = core_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
+    write_server_toml(&config_path, &initial)?;
+    let server = build_reloadable_test_server_from_source(
+        ServerConfigSource::Toml(config_path.clone()),
+        plugin_test_registries_from_dist(dist_dir, &[JE_5_ADAPTER_ID])?,
+    )
+    .await?;
+
+    std::fs::remove_file(&config_path)?;
+    let expected_path = config_path.display().to_string();
+
+    let error = server
+        .reload_runtime_full()
+        .await
+        .expect_err("manual reload should fail when server.toml is missing");
+    assert!(matches!(
+        &error,
+        RuntimeError::Config(message)
+            if message.contains("server config path")
+                && message.contains(expected_path.as_str())
+    ));
+
+    let reload_host = server
+        .runtime
+        .reload
+        .reload_host()
+        .expect("reloadable test server should keep a reload host")
+        .clone();
+    let watch_error = server
+        .runtime
+        .maybe_reload_runtime_watch(reload_host.as_ref())
+        .await
+        .expect_err("watch reload should fail when server.toml is missing");
+    assert!(matches!(
+        &watch_error,
+        RuntimeError::Config(message)
+            if message.contains("server config path")
+                && message.contains(expected_path.as_str())
+    ));
+
+    server.shutdown().await
+}
+
+#[tokio::test]
 async fn full_reload_preserves_live_java_session() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));

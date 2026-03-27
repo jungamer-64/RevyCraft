@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::fs;
+use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -417,9 +418,6 @@ impl ServerConfig {
     ///
     /// Returns [`ServerConfigError`] when `server.toml` cannot be read or parsed.
     pub fn from_toml(path: &Path) -> Result<Self, ServerConfigError> {
-        if !path.exists() {
-            return NormalizedServerConfig::from(Self::default()).into_validated();
-        }
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         ServerConfigDocument::from_path(path)?
             .normalize(parent)?
@@ -682,7 +680,17 @@ struct AdminGrpcPrincipalDocument {
 
 impl ServerConfigDocument {
     fn from_path(path: &Path) -> Result<Self, ServerConfigError> {
-        toml::from_str(&fs::read_to_string(path)?).map_err(|error| {
+        let contents = fs::read_to_string(path).map_err(|error| {
+            if error.kind() == ErrorKind::NotFound {
+                ServerConfigError::Config(format!(
+                    "server config path `{}` was not found",
+                    path.display()
+                ))
+            } else {
+                ServerConfigError::Io(error)
+            }
+        })?;
+        toml::from_str(&contents).map_err(|error| {
             ServerConfigError::Config(format!(
                 "failed to parse config {}: {error}",
                 path.display()
@@ -1147,6 +1155,7 @@ fn parse_plugin_abi(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn configured_server_config() -> ServerConfig {
         let mut config = ServerConfig::default();
@@ -1351,5 +1360,30 @@ mod tests {
             .plan_full_reload(&candidate)
             .expect_err("full reload should reject storage profile diffs");
         assert_config_error_contains(error, "bootstrap config changes require a restart");
+    }
+
+    #[test]
+    fn from_toml_rejects_missing_path_with_selected_path() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "revy-missing-server-config-{}-{nonce}.toml",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let error =
+            ServerConfig::from_toml(&path).expect_err("missing server.toml should fail fast");
+        let expected_path = path.display().to_string();
+
+        match error {
+            ServerConfigError::Config(message) => {
+                assert!(message.contains("server config path"));
+                assert!(message.contains(expected_path.as_str()));
+            }
+            other => panic!("unexpected config error: {other:?}"),
+        }
     }
 }

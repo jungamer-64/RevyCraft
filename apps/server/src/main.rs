@@ -17,7 +17,7 @@ use server_runtime::runtime::{
 };
 use std::ffi::OsString;
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -248,19 +248,9 @@ fn selected_server_config_path(env_override: Option<OsString>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_SERVER_CONFIG_PATH))
 }
 
-fn missing_server_config_warning(path: &Path) -> Option<String> {
-    (!path.exists()).then(|| {
-        format!(
-            "server config path `{}` was not found; booting with default config",
-            path.display()
-        )
-    })
-}
-
-fn resolve_server_config_source() -> (ServerConfigSource, Option<String>) {
+fn resolve_server_config_source() -> ServerConfigSource {
     let config_path = selected_server_config_path(std::env::var_os(SERVER_CONFIG_ENV));
-    let warning = missing_server_config_warning(&config_path);
-    (ServerConfigSource::Toml(config_path), warning)
+    ServerConfigSource::Toml(config_path)
 }
 
 fn upgrade_control_plane(
@@ -515,10 +505,7 @@ async fn main() -> Result<(), RuntimeError> {
         .await;
     }
 
-    let (config_source, missing_config_warning) = resolve_server_config_source();
-    if let Some(warning) = missing_config_warning {
-        eprintln!("{warning}");
-    }
+    let config_source = resolve_server_config_source();
     let server = Arc::new(ServerSupervisor::boot(config_source).await?);
     let coordinator = Arc::new(UpgradeCoordinator::new(Arc::clone(&server)));
     let control_plane = upgrade_control_plane(&server, &coordinator);
@@ -537,12 +524,10 @@ async fn main() -> Result<(), RuntimeError> {
 mod tests {
     use super::{
         ConsoleEofAction, ConsoleInputMode, DEFAULT_SERVER_CONFIG_PATH, decide_console_eof_action,
-        missing_server_config_warning, selected_server_config_path,
+        selected_server_config_path,
     };
     use std::ffi::OsString;
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use tempfile::tempdir;
+    use std::path::PathBuf;
 
     #[test]
     fn terminal_eof_requests_shutdown() {
@@ -586,22 +571,5 @@ mod tests {
             selected_server_config_path(Some(OsString::from("custom/server.toml"))),
             PathBuf::from("custom/server.toml")
         );
-    }
-
-    #[test]
-    fn missing_config_path_warns_with_selected_path() {
-        let path = Path::new("missing/server.toml");
-        let warning = missing_server_config_warning(path).expect("missing config path should warn");
-        assert!(warning.contains("booting with default config"));
-        assert!(warning.contains("missing/server.toml"));
-    }
-
-    #[test]
-    fn existing_config_path_does_not_warn() -> Result<(), Box<dyn std::error::Error>> {
-        let temp_dir = tempdir()?;
-        let path = temp_dir.path().join("server.toml");
-        fs::write(&path, "")?;
-        assert_eq!(missing_server_config_warning(&path), None);
-        Ok(())
     }
 }
