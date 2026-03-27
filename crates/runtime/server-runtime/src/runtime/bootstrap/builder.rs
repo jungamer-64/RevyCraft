@@ -82,6 +82,8 @@ pub(crate) async fn boot_server(
         sessions,
         #[cfg(test)]
         fail_nth_reattach_send: std::sync::atomic::AtomicUsize::new(0),
+        #[cfg(test)]
+        reload_stage_pause_hook: tokio::sync::Mutex::new(None),
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -204,12 +206,18 @@ pub(crate) async fn boot_server_from_upgrade(
         sessions,
         #[cfg(test)]
         fail_nth_reattach_send: std::sync::atomic::AtomicUsize::new(0),
+        #[cfg(test)]
+        reload_stage_pause_hook: tokio::sync::Mutex::new(None),
     });
     server.reload.set_upgrade_state(
         RuntimeUpgradeRole::Child,
         RuntimeUpgradePhase::ChildWaitingCommit,
     );
+    let child_serial_hold = server.reload.lock_reload_serial_owned().await;
     let child_commit_hold = server.reload.write_consistency_owned().await;
+    server
+        .reload
+        .install_child_upgrade_serial_hold(child_serial_hold);
     server
         .reload
         .install_child_upgrade_commit_hold(child_commit_hold);

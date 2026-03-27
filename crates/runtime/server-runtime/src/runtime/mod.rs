@@ -42,6 +42,8 @@ use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -367,6 +369,45 @@ impl RuntimeServer {
     pub(crate) async fn replace_active_config(&self, next_active_config: ServerConfig) {
         self.selection.replace_config(next_active_config).await;
     }
+
+    #[cfg(test)]
+    pub(crate) async fn arm_reload_stage_pause_for_test(&self) -> ReloadStagePauseHandle {
+        let (reached_tx, reached_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        *self.reload_stage_pause_hook.lock().await = Some(ReloadStagePauseHook {
+            reached_tx: Some(reached_tx),
+            release_rx,
+        });
+        ReloadStagePauseHandle {
+            reached_rx,
+            release_tx: Some(release_tx),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn maybe_pause_after_reload_stage_for_test(&self) {
+        let hook = self.reload_stage_pause_hook.lock().await.take();
+        let Some(mut hook) = hook else {
+            return;
+        };
+        if let Some(reached_tx) = hook.reached_tx.take() {
+            let _ = reached_tx.send(());
+        }
+        let _ = hook.release_rx.await;
+    }
+}
+
+#[cfg(test)]
+impl ReloadStagePauseHandle {
+    pub(crate) async fn wait_until_reached(&mut self) {
+        let _ = (&mut self.reached_rx).await;
+    }
+
+    pub(crate) fn release(mut self) {
+        if let Some(release_tx) = self.release_tx.take() {
+            let _ = release_tx.send(());
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -581,6 +622,20 @@ pub(crate) struct RuntimeServer {
     pub(crate) sessions: SessionRegistry,
     #[cfg(test)]
     pub(crate) fail_nth_reattach_send: AtomicUsize,
+    #[cfg(test)]
+    reload_stage_pause_hook: AsyncMutex<Option<ReloadStagePauseHook>>,
+}
+
+#[cfg(test)]
+struct ReloadStagePauseHook {
+    reached_tx: Option<oneshot::Sender<()>>,
+    release_rx: oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+pub(crate) struct ReloadStagePauseHandle {
+    reached_rx: oneshot::Receiver<()>,
+    release_tx: Option<oneshot::Sender<()>>,
 }
 
 pub(crate) struct OnlineAuthKeys {

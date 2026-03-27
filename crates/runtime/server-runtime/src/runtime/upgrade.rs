@@ -15,7 +15,7 @@ use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{OwnedRwLockWriteGuard, oneshot};
+use tokio::sync::{OwnedMutexGuard, OwnedRwLockWriteGuard, oneshot};
 
 #[cfg(debug_assertions)]
 const UPGRADE_TEST_HOLD_AFTER_SESSION_FREEZE_MS_ENV: &str =
@@ -82,6 +82,7 @@ pub struct RuntimeUpgradeImport {
 
 pub struct RuntimeUpgradeGuard {
     runtime: Arc<RuntimeServer>,
+    reload_serial_guard: Option<OwnedMutexGuard<()>>,
     consistency_guard: Option<OwnedRwLockWriteGuard<()>>,
     game_listener: Option<std::net::TcpListener>,
     sessions: Vec<RuntimeUpgradeSessionHandle>,
@@ -89,6 +90,7 @@ pub struct RuntimeUpgradeGuard {
 }
 
 pub struct RuntimeUpgradeCommitHold {
+    _reload_serial_guard: OwnedMutexGuard<()>,
     _consistency_guard: OwnedRwLockWriteGuard<()>,
 }
 
@@ -173,6 +175,7 @@ impl RuntimeUpgradeGuard {
         self.runtime
             .import_live_sessions_after_upgrade(std::mem::take(&mut self.sessions))
             .await?;
+        let _ = self.reload_serial_guard.take();
         let _ = self.consistency_guard.take();
         self.runtime.reload.clear_upgrade_state();
         Ok(())
@@ -182,6 +185,10 @@ impl RuntimeUpgradeGuard {
     pub fn commit(mut self) -> RuntimeUpgradeCommitHold {
         eprintln!("runtime upgrade phase: parent committed cutover");
         RuntimeUpgradeCommitHold {
+            _reload_serial_guard: self
+                .reload_serial_guard
+                .take()
+                .expect("upgrade guard commit should retain reload serial guard"),
             _consistency_guard: self
                 .consistency_guard
                 .take()
@@ -236,6 +243,7 @@ impl ServerSupervisor {
 
 impl RunningServer {
     async fn begin_runtime_upgrade(&self) -> Result<RuntimeUpgradeGuard, RuntimeError> {
+        let reload_serial_guard = self.runtime.reload.lock_reload_serial_owned().await;
         let active_config = self.runtime.selection_state().await.config;
         if active_config.topology.be_enabled {
             return Err(RuntimeError::Unsupported(
@@ -330,6 +338,7 @@ impl RunningServer {
         eprintln!("runtime upgrade phase: parent waiting for child readiness");
         Ok(RuntimeUpgradeGuard {
             runtime: Arc::clone(&self.runtime),
+            reload_serial_guard: Some(reload_serial_guard),
             consistency_guard: Some(consistency_guard),
             game_listener: Some(game_listener),
             sessions,
@@ -357,6 +366,7 @@ async fn maybe_hold_after_session_freeze_for_test() {
 
 impl RuntimeServer {
     async fn finish_child_runtime_upgrade_commit(self: &Arc<Self>) -> Result<(), RuntimeError> {
+        self.reload.release_child_upgrade_serial_hold();
         self.reload.release_child_upgrade_commit_hold();
         self.resume_all_live_sessions_after_upgrade_freeze().await?;
         self.reload.clear_upgrade_state();

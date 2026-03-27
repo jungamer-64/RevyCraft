@@ -241,6 +241,63 @@ pub struct RuntimeSelectionResult {
     pub reloaded: Vec<String>,
 }
 
+pub struct StagedRuntimeSelection {
+    loaded_plugins: LoadedPluginSet,
+    reloaded_plugin_ids: Vec<String>,
+    protocol_topology: RuntimeProtocolTopologyCandidate,
+    staged: Option<Box<dyn Any + Send>>,
+}
+
+impl StagedRuntimeSelection {
+    #[must_use]
+    pub(crate) fn new<T: Any + Send>(
+        loaded_plugins: LoadedPluginSet,
+        reloaded_plugin_ids: Vec<String>,
+        protocol_topology: RuntimeProtocolTopologyCandidate,
+        staged: T,
+    ) -> Self {
+        Self {
+            loaded_plugins,
+            reloaded_plugin_ids,
+            protocol_topology,
+            staged: Some(Box::new(staged)),
+        }
+    }
+
+    #[must_use]
+    pub const fn loaded_plugins(&self) -> &LoadedPluginSet {
+        &self.loaded_plugins
+    }
+
+    #[must_use]
+    pub fn reloaded_plugin_ids(&self) -> &[String] {
+        &self.reloaded_plugin_ids
+    }
+
+    #[must_use]
+    pub const fn protocol_topology(&self) -> &RuntimeProtocolTopologyCandidate {
+        &self.protocol_topology
+    }
+
+    pub(crate) fn into_parts(
+        mut self,
+    ) -> (
+        LoadedPluginSet,
+        Vec<String>,
+        RuntimeProtocolTopologyCandidate,
+        Box<dyn Any + Send>,
+    ) {
+        (
+            self.loaded_plugins,
+            self.reloaded_plugin_ids,
+            self.protocol_topology,
+            self.staged
+                .take()
+                .expect("staged runtime selection should contain staged state"),
+        )
+    }
+}
+
 pub struct PreparedRuntimeSelection {
     loaded_plugins: LoadedPluginSet,
     reloaded_plugin_ids: Vec<String>,
@@ -290,6 +347,30 @@ impl PreparedRuntimeSelection {
 }
 
 pub trait RuntimePluginHost: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns [`PluginHostError`] when the host cannot stage its
+    /// runtime-selected gameplay/auth/plugin state with the provided config.
+    fn stage_runtime_selection(
+        &self,
+        config: &RuntimeSelectionConfig,
+    ) -> Result<StagedRuntimeSelection, PluginHostError>;
+
+    /// # Errors
+    ///
+    /// Returns [`PluginHostError`] when a modified plugin cannot be staged.
+    fn stage_runtime_artifacts(&self) -> Result<StagedRuntimeSelection, PluginHostError>;
+
+    /// # Errors
+    ///
+    /// Returns [`PluginHostError`] when the staged candidate cannot be
+    /// validated against the live runtime snapshot.
+    fn finalize_staged_runtime_selection(
+        &self,
+        staged: StagedRuntimeSelection,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<PreparedRuntimeSelection, PluginHostError>;
+
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the host cannot stage its

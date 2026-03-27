@@ -1,13 +1,15 @@
 use super::{
-    AdminUiGeneration, Arc, AuthGeneration, GameplayGeneration, ManagedAdminUiPlugin,
-    ManagedAuthPlugin, ManagedGameplayPlugin, ManagedStoragePlugin, PluginFailureStage, PluginHost,
-    PluginKind, PreparedProtocolTopology, RuntimeError, RuntimeReloadContext,
-    RuntimeSelectionConfig, StorageGeneration, SystemTime, import_storage_runtime_state,
-    protocol_reload_compatible, validate_gameplay_session_migration,
+    AdminUiGeneration, Arc, ArtifactIdentity, AuthGeneration, GameplayGeneration,
+    ManagedAdminUiPlugin, ManagedAuthPlugin, ManagedGameplayPlugin, ManagedStoragePlugin,
+    PluginFailureStage, PluginHost, PluginKind, PreparedProtocolTopology, RuntimeError,
+    RuntimeReloadContext, RuntimeSelectionConfig, StorageGeneration, SystemTime,
+    import_storage_runtime_state, protocol_reload_compatible, validate_gameplay_session_migration,
     validate_protocol_session_migration,
 };
 use crate::runtime::ProtocolReloadSession;
-use crate::runtime::{PreparedRuntimeSelection, RuntimeProtocolTopologyCandidate};
+use crate::runtime::{
+    PreparedRuntimeSelection, RuntimeProtocolTopologyCandidate, StagedRuntimeSelection,
+};
 use std::collections::HashMap;
 
 struct PreparedFreshRuntimeSelection {
@@ -21,12 +23,15 @@ struct PreparedFreshRuntimeSelection {
 
 struct PreparedProtocolArtifactUpdate {
     plugin_id: String,
+    identity: ArtifactIdentity,
     loaded_at: SystemTime,
     generation: Arc<super::ProtocolGeneration>,
 }
 
 struct PreparedGameplayArtifactUpdate {
     plugin_id: String,
+    profile_id: mc_core::GameplayProfileId,
+    identity: ArtifactIdentity,
     loaded_at: SystemTime,
     generation: Arc<GameplayGeneration>,
 }
@@ -34,6 +39,7 @@ struct PreparedGameplayArtifactUpdate {
 struct PreparedStorageArtifactUpdate {
     plugin_id: String,
     profile_id: mc_core::StorageProfileId,
+    identity: ArtifactIdentity,
     loaded_at: SystemTime,
     generation: Arc<StorageGeneration>,
 }
@@ -285,9 +291,8 @@ impl PluginHost {
         Ok(())
     }
 
-    fn prepare_protocol_artifact_updates(
+    fn stage_protocol_artifact_updates(
         &self,
-        protocol_sessions: &[ProtocolReloadSession],
     ) -> Result<Vec<PreparedProtocolArtifactUpdate>, RuntimeError> {
         let mut updates = Vec::new();
         let mut protocols = self
@@ -324,36 +329,9 @@ impl PluginHost {
                     continue;
                 }
             };
-            let current_generation = managed
-                .adapter
-                .current_generation()
-                .map_err(|error| RuntimeError::Config(error.to_string()))?;
-            if !protocol_reload_compatible(
-                &managed.package.plugin_id,
-                &current_generation,
-                &generation,
-            ) {
-                self.failures.handle_candidate_failure(
-                    PluginKind::Protocol,
-                    PluginFailureStage::Reload,
-                    &managed.package.plugin_id,
-                    identity,
-                    "protocol topology changed during reload",
-                )?;
-                continue;
-            }
-            if !validate_protocol_session_migration(managed, &generation, protocol_sessions)? {
-                self.failures.handle_candidate_failure(
-                    PluginKind::Protocol,
-                    PluginFailureStage::Reload,
-                    &managed.package.plugin_id,
-                    identity,
-                    "protocol session migration failed",
-                )?;
-                continue;
-            }
             updates.push(PreparedProtocolArtifactUpdate {
                 plugin_id: managed.package.plugin_id.clone(),
+                identity,
                 loaded_at: modified_at,
                 generation,
             });
@@ -361,9 +339,56 @@ impl PluginHost {
         Ok(updates)
     }
 
-    fn prepare_gameplay_artifact_updates(
+    fn finalize_protocol_artifact_updates(
         &self,
-        runtime: &RuntimeReloadContext,
+        updates: Vec<PreparedProtocolArtifactUpdate>,
+        protocol_sessions: &[ProtocolReloadSession],
+    ) -> Result<Vec<PreparedProtocolArtifactUpdate>, RuntimeError> {
+        let protocols = self
+            .protocols
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        let mut finalized = Vec::new();
+        for update in updates {
+            let Some(managed) = protocols.get(&update.plugin_id) else {
+                continue;
+            };
+            let current_generation = managed
+                .adapter
+                .current_generation()
+                .map_err(|error| RuntimeError::Config(error.to_string()))?;
+            if !protocol_reload_compatible(
+                &update.plugin_id,
+                &current_generation,
+                &update.generation,
+            ) {
+                self.failures.handle_candidate_failure(
+                    PluginKind::Protocol,
+                    PluginFailureStage::Reload,
+                    &update.plugin_id,
+                    update.identity,
+                    "protocol topology changed during reload",
+                )?;
+                continue;
+            }
+            if !validate_protocol_session_migration(managed, &update.generation, protocol_sessions)?
+            {
+                self.failures.handle_candidate_failure(
+                    PluginKind::Protocol,
+                    PluginFailureStage::Reload,
+                    &update.plugin_id,
+                    update.identity,
+                    "protocol session migration failed",
+                )?;
+                continue;
+            }
+            finalized.push(update);
+        }
+        Ok(finalized)
+    }
+
+    fn stage_gameplay_artifact_updates(
+        &self,
     ) -> Result<Vec<PreparedGameplayArtifactUpdate>, RuntimeError> {
         let mut updates = Vec::new();
         let mut gameplay = self
@@ -415,18 +440,10 @@ impl PluginHost {
                 )?;
                 continue;
             }
-            if !validate_gameplay_session_migration(managed, &generation, runtime)? {
-                self.failures.handle_candidate_failure(
-                    PluginKind::Gameplay,
-                    PluginFailureStage::Reload,
-                    &managed.package.plugin_id,
-                    identity,
-                    "gameplay session migration failed",
-                )?;
-                continue;
-            }
             updates.push(PreparedGameplayArtifactUpdate {
                 plugin_id: managed.package.plugin_id.clone(),
+                profile_id: managed.profile_id.clone(),
+                identity,
                 loaded_at: modified_at,
                 generation,
             });
@@ -434,9 +451,37 @@ impl PluginHost {
         Ok(updates)
     }
 
-    fn prepare_storage_artifact_updates(
+    fn finalize_gameplay_artifact_updates(
         &self,
+        updates: Vec<PreparedGameplayArtifactUpdate>,
         runtime: &RuntimeReloadContext,
+    ) -> Result<Vec<PreparedGameplayArtifactUpdate>, RuntimeError> {
+        let gameplay = self
+            .gameplay
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        let mut finalized = Vec::new();
+        for update in updates {
+            let Some(managed) = gameplay.get(&update.profile_id) else {
+                continue;
+            };
+            if !validate_gameplay_session_migration(managed, &update.generation, runtime)? {
+                self.failures.handle_candidate_failure(
+                    PluginKind::Gameplay,
+                    PluginFailureStage::Reload,
+                    &update.plugin_id,
+                    update.identity,
+                    "gameplay session migration failed",
+                )?;
+                continue;
+            }
+            finalized.push(update);
+        }
+        Ok(finalized)
+    }
+
+    fn stage_storage_artifact_updates(
+        &self,
     ) -> Result<Vec<PreparedStorageArtifactUpdate>, RuntimeError> {
         let mut updates = Vec::new();
         let mut storage = self
@@ -486,24 +531,37 @@ impl PluginHost {
                 )?;
                 continue;
             }
-            if !import_storage_runtime_state(&managed.package.plugin_id, &generation, runtime) {
-                self.failures.handle_candidate_failure(
-                    PluginKind::Storage,
-                    PluginFailureStage::Reload,
-                    &managed.package.plugin_id,
-                    identity,
-                    "storage runtime state import failed",
-                )?;
-                continue;
-            }
             updates.push(PreparedStorageArtifactUpdate {
                 plugin_id: managed.package.plugin_id.clone(),
                 profile_id: managed.profile_id.clone(),
+                identity,
                 loaded_at: modified_at,
                 generation,
             });
         }
         Ok(updates)
+    }
+
+    fn finalize_storage_artifact_updates(
+        &self,
+        updates: Vec<PreparedStorageArtifactUpdate>,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<Vec<PreparedStorageArtifactUpdate>, RuntimeError> {
+        let mut finalized = Vec::new();
+        for update in updates {
+            if !import_storage_runtime_state(&update.plugin_id, &update.generation, runtime) {
+                self.failures.handle_candidate_failure(
+                    PluginKind::Storage,
+                    PluginFailureStage::Reload,
+                    &update.plugin_id,
+                    update.identity,
+                    "storage runtime state import failed",
+                )?;
+                continue;
+            }
+            finalized.push(update);
+        }
+        Ok(finalized)
     }
 
     fn prepare_auth_artifact_updates(
@@ -665,7 +723,8 @@ impl PluginHost {
                 &admin_ui,
             )
         };
-        let protocol_updates = self.prepare_protocol_artifact_updates(&[])?;
+        let protocol_updates =
+            self.finalize_protocol_artifact_updates(self.stage_protocol_artifact_updates()?, &[])?;
         let reloaded_plugin_ids = protocol_updates
             .iter()
             .map(|update| update.plugin_id.clone())
@@ -686,14 +745,10 @@ impl PluginHost {
         Ok(reloaded_plugin_ids)
     }
 
-    pub(crate) fn prepare_runtime_artifacts(
-        &self,
-        runtime: &RuntimeReloadContext,
-    ) -> Result<PreparedRuntimeSelection, RuntimeError> {
-        let protocol_updates =
-            self.prepare_protocol_artifact_updates(&runtime.protocol_sessions)?;
-        let gameplay_updates = self.prepare_gameplay_artifact_updates(runtime)?;
-        let storage_updates = self.prepare_storage_artifact_updates(runtime)?;
+    pub(crate) fn stage_runtime_artifacts(&self) -> Result<StagedRuntimeSelection, RuntimeError> {
+        let protocol_updates = self.stage_protocol_artifact_updates()?;
+        let gameplay_updates = self.stage_gameplay_artifact_updates()?;
+        let storage_updates = self.stage_storage_artifact_updates()?;
         let auth_updates = self.prepare_auth_artifact_updates()?;
         let admin_ui_updates = self.prepare_admin_ui_artifact_updates()?;
         let mut reloaded_plugin_ids = protocol_updates
@@ -748,7 +803,7 @@ impl PluginHost {
         };
 
         debug_assert_eq!(current_selection, self.current_runtime_selection());
-        Ok(PreparedRuntimeSelection::new(
+        Ok(StagedRuntimeSelection::new(
             loaded_plugins,
             reloaded_plugin_ids,
             current_topology,
@@ -762,23 +817,26 @@ impl PluginHost {
         ))
     }
 
-    pub(crate) fn prepare_runtime_selection(
+    pub(crate) fn prepare_runtime_artifacts(
         &self,
-        config: &RuntimeSelectionConfig,
         runtime: &RuntimeReloadContext,
     ) -> Result<PreparedRuntimeSelection, RuntimeError> {
+        let staged = self.stage_runtime_artifacts()?;
+        self.finalize_staged_runtime_selection(staged, runtime)
+    }
+
+    pub(crate) fn stage_runtime_selection(
+        &self,
+        config: &RuntimeSelectionConfig,
+    ) -> Result<StagedRuntimeSelection, RuntimeError> {
         let previous_matrix = self.current_runtime_selection().failure_matrix();
         self.failures.update_matrix(config.failure_matrix());
-        let prepared = (|| {
+        let staged = (|| {
             let protocols = self.prepare_protocol_topology_for_reload(config)?;
             let gameplay = self.prepare_gameplay_profiles(config, PluginFailureStage::Reload)?;
             let storage = self.prepare_storage_profiles(config, PluginFailureStage::Reload)?;
             let auth = self.prepare_auth_profiles(config, PluginFailureStage::Reload)?;
             let admin_ui = self.prepare_admin_ui_profiles(config, PluginFailureStage::Reload)?;
-
-            self.validate_fresh_protocol_sessions(&protocols, &runtime.protocol_sessions)?;
-            self.validate_fresh_gameplay_sessions(&gameplay, runtime)?;
-            self.validate_fresh_storage_runtime(&storage, runtime)?;
 
             let loaded_plugins = Self::loaded_plugin_set_from_parts(
                 protocols.registry.clone(),
@@ -791,7 +849,7 @@ impl PluginHost {
                 &protocols, &gameplay, &storage, &auth, &admin_ui,
             );
 
-            Ok(PreparedRuntimeSelection::new(
+            Ok(StagedRuntimeSelection::new(
                 loaded_plugins,
                 reloaded_plugin_ids,
                 RuntimeProtocolTopologyCandidate::new(
@@ -809,7 +867,91 @@ impl PluginHost {
             ))
         })();
         self.failures.update_matrix(previous_matrix);
-        prepared
+        staged
+    }
+
+    pub(crate) fn prepare_runtime_selection(
+        &self,
+        config: &RuntimeSelectionConfig,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<PreparedRuntimeSelection, RuntimeError> {
+        let staged = self.stage_runtime_selection(config)?;
+        self.finalize_staged_runtime_selection(staged, runtime)
+    }
+
+    pub(crate) fn finalize_staged_runtime_selection(
+        &self,
+        staged: StagedRuntimeSelection,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<PreparedRuntimeSelection, RuntimeError> {
+        let (loaded_plugins, mut reloaded_plugin_ids, protocol_topology, staged_state) =
+            staged.into_parts();
+        let staged_state = *staged_state
+            .downcast::<PreparedRuntimeSelectionState>()
+            .expect("staged runtime selection payload type should match");
+        match staged_state {
+            PreparedRuntimeSelectionState::Fresh(fresh) => {
+                self.validate_fresh_protocol_sessions(
+                    &fresh.protocols,
+                    &runtime.protocol_sessions,
+                )?;
+                self.validate_fresh_gameplay_sessions(&fresh.gameplay, runtime)?;
+                self.validate_fresh_storage_runtime(&fresh.storage, runtime)?;
+                Ok(PreparedRuntimeSelection::new(
+                    loaded_plugins,
+                    reloaded_plugin_ids,
+                    protocol_topology,
+                    PreparedRuntimeSelectionState::Fresh(fresh),
+                ))
+            }
+            PreparedRuntimeSelectionState::Artifacts(mut artifacts) => {
+                artifacts.protocol_updates = self.finalize_protocol_artifact_updates(
+                    artifacts.protocol_updates,
+                    &runtime.protocol_sessions,
+                )?;
+                artifacts.gameplay_updates =
+                    self.finalize_gameplay_artifact_updates(artifacts.gameplay_updates, runtime)?;
+                artifacts.storage_updates =
+                    self.finalize_storage_artifact_updates(artifacts.storage_updates, runtime)?;
+                reloaded_plugin_ids = artifacts
+                    .protocol_updates
+                    .iter()
+                    .map(|update| update.plugin_id.clone())
+                    .chain(
+                        artifacts
+                            .gameplay_updates
+                            .iter()
+                            .map(|update| update.plugin_id.clone()),
+                    )
+                    .chain(
+                        artifacts
+                            .storage_updates
+                            .iter()
+                            .map(|update| update.plugin_id.clone()),
+                    )
+                    .chain(
+                        artifacts
+                            .auth_updates
+                            .iter()
+                            .map(|update| update.plugin_id.clone()),
+                    )
+                    .chain(
+                        artifacts
+                            .admin_ui_updates
+                            .iter()
+                            .map(|update| update.plugin_id.clone()),
+                    )
+                    .collect::<Vec<_>>();
+                reloaded_plugin_ids.sort();
+                reloaded_plugin_ids.dedup();
+                Ok(PreparedRuntimeSelection::new(
+                    loaded_plugins,
+                    reloaded_plugin_ids,
+                    protocol_topology,
+                    PreparedRuntimeSelectionState::Artifacts(artifacts),
+                ))
+            }
+        }
     }
 
     pub(crate) fn commit_runtime_selection(&self, prepared: PreparedRuntimeSelection) {

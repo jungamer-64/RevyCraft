@@ -1,21 +1,32 @@
 use crate::RuntimeError;
 use crate::runtime::selection::{ResolvedRuntimeSelection, SelectionResolver};
+use crate::runtime::topology_manager::PreparedTopologyReload;
 use crate::runtime::{
     ArtifactsReloadResult, CoreReloadResult, FullReloadResult, RuntimeReloadContext,
     RuntimeReloadMode, RuntimeReloadResult, RuntimeServer, SessionControl,
     SessionReattachInstruction, SessionReattachRecord,
 };
-use mc_plugin_host::runtime::{PreparedRuntimeSelection, RuntimePluginHost};
+use mc_plugin_host::runtime::{
+    PreparedRuntimeSelection, RuntimePluginHost, StagedRuntimeSelection,
+};
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::Ordering;
 use tokio::sync::RwLockWriteGuard;
 use tokio::sync::oneshot;
 
+struct StagedSelectionReload {
+    previous_selection: ResolvedRuntimeSelection,
+    candidate_config: crate::config::ServerConfig,
+    staged_selection: StagedRuntimeSelection,
+    prepared_topology: PreparedTopologyReload,
+}
+
 struct PreparedSelectionReload {
     previous_selection: ResolvedRuntimeSelection,
     candidate_selection: ResolvedRuntimeSelection,
     prepared_selection: PreparedRuntimeSelection,
+    prepared_topology: PreparedTopologyReload,
 }
 
 struct CoreReloadRollbackState {
@@ -80,6 +91,7 @@ impl RuntimeServer {
         reload_host: &dyn RuntimePluginHost,
         mode: RuntimeReloadMode,
     ) -> Result<RuntimeReloadResult, RuntimeError> {
+        let _reload_serial = self.reload.lock_reload_serial().await;
         match mode {
             RuntimeReloadMode::Artifacts => self
                 .reload_artifacts_scope(reload_host)
@@ -97,6 +109,12 @@ impl RuntimeServer {
         &self,
         reload_host: &dyn RuntimePluginHost,
     ) -> Result<Option<FullReloadResult>, RuntimeError> {
+        if self.reload.current_upgrade_state().is_some() {
+            return Ok(None);
+        }
+        let Some(_reload_serial) = self.reload.try_lock_reload_serial() else {
+            return Ok(None);
+        };
         let loaded_config = self.reload.config_source().load()?;
         let active_config = self.selection_state().await.config;
         if !loaded_config.topology.reload_watch
@@ -118,28 +136,27 @@ impl RuntimeServer {
             })
     }
 
-    async fn prepare_selection_reload(
+    async fn stage_selection_reload(
         &self,
         reload_host: &dyn RuntimePluginHost,
         previous_selection: ResolvedRuntimeSelection,
         full_reload_plan: &crate::config::FullReloadPlan,
-        consistency_guard: &RwLockWriteGuard<'_, ()>,
-    ) -> Result<PreparedSelectionReload, RuntimeError> {
-        let context = self.reload_context(consistency_guard).await;
-        let prepared_selection = reload_host
-            .prepare_runtime_selection(&full_reload_plan.plugin_host_selection, &context)?;
-        let candidate_selection = match SelectionResolver::resolve(
-            full_reload_plan.next_active_config.clone(),
-            prepared_selection.loaded_plugins().clone(),
-            &context.gameplay_sessions,
-        ) {
-            Ok(candidate_selection) => candidate_selection,
-            Err(error) => return Err(error),
-        };
-        Ok(PreparedSelectionReload {
+    ) -> Result<StagedSelectionReload, RuntimeError> {
+        let staged_selection =
+            reload_host.stage_runtime_selection(&full_reload_plan.plugin_host_selection)?;
+        let prepared_topology = self
+            .topology
+            .prepare_generation_reload(
+                full_reload_plan.next_active_config.clone(),
+                false,
+                staged_selection.protocol_topology(),
+            )
+            .await?;
+        Ok(StagedSelectionReload {
             previous_selection,
-            candidate_selection,
-            prepared_selection,
+            candidate_config: full_reload_plan.next_active_config.clone(),
+            staged_selection,
+            prepared_topology,
         })
     }
 
@@ -147,10 +164,14 @@ impl RuntimeServer {
         &self,
         reload_host: &dyn RuntimePluginHost,
     ) -> Result<ArtifactsReloadResult, RuntimeError> {
+        let staged_selection = reload_host.stage_runtime_artifacts()?;
+        #[cfg(test)]
+        self.maybe_pause_after_reload_stage_for_test().await;
         let consistency_guard = self.reload.write_consistency().await;
         let context = self.reload_context(&consistency_guard).await;
         let previous_selection = self.selection_state().await;
-        let prepared_selection = reload_host.prepare_runtime_artifacts(&context)?;
+        let prepared_selection =
+            reload_host.finalize_staged_runtime_selection(staged_selection, &context)?;
         let candidate_selection = match SelectionResolver::resolve(
             previous_selection.config.clone(),
             prepared_selection.loaded_plugins().clone(),
@@ -190,10 +211,10 @@ impl RuntimeServer {
         }
 
         if matches!(mode, RuntimeReloadMode::Core) {
-            let consistency_guard = self.reload.write_consistency().await;
             let active_selection = self.selection_state().await;
             let reload_plan = active_selection.config.plan_core_reload(&loaded_config)?;
             let active_generation = self.topology.active_generation();
+            let consistency_guard = self.reload.write_consistency().await;
             let (candidate_core, dirty, rollback) = match self
                 .reload_core_with_plan(
                     &consistency_guard,
@@ -222,31 +243,46 @@ impl RuntimeServer {
             return Ok(RuntimeReloadResult::Core(CoreReloadResult {}));
         }
 
-        let consistency_guard = self.reload.write_consistency().await;
         let active_selection = self.selection_state().await;
         let reload_plan = active_selection.config.plan_full_reload(&loaded_config)?;
-        let prepared = self
-            .prepare_selection_reload(
-                reload_host,
-                active_selection,
-                &reload_plan,
-                &consistency_guard,
-            )
+        let staged = self
+            .stage_selection_reload(reload_host, active_selection, &reload_plan)
             .await?;
-        let prepared_topology = match self
-            .topology
-            .prepare_generation_reload(
-                reload_plan.next_active_config.clone(),
-                false,
-                prepared.prepared_selection.protocol_topology(),
-            )
-            .await
+        #[cfg(test)]
+        self.maybe_pause_after_reload_stage_for_test().await;
+        let consistency_guard = self.reload.write_consistency().await;
+        let context = self.reload_context(&consistency_guard).await;
+        let prepared_selection = match reload_host
+            .finalize_staged_runtime_selection(staged.staged_selection, &context)
         {
-            Ok(prepared_topology) => prepared_topology,
-            Err(error) => return Err(error),
+            Ok(prepared_selection) => prepared_selection,
+            Err(error) => {
+                self.topology
+                    .rollback_generation_reload(staged.prepared_topology);
+                return Err(error.into());
+            }
         };
-        let candidate_generation =
-            prepared_topology.candidate_generation(&self.topology.active_generation());
+        let candidate_selection = match SelectionResolver::resolve(
+            staged.candidate_config.clone(),
+            prepared_selection.loaded_plugins().clone(),
+            &context.gameplay_sessions,
+        ) {
+            Ok(candidate_selection) => candidate_selection,
+            Err(error) => {
+                self.topology
+                    .rollback_generation_reload(staged.prepared_topology);
+                return Err(error);
+            }
+        };
+        let prepared = PreparedSelectionReload {
+            previous_selection: staged.previous_selection,
+            candidate_selection,
+            prepared_selection,
+            prepared_topology: staged.prepared_topology,
+        };
+        let candidate_generation = prepared
+            .prepared_topology
+            .candidate_generation(&self.topology.active_generation());
         let (candidate_core, dirty, rollback) = match self
             .reload_core_with_plan(
                 &consistency_guard,
@@ -259,7 +295,8 @@ impl RuntimeServer {
         {
             Ok(candidate_core) => candidate_core,
             Err(failure) => {
-                self.topology.rollback_generation_reload(prepared_topology);
+                self.topology
+                    .rollback_generation_reload(prepared.prepared_topology);
                 let rollback_generation = self.topology.active_generation();
                 self.rollback_reattached_sessions(
                     &failure.rollback,
@@ -272,7 +309,7 @@ impl RuntimeServer {
         };
         let prepared_topology = match self
             .topology
-            .precommit_generation_reload(prepared_topology, &self.sessions)
+            .precommit_generation_reload(prepared.prepared_topology, &self.sessions)
             .await
         {
             Ok(prepared_topology) => prepared_topology,

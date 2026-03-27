@@ -1,4 +1,6 @@
 use super::*;
+use crate::RuntimeReloadMode;
+use crate::runtime::RuntimeReloadResult;
 
 #[tokio::test]
 async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Result<(), RuntimeError>
@@ -107,6 +109,96 @@ async fn manual_protocol_reload_waits_for_consistency_readers() -> Result<(), Ru
             "manual reload should complete after the consistency reader releases"
         );
     }
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn artifacts_reload_staging_does_not_block_live_session_commands() -> Result<(), RuntimeError>
+{
+    let temp_dir = tempdir()?;
+    let (server, dist_dir, target_dir, before_generation) =
+        spawn_protocol_reload_server(&temp_dir, "protocol-reload-stage-nonblocking").await?;
+    let codec = MinecraftWireCodec;
+    let addr = listener_addr(&server);
+    let (mut alpha, mut alpha_buffer) =
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "protostage").await?;
+    let _ = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+
+    let mut pause = server.runtime.arm_reload_stage_pause_for_test().await;
+    PackagedPluginHarness::shared()
+        .map_err(|error| RuntimeError::Config(error.to_string()))?
+        .install_protocol_plugin_for_reload(
+            "mc-plugin-proto-je-5-reload-test",
+            JE_5_ADAPTER_ID,
+            &dist_dir,
+            &target_dir,
+            "protocol-reload-v2",
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+
+    let runtime = std::sync::Arc::clone(&server.runtime);
+    let reload_host = runtime
+        .reload
+        .reload_host()
+        .expect("reloadable test server should retain a reload host")
+        .clone();
+    let reload = tokio::spawn(async move {
+        runtime
+            .reload_runtime(reload_host.as_ref(), RuntimeReloadMode::Artifacts)
+            .await
+    });
+
+    pause.wait_until_reached().await;
+    let adapter = active_protocol_registry(&server)
+        .resolve_adapter(JE_5_ADAPTER_ID)
+        .expect("runtime should still resolve the active adapter while staging is paused");
+    assert_eq!(
+        adapter.plugin_generation_id(),
+        Some(before_generation),
+        "staged reload should not commit before the pause is released"
+    );
+
+    write_packet(&mut alpha, &codec, &held_item_change(5)).await?;
+    let held_item = read_until_java_packet(
+        &mut alpha,
+        &codec,
+        &mut alpha_buffer,
+        TestJavaProtocol::Je5,
+        TestJavaPacket::HeldItemChange,
+    )
+    .await?;
+    assert_eq!(
+        held_item_from_packet(&held_item)?,
+        5,
+        "live session commands should continue while reload staging is paused outside the consistency gate"
+    );
+
+    pause.release();
+    let result = reload
+        .await
+        .map_err(|error| RuntimeError::Config(format!("reload task join failed: {error}")))??;
+    let RuntimeReloadResult::Artifacts(result) = result else {
+        unreachable!("artifacts reload task should only produce an artifacts result");
+    };
+    assert!(
+        result
+            .reloaded_plugin_ids
+            .iter()
+            .any(|plugin_id| plugin_id == JE_5_ADAPTER_ID)
+    );
+
+    let adapter = active_protocol_registry(&server)
+        .resolve_adapter(JE_5_ADAPTER_ID)
+        .expect("runtime should still resolve the adapter after the staged reload commits");
+    assert_ne!(adapter.plugin_generation_id(), Some(before_generation));
 
     server.shutdown().await
 }

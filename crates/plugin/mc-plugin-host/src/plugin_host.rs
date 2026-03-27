@@ -3,7 +3,8 @@ use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
 use crate::registry::ProtocolRegistry;
 use crate::runtime::{
     AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
-    RuntimeProtocolTopologyCandidate, RuntimeReloadContext, StorageProfileHandle,
+    RuntimeProtocolTopologyCandidate, RuntimeReloadContext, StagedRuntimeSelection,
+    StorageProfileHandle,
 };
 use bytes::BytesMut;
 use libloading::Library;
@@ -388,6 +389,25 @@ impl PluginHost {
 }
 
 impl RuntimePluginHost for PluginHost {
+    fn stage_runtime_selection(
+        &self,
+        config: &RuntimeSelectionConfig,
+    ) -> Result<StagedRuntimeSelection, RuntimeError> {
+        Self::stage_runtime_selection(self, config)
+    }
+
+    fn stage_runtime_artifacts(&self) -> Result<StagedRuntimeSelection, RuntimeError> {
+        Self::stage_runtime_artifacts(self)
+    }
+
+    fn finalize_staged_runtime_selection(
+        &self,
+        staged: StagedRuntimeSelection,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<crate::runtime::PreparedRuntimeSelection, RuntimeError> {
+        Self::finalize_staged_runtime_selection(self, staged, runtime)
+    }
+
     fn prepare_runtime_selection(
         &self,
         config: &RuntimeSelectionConfig,
