@@ -4,9 +4,10 @@ use mc_plugin_api::abi::{ByteSlice, OwnedBuffer, PluginErrorCode, Utf8Slice};
 use mc_plugin_api::codec::gameplay::host_blob::{
     decode_block_entity, decode_block_state, decode_player_snapshot, decode_targeted_event_blob,
     decode_world_meta, encode_begin_mining, encode_block_pos, encode_can_edit_block_key,
-    encode_clear_mining, encode_inventory_slot_update, encode_open_chest, encode_open_furnace,
-    encode_player_id, encode_player_pose_update, encode_selected_hotbar_slot_update,
-    encode_set_block, encode_spawn_dropped_item, encode_targeted_event_blob,
+    encode_clear_mining, encode_inventory_slot_update, encode_open_chest,
+    encode_open_crafting_table, encode_open_furnace, encode_player_id, encode_player_pose_update,
+    encode_selected_hotbar_slot_update, encode_set_block, encode_spawn_dropped_item,
+    encode_targeted_event_blob,
 };
 use mc_plugin_api::codec::gameplay::{GameplayRequest, GameplayResponse};
 use mc_plugin_api::host_api::GameplayHostApiV2;
@@ -153,6 +154,14 @@ impl GameplayHost for SdkGameplayHost {
             return Err("gameplay host did not provide open_furnace".to_string());
         };
         let payload = encode_open_furnace(player_id, position);
+        call_host_mutation(self.api.context, &payload, callback)
+    }
+
+    fn open_crafting_table(&self, player_id: PlayerId) -> Result<(), String> {
+        let Some(callback) = self.api.open_crafting_table else {
+            return Err("gameplay host did not provide open_crafting_table".to_string());
+        };
+        let payload = encode_open_crafting_table(player_id);
         call_host_mutation(self.api.context, &payload, callback)
     }
 

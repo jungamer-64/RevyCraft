@@ -91,6 +91,11 @@ impl BlockState {
     }
 
     #[must_use]
+    pub fn crafting_table() -> Self {
+        Self::new("minecraft:crafting_table")
+    }
+
+    #[must_use]
     pub fn chest() -> Self {
         Self::new("minecraft:chest")
     }

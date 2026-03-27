@@ -134,6 +134,25 @@ pub(in crate::core) fn open_world_chest_state(
     )
 }
 
+pub(in crate::core) fn open_world_crafting_table_state(
+    state: &mut impl CoreStateMut,
+    player_id: PlayerId,
+) -> Option<OpenContainerDelta> {
+    let window_id = allocate_non_player_window_id(state, player_id)?;
+    open_non_player_window_state(
+        state,
+        player_id,
+        OpenInventoryWindow {
+            window_id,
+            container: InventoryContainer::CraftingTable,
+            state: OpenInventoryWindowState::CraftingTable {
+                slots: vec![None; CRAFTING_TABLE_LOCAL_SLOT_COUNT],
+            },
+        },
+        "Crafting".to_string(),
+    )
+}
+
 pub(in crate::core) fn open_world_furnace_state(
     state: &mut impl CoreStateMut,
     player_id: PlayerId,

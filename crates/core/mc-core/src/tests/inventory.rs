@@ -259,6 +259,25 @@ fn prepare_stick_recipe(session: &mut WindowZeroSession) {
     let _ = session.right_click_input(2, item("minecraft:oak_planks", 1));
 }
 
+fn fill_crafting_table_from_hotbar0(
+    session: &mut WindowZeroSession,
+    key: &str,
+    count: u8,
+    raw_slots: &[i16],
+) {
+    session.seed_hotbar0(key, count);
+    let _ = session.open_crafting_table(2);
+    let _ = session.pickup_hotbar0_in_window(2);
+    for raw_slot in raw_slots {
+        let _ = session.click_window_raw_slot(
+            2,
+            *raw_slot,
+            InventoryClickButton::Right,
+            Some(item(key, 1)),
+        );
+    }
+}
+
 #[test]
 fn window_zero_clicks_move_items_between_storage_and_crafting_slots() {
     let mut session = WindowZeroSession::new("window-zero-move");
@@ -642,6 +661,86 @@ fn crafting_table_window_clicks_use_window_local_slots_and_cursor_sync() {
     assert_eq!(
         online.cursor.as_ref().map(stack_summary),
         Some(("minecraft:oak_planks", 4))
+    );
+}
+
+#[test]
+fn crafting_table_window_supports_three_by_three_chest_recipe() {
+    let mut session = WindowZeroSession::new("ct-chest");
+    fill_crafting_table_from_hotbar0(
+        &mut session,
+        "minecraft:oak_planks",
+        8,
+        &[1, 2, 3, 4, 6, 7, 8, 9],
+    );
+
+    let window = session
+        .online()
+        .active_container
+        .clone()
+        .expect("crafting table should stay open");
+    assert_eq!(
+        window
+            .contents(&session.online().snapshot.inventory)
+            .get_slot(InventorySlot::Container(0))
+            .map(stack_summary),
+        Some(("minecraft:chest", 1))
+    );
+
+    let (action_number, result_events) =
+        session.click_window_raw_slot(2, 0, InventoryClickButton::Left, None);
+    assert_transaction_processed(&result_events, session.player, 2, action_number, true);
+    assert_cursor_changed_to(&result_events, session.player, "minecraft:chest", 1);
+
+    let window = session
+        .online()
+        .active_container
+        .expect("crafting table should stay open");
+    if let crate::core::OpenInventoryWindowState::CraftingTable { slots } = &window.state {
+        assert!(slots.iter().all(Option::is_none));
+    } else {
+        panic!("expected crafting table state");
+    }
+}
+
+#[test]
+fn crafting_table_window_supports_shifted_two_by_two_crafting_table_recipe() {
+    let mut session = WindowZeroSession::new("ct-table");
+    fill_crafting_table_from_hotbar0(&mut session, "minecraft:oak_planks", 4, &[2, 3, 5, 6]);
+
+    let window = session
+        .online()
+        .active_container
+        .expect("crafting table should stay open");
+    assert_eq!(
+        window
+            .contents(&session.online().snapshot.inventory)
+            .get_slot(InventorySlot::Container(0))
+            .map(stack_summary),
+        Some(("minecraft:crafting_table", 1))
+    );
+}
+
+#[test]
+fn crafting_table_window_supports_three_by_three_furnace_recipe() {
+    let mut session = WindowZeroSession::new("ct-furnace");
+    fill_crafting_table_from_hotbar0(
+        &mut session,
+        "minecraft:cobblestone",
+        8,
+        &[1, 2, 3, 4, 6, 7, 8, 9],
+    );
+
+    let window = session
+        .online()
+        .active_container
+        .expect("crafting table should stay open");
+    assert_eq!(
+        window
+            .contents(&session.online().snapshot.inventory)
+            .get_slot(InventorySlot::Container(0))
+            .map(stack_summary),
+        Some(("minecraft:furnace", 1))
     );
 }
 

@@ -64,6 +64,7 @@ pub struct GameplayHostApiV2 {
     pub set_block: Option<GameplayHostMutationFn>,
     pub spawn_dropped_item: Option<GameplayHostMutationFn>,
     pub emit_event: Option<GameplayHostMutationFn>,
+    pub open_crafting_table: Option<GameplayHostMutationFn>,
 }
 
 unsafe impl Send for GameplayHostApiV2 {}

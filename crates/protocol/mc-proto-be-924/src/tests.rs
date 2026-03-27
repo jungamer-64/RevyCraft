@@ -39,7 +39,7 @@ use mc_core::{
 use mc_proto_be_common::__version_support::world::bedrock_actor_id;
 use mc_proto_common::{
     ConnectionPhase, HandshakeProbe, LoginRequest, PlayEncodingContext, PlaySyncAdapter,
-    ProtocolSessionSnapshot, SessionAdapter,
+    ProtocolError, ProtocolSessionSnapshot, SessionAdapter,
 };
 use serde_json::json;
 use std::io::Cursor;
@@ -69,6 +69,28 @@ fn encode_session(context: &PlayEncodingContext) -> ProtocolSessionSnapshot {
         player_id: Some(context.player_id),
         entity_id: Some(context.entity_id),
     }
+}
+
+fn item_instance_summary(
+    descriptor: &bedrockrs_proto::v662::types::NetworkItemInstanceDescriptor,
+) -> Result<(i32, u16, u32, i32), ProtocolError> {
+    let mut bytes = Vec::new();
+    descriptor
+        .serialize(&mut bytes)
+        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
+    let mut cursor = Cursor::new(bytes);
+    let item_id = <i32 as ProtoCodecVAR>::deserialize(&mut cursor)
+        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
+    if item_id == 0 {
+        return Ok((0, 0, 0, 0));
+    }
+    let stack_size = <u16 as ProtoCodecLE>::deserialize(&mut cursor)
+        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
+    let aux_value = <u32 as ProtoCodecVAR>::deserialize(&mut cursor)
+        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
+    let block_runtime_id = <i32 as ProtoCodecVAR>::deserialize(&mut cursor)
+        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
+    Ok((item_id, stack_size, aux_value, block_runtime_id))
 }
 
 trait TestPlaySyncAdapterExt: PlaySyncAdapter {
@@ -391,6 +413,70 @@ fn encodes_inventory_and_container_packets() {
         packets.as_slice(),
         [V924::ContainerSetDataPacket(packet)] if packet.id == 1 && packet.value == 200
     ));
+}
+
+#[test]
+fn creative_content_packet_includes_crafting_table_and_furnace_items() {
+    let frames =
+        crate::inventory::encode_creative_content_packet().expect("creative content should encode");
+    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        .expect("creative packet should decode");
+
+    let V924::CreativeContentPacket(packet) = &packets[0] else {
+        panic!("unexpected creative packets: {packets:?}");
+    };
+    let creative_items = packet
+        .contents
+        .iter()
+        .map(|entry| item_instance_summary(&entry.item_instance))
+        .collect::<Result<Vec<_>, _>>()
+        .expect("creative item instances should decode");
+    assert!(
+        creative_items
+            .iter()
+            .any(|(item_id, count, _, _)| *item_id == 58 && *count == 64)
+    );
+    assert!(
+        creative_items
+            .iter()
+            .any(|(item_id, count, _, _)| *item_id == 61 && *count == 64)
+    );
+}
+
+#[test]
+fn inventory_slot_packets_encode_crafting_table_and_furnace_items() {
+    let adapter = Bedrock924Adapter::new();
+
+    for (stack, expected_item_id) in [
+        (item("minecraft:crafting_table", 1), 58),
+        (item("minecraft:furnace", 1), 61),
+    ] {
+        let frames = adapter
+            .encode_play_event_for(
+                &CoreEvent::InventorySlotChanged {
+                    window_id: 2,
+                    container: InventoryContainer::Chest,
+                    slot: InventorySlot::Container(0),
+                    stack: Some(stack),
+                },
+                &play_context(),
+            )
+            .expect("inventory slot change should encode");
+        let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+            .expect("inventory slot packet should decode");
+        let V924::InventorySlotPacket(packet) = &packets[0] else {
+            panic!("unexpected slot packets: {packets:?}");
+        };
+        let mut bytes = Vec::new();
+        packet
+            .item
+            .serialize(&mut bytes)
+            .expect("slot descriptor should serialize");
+        let mut cursor = Cursor::new(bytes);
+        let item_id =
+            <i32 as ProtoCodecVAR>::deserialize(&mut cursor).expect("slot item id should decode");
+        assert_eq!(item_id, expected_item_id);
+    }
 }
 
 #[test]

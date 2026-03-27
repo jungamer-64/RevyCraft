@@ -338,7 +338,9 @@ fn supported_creative_items() -> Vec<ItemStack> {
         ("minecraft:bricks", 64),
         ("minecraft:oak_log", 64),
         ("minecraft:stick", 64),
+        ("minecraft:crafting_table", 64),
         ("minecraft:chest", 64),
+        ("minecraft:furnace", 64),
     ]
     .into_iter()
     .map(|(key, count)| ItemStack::new(key, count, 0))
@@ -577,7 +579,9 @@ fn bedrock_item_encoding(stack: &ItemStack) -> Result<BedrockItemEncoding, Proto
         "minecraft:glass" => 20,
         "minecraft:sandstone" => 24,
         "minecraft:bricks" => 45,
+        "minecraft:crafting_table" => 58,
         "minecraft:chest" => 54,
+        "minecraft:furnace" => 61,
         "minecraft:oak_log" => 17,
         "minecraft:stick" => 280,
         _ => {

@@ -1018,6 +1018,68 @@ fn use_block_places_opens_closes_and_roundtrips_world_backed_chest() {
 }
 
 #[test]
+fn use_block_places_and_opens_crafting_table() {
+    let (mut core, first) = logged_in_creative_core("world-craft-open");
+    let crafting_table_pos = BlockPos::new(2, 4, 0);
+
+    let _ = creative_inventory_set(
+        &mut core,
+        first,
+        InventorySlot::Hotbar(0),
+        Some(item("minecraft:crafting_table", 1)),
+    );
+    let place_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: BlockPos::new(2, 3, 0),
+            face: Some(BlockFace::Top),
+            held_item: Some(item("minecraft:crafting_table", 1)),
+        },
+        0,
+    );
+    assert!(
+        block_change_count(&place_events, crafting_table_pos, |block| {
+            block.key.as_str() == "minecraft:crafting_table"
+        }) >= 1
+    );
+    assert!(
+        !core
+            .snapshot()
+            .block_entities
+            .contains_key(&crafting_table_pos)
+    );
+
+    let open_events = core.apply_command(
+        CoreCommand::UseBlock {
+            player_id: first,
+            hand: InteractionHand::Main,
+            position: crafting_table_pos,
+            face: Some(BlockFace::Top),
+            held_item: None,
+        },
+        0,
+    );
+    assert_container_opened(&open_events, first, 1, InventoryContainer::CraftingTable);
+    assert_player_window_contents(&open_events, first, 1, InventoryContainer::CraftingTable);
+
+    let close_events = core.apply_command(
+        CoreCommand::CloseContainer {
+            player_id: first,
+            window_id: 1,
+        },
+        0,
+    );
+    assert_container_closed(&close_events, first, 1);
+    assert!(
+        !core
+            .snapshot()
+            .block_entities
+            .contains_key(&crafting_table_pos)
+    );
+}
+
+#[test]
 fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
     let mut core = ServerCore::new(CoreConfig {
         game_mode: 1,

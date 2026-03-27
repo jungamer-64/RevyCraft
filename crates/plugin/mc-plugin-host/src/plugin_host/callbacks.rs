@@ -4,10 +4,11 @@ use mc_core::GameplayTransaction;
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode, Utf8Slice};
 use mc_plugin_api::codec::gameplay::host_blob::{
     decode_begin_mining, decode_block_pos, decode_can_edit_block_key, decode_clear_mining,
-    decode_inventory_slot_update, decode_open_chest, decode_open_furnace, decode_player_id,
-    decode_player_pose_update, decode_selected_hotbar_slot_update, decode_set_block,
-    decode_spawn_dropped_item, decode_targeted_event_blob, encode_block_entity, encode_block_state,
-    encode_player_snapshot, encode_world_meta,
+    decode_inventory_slot_update, decode_open_chest, decode_open_crafting_table,
+    decode_open_furnace, decode_player_id, decode_player_pose_update,
+    decode_selected_hotbar_slot_update, decode_set_block, decode_spawn_dropped_item,
+    decode_targeted_event_blob, encode_block_entity, encode_block_state, encode_player_snapshot,
+    encode_world_meta,
 };
 use mc_plugin_api::host_api::{GameplayHostApiV2, HostApiTableV1};
 use std::cell::Cell;
@@ -328,6 +329,24 @@ unsafe extern "C" fn gameplay_host_open_furnace(
     mutation_status(result, error_out)
 }
 
+unsafe extern "C" fn gameplay_host_open_crafting_table(
+    _context: *mut std::ffi::c_void,
+    payload: ByteSlice,
+    error_out: *mut OwnedBuffer,
+) -> PluginErrorCode {
+    let result = with_current_gameplay_context(|scope| {
+        let payload = super::read_byte_slice(
+            payload,
+            scope.buffer_limits.callback_payload_bytes,
+            "gameplay host callback payload",
+        )?;
+        let player_id = decode_open_crafting_table(payload).map_err(|error| error.to_string())?;
+        scope.tx.open_crafting_table(player_id);
+        Ok(())
+    });
+    mutation_status(result, error_out)
+}
+
 unsafe extern "C" fn gameplay_host_set_block(
     _context: *mut std::ffi::c_void,
     payload: ByteSlice,
@@ -413,6 +432,7 @@ pub(crate) fn gameplay_host_api() -> GameplayHostApiV2 {
         set_block: Some(gameplay_host_set_block),
         spawn_dropped_item: Some(gameplay_host_spawn_dropped_item),
         emit_event: Some(gameplay_host_emit_event),
+        open_crafting_table: Some(gameplay_host_open_crafting_table),
     }
 }
 

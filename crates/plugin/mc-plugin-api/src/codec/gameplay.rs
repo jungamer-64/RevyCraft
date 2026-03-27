@@ -555,6 +555,15 @@ pub mod host_blob {
         decode_open_chest(bytes)
     }
 
+    #[must_use]
+    pub fn encode_open_crafting_table(player_id: PlayerId) -> Vec<u8> {
+        encode_player_id(player_id)
+    }
+
+    pub fn decode_open_crafting_table(bytes: &[u8]) -> Result<PlayerId, ProtocolCodecError> {
+        decode_player_id(bytes)
+    }
+
     pub fn encode_set_block(
         position: mc_core::BlockPos,
         block: &mc_core::BlockState,

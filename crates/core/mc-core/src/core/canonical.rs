@@ -3,8 +3,9 @@ use super::{
     inventory::{
         apply_inventory_click_state, close_inventory_window_state,
         close_player_active_container_state, inventory_diff_events, open_non_player_window_state,
-        open_world_chest_state, open_world_furnace_state, property_diff_events, property_events,
-        tick_active_container_state, tick_dropped_item_state, window_resync_events,
+        open_world_chest_state, open_world_crafting_table_state, open_world_furnace_state,
+        property_diff_events, property_events, tick_active_container_state,
+        tick_dropped_item_state, window_resync_events,
     },
     login::{finalize_login_delta, state_update_client_settings},
     mining::{
@@ -74,6 +75,9 @@ pub(super) enum CoreOp {
     OpenChest {
         player_id: PlayerId,
         position: BlockPos,
+    },
+    OpenCraftingTable {
+        player_id: PlayerId,
     },
     OpenFurnace {
         player_id: PlayerId,
@@ -443,6 +447,9 @@ pub(super) fn reduce_core_op(
             player_id,
             position,
         } => AppliedCoreOp::OpenContainer(open_world_chest_state(state, player_id, position)),
+        CoreOp::OpenCraftingTable { player_id } => {
+            AppliedCoreOp::OpenContainer(open_world_crafting_table_state(state, player_id))
+        }
         CoreOp::OpenFurnace {
             player_id,
             position,

@@ -268,6 +268,10 @@ impl<'a> GameplayTransaction<'a> {
         });
     }
 
+    pub fn open_crafting_table(&mut self, player_id: PlayerId) {
+        self.push_previewed_op(CoreOp::OpenCraftingTable { player_id });
+    }
+
     pub fn open_furnace(&mut self, player_id: PlayerId, position: BlockPos) {
         self.push_previewed_op(CoreOp::OpenFurnace {
             player_id,
@@ -790,6 +794,21 @@ fn use_block(
         }
         tx.clear_mining(player_id);
         tx.open_chest(player_id, position);
+        return;
+    }
+    if target_block.key.as_str() == catalog::CRAFTING_TABLE {
+        if !tx.can_edit_block(player_id, position) {
+            tx.emit_event(
+                EventTarget::Player(player_id),
+                CoreEvent::BlockChanged {
+                    position,
+                    block: target_block,
+                },
+            );
+            return;
+        }
+        tx.clear_mining(player_id);
+        tx.open_crafting_table(player_id);
         return;
     }
     if target_block.key.as_str() == catalog::FURNACE {

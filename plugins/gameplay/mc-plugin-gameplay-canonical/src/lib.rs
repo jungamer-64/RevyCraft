@@ -301,6 +301,19 @@ fn use_block(
         host.clear_mining(player_id)?;
         return host.open_furnace(player_id, position);
     }
+    if target_block.key.as_str() == catalog::CRAFTING_TABLE {
+        if !host.can_edit_block(player_id, position)? {
+            return host.emit_event(TargetedEvent {
+                target: EventTarget::Player(player_id),
+                event: CoreEvent::BlockChanged {
+                    position,
+                    block: target_block,
+                },
+            });
+        }
+        host.clear_mining(player_id)?;
+        return host.open_crafting_table(player_id);
+    }
     place_block(host, player_id, hand, position, face, held_item)
 }
 

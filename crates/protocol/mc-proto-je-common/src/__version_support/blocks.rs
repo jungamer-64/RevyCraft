@@ -1,6 +1,6 @@
 use mc_core::catalog::{
-    BEDROCK, BRICKS, CHEST, COBBLESTONE, DIRT, FURNACE, GLASS, GRASS_BLOCK, OAK_LOG, OAK_PLANKS,
-    SAND, SANDSTONE, STICK, STONE,
+    BEDROCK, BRICKS, CHEST, COBBLESTONE, CRAFTING_TABLE, DIRT, FURNACE, GLASS, GRASS_BLOCK,
+    OAK_LOG, OAK_PLANKS, SAND, SANDSTONE, STICK, STONE,
 };
 use mc_core::{BlockState, ItemStack};
 
@@ -17,6 +17,7 @@ pub fn legacy_block(state: &BlockState) -> (u16, u8) {
         GLASS => (20, 0),
         SANDSTONE => (24, 0),
         BRICKS => (45, 0),
+        CRAFTING_TABLE => (58, 0),
         CHEST => (54, 0),
         FURNACE => (61, 0),
         _ => (0, 0),
@@ -42,6 +43,7 @@ pub fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
         20 => BlockState::glass(),
         24 if metadata == 0 => BlockState::sandstone(),
         45 => BlockState::bricks(),
+        58 => BlockState::crafting_table(),
         54 => BlockState::chest(),
         61 => BlockState::furnace(),
         _ => BlockState::air(),
@@ -62,6 +64,7 @@ pub fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
         GLASS => Some((20, damage)),
         SANDSTONE => Some((24, damage)),
         BRICKS => Some((45, damage)),
+        CRAFTING_TABLE => Some((58, damage)),
         CHEST => Some((54, damage)),
         FURNACE => Some((61, damage)),
         STICK => Some((280, damage)),
@@ -82,6 +85,7 @@ pub fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
         20 => GLASS,
         24 if damage == 0 => SANDSTONE,
         45 => BRICKS,
+        58 if damage == 0 => CRAFTING_TABLE,
         54 if damage == 0 => CHEST,
         61 if damage == 0 => FURNACE,
         280 if damage == 0 => STICK,
@@ -112,5 +116,15 @@ mod tests {
         let furnace_stack = ItemStack::new(FURNACE, 2, 0);
         assert_eq!(legacy_item(&furnace_stack), Some((61, 0)));
         assert_eq!(semantic_item(61, 0, 2), furnace_stack);
+    }
+
+    #[test]
+    fn crafting_table_block_and_item_round_trip_through_legacy_ids() {
+        assert_eq!(legacy_block(&BlockState::crafting_table()), (58, 0));
+        assert_eq!(semantic_block(58, 0), BlockState::crafting_table());
+
+        let crafting_table_stack = ItemStack::new(CRAFTING_TABLE, 1, 0);
+        assert_eq!(legacy_item(&crafting_table_stack), Some((58, 0)));
+        assert_eq!(semantic_item(58, 0, 1), crafting_table_stack);
     }
 }

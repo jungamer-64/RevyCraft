@@ -52,6 +52,8 @@ pub trait GameplayHost {
 
     fn open_furnace(&self, player_id: PlayerId, position: mc_core::BlockPos) -> Result<(), String>;
 
+    fn open_crafting_table(&self, player_id: PlayerId) -> Result<(), String>;
+
     fn set_block(
         &self,
         position: mc_core::BlockPos,

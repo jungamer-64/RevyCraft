@@ -1,5 +1,6 @@
 use super::state::{OpenInventoryWindow, OpenInventoryWindowState};
 use super::util::{MAX_STACK_SIZE, stack_keys_match};
+use crate::catalog;
 use crate::events::InventoryClickButton;
 use crate::inventory::{ItemStack, PlayerInventory};
 
@@ -8,6 +9,112 @@ struct CraftingRecipe {
     output: ItemStack,
     consume: Vec<usize>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RecipeDefinition {
+    min_grid_width: usize,
+    pattern_width: usize,
+    pattern_height: usize,
+    pattern: &'static [Option<&'static str>],
+    output_key: &'static str,
+    output_count: u8,
+}
+
+#[derive(Debug)]
+struct NormalizedCraftingGrid<'a> {
+    available_width: usize,
+    width: usize,
+    height: usize,
+    cells: Vec<Option<&'a ItemStack>>,
+    original_indices: Vec<Option<usize>>,
+}
+
+const LOG_TO_PLANKS_PATTERN: [Option<&str>; 1] = [Some(catalog::OAK_LOG)];
+const STICK_PATTERN: [Option<&str>; 2] = [Some(catalog::OAK_PLANKS), Some(catalog::OAK_PLANKS)];
+const SANDSTONE_PATTERN: [Option<&str>; 4] = [
+    Some(catalog::SAND),
+    Some(catalog::SAND),
+    Some(catalog::SAND),
+    Some(catalog::SAND),
+];
+const CRAFTING_TABLE_PATTERN: [Option<&str>; 4] = [
+    Some(catalog::OAK_PLANKS),
+    Some(catalog::OAK_PLANKS),
+    Some(catalog::OAK_PLANKS),
+    Some(catalog::OAK_PLANKS),
+];
+const CHEST_PATTERN: [Option<&str>; 9] = [
+    Some(catalog::OAK_PLANKS),
+    Some(catalog::OAK_PLANKS),
+    Some(catalog::OAK_PLANKS),
+    Some(catalog::OAK_PLANKS),
+    None,
+    Some(catalog::OAK_PLANKS),
+    Some(catalog::OAK_PLANKS),
+    Some(catalog::OAK_PLANKS),
+    Some(catalog::OAK_PLANKS),
+];
+const FURNACE_PATTERN: [Option<&str>; 9] = [
+    Some(catalog::COBBLESTONE),
+    Some(catalog::COBBLESTONE),
+    Some(catalog::COBBLESTONE),
+    Some(catalog::COBBLESTONE),
+    None,
+    Some(catalog::COBBLESTONE),
+    Some(catalog::COBBLESTONE),
+    Some(catalog::COBBLESTONE),
+    Some(catalog::COBBLESTONE),
+];
+const RECIPE_DEFINITIONS: [RecipeDefinition; 6] = [
+    RecipeDefinition {
+        min_grid_width: 1,
+        pattern_width: 1,
+        pattern_height: 1,
+        pattern: &LOG_TO_PLANKS_PATTERN,
+        output_key: catalog::OAK_PLANKS,
+        output_count: 4,
+    },
+    RecipeDefinition {
+        min_grid_width: 2,
+        pattern_width: 1,
+        pattern_height: 2,
+        pattern: &STICK_PATTERN,
+        output_key: catalog::STICK,
+        output_count: 4,
+    },
+    RecipeDefinition {
+        min_grid_width: 2,
+        pattern_width: 2,
+        pattern_height: 2,
+        pattern: &SANDSTONE_PATTERN,
+        output_key: catalog::SANDSTONE,
+        output_count: 1,
+    },
+    RecipeDefinition {
+        min_grid_width: 2,
+        pattern_width: 2,
+        pattern_height: 2,
+        pattern: &CRAFTING_TABLE_PATTERN,
+        output_key: catalog::CRAFTING_TABLE,
+        output_count: 1,
+    },
+    RecipeDefinition {
+        min_grid_width: 3,
+        pattern_width: 3,
+        pattern_height: 3,
+        pattern: &CHEST_PATTERN,
+        output_key: catalog::CHEST,
+        output_count: 1,
+    },
+    RecipeDefinition {
+        min_grid_width: 3,
+        pattern_width: 3,
+        pattern_height: 3,
+        pattern: &FURNACE_PATTERN,
+        output_key: catalog::FURNACE,
+        output_count: 1,
+    },
+];
 
 pub(super) fn apply_player_crafting_result_click(
     inventory: &mut PlayerInventory,
@@ -111,6 +218,16 @@ fn active_container_crafting_inputs(window: &OpenInventoryWindow) -> Vec<Option<
 }
 
 fn current_crafting_recipe(inputs: &[Option<ItemStack>], width: usize) -> Option<CraftingRecipe> {
+    let normalized = normalize_crafting_inputs(inputs, width)?;
+    RECIPE_DEFINITIONS
+        .iter()
+        .find_map(|definition| match_recipe(definition, &normalized))
+}
+
+fn normalize_crafting_inputs(
+    inputs: &[Option<ItemStack>],
+    width: usize,
+) -> Option<NormalizedCraftingGrid<'_>> {
     if inputs.len() != width * width {
         return None;
     }
@@ -124,77 +241,80 @@ fn current_crafting_recipe(inputs: &[Option<ItemStack>], width: usize) -> Option
         return None;
     }
 
-    if occupied.len() == 1
-        && occupied[0].1.key.as_str() == "minecraft:oak_log"
-        && occupied[0].1.count > 0
-    {
-        return Some(CraftingRecipe {
-            output: ItemStack::new("minecraft:oak_planks", 4, 0),
-            consume: vec![occupied[0].0],
-        });
-    }
-
-    if occupied.len() == 4
-        && occupied
-            .iter()
-            .all(|(_, stack)| stack.key.as_str() == "minecraft:sand" && stack.count > 0)
-        && forms_shifted_square(&occupied, width)
-    {
-        return Some(CraftingRecipe {
-            output: ItemStack::new("minecraft:sandstone", 1, 0),
-            consume: occupied.iter().map(|(index, _)| *index).collect(),
-        });
-    }
-
-    if occupied.len() == 2
-        && occupied
-            .iter()
-            .all(|(_, stack)| stack.key.as_str() == "minecraft:oak_planks" && stack.count > 0)
-        && forms_vertical_pair(&occupied, width)
-    {
-        return Some(CraftingRecipe {
-            output: ItemStack::new("minecraft:stick", 4, 0),
-            consume: occupied.iter().map(|(index, _)| *index).collect(),
-        });
-    }
-
-    None
-}
-
-fn forms_shifted_square(occupied: &[(usize, &ItemStack)], width: usize) -> bool {
-    let xs = occupied
+    let min_x = occupied
         .iter()
         .map(|(index, _)| index % width)
-        .collect::<Vec<_>>();
-    let ys = occupied
+        .min()
+        .expect("occupied crafting inputs should not be empty");
+    let max_x = occupied
+        .iter()
+        .map(|(index, _)| index % width)
+        .max()
+        .expect("occupied crafting inputs should not be empty");
+    let min_y = occupied
         .iter()
         .map(|(index, _)| index / width)
-        .collect::<Vec<_>>();
-    let min_x = *xs.iter().min().expect("occupied should not be empty");
-    let max_x = *xs.iter().max().expect("occupied should not be empty");
-    let min_y = *ys.iter().min().expect("occupied should not be empty");
-    let max_y = *ys.iter().max().expect("occupied should not be empty");
-    if max_x != min_x + 1 || max_y != min_y + 1 {
-        return false;
+        .min()
+        .expect("occupied crafting inputs should not be empty");
+    let max_y = occupied
+        .iter()
+        .map(|(index, _)| index / width)
+        .max()
+        .expect("occupied crafting inputs should not be empty");
+    let normalized_width = max_x - min_x + 1;
+    let normalized_height = max_y - min_y + 1;
+    let mut cells = vec![None; normalized_width * normalized_height];
+    let mut original_indices = vec![None; normalized_width * normalized_height];
+
+    for (index, stack) in occupied {
+        let x = index % width;
+        let y = index / width;
+        let normalized_index = (y - min_y) * normalized_width + (x - min_x);
+        cells[normalized_index] = Some(stack);
+        original_indices[normalized_index] = Some(index);
     }
-    let wanted = [
-        (min_x, min_y),
-        (min_x + 1, min_y),
-        (min_x, min_y + 1),
-        (min_x + 1, min_y + 1),
-    ];
-    occupied.iter().all(|(index, _)| {
-        let coord = (index % width, index / width);
-        wanted.contains(&coord)
+
+    Some(NormalizedCraftingGrid {
+        available_width: width,
+        width: normalized_width,
+        height: normalized_height,
+        cells,
+        original_indices,
     })
 }
 
-fn forms_vertical_pair(occupied: &[(usize, &ItemStack)], width: usize) -> bool {
-    let first = occupied[0].0;
-    let second = occupied[1].0;
-    let (first_x, first_y) = (first % width, first / width);
-    let (second_x, second_y) = (second % width, second / width);
-    first_x == second_x && first_y.abs_diff(second_y) == 1
+fn match_recipe(
+    definition: &RecipeDefinition,
+    normalized: &NormalizedCraftingGrid<'_>,
+) -> Option<CraftingRecipe> {
+    if normalized.available_width < definition.min_grid_width
+        || normalized.width != definition.pattern_width
+        || normalized.height != definition.pattern_height
+        || normalized.cells.len() != definition.pattern.len()
+    {
+        return None;
+    }
+
+    for (expected, actual) in definition.pattern.iter().zip(&normalized.cells) {
+        match (expected, actual) {
+            (Some(expected_key), Some(stack))
+                if stack.count > 0 && stack.key.as_str() == *expected_key => {}
+            (None, None) => {}
+            _ => return None,
+        }
+    }
+
+    let consume = definition
+        .pattern
+        .iter()
+        .zip(&normalized.original_indices)
+        .filter_map(|(expected, index)| expected.is_some().then_some(*index).flatten())
+        .collect();
+
+    Some(CraftingRecipe {
+        output: ItemStack::new(definition.output_key, definition.output_count, 0),
+        consume,
+    })
 }
 
 fn consume_player_crafting_inputs(inventory: &mut PlayerInventory, recipe: &CraftingRecipe) {
