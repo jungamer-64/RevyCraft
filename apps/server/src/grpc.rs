@@ -502,10 +502,12 @@ fn map_status_view(status: AdminStatusView) -> proto::AdminStatusView {
                 artifact_quarantine_count: count_to_u64(plugin_host.artifact_quarantine_count),
                 pending_fatal_error: plugin_host.pending_fatal_error,
             }),
-        upgrade: status.upgrade.map(|upgrade| proto::RuntimeUpgradeStateView {
-            role: map_upgrade_role(upgrade.role),
-            phase: map_upgrade_phase(upgrade.phase),
-        }),
+        upgrade: status
+            .upgrade
+            .map(|upgrade| proto::RuntimeUpgradeStateView {
+                role: map_upgrade_role(upgrade.role),
+                phase: map_upgrade_phase(upgrade.phase),
+            }),
     }
 }
 

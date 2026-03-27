@@ -159,9 +159,10 @@ impl RuntimeUpgradeGuard {
     ///
     /// Returns [`RuntimeError`] when listener/session rollback import fails.
     pub async fn rollback(mut self) -> Result<(), RuntimeError> {
-        self.runtime
-            .reload
-            .set_upgrade_state(RuntimeUpgradeRole::Parent, RuntimeUpgradePhase::ParentRollingBack);
+        self.runtime.reload.set_upgrade_state(
+            RuntimeUpgradeRole::Parent,
+            RuntimeUpgradePhase::ParentRollingBack,
+        );
         eprintln!("runtime upgrade phase: parent rolling back");
         if let Some(listener) = self.game_listener.take() {
             self.runtime
@@ -224,10 +225,10 @@ impl ServerSupervisor {
         let running =
             boot_server_from_upgrade(config_source, import, loaded_plugins, Some(plugin_host))
                 .await?;
-        running
-            .runtime
-            .reload
-            .set_upgrade_state(RuntimeUpgradeRole::Child, RuntimeUpgradePhase::ChildWaitingCommit);
+        running.runtime.reload.set_upgrade_state(
+            RuntimeUpgradeRole::Child,
+            RuntimeUpgradePhase::ChildWaitingCommit,
+        );
         eprintln!("runtime upgrade phase: child waiting for commit");
         Ok(Self { running })
     }
@@ -242,12 +243,18 @@ impl RunningServer {
             ));
         }
 
-        self.runtime
-            .reload
-            .set_upgrade_state(RuntimeUpgradeRole::Parent, RuntimeUpgradePhase::ParentFreezing);
+        self.runtime.reload.set_upgrade_state(
+            RuntimeUpgradeRole::Parent,
+            RuntimeUpgradePhase::ParentFreezing,
+        );
         eprintln!("runtime upgrade phase: parent freezing");
 
-        let game_listener = match self.runtime.topology.export_tcp_listener_for_upgrade().await {
+        let game_listener = match self
+            .runtime
+            .topology
+            .export_tcp_listener_for_upgrade()
+            .await
+        {
             Ok(listener) => listener,
             Err(error) => {
                 self.runtime.reload.clear_upgrade_state();
@@ -263,7 +270,10 @@ impl RunningServer {
             Err(error) => {
                 self.runtime
                     .topology
-                    .import_tcp_listener_after_upgrade_rollback(game_listener, &self.runtime.sessions)
+                    .import_tcp_listener_after_upgrade_rollback(
+                        game_listener,
+                        &self.runtime.sessions,
+                    )
                     .await?;
                 self.runtime.reload.clear_upgrade_state();
                 return Err(error);
@@ -305,7 +315,9 @@ impl RunningServer {
                         &self.runtime.sessions,
                     )
                     .await?;
-                self.runtime.import_live_sessions_after_upgrade(sessions).await?;
+                self.runtime
+                    .import_live_sessions_after_upgrade(sessions)
+                    .await?;
                 drop(consistency_guard);
                 self.runtime.reload.clear_upgrade_state();
                 return Err(error);

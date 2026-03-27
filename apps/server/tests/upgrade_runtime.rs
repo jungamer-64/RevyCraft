@@ -5,6 +5,7 @@ use mc_proto_common::MinecraftWireCodec;
 use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol};
 use revy_admin_grpc::admin as proto;
 use std::fs;
+#[cfg(unix)]
 use std::fs::File;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -43,6 +44,7 @@ async fn grpc_client(local_addr: SocketAddr) -> Result<AdminClient, tonic::trans
     .await
 }
 
+#[cfg(unix)]
 fn wait_for_output_contains(
     path: &std::path::Path,
     needle: &str,
@@ -541,7 +543,9 @@ async fn grpc_upgrade_freeze_blocks_mutating_admin_requests_and_preserves_buffer
         Duration::from_secs(5),
         24,
     )
-    .map_err(|error| format!("buffered held-item change was not delivered after cutover: {error}"))?;
+    .map_err(|error| {
+        format!("buffered held-item change was not delivered after cutover: {error}")
+    })?;
     assert_eq!(held_item_from_packet(protocol, &held_item)?, 8);
 
     shutdown_runtime_via_grpc(&mut child_client, grpc_addr, &mut child).await

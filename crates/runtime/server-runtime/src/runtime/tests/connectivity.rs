@@ -237,7 +237,10 @@ async fn runtime_upgrade_hold_blocks_tick_and_save() -> Result<(), RuntimeError>
         async move { runtime.maybe_save().await }
     });
     tokio::time::sleep(Duration::from_millis(150)).await;
-    assert!(!tick.is_finished(), "tick should block while upgrade hold is active");
+    assert!(
+        !tick.is_finished(),
+        "tick should block while upgrade hold is active"
+    );
     assert!(
         !save.is_finished(),
         "maybe_save should block while upgrade hold is active"

@@ -173,6 +173,29 @@ pub fn repo_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .canonicalize()?)
 }
 
+fn runtime_plugin_allowlist<'a>(options: &'a ServerTomlOptions<'a>) -> BTreeSet<&'a str> {
+    let mut plugin_allowlist = BTreeSet::from([
+        "auth-offline",
+        "gameplay-canonical",
+        "je-5",
+        "storage-je-anvil-1_7_10",
+    ]);
+    if options.bedrock_enabled {
+        plugin_allowlist.insert("auth-bedrock-offline");
+        plugin_allowlist.insert("be-924");
+    }
+    for plugin_id in options.extra_plugin_allowlist {
+        plugin_allowlist.insert(plugin_id);
+    }
+    plugin_allowlist
+}
+
+fn seed_runtime_plugins(temp_root: &Path, plugin_ids: &[&str]) -> TestResult<PathBuf> {
+    let dist_dir = temp_root.join("runtime").join("plugins");
+    PackagedPluginHarness::shared()?.seed_subset(&dist_dir, plugin_ids)?;
+    Ok(dist_dir)
+}
+
 pub fn write_server_toml(
     temp_dir: &Path,
     repo_root: &Path,
@@ -191,17 +214,19 @@ pub fn write_server_toml(
 pub fn write_server_toml_at(
     temp_root: &Path,
     config_path: &Path,
-    repo_root: &Path,
+    _repo_root: &Path,
     world_dir: &Path,
     options: &ServerTomlOptions<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let runtime_dir = config_path
         .parent()
         .ok_or("config path should have a parent directory")?;
-    let plugins_dir = options
-        .plugins_dir_override
-        .clone()
-        .unwrap_or_else(|| repo_root.join("runtime").join("plugins"));
+    let plugin_allowlist = runtime_plugin_allowlist(options);
+    let seeded_plugin_ids = plugin_allowlist.iter().copied().collect::<Vec<_>>();
+    let plugins_dir = match &options.plugins_dir_override {
+        Some(plugins_dir) => plugins_dir.clone(),
+        None => seed_runtime_plugins(temp_root, &seeded_plugin_ids)?,
+    };
     fs::create_dir_all(runtime_dir)?;
     let (principal_block, admin_bind_addr) = if options.admin_grpc_enabled {
         let token_path = temp_root.join("admin").join("ops.token");
@@ -235,19 +260,6 @@ pub fn write_server_toml_at(
             .collect::<Vec<_>>()
             .join(", ")
     );
-    let mut plugin_allowlist = BTreeSet::from([
-        "auth-offline",
-        "gameplay-canonical",
-        "je-5",
-        "storage-je-anvil-1_7_10",
-    ]);
-    if options.bedrock_enabled {
-        plugin_allowlist.insert("auth-bedrock-offline");
-        plugin_allowlist.insert("be-924");
-    }
-    for plugin_id in options.extra_plugin_allowlist {
-        plugin_allowlist.insert(plugin_id);
-    }
     let plugin_allowlist = format!(
         "[{}]",
         plugin_allowlist
@@ -342,10 +354,8 @@ pub fn prepare_online_auth_runtime_plugins(
     temp_root: &Path,
     scenario: &str,
 ) -> TestResult<PathBuf> {
-    let dist_dir = temp_root.join("runtime").join("plugins");
-    let harness = PackagedPluginHarness::shared()?;
-    harness.seed_subset(
-        &dist_dir,
+    let dist_dir = seed_runtime_plugins(
+        temp_root,
         &[
             "je-5",
             "gameplay-canonical",
@@ -353,6 +363,7 @@ pub fn prepare_online_auth_runtime_plugins(
             "auth-offline",
         ],
     )?;
+    let harness = PackagedPluginHarness::shared()?;
     harness.install_auth_plugin(
         "mc-plugin-auth-online-stub",
         "auth-online-stub",

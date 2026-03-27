@@ -187,7 +187,10 @@ impl UpgradeCoordinator {
         }
         eprintln!("runtime upgrade handshake: child hello acknowledged");
 
-        let paused_surfaces = match self.pause_process_surfaces(subject.is_local_console()).await {
+        let paused_surfaces = match self
+            .pause_process_surfaces(subject.is_local_console())
+            .await
+        {
             Ok(paused) => paused,
             Err(error) => {
                 let _ = child.kill();
@@ -270,7 +273,8 @@ impl UpgradeCoordinator {
             &sessions,
         )?;
         eprintln!("runtime upgrade transfer: handles sent, waiting for child readiness");
-        let child_ready = tokio::time::timeout(upgrade_ready_timeout(), transport.read_message()).await;
+        let child_ready =
+            tokio::time::timeout(upgrade_ready_timeout(), transport.read_message()).await;
         match child_ready {
             Ok(Ok(UpgradeControlMessage::Ready)) => {
                 eprintln!("runtime upgrade handshake: child reported ready");

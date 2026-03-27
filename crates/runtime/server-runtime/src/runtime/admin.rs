@@ -816,26 +816,28 @@ fn plugin_status_view_from_runtime(status: &AdminStatusView) -> plugin_admin::Ad
                 pending_fatal_error: plugin_host.pending_fatal_error.clone(),
             }
         }),
-        upgrade: status.upgrade.map(|upgrade| plugin_admin::RuntimeUpgradeStateView {
-            role: match upgrade.role {
-                super::RuntimeUpgradeRole::Parent => plugin_admin::RuntimeUpgradeRole::Parent,
-                super::RuntimeUpgradeRole::Child => plugin_admin::RuntimeUpgradeRole::Child,
-            },
-            phase: match upgrade.phase {
-                super::RuntimeUpgradePhase::ParentFreezing => {
-                    plugin_admin::RuntimeUpgradePhase::ParentFreezing
-                }
-                super::RuntimeUpgradePhase::ParentWaitingChildReady => {
-                    plugin_admin::RuntimeUpgradePhase::ParentWaitingChildReady
-                }
-                super::RuntimeUpgradePhase::ParentRollingBack => {
-                    plugin_admin::RuntimeUpgradePhase::ParentRollingBack
-                }
-                super::RuntimeUpgradePhase::ChildWaitingCommit => {
-                    plugin_admin::RuntimeUpgradePhase::ChildWaitingCommit
-                }
-            },
-        }),
+        upgrade: status
+            .upgrade
+            .map(|upgrade| plugin_admin::RuntimeUpgradeStateView {
+                role: match upgrade.role {
+                    super::RuntimeUpgradeRole::Parent => plugin_admin::RuntimeUpgradeRole::Parent,
+                    super::RuntimeUpgradeRole::Child => plugin_admin::RuntimeUpgradeRole::Child,
+                },
+                phase: match upgrade.phase {
+                    super::RuntimeUpgradePhase::ParentFreezing => {
+                        plugin_admin::RuntimeUpgradePhase::ParentFreezing
+                    }
+                    super::RuntimeUpgradePhase::ParentWaitingChildReady => {
+                        plugin_admin::RuntimeUpgradePhase::ParentWaitingChildReady
+                    }
+                    super::RuntimeUpgradePhase::ParentRollingBack => {
+                        plugin_admin::RuntimeUpgradePhase::ParentRollingBack
+                    }
+                    super::RuntimeUpgradePhase::ChildWaitingCommit => {
+                        plugin_admin::RuntimeUpgradePhase::ChildWaitingCommit
+                    }
+                },
+            }),
     }
 }
 

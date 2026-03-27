@@ -98,11 +98,7 @@ impl ReloadCoordinator {
             .expect("upgrade state mutex should not be poisoned")
     }
 
-    pub(crate) fn set_upgrade_state(
-        &self,
-        role: RuntimeUpgradeRole,
-        phase: RuntimeUpgradePhase,
-    ) {
+    pub(crate) fn set_upgrade_state(&self, role: RuntimeUpgradeRole, phase: RuntimeUpgradePhase) {
         *self
             .upgrade_state
             .lock()

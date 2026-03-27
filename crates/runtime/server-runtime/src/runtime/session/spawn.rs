@@ -2,9 +2,9 @@ use crate::RuntimeError;
 use crate::runtime::{
     AcceptedGenerationSession, GenerationAdmission, QueuedAcceptGuard, RuntimeServer,
     RuntimeUpgradeLoginChallenge, RuntimeUpgradePhase, RuntimeUpgradeQueuedMessage,
-    RuntimeUpgradeRole, RuntimeUpgradeSessionHandle,
-    RuntimeUpgradeSessionState, RuntimeUpgradeStateView, SESSION_OUTBOUND_QUEUE_CAPACITY,
-    SessionControl, SessionMessage, SessionState,
+    RuntimeUpgradeRole, RuntimeUpgradeSessionHandle, RuntimeUpgradeSessionState,
+    RuntimeUpgradeStateView, SESSION_OUTBOUND_QUEUE_CAPACITY, SessionControl, SessionMessage,
+    SessionState,
 };
 use crate::transport::{AcceptedTransportSession, TransportSessionIo, default_wire_codec};
 use bytes::BytesMut;

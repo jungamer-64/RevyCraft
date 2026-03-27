@@ -205,9 +205,10 @@ pub(crate) async fn boot_server_from_upgrade(
         #[cfg(test)]
         fail_nth_reattach_send: std::sync::atomic::AtomicUsize::new(0),
     });
-    server
-        .reload
-        .set_upgrade_state(RuntimeUpgradeRole::Child, RuntimeUpgradePhase::ChildWaitingCommit);
+    server.reload.set_upgrade_state(
+        RuntimeUpgradeRole::Child,
+        RuntimeUpgradePhase::ChildWaitingCommit,
+    );
     let child_commit_hold = server.reload.write_consistency_owned().await;
     server
         .reload
