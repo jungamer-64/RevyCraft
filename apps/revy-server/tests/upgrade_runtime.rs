@@ -88,7 +88,7 @@ fn wait_for_tcp_closed(
 
 fn remote_admin_upgrade_options<'a>(grpc_port: u16, motd: &'a str) -> ServerTomlOptions<'a> {
     let mut options = ServerTomlOptions::new(true, 0, grpc_port, motd);
-    options.local_console_permissions = UPGRADE_LOCAL_CONSOLE_PERMISSIONS;
+    options.console_permissions = UPGRADE_CONSOLE_PERMISSIONS;
     options.remote_permissions = UPGRADE_REMOTE_PERMISSIONS;
     options
 }
@@ -865,7 +865,7 @@ fn console_upgrade_reaches_child_and_child_console_keeps_working()
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
     let mut options = ServerTomlOptions::new(true, 0, grpc_port, "console-upgrade");
-    options.local_console_permissions = UPGRADE_LOCAL_CONSOLE_PERMISSIONS;
+    options.console_permissions = UPGRADE_CONSOLE_PERMISSIONS;
     options.remote_permissions = UPGRADE_REMOTE_PERMISSIONS;
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
@@ -943,7 +943,7 @@ async fn grpc_upgrade_child_import_failure_rolls_back_and_keeps_grpc_available()
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
     let mut options = ServerTomlOptions::new(true, 0, grpc_port, "grpc-upgrade-rollback");
-    options.local_console_permissions = UPGRADE_LOCAL_CONSOLE_PERMISSIONS;
+    options.console_permissions = UPGRADE_CONSOLE_PERMISSIONS;
     options.remote_permissions = UPGRADE_REMOTE_PERMISSIONS;
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 

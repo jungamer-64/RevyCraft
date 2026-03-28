@@ -1,68 +1,26 @@
 #![allow(clippy::multiple_crate_versions)]
 
-mod admin_transport;
+mod admin_surface;
 mod process_surfaces;
 mod upgrade;
 
-use crate::admin_transport::AdminTransportSupervisor;
-use crate::process_surfaces::{ConsoleControl, PausedProcessSurfaces, ProcessSurfaceCommand};
+use crate::admin_surface::AdminSurfaceSupervisor;
+use crate::process_surfaces::{
+    PausedAdminSurfaceInstance, PausedProcessSurfaces, ProcessSurfaceCommand,
+};
 use crate::upgrade::UpgradeCoordinator;
 use revy_server_runtime::RuntimeError;
 use revy_server_runtime::config::ServerConfigSource;
 use revy_server_runtime::runtime::{
-    AdminControlPlaneHandle, AdminRequest, AdminResponse, AdminSubject, ServerSupervisor,
-    format_runtime_status_summary,
+    AdminControlPlaneHandle, AdminSubject, ServerSupervisor, format_runtime_status_summary,
 };
 use std::ffi::OsString;
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
 
 const DEFAULT_SERVER_CONFIG_PATH: &str = "runtime/server.toml";
 const SERVER_CONFIG_ENV: &str = "REVY_SERVER_CONFIG";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ConsoleLoopExit {
-    ShutdownRequested,
-    Detached,
-    NoAdminSurface,
-    ExternalShutdown,
-    PausedForUpgrade,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ConsoleInputMode {
-    Terminal,
-    NonTerminal,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ConsoleEofAction {
-    Shutdown,
-    Detach,
-    WarnAndExit,
-}
-
-fn console_input_mode() -> ConsoleInputMode {
-    if std::io::stdin().is_terminal() {
-        ConsoleInputMode::Terminal
-    } else {
-        ConsoleInputMode::NonTerminal
-    }
-}
-
-fn decide_console_eof_action(
-    input_mode: ConsoleInputMode,
-    has_other_admin_surface: bool,
-) -> ConsoleEofAction {
-    match input_mode {
-        ConsoleInputMode::Terminal => ConsoleEofAction::Shutdown,
-        ConsoleInputMode::NonTerminal if has_other_admin_surface => ConsoleEofAction::Detach,
-        ConsoleInputMode::NonTerminal => ConsoleEofAction::WarnAndExit,
-    }
-}
 
 async fn wait_for_ctrl_c() -> Result<(), RuntimeError> {
     tokio::signal::ctrl_c()
@@ -81,112 +39,6 @@ async fn wait_for_shutdown_signal(mut shutdown_rx: watch::Receiver<bool>) {
     }
 }
 
-async fn run_console_loop(
-    control_plane: &AdminControlPlaneHandle,
-    surface_control_tx: mpsc::Sender<ProcessSurfaceCommand>,
-    input_mode: ConsoleInputMode,
-    has_other_admin_surface: bool,
-    shutdown_tx: &watch::Sender<bool>,
-    shutdown_rx: watch::Receiver<bool>,
-    mut control_rx: mpsc::Receiver<ConsoleControl>,
-) -> Result<ConsoleLoopExit, RuntimeError> {
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    loop {
-        tokio::select! {
-            Some(control) = control_rx.recv() => {
-                match control {
-                    ConsoleControl::PauseForUpgrade { ack_tx } => {
-                        let _ = ack_tx.send(());
-                        return Ok(ConsoleLoopExit::PausedForUpgrade);
-                    }
-                }
-            }
-            signal = wait_for_ctrl_c() => {
-                signal?;
-                let _ = shutdown_tx.send(true);
-                return Ok(ConsoleLoopExit::ShutdownRequested);
-            }
-            _ = wait_for_shutdown_signal(shutdown_rx.clone()) => {
-                return Ok(ConsoleLoopExit::ExternalShutdown);
-            }
-            line = lines.next_line() => {
-                let Some(line) = line.map_err(|error| RuntimeError::Config(format!("failed to read stdin: {error}")))? else {
-                    return Ok(match decide_console_eof_action(input_mode, has_other_admin_surface) {
-                        ConsoleEofAction::Shutdown => {
-                            let _ = shutdown_tx.send(true);
-                            ConsoleLoopExit::ShutdownRequested
-                        }
-                        ConsoleEofAction::Detach => ConsoleLoopExit::Detached,
-                        ConsoleEofAction::WarnAndExit => ConsoleLoopExit::NoAdminSurface,
-                    });
-                };
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                let request = match control_plane.parse_local_command(line).await {
-                    Ok(request) => request,
-                    Err(error) => {
-                        let response = AdminResponse::Error {
-                            message: error,
-                        };
-                        match control_plane.render_local_response(&response).await {
-                            Ok(text) => println!("{text}"),
-                            Err(render_error) => eprintln!("{render_error}"),
-                        }
-                        continue;
-                    }
-                };
-                let upgrade_requested = matches!(request, AdminRequest::UpgradeRuntime { .. });
-                let response = control_plane.execute_local_console(request).await;
-                let shutdown_requested = matches!(response, AdminResponse::ShutdownScheduled);
-                let upgrade_committed = upgrade_requested && matches!(response, AdminResponse::UpgradeRuntime(_));
-                match control_plane.render_local_response(&response).await {
-                    Ok(text) => println!("{text}"),
-                    Err(error) => eprintln!("{error}"),
-                }
-                if matches!(response, AdminResponse::ReloadRuntime(_)) {
-                    let _ = surface_control_tx.try_send(ProcessSurfaceCommand::ReconcileAdminTransport);
-                }
-                if shutdown_requested {
-                    let _ = shutdown_tx.send(true);
-                    return Ok(ConsoleLoopExit::ShutdownRequested);
-                }
-                if upgrade_committed {
-                    return Ok(ConsoleLoopExit::PausedForUpgrade);
-                }
-            }
-        }
-    }
-}
-
-fn spawn_console_monitor(
-    control_plane: AdminControlPlaneHandle,
-    surface_control_tx: mpsc::Sender<ProcessSurfaceCommand>,
-    input_mode: ConsoleInputMode,
-    has_other_admin_surface: bool,
-    shutdown_tx: watch::Sender<bool>,
-    shutdown_rx: watch::Receiver<bool>,
-) -> (
-    mpsc::Sender<ConsoleControl>,
-    tokio::task::JoinHandle<Result<ConsoleLoopExit, RuntimeError>>,
-) {
-    let (control_tx, control_rx) = mpsc::channel(4);
-    let monitor = tokio::spawn(async move {
-        run_console_loop(
-            &control_plane,
-            surface_control_tx,
-            input_mode,
-            has_other_admin_surface,
-            &shutdown_tx,
-            shutdown_rx,
-            control_rx,
-        )
-        .await
-    });
-    (control_tx, monitor)
-}
-
 async fn wait_for_runtime_completion(server: &ServerSupervisor) -> Result<(), RuntimeError> {
     server.wait_for_runtime_completion().await
 }
@@ -198,65 +50,9 @@ async fn wait_for_exit_signal(shutdown_rx: watch::Receiver<bool>) -> Result<(), 
     }
 }
 
-async fn wait_for_console_loop(
-    console_monitor: &mut tokio::task::JoinHandle<Result<ConsoleLoopExit, RuntimeError>>,
-) -> Result<ConsoleLoopExit, RuntimeError> {
-    console_monitor.await.map_err(RuntimeError::from)?
-}
-
 enum ProcessStartupMode {
     Normal,
     UpgradeChild(upgrade::PendingUpgradeChild),
-}
-
-async fn pause_console_for_upgrade(
-    console_control_tx: &mut Option<mpsc::Sender<ConsoleControl>>,
-    console_monitor: &mut Option<tokio::task::JoinHandle<Result<ConsoleLoopExit, RuntimeError>>>,
-) -> Result<bool, RuntimeError> {
-    let Some(control_tx) = console_control_tx.take() else {
-        return Ok(false);
-    };
-    let Some(mut monitor) = console_monitor.take() else {
-        return Ok(false);
-    };
-    let (ack_tx, ack_rx) = oneshot::channel();
-    control_tx
-        .send(ConsoleControl::PauseForUpgrade { ack_tx })
-        .await
-        .map_err(|_| RuntimeError::Config("failed to pause console for upgrade".to_string()))?;
-    let _ = ack_rx.await;
-    match wait_for_console_loop(&mut monitor).await? {
-        ConsoleLoopExit::PausedForUpgrade | ConsoleLoopExit::ExternalShutdown => Ok(true),
-        ConsoleLoopExit::Detached => Ok(false),
-        ConsoleLoopExit::ShutdownRequested => Err(RuntimeError::Config(
-            "console requested shutdown while pausing for upgrade".to_string(),
-        )),
-        ConsoleLoopExit::NoAdminSurface => Err(RuntimeError::Config(
-            "console lost stdin while pausing for upgrade".to_string(),
-        )),
-    }
-}
-
-fn spawn_console_surface(
-    control_plane: &AdminControlPlaneHandle,
-    surface_control_tx: &mpsc::Sender<ProcessSurfaceCommand>,
-    console_input_mode: ConsoleInputMode,
-    has_other_admin_surface: bool,
-    shutdown_tx: &watch::Sender<bool>,
-    shutdown_rx: &watch::Receiver<bool>,
-    console_control_tx: &mut Option<mpsc::Sender<ConsoleControl>>,
-    console_monitor: &mut Option<tokio::task::JoinHandle<Result<ConsoleLoopExit, RuntimeError>>>,
-) {
-    let (control_tx, monitor) = spawn_console_monitor(
-        control_plane.clone(),
-        surface_control_tx.clone(),
-        console_input_mode,
-        has_other_admin_surface,
-        shutdown_tx.clone(),
-        shutdown_rx.clone(),
-    );
-    *console_control_tx = Some(control_tx);
-    *console_monitor = Some(monitor);
 }
 
 fn selected_server_config_path(env_override: Option<OsString>) -> PathBuf {
@@ -286,8 +82,7 @@ fn upgrade_control_plane(
 async fn run_server_process(
     server: Arc<ServerSupervisor>,
     control_plane: AdminControlPlaneHandle,
-    admin_transport_resume: Option<(std::net::TcpListener, Vec<u8>)>,
-    enable_console: bool,
+    admin_surface_resume: Option<Vec<PausedAdminSurfaceInstance>>,
     mut startup_mode: ProcessStartupMode,
     upgrade_coordinator: Arc<UpgradeCoordinator>,
 ) -> Result<(), RuntimeError> {
@@ -307,40 +102,22 @@ async fn run_server_process(
     upgrade_coordinator
         .set_surface_control_sender(surface_control_tx.clone())
         .await;
-    let mut admin_transport = AdminTransportSupervisor::new(
+
+    let mut admin_surfaces = AdminSurfaceSupervisor::new(
         Arc::clone(&server),
         control_plane.clone(),
-        surface_control_tx.clone(),
+        surface_control_tx,
     );
-    let admin_transport_result = if let Some((listener, resume_payload)) = admin_transport_resume {
-        admin_transport
-            .resume_from_upgrade(listener, resume_payload)
-            .await
+    let startup_result = if let Some(paused_instances) = admin_surface_resume {
+        admin_surfaces.resume_from_upgrade(paused_instances).await
     } else {
-        admin_transport.reconcile().await
+        admin_surfaces.reconcile().await
     };
-    if let Err(error) = admin_transport_result {
+    if let Err(error) = startup_result {
         if let ProcessStartupMode::UpgradeChild(pending_child) = &mut startup_mode {
             let _ = pending_child.report_error(error.to_string()).await;
         }
         return Err(error);
-    }
-    let console_input_mode = console_input_mode();
-    let mut has_other_admin_surface = admin_transport.has_remote_surface();
-    let mut console_control_tx = None;
-    let mut console_monitor = None;
-
-    if matches!(startup_mode, ProcessStartupMode::Normal) && enable_console {
-        spawn_console_surface(
-            &control_plane,
-            &surface_control_tx,
-            console_input_mode,
-            has_other_admin_surface,
-            &shutdown_tx,
-            &shutdown_rx,
-            &mut console_control_tx,
-            &mut console_monitor,
-        );
     }
 
     if let ProcessStartupMode::UpgradeChild(pending_child) = &mut startup_mode {
@@ -351,92 +128,29 @@ async fn run_server_process(
         upgrade::child_upgrade_ready_delay_if_needed().await;
         pending_child.report_ready_and_wait_for_commit().await?;
         server.finish_child_runtime_upgrade_commit().await?;
+        admin_surfaces.activate_after_upgrade_commit()?;
         eprintln!("runtime upgrade phase: child committed cutover");
-        if enable_console {
-            spawn_console_surface(
-                &control_plane,
-                &surface_control_tx,
-                console_input_mode,
-                has_other_admin_surface,
-                &shutdown_tx,
-                &shutdown_rx,
-                &mut console_control_tx,
-                &mut console_monitor,
-            );
-        }
     }
 
     loop {
         tokio::select! {
             Some(surface_command) = surface_control_rx.recv() => {
                 match surface_command {
-                    ProcessSurfaceCommand::PauseForUpgrade { skip_console, ack_tx } => {
-                        let admin_transport_for_child = admin_transport.pause_for_upgrade().await?;
-                        let console_was_paused = if skip_console {
-                            false
-                        } else {
-                            pause_console_for_upgrade(&mut console_control_tx, &mut console_monitor).await?
-                        };
+                    ProcessSurfaceCommand::PauseForUpgrade { ack_tx } => {
+                        let paused = admin_surfaces.pause_for_upgrade().await?;
                         let _ = ack_tx.send(Ok(PausedProcessSurfaces {
-                            admin_transport_for_child,
-                            console_was_paused,
-                            admin_transport_was_paused: has_other_admin_surface,
+                            admin_surfaces: paused,
                         }));
                     }
                     ProcessSurfaceCommand::ResumeAfterUpgradeRollback { paused, ack_tx } => {
-                        if paused.admin_transport_was_paused {
-                            admin_transport.resume_after_upgrade_rollback()?;
-                        }
-                        has_other_admin_surface = admin_transport.has_remote_surface();
-                        if paused.console_was_paused {
-                            spawn_console_surface(
-                                &control_plane,
-                                &surface_control_tx,
-                                console_input_mode,
-                                has_other_admin_surface,
-                                &shutdown_tx,
-                                &shutdown_rx,
-                                &mut console_control_tx,
-                                &mut console_monitor,
-                            );
+                        if !paused.admin_surfaces.is_empty() {
+                            admin_surfaces
+                                .resume_after_upgrade_rollback(paused.admin_surfaces)?;
                         }
                         let _ = ack_tx.send(Ok(()));
                     }
-                    ProcessSurfaceCommand::ReconcileAdminTransport => {
-                        admin_transport.reconcile().await?;
-                        has_other_admin_surface = admin_transport.has_remote_surface();
-                    }
-                }
-            }
-            result = async {
-                let Some(console_monitor) = console_monitor.as_mut() else {
-                    std::future::pending().await
-                };
-                wait_for_console_loop(console_monitor).await
-            } => {
-                match result? {
-                    ConsoleLoopExit::ShutdownRequested => {
-                        let _ = shutdown_tx.send(true);
-                        break;
-                    }
-                    ConsoleLoopExit::Detached => {
-                        console_control_tx = None;
-                        console_monitor = None;
-                    }
-                    ConsoleLoopExit::NoAdminSurface => {
-                        eprintln!(
-                            "stdin reached EOF and no other admin surface is available; shutting down to avoid running headless"
-                        );
-                        let _ = shutdown_tx.send(true);
-                        break;
-                    }
-                    ConsoleLoopExit::ExternalShutdown => {
-                        console_control_tx = None;
-                        console_monitor = None;
-                    }
-                    ConsoleLoopExit::PausedForUpgrade => {
-                        console_control_tx = None;
-                        console_monitor = None;
+                    ProcessSurfaceCommand::ReconcileAdminSurfaces => {
+                        admin_surfaces.reconcile().await?;
                     }
                 }
             }
@@ -460,7 +174,8 @@ async fn run_server_process(
         drop(upgrade_coordinator);
         return Ok(());
     }
-    admin_transport.shutdown_current()?;
+
+    admin_surfaces.shutdown_current()?;
     drop(control_plane);
     drop(upgrade_coordinator);
     let _ = server.request_shutdown();
@@ -472,14 +187,13 @@ async fn main() -> Result<(), RuntimeError> {
     let args = std::env::args().collect::<Vec<_>>();
     if let Some(mut pending_child) = upgrade::try_boot_upgrade_child(&args).await? {
         let server = pending_child.server();
-        let admin_transport_resume = pending_child.take_admin_transport_resume();
+        let admin_surface_resume = pending_child.take_admin_surface_resume();
         let coordinator = Arc::new(UpgradeCoordinator::new(Arc::clone(&server)));
         let control_plane = upgrade_control_plane(&server, &coordinator);
         return run_server_process(
             server,
             control_plane,
-            admin_transport_resume,
-            true,
+            Some(admin_surface_resume),
             ProcessStartupMode::UpgradeChild(pending_child),
             coordinator,
         )
@@ -494,7 +208,6 @@ async fn main() -> Result<(), RuntimeError> {
         server,
         control_plane,
         None,
-        true,
         ProcessStartupMode::Normal,
         coordinator,
     )
@@ -503,40 +216,9 @@ async fn main() -> Result<(), RuntimeError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ConsoleEofAction, ConsoleInputMode, DEFAULT_SERVER_CONFIG_PATH, decide_console_eof_action,
-        selected_server_config_path,
-    };
+    use super::{DEFAULT_SERVER_CONFIG_PATH, selected_server_config_path};
     use std::ffi::OsString;
     use std::path::PathBuf;
-
-    #[test]
-    fn terminal_eof_requests_shutdown() {
-        assert_eq!(
-            decide_console_eof_action(ConsoleInputMode::Terminal, false),
-            ConsoleEofAction::Shutdown
-        );
-        assert_eq!(
-            decide_console_eof_action(ConsoleInputMode::Terminal, true),
-            ConsoleEofAction::Shutdown
-        );
-    }
-
-    #[test]
-    fn non_terminal_eof_detaches_when_another_admin_surface_exists() {
-        assert_eq!(
-            decide_console_eof_action(ConsoleInputMode::NonTerminal, true),
-            ConsoleEofAction::Detach
-        );
-    }
-
-    #[test]
-    fn non_terminal_eof_warns_and_exits_without_other_admin_surface() {
-        assert_eq!(
-            decide_console_eof_action(ConsoleInputMode::NonTerminal, false),
-            ConsoleEofAction::WarnAndExit
-        );
-    }
 
     #[test]
     fn config_path_defaults_to_runtime_server_toml() {

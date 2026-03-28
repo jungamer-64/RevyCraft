@@ -26,11 +26,11 @@ pub type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 static LOG_CAPTURE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-pub const DEFAULT_LOCAL_CONSOLE_PERMISSIONS: &[&str] =
+pub const DEFAULT_CONSOLE_PERMISSIONS: &[&str] =
     &["status", "sessions", "reload-runtime", "shutdown"];
 pub const DEFAULT_REMOTE_PERMISSIONS: &[&str] =
     &["status", "sessions", "reload-runtime", "shutdown"];
-pub const UPGRADE_LOCAL_CONSOLE_PERMISSIONS: &[&str] = &[
+pub const UPGRADE_CONSOLE_PERMISSIONS: &[&str] = &[
     "status",
     "sessions",
     "reload-runtime",
@@ -70,7 +70,7 @@ pub struct ServerTomlOptions<'a> {
     pub auth_profile: &'a str,
     pub extra_plugin_allowlist: &'a [&'a str],
     pub plugins_dir_override: Option<PathBuf>,
-    pub local_console_permissions: &'a [&'a str],
+    pub console_permissions: &'a [&'a str],
     pub remote_permissions: &'a [&'a str],
 }
 
@@ -92,7 +92,7 @@ impl<'a> ServerTomlOptions<'a> {
             auth_profile: "offline-v1",
             extra_plugin_allowlist: &[],
             plugins_dir_override: None,
-            local_console_permissions: DEFAULT_LOCAL_CONSOLE_PERMISSIONS,
+            console_permissions: DEFAULT_CONSOLE_PERMISSIONS,
             remote_permissions: DEFAULT_REMOTE_PERMISSIONS,
         }
     }
@@ -175,6 +175,7 @@ pub fn repo_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 fn runtime_plugin_allowlist<'a>(options: &'a ServerTomlOptions<'a>) -> BTreeSet<&'a str> {
     let mut plugin_allowlist = BTreeSet::from([
+        "admin-ui-console",
         "auth-offline",
         "gameplay-canonical",
         "je-5",
@@ -240,13 +241,22 @@ pub fn write_server_toml_at(
             .collect::<Vec<_>>()
             .join(", ")
     );
+    let console_permissions = format!(
+        "[{}]",
+        options
+            .console_permissions
+            .iter()
+            .map(|permission| toml_string(permission))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let remote_admin_block = if options.remote_admin_enabled {
         let token_path = temp_root.join("admin").join("ops.token");
         fs::create_dir_all(token_path.parent().expect("token parent should exist"))?;
         fs::write(&token_path, format!("{OPS_TOKEN}\n"))?;
-        let transport_config_path = runtime_dir.join("admin-transport-grpc.toml");
+        let grpc_surface_config_path = runtime_dir.join("admin-transport-grpc.toml");
         fs::write(
-            &transport_config_path,
+            &grpc_surface_config_path,
             format!(
                 concat!(
                     "bind_addr = {}\n",
@@ -260,9 +270,9 @@ pub fn write_server_toml_at(
         )?;
         format!(
             concat!(
-                "[static.admin.remote]\n",
-                "transport_profile = \"grpc-v1\"\n",
-                "transport_config = \"admin-transport-grpc.toml\"\n\n",
+                "[live.admin.surfaces.remote]\n",
+                "profile = \"grpc-v1\"\n",
+                "config = \"admin-transport-grpc.toml\"\n\n",
                 "[static.admin.principals.ops]\n",
                 "permissions = {}\n\n",
             ),
@@ -271,15 +281,6 @@ pub fn write_server_toml_at(
     } else {
         String::new()
     };
-    let local_console_permissions = format!(
-        "[{}]",
-        options
-            .local_console_permissions
-            .iter()
-            .map(|permission| toml_string(permission))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
     let plugin_allowlist = format!(
         "[{}]",
         plugin_allowlist
@@ -310,10 +311,13 @@ storage_profile = \"je-anvil-1_7_10\"
 
 [static.plugins]
 plugins_dir = {}
-plugin_abi_min = \"4.0\"
-plugin_abi_max = \"4.0\"
+plugin_abi_min = \"5.0\"
+plugin_abi_max = \"5.0\"
 
 {}\
+[static.admin.principals.\"console:console\"]
+permissions = {}
+
 [live.network]
 server_ip = \"127.0.0.1\"
 server_port = {}
@@ -337,29 +341,27 @@ protocol = \"quarantine\"
 gameplay = \"quarantine\"
 storage = \"fail-fast\"
 auth = \"skip\"
-admin_transport = \"skip\"
-admin_ui = \"skip\"
+admin_surface = \"skip\"
 
 [live.profiles]
 auth = {}
 bedrock_auth = \"bedrock-offline-v1\"
 default_gameplay = \"canonical\"
 
-[live.admin]
-ui_profile = \"console-v1\"
-local_console_permissions = {}
+[live.admin.surfaces.console]
+profile = \"console-v1\"
 ",
             options.online_mode,
             toml_string(&world_dir.display().to_string()),
             toml_string(&plugins_dir.display().to_string()),
             remote_admin_block,
+            console_permissions,
             options.server_port,
             toml_string(options.motd),
             options.bedrock_enabled,
             bedrock_adapter_block,
             plugin_allowlist,
             toml_string(options.auth_profile),
-            local_console_permissions,
         ),
     )?;
     Ok(())
@@ -372,6 +374,7 @@ pub fn prepare_online_auth_runtime_plugins(
     let dist_dir = seed_runtime_plugins(
         temp_root,
         &[
+            "admin-ui-console",
             "admin-transport-grpc",
             "je-5",
             "gameplay-canonical",

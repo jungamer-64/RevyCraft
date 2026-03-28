@@ -1,8 +1,8 @@
 use crate::PluginHostError;
 use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
 pub use crate::host::{
-    InProcessAdminTransportPlugin, InProcessAdminUiPlugin, InProcessAuthPlugin,
-    InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    InProcessAdminSurfacePlugin, InProcessAuthPlugin, InProcessGameplayPlugin,
+    InProcessProtocolPlugin, InProcessStoragePlugin,
 };
 use crate::host::{
     PluginAbiRange, PluginCatalog, PluginFailureMatrix, PluginHost, PluginHostStatusSnapshot,
@@ -10,8 +10,8 @@ use crate::host::{
 };
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use crate::runtime::{
-    AdminTransportProfileHandle, AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle,
-    RuntimePluginHost, RuntimeReloadContext, StorageProfileHandle,
+    AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
+    RuntimeReloadContext, StorageProfileHandle,
 };
 use mc_core::{PluginGenerationId, StorageProfileId};
 use std::sync::Arc;
@@ -27,8 +27,7 @@ pub struct InProcessHostBuildInput {
     pub gameplay_plugins: Vec<InProcessGameplayPlugin>,
     pub storage_plugins: Vec<InProcessStoragePlugin>,
     pub auth_plugins: Vec<InProcessAuthPlugin>,
-    pub admin_transport_plugins: Vec<InProcessAdminTransportPlugin>,
-    pub admin_ui_plugins: Vec<InProcessAdminUiPlugin>,
+    pub admin_surface_plugins: Vec<InProcessAdminSurfacePlugin>,
     pub bootstrap_config: crate::config::BootstrapConfig,
     pub abi_range: PluginAbiRange,
     pub failure_matrix: PluginFailureMatrix,
@@ -56,11 +55,8 @@ pub fn build_in_process_host(input: InProcessHostBuildInput) -> BuiltTestHost {
     for plugin in input.auth_plugins {
         catalog.register_in_process_auth_plugin(plugin);
     }
-    for plugin in input.admin_transport_plugins {
-        catalog.register_in_process_admin_transport_plugin(plugin);
-    }
-    for plugin in input.admin_ui_plugins {
-        catalog.register_in_process_admin_ui_plugin(plugin);
+    for plugin in input.admin_surface_plugins {
+        catalog.register_in_process_admin_surface_plugin(plugin);
     }
     BuiltTestHost {
         inner: Arc::new(PluginHost::new(
@@ -174,23 +170,13 @@ pub fn resolve_auth_profile(
 }
 
 #[must_use]
-pub fn resolve_admin_ui_profile(
+pub fn resolve_admin_surface_profile(
     host: &BuiltTestHost,
     profile_id: &str,
-) -> Option<Arc<dyn AdminUiProfileHandle>> {
+) -> Option<Arc<dyn AdminSurfaceProfileHandle>> {
     host.inner
-        .resolve_admin_ui_profile(profile_id)
-        .map(|profile| profile as Arc<dyn AdminUiProfileHandle>)
-}
-
-#[must_use]
-pub fn resolve_admin_transport_profile(
-    host: &BuiltTestHost,
-    profile_id: &str,
-) -> Option<Arc<dyn AdminTransportProfileHandle>> {
-    host.inner
-        .resolve_admin_transport_profile(profile_id)
-        .map(|profile| profile as Arc<dyn AdminTransportProfileHandle>)
+        .resolve_admin_surface_profile(profile_id)
+        .map(|profile| profile as Arc<dyn AdminSurfaceProfileHandle>)
 }
 
 /// # Errors

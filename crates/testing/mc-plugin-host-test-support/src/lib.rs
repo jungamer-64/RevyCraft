@@ -10,21 +10,20 @@ use mc_plugin_host::__test_hooks::{
     activate_storage_profile, build_in_process_host, discover, load_plugin_set,
     load_protocol_plugin_set, load_protocol_registry, reload_modified,
     reload_modified_with_context, replace_in_process_protocol_plugin,
-    resolve_admin_transport_profile, resolve_admin_ui_profile, resolve_auth_profile,
-    resolve_gameplay_profile, resolve_storage_profile, runtime_host, status,
-    take_pending_fatal_error,
+    resolve_admin_surface_profile, resolve_auth_profile, resolve_gameplay_profile,
+    resolve_storage_profile, runtime_host, status, take_pending_fatal_error,
 };
 use mc_plugin_host::__test_hooks::{
-    InProcessAdminTransportPlugin, InProcessAdminUiPlugin, InProcessAuthPlugin,
-    InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    InProcessAdminSurfacePlugin, InProcessAuthPlugin, InProcessGameplayPlugin,
+    InProcessProtocolPlugin, InProcessStoragePlugin,
 };
 use mc_plugin_host::PluginHostError;
 use mc_plugin_host::config::{BootstrapConfig, RuntimeSelectionConfig};
 pub use mc_plugin_host::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
 use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_host::runtime::{
-    AdminTransportProfileHandle, AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle,
-    RuntimePluginHost, RuntimeReloadContext, StorageProfileHandle,
+    AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
+    RuntimeReloadContext, StorageProfileHandle,
 };
 use std::sync::Arc;
 
@@ -121,19 +120,11 @@ impl TestPluginHost {
     }
 
     #[must_use]
-    pub fn resolve_admin_ui_profile(
+    pub fn resolve_admin_surface_profile(
         &self,
         profile_id: &str,
-    ) -> Option<Arc<dyn AdminUiProfileHandle>> {
-        resolve_admin_ui_profile(&self.inner, profile_id)
-    }
-
-    #[must_use]
-    pub fn resolve_admin_transport_profile(
-        &self,
-        profile_id: &str,
-    ) -> Option<Arc<dyn AdminTransportProfileHandle>> {
-        resolve_admin_transport_profile(&self.inner, profile_id)
+    ) -> Option<Arc<dyn AdminSurfaceProfileHandle>> {
+        resolve_admin_surface_profile(&self.inner, profile_id)
     }
 
     /// # Errors
@@ -175,8 +166,7 @@ pub struct TestPluginHostBuilder {
     gameplay_plugins: Vec<InProcessGameplayPlugin>,
     storage_plugins: Vec<InProcessStoragePlugin>,
     auth_plugins: Vec<InProcessAuthPlugin>,
-    admin_transport_plugins: Vec<InProcessAdminTransportPlugin>,
-    admin_ui_plugins: Vec<InProcessAdminUiPlugin>,
+    admin_surface_plugins: Vec<InProcessAdminSurfacePlugin>,
     bootstrap_config: mc_plugin_host::config::BootstrapConfig,
     abi_range: PluginAbiRange,
     failure_matrix: PluginFailureMatrix,
@@ -213,14 +203,8 @@ impl TestPluginHostBuilder {
     }
 
     #[must_use]
-    pub fn admin_transport_raw(mut self, plugin: InProcessAdminTransportPlugin) -> Self {
-        self.admin_transport_plugins.push(plugin);
-        self
-    }
-
-    #[must_use]
-    pub fn admin_ui_raw(mut self, plugin: InProcessAdminUiPlugin) -> Self {
-        self.admin_ui_plugins.push(plugin);
+    pub fn admin_surface_raw(mut self, plugin: InProcessAdminSurfacePlugin) -> Self {
+        self.admin_surface_plugins.push(plugin);
         self
     }
 
@@ -253,8 +237,7 @@ impl TestPluginHostBuilder {
                 gameplay_plugins: self.gameplay_plugins,
                 storage_plugins: self.storage_plugins,
                 auth_plugins: self.auth_plugins,
-                admin_transport_plugins: self.admin_transport_plugins,
-                admin_ui_plugins: self.admin_ui_plugins,
+                admin_surface_plugins: self.admin_surface_plugins,
                 bootstrap_config: self.bootstrap_config,
                 abi_range: self.abi_range,
                 failure_matrix: self.failure_matrix,
@@ -265,8 +248,8 @@ impl TestPluginHostBuilder {
 
 pub mod raw {
     pub use mc_plugin_host::__test_hooks::{
-        InProcessAdminTransportPlugin, InProcessAdminUiPlugin, InProcessAuthPlugin,
-        InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+        InProcessAdminSurfacePlugin, InProcessAuthPlugin, InProcessGameplayPlugin,
+        InProcessProtocolPlugin, InProcessStoragePlugin,
     };
 }
 

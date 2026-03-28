@@ -89,11 +89,11 @@ cross target build に必要な Rust target component や linker 設定は事前
 
 ## 起動後に見えるもの
 
-起動直後は listener の bind 結果と runtime status summary が標準出力へ出ます。さらに次の admin surface が条件つきで有効になります。
+起動直後は listener の bind 結果と runtime status summary が標準出力へ出ます。さらに config で有効化した admin surface が起動します。
 
-- local console
-  `live.admin.ui_profile` で有効な admin-ui profile が解決できた場合に、stdio 上の line-oriented operator loop が起動します。
-- remote gRPC transport
-  `static.admin.remote.transport_profile = "grpc-v1"` の場合に、admin-transport plugin 経由で unary gRPC control plane が bind されます。
+- console admin surface
+  `[live.admin.surfaces.console]` のように `console-v1` surface を有効化し、`static.admin.principals."console:<instance>"` に permission を与えると、stdio 上の line-oriented console surface が起動します。
+- gRPC admin surface
+  `[live.admin.surfaces.<instance>]` で `profile = "grpc-v1"` と plugin-owned config path を指定すると、gRPC admin surface plugin が unary gRPC control plane を bind します。
 
-console EOF の扱い、permission、reload command、remote admin principal 設定は [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。
+console の stdin EOF はその console surface の入力 loop だけを閉じ、server process 自体は継続します。permission、reload command、principal 設定は [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。

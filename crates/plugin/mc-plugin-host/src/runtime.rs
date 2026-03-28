@@ -4,18 +4,19 @@ use crate::host::PreparedProtocolTopology;
 use crate::host::{PluginFailureAction, PluginHostStatusSnapshot};
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_core::{
-    AdminTransportCapabilitySet, AdminTransportProfileId, AdminUiCapabilitySet, AdminUiProfileId,
-    AuthCapabilitySet, ConnectionId, GameplayCapabilitySet, GameplayCommand, GameplayJournal,
-    GameplayJournalApplyResult, GameplayProfileId, PlayerId, PluginGenerationId, ServerCore,
-    SessionCapabilitySet, StorageCapabilitySet, TargetedEvent, WorldSnapshot,
+    AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapabilitySet, ConnectionId,
+    GameplayCapabilitySet, GameplayCommand, GameplayJournal, GameplayJournalApplyResult,
+    GameplayProfileId, PlayerId, PluginGenerationId, ServerCore, SessionCapabilitySet,
+    StorageCapabilitySet, TargetedEvent, WorldSnapshot,
 };
 use mc_plugin_api::abi::PluginKind;
-use mc_plugin_api::codec::admin_transport::{AdminTransportPauseView, AdminTransportStatusView};
-use mc_plugin_api::codec::admin_ui::{AdminRequest, AdminResponse};
+use mc_plugin_api::codec::admin_surface::{
+    AdminSurfaceInstanceDeclaration, AdminSurfacePauseView, AdminSurfaceStatusView,
+};
 use mc_plugin_api::codec::auth::{AuthMode, BedrockAuthResult};
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
-use mc_plugin_api::host_api::AdminTransportHostApiV1;
+use mc_plugin_api::host_api::AdminSurfaceHostApiV1;
 use mc_proto_common::StorageError;
 use std::any::Any;
 use std::path::Path;
@@ -240,55 +241,57 @@ pub trait AuthProfileHandle: Send + Sync {
     ) -> Result<BedrockAuthResult, PluginHostError>;
 }
 
-pub trait AdminTransportProfileHandle: Send + Sync {
-    fn profile_id(&self) -> &AdminTransportProfileId;
+pub trait AdminSurfaceProfileHandle: Send + Sync {
+    fn profile_id(&self) -> &AdminSurfaceProfileId;
 
-    fn capability_set(&self) -> AdminTransportCapabilitySet;
+    fn capability_set(&self) -> AdminSurfaceCapabilitySet;
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
+
+    fn declare_instance(
+        &self,
+        instance_id: &str,
+        surface_config_path: Option<&Path>,
+    ) -> Result<AdminSurfaceInstanceDeclaration, PluginHostError>;
 
     fn start(
         &self,
-        transport_config_path: &Path,
-        host_api: AdminTransportHostApiV1,
-    ) -> Result<AdminTransportStatusView, PluginHostError>;
+        instance_id: &str,
+        surface_config_path: Option<&Path>,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<AdminSurfaceStatusView, PluginHostError>;
 
     fn pause_for_upgrade(
         &self,
-        host_api: AdminTransportHostApiV1,
-    ) -> Result<AdminTransportPauseView, PluginHostError>;
+        instance_id: &str,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<AdminSurfacePauseView, PluginHostError>;
 
     fn resume_from_upgrade(
         &self,
-        transport_config_path: &Path,
+        instance_id: &str,
+        surface_config_path: Option<&Path>,
         resume_payload: &[u8],
-        host_api: AdminTransportHostApiV1,
-    ) -> Result<AdminTransportStatusView, PluginHostError>;
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<AdminSurfaceStatusView, PluginHostError>;
+
+    fn activate_after_upgrade_commit(
+        &self,
+        instance_id: &str,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<(), PluginHostError>;
 
     fn resume_after_upgrade_rollback(
         &self,
-        host_api: AdminTransportHostApiV1,
-    ) -> Result<AdminTransportStatusView, PluginHostError>;
+        instance_id: &str,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<AdminSurfaceStatusView, PluginHostError>;
 
-    fn shutdown(&self, host_api: AdminTransportHostApiV1) -> Result<(), PluginHostError>;
-}
-
-pub trait AdminUiProfileHandle: Send + Sync {
-    fn profile_id(&self) -> &AdminUiProfileId;
-
-    fn capability_set(&self) -> AdminUiCapabilitySet;
-
-    fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
-
-    /// # Errors
-    ///
-    /// Returns [`PluginHostError`] when the UI cannot parse the provided line.
-    fn parse_line(&self, line: &str) -> Result<AdminRequest, PluginHostError>;
-
-    /// # Errors
-    ///
-    /// Returns [`PluginHostError`] when the UI cannot render the provided response.
-    fn render_response(&self, response: &AdminResponse) -> Result<String, PluginHostError>;
+    fn shutdown(
+        &self,
+        instance_id: &str,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<(), PluginHostError>;
 }
 
 pub struct RuntimeProtocolTopologyCandidate {

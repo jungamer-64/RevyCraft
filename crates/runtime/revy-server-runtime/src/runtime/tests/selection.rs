@@ -37,13 +37,15 @@ fn selection_resolver_bootstrap_matches_reload_resolution() -> Result<(), Runtim
     assert_eq!(
         bootstrap
             .selection
-            .admin_ui
-            .as_ref()
-            .map(|profile| profile.profile_id().clone()),
+            .admin_surfaces
+            .iter()
+            .map(|surface| surface.profile.profile_id().clone())
+            .collect::<Vec<_>>(),
         reload
-            .admin_ui
-            .as_ref()
-            .map(|profile| profile.profile_id().clone()),
+            .admin_surfaces
+            .iter()
+            .map(|surface| surface.profile.profile_id().clone())
+            .collect::<Vec<_>>(),
     );
     assert_eq!(
         bootstrap

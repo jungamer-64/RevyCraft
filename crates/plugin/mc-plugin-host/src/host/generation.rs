@@ -1,19 +1,17 @@
 use super::{
-    AdminRequest, AdminResponse, AdminTransportCapabilitySet, AdminTransportHostApiV1,
-    AdminTransportPauseView, AdminTransportPluginInvokeV1Fn, AdminTransportProfileId,
-    AdminTransportRequest, AdminTransportResponse, AdminTransportStatusView, AdminUiCapabilitySet,
-    AdminUiInput, AdminUiOutput, AdminUiPluginInvokeV1Fn, AdminUiProfileId, Arc, AuthCapabilitySet,
+    AdminSurfaceCapabilitySet, AdminSurfaceHostApiV1, AdminSurfaceInstanceDeclaration,
+    AdminSurfacePauseView, AdminSurfacePluginInvokeV1Fn, AdminSurfaceProfileId,
+    AdminSurfaceRequest, AdminSurfaceResponse, AdminSurfaceStatusView, Arc, AuthCapabilitySet,
     AuthGenerationHandle, AuthMode, AuthProfileId, AuthRequest, AuthResponse, BedrockAuthResult,
     BedrockListenerDescriptor, ByteSlice, GameplayCapabilitySet, GameplayPluginInvokeV3Fn,
     GameplayProfileId, GameplayRequest, GameplayResponse, Library, Mutex, OwnedBuffer, PlayerId,
     PluginBuildTag, PluginErrorCode, PluginFreeBufferFn, PluginGenerationId, PluginInvokeFn,
     ProtocolCapabilitySet, ProtocolDescriptor, ProtocolError, ProtocolRequest, ProtocolResponse,
     RuntimeError, StorageCapabilitySet, StorageError, StorageProfileId, StorageRequest,
-    StorageResponse, admin_ui_host_api, decode_admin_transport_response, decode_admin_ui_output,
-    decode_auth_response, decode_gameplay_response, decode_protocol_response,
-    decode_storage_response, encode_admin_transport_request, encode_admin_ui_input,
-    encode_auth_request, encode_gameplay_request, encode_protocol_request, encode_storage_request,
-    take_owned_buffer,
+    StorageResponse, admin_surface_host_api, decode_admin_surface_response, decode_auth_response,
+    decode_gameplay_response, decode_protocol_response, decode_storage_response,
+    encode_admin_surface_request, encode_auth_request, encode_gameplay_request,
+    encode_protocol_request, encode_storage_request, take_owned_buffer,
 };
 use crate::config::PluginBufferLimits;
 
@@ -238,27 +236,14 @@ pub(crate) struct AuthGeneration {
 }
 
 #[derive(Clone)]
-pub(crate) struct AdminTransportGeneration {
+pub(crate) struct AdminSurfaceGeneration {
     pub(crate) generation_id: PluginGenerationId,
     pub(crate) plugin_id: String,
-    pub(crate) profile_id: AdminTransportProfileId,
-    pub(crate) capabilities: AdminTransportCapabilitySet,
+    pub(crate) profile_id: AdminSurfaceProfileId,
+    pub(crate) capabilities: AdminSurfaceCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) invoke: AdminTransportPluginInvokeV1Fn,
-    pub(crate) free_buffer: PluginFreeBufferFn,
-    pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
-}
-
-#[derive(Clone)]
-pub(crate) struct AdminUiGeneration {
-    pub(crate) generation_id: PluginGenerationId,
-    pub(crate) plugin_id: String,
-    pub(crate) profile_id: AdminUiProfileId,
-    pub(crate) capabilities: AdminUiCapabilitySet,
-    pub(crate) buffer_limits: PluginBufferLimits,
-    pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) invoke: AdminUiPluginInvokeV1Fn,
+    pub(crate) invoke: AdminSurfacePluginInvokeV1Fn,
     pub(crate) free_buffer: PluginFreeBufferFn,
     pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
 }
@@ -370,14 +355,14 @@ impl AuthGeneration {
     }
 }
 
-impl AdminTransportGeneration {
+impl AdminSurfaceGeneration {
     pub(crate) fn invoke(
         &self,
-        request: &AdminTransportRequest,
-        host_api: AdminTransportHostApiV1,
-    ) -> Result<AdminTransportResponse, String> {
+        request: &AdminSurfaceRequest,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<AdminSurfaceResponse, String> {
         let request_bytes =
-            encode_admin_transport_request(request).map_err(|error| error.to_string())?;
+            encode_admin_surface_request(request).map_err(|error| error.to_string())?;
         let mut output = OwnedBuffer::empty();
         let mut error = OwnedBuffer::empty();
         let status = unsafe {
@@ -404,135 +389,138 @@ impl AdminTransportGeneration {
         let response_bytes = take_owned_buffer(
             self.free_buffer,
             output,
-            self.buffer_limits.admin_ui_response_bytes,
-            "admin-transport response buffer",
+            self.buffer_limits.admin_surface_response_bytes,
+            "admin-surface response buffer",
         )?;
-        decode_admin_transport_response(request, &response_bytes).map_err(|error| error.to_string())
+        decode_admin_surface_response(request, &response_bytes).map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn declare_instance(
+        &self,
+        instance_id: &str,
+        surface_config_path: Option<&std::path::Path>,
+    ) -> Result<AdminSurfaceInstanceDeclaration, String> {
+        match self.invoke(
+            &AdminSurfaceRequest::DeclareInstance {
+                instance_id: instance_id.to_string(),
+                surface_config_path: surface_config_path.map(|path| path.display().to_string()),
+            },
+            admin_surface_host_api(),
+        )? {
+            AdminSurfaceResponse::Declared(declaration) => Ok(declaration),
+            other => Err(format!(
+                "unexpected admin-surface declaration payload: {other:?}"
+            )),
+        }
     }
 
     pub(crate) fn start(
         &self,
-        transport_config_path: &std::path::Path,
-        host_api: AdminTransportHostApiV1,
-    ) -> Result<AdminTransportStatusView, String> {
+        instance_id: &str,
+        surface_config_path: Option<&std::path::Path>,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<AdminSurfaceStatusView, String> {
         match self.invoke(
-            &AdminTransportRequest::Start {
-                transport_config_path: transport_config_path.display().to_string(),
+            &AdminSurfaceRequest::Start {
+                instance_id: instance_id.to_string(),
+                surface_config_path: surface_config_path.map(|path| path.display().to_string()),
             },
             host_api,
         )? {
-            AdminTransportResponse::Started(status) => Ok(status),
-            other => Err(format!(
-                "unexpected admin-transport start payload: {other:?}"
-            )),
+            AdminSurfaceResponse::Started(status) => Ok(status),
+            other => Err(format!("unexpected admin-surface start payload: {other:?}")),
         }
     }
 
     pub(crate) fn pause_for_upgrade(
         &self,
-        host_api: AdminTransportHostApiV1,
-    ) -> Result<AdminTransportPauseView, String> {
-        match self.invoke(&AdminTransportRequest::PauseForUpgrade, host_api)? {
-            AdminTransportResponse::Paused(view) => Ok(view),
-            other => Err(format!(
-                "unexpected admin-transport pause payload: {other:?}"
-            )),
+        instance_id: &str,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<AdminSurfacePauseView, String> {
+        match self.invoke(
+            &AdminSurfaceRequest::PauseForUpgrade {
+                instance_id: instance_id.to_string(),
+            },
+            host_api,
+        )? {
+            AdminSurfaceResponse::Paused(view) => Ok(view),
+            other => Err(format!("unexpected admin-surface pause payload: {other:?}")),
         }
     }
 
     pub(crate) fn resume_from_upgrade(
         &self,
-        transport_config_path: &std::path::Path,
+        instance_id: &str,
+        surface_config_path: Option<&std::path::Path>,
         resume_payload: &[u8],
-        host_api: AdminTransportHostApiV1,
-    ) -> Result<AdminTransportStatusView, String> {
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<AdminSurfaceStatusView, String> {
         match self.invoke(
-            &AdminTransportRequest::ResumeFromUpgrade {
-                transport_config_path: transport_config_path.display().to_string(),
+            &AdminSurfaceRequest::ResumeFromUpgrade {
+                instance_id: instance_id.to_string(),
+                surface_config_path: surface_config_path.map(|path| path.display().to_string()),
                 resume_payload: resume_payload.to_vec(),
             },
             host_api,
         )? {
-            AdminTransportResponse::Resumed(status) => Ok(status),
+            AdminSurfaceResponse::Resumed(status) => Ok(status),
             other => Err(format!(
-                "unexpected admin-transport resume payload: {other:?}"
+                "unexpected admin-surface resume payload: {other:?}"
+            )),
+        }
+    }
+
+    pub(crate) fn activate_after_upgrade_commit(
+        &self,
+        instance_id: &str,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<(), String> {
+        match self.invoke(
+            &AdminSurfaceRequest::ActivateAfterUpgradeCommit {
+                instance_id: instance_id.to_string(),
+            },
+            host_api,
+        )? {
+            AdminSurfaceResponse::Activated => Ok(()),
+            other => Err(format!(
+                "unexpected admin-surface activation payload: {other:?}"
             )),
         }
     }
 
     pub(crate) fn resume_after_upgrade_rollback(
         &self,
-        host_api: AdminTransportHostApiV1,
-    ) -> Result<AdminTransportStatusView, String> {
-        match self.invoke(&AdminTransportRequest::ResumeAfterUpgradeRollback, host_api)? {
-            AdminTransportResponse::ResumedAfterRollback(status) => Ok(status),
+        instance_id: &str,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<AdminSurfaceStatusView, String> {
+        match self.invoke(
+            &AdminSurfaceRequest::ResumeAfterUpgradeRollback {
+                instance_id: instance_id.to_string(),
+            },
+            host_api,
+        )? {
+            AdminSurfaceResponse::ResumedAfterRollback(status) => Ok(status),
             other => Err(format!(
-                "unexpected admin-transport rollback resume payload: {other:?}"
+                "unexpected admin-surface rollback resume payload: {other:?}"
             )),
         }
     }
 
-    pub(crate) fn shutdown(&self, host_api: AdminTransportHostApiV1) -> Result<(), String> {
-        match self.invoke(&AdminTransportRequest::Shutdown, host_api)? {
-            AdminTransportResponse::ShutdownComplete => Ok(()),
+    pub(crate) fn shutdown(
+        &self,
+        instance_id: &str,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<(), String> {
+        match self.invoke(
+            &AdminSurfaceRequest::Shutdown {
+                instance_id: instance_id.to_string(),
+            },
+            host_api,
+        )? {
+            AdminSurfaceResponse::ShutdownComplete => Ok(()),
             other => Err(format!(
-                "unexpected admin-transport shutdown payload: {other:?}"
+                "unexpected admin-surface shutdown payload: {other:?}"
             )),
-        }
-    }
-}
-
-impl AdminUiGeneration {
-    fn invoke(&self, request: &AdminUiInput) -> Result<AdminUiOutput, String> {
-        let request_bytes = encode_admin_ui_input(request).map_err(|error| error.to_string())?;
-        let mut output = OwnedBuffer::empty();
-        let mut error = OwnedBuffer::empty();
-        let host_api = admin_ui_host_api();
-        let status = unsafe {
-            (self.invoke)(
-                ByteSlice {
-                    ptr: request_bytes.as_ptr(),
-                    len: request_bytes.len(),
-                },
-                &raw const host_api,
-                &raw mut output,
-                &raw mut error,
-            )
-        };
-        if status != PluginErrorCode::Ok {
-            return Err(decode_plugin_error(
-                &self.plugin_id,
-                status,
-                self.free_buffer,
-                error,
-                self.buffer_limits.metadata_bytes,
-            ));
-        }
-
-        let response_bytes = take_owned_buffer(
-            self.free_buffer,
-            output,
-            self.buffer_limits.admin_ui_response_bytes,
-            "admin-ui response buffer",
-        )?;
-        decode_admin_ui_output(request, &response_bytes).map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn parse_line(&self, line: &str) -> Result<AdminRequest, String> {
-        match self.invoke(&AdminUiInput::ParseLine {
-            line: line.to_string(),
-        })? {
-            AdminUiOutput::ParsedRequest(request) => Ok(request),
-            other => Err(format!("unexpected admin-ui parse payload: {other:?}")),
-        }
-    }
-
-    pub(crate) fn render_response(&self, response: &AdminResponse) -> Result<String, String> {
-        match self.invoke(&AdminUiInput::RenderResponse {
-            response: response.clone(),
-        })? {
-            AdminUiOutput::RenderedText(text) => Ok(text),
-            other => Err(format!("unexpected admin-ui render payload: {other:?}")),
         }
     }
 }

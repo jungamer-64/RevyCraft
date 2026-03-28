@@ -10,7 +10,7 @@
 | `gameplay` | semantic な `GameplayCommand` を評価し、host transaction API 経由で world / player を更新する | `live.profiles.default_gameplay` / `gameplay_map` |
 | `storage` | world snapshot の load / save / import / export | `static.bootstrap.storage_profile` |
 | `auth` | Java offline / online、Bedrock offline / XBL 認証 | `live.profiles.auth` / `bedrock_auth` |
-| `admin-ui` | local console line の parse / render | `live.admin.ui_profile` |
+| `admin-surface` | console / gRPC などの operator surface、identity mapping、surface-owned config と process resource の利用 | `live.admin.surfaces.<instance>` |
 
 ## packaged layout
 
@@ -72,7 +72,7 @@ host は load 後に 3 つの情報を付き合わせます。
 
 現在の実装で重要なのは次です。
 
-- gameplay / storage / auth / admin-ui
+- gameplay / storage / auth / admin-surface
   embedded manifest の profile id と descriptor の profile id が一致している必要がある
 - auth
   auth mode は descriptor 側にあり、embedded manifest 側には入らない
@@ -95,8 +95,8 @@ runtime がどの plugin を実際に使うかは config で決まります。
   `static.bootstrap.storage_profile`
 - auth
   `auth` と `bedrock_auth`
-- admin-ui
-  `ui_profile`
+- admin-surface
+  `live.admin.surfaces.<instance>.profile`
 
 profile id を新しく増やす plugin は、manifest / descriptor / config の 3 箇所で同じ id を使うことが前提です。
 
@@ -111,6 +111,6 @@ profile id を新しく増やす plugin は、manifest / descriptor / config の
 - `plugins/auth/mc-plugin-auth-offline`
   Java offline auth plugin の例
 - `plugins/admin-ui/mc-plugin-admin-ui-console`
-  `console-v1` admin-ui profile の例
+  historical package 名のまま残っている `console-v1` admin surface plugin の例
 
-Rust からの実装方法、`StaticPluginManifest`、macro、ABI `4.0` の詳細は [`rust-sdk-and-manifest.md`](rust-sdk-and-manifest.md) を参照してください。
+Rust からの実装方法、`StaticPluginManifest`、macro、ABI `5.0` の詳細は [`rust-sdk-and-manifest.md`](rust-sdk-and-manifest.md) を参照してください。

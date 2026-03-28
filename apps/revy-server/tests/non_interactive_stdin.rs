@@ -10,7 +10,7 @@ use support::*;
 use tempfile::tempdir;
 
 #[test]
-fn stdin_null_with_remote_admin_transport_keeps_server_running()
+fn stdin_null_with_grpc_admin_surface_keeps_server_running()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let repo_root = repo_root()?;
@@ -21,7 +21,7 @@ fn stdin_null_with_remote_admin_transport_keeps_server_running()
         temp_dir.path(),
         &repo_root,
         &world_dir,
-        &ServerTomlOptions::new(true, 0, remote_admin_port, "stdin-null-remote-admin"),
+        &ServerTomlOptions::new(true, 0, remote_admin_port, "stdin-null-grpc-admin-surface"),
     )?;
 
     let mut child = spawn_server(temp_dir.path(), Stdio::null(), Stdio::null(), Stdio::null())?;
@@ -37,8 +37,7 @@ fn stdin_null_with_remote_admin_transport_keeps_server_running()
 }
 
 #[test]
-fn stdin_null_without_other_admin_surface_warns_and_exits() -> Result<(), Box<dyn std::error::Error>>
-{
+fn stdin_null_with_console_only_keeps_server_running() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let repo_root = repo_root()?;
     let world_dir = temp_dir.path().join("world");
@@ -47,7 +46,7 @@ fn stdin_null_without_other_admin_surface_warns_and_exits() -> Result<(), Box<dy
         temp_dir.path(),
         &repo_root,
         &world_dir,
-        &ServerTomlOptions::new(false, 0, 50051, "stdin-null-no-admin"),
+        &ServerTomlOptions::new(false, 0, 50051, "stdin-null-console-only"),
     )?;
 
     let mut child = spawn_server(
@@ -57,19 +56,19 @@ fn stdin_null_without_other_admin_surface_warns_and_exits() -> Result<(), Box<dy
         Stdio::piped(),
     )?;
 
-    let Some(_status) = wait_for_exit(&mut child, Duration::from_secs(2))? else {
-        child.kill()?;
-        let _ = child.wait()?;
-        return Err("server did not exit after stdin EOF without another admin surface".into());
-    };
-    let (_stdout, stderr) = read_child_output(&mut child)?;
-    assert!(stderr.contains("stdin reached EOF and no other admin surface is available"));
+    thread::sleep(Duration::from_millis(500));
+    if let Some(status) = child.try_wait()? {
+        let (_stdout, stderr) = read_child_output(&mut child)?;
+        return Err(format!("server exited early with status {status}; stderr={stderr}").into());
+    }
+
+    child.kill()?;
+    let _ = child.wait()?;
     Ok(())
 }
 
 #[test]
-fn piped_status_command_detaches_after_eof_when_remote_admin_transport_is_available()
--> Result<(), Box<dyn std::error::Error>> {
+fn piped_status_command_keeps_server_running_after_eof() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let repo_root = repo_root()?;
     let remote_admin_port = reserve_port()?;
@@ -79,7 +78,7 @@ fn piped_status_command_detaches_after_eof_when_remote_admin_transport_is_availa
         temp_dir.path(),
         &repo_root,
         &world_dir,
-        &ServerTomlOptions::new(true, 0, remote_admin_port, "stdin-pipe-remote-admin"),
+        &ServerTomlOptions::new(true, 0, remote_admin_port, "stdin-pipe-grpc-admin-surface"),
     )?;
 
     let mut child = spawn_server(
@@ -102,13 +101,16 @@ fn piped_status_command_detaches_after_eof_when_remote_admin_transport_is_availa
     child.kill()?;
     let _ = child.wait()?;
     let (stdout, _stderr) = read_child_output(&mut child)?;
-    assert!(stdout.contains("status: generation="));
+    assert!(
+        stdout.contains("runtime active-generation="),
+        "expected console status output after EOF; stdout={stdout}"
+    );
     Ok(())
 }
 
 #[cfg(unix)]
 #[test]
-fn runtime_failure_exits_even_when_remote_admin_transport_is_available()
+fn runtime_failure_exits_even_when_grpc_admin_surface_is_available()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let repo_root = repo_root()?;
@@ -125,7 +127,7 @@ fn runtime_failure_exits_even_when_remote_admin_transport_is_available()
             true,
             server_port,
             remote_admin_port,
-            "runtime-failure-remote-admin",
+            "runtime-failure-grpc-admin-surface",
         ),
     )?;
 

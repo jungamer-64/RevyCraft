@@ -1,4 +1,4 @@
-use super::{__macro_support, admin_ui, capabilities, gameplay, manifest, protocol};
+use super::{__macro_support, admin_surface, capabilities, gameplay, manifest, protocol};
 use bytes::BytesMut;
 use mc_core::{
     BlockPos, CapabilityAnnouncement, CoreEvent, DimensionId, GameplayCapability,
@@ -6,16 +6,20 @@ use mc_core::{
     RuntimeCommand, WorldMeta,
 };
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
-use mc_plugin_api::codec::admin_ui::{
-    AdminPermission, AdminPrincipal, AdminRequest, AdminResponse, AdminUiDescriptor, AdminUiInput,
-    AdminUiOutput, decode_admin_ui_output, encode_admin_ui_input,
+use mc_plugin_api::codec::admin::AdminPermission;
+use mc_plugin_api::codec::admin_surface::{
+    AdminSurfaceDescriptor, AdminSurfaceEndpointView, AdminSurfaceInstanceDeclaration,
+    AdminSurfacePauseView, AdminSurfaceRequest, AdminSurfaceResponse, AdminSurfaceStatusView,
+    decode_admin_surface_response, encode_admin_surface_request,
 };
 use mc_plugin_api::codec::gameplay::{
     GameplayDescriptor, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
     decode_gameplay_response, encode_gameplay_request, host_blob::encode_world_meta,
 };
 use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse, WireFrameDecodeResult};
-use mc_plugin_api::host_api::{GameplayHostApiV2, GameplayPluginApiV3, HostApiTableV1};
+use mc_plugin_api::host_api::{
+    AdminSurfaceHostApiV1, AdminSurfacePluginApiV1, GameplayHostApiV2, GameplayPluginApiV3,
+};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest, PlayEncodingContext,
     ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
@@ -93,16 +97,36 @@ fn gameplay_host_api_for(context: &TestHostContext) -> GameplayHostApiV2 {
     }
 }
 
-fn admin_ui_host_api_for(context: &TestHostContext) -> HostApiTableV1 {
-    HostApiTableV1 {
+unsafe extern "C" fn host_admin_surface_permissions(
+    context: *mut c_void,
+    _principal_id: mc_plugin_api::abi::Utf8Slice,
+    output: *mut OwnedBuffer,
+    error_out: *mut OwnedBuffer,
+) -> PluginErrorCode {
+    let Some(context) = (unsafe { (context as *const TestHostContext).as_ref() }) else {
+        write_test_buffer(error_out, b"missing host context".to_vec());
+        return PluginErrorCode::InvalidInput;
+    };
+    let permissions = match context.level_name {
+        "host-a" => vec![AdminPermission::Status],
+        "host-b" => vec![AdminPermission::Shutdown],
+        _ => vec![AdminPermission::Sessions],
+    };
+    let bytes = serde_json::to_vec(&permissions).expect("permissions should encode");
+    write_test_buffer(output, bytes);
+    PluginErrorCode::Ok
+}
+
+fn admin_surface_host_api_for(context: &TestHostContext) -> AdminSurfaceHostApiV1 {
+    AdminSurfaceHostApiV1 {
         abi: CURRENT_PLUGIN_ABI,
         context: std::ptr::from_ref(context).cast_mut().cast(),
         log: None,
-        read_player_snapshot: None,
-        read_world_meta: Some(host_read_world_meta),
-        read_block_state: None,
-        read_block_entity: None,
-        can_edit_block: None,
+        execute: None,
+        permissions: Some(host_admin_surface_permissions),
+        take_process_resource: None,
+        publish_handoff_resource: None,
+        take_handoff_resource: None,
     }
 }
 
@@ -470,52 +494,94 @@ mod plugin_b {
 }
 
 #[allow(unexpected_cfgs)]
-mod console_admin_ui_plugin {
+mod test_admin_surface_plugin {
     use super::*;
     use crate::export_plugin;
 
     #[derive(Default)]
-    pub struct ConsoleAdminUiPlugin;
+    pub struct TestAdminSurfacePlugin;
 
-    impl admin_ui::RustAdminUiPlugin for ConsoleAdminUiPlugin {
-        fn descriptor(&self) -> AdminUiDescriptor {
-            AdminUiDescriptor {
-                ui_profile: "console-v1".into(),
-            }
+    impl admin_surface::RustAdminSurfacePlugin for TestAdminSurfacePlugin {
+        fn descriptor(&self) -> AdminSurfaceDescriptor {
+            admin_surface::admin_surface_descriptor("console-v1")
         }
 
-        fn parse_line(&self, line: &str) -> Result<AdminRequest, String> {
-            match line.trim() {
-                "status" => Ok(AdminRequest::Status),
-                "help" => Ok(AdminRequest::Help),
-                other => Err(format!("unknown command `{other}`")),
-            }
-        }
-
-        fn render_response(&self, response: &AdminResponse) -> Result<String, String> {
-            Ok(match response {
-                AdminResponse::Status(_) => "status".to_string(),
-                AdminResponse::Help => "help".to_string(),
-                AdminResponse::PermissionDenied {
-                    principal,
-                    permission,
-                } => format!(
-                    "permission denied: principal={} permission={}",
-                    principal.as_str(),
-                    permission.as_str()
-                ),
-                other => format!("{other:?}"),
+        fn declare_instance(
+            &self,
+            _instance_id: &str,
+            _surface_config_path: Option<&str>,
+        ) -> Result<AdminSurfaceInstanceDeclaration, String> {
+            Ok(AdminSurfaceInstanceDeclaration {
+                principals: Vec::new(),
+                required_process_resources: Vec::new(),
+                supports_upgrade_handoff: false,
             })
+        }
+
+        fn start(
+            &self,
+            instance_id: &str,
+            host: admin_surface::SdkAdminSurfaceHost,
+            _surface_config_path: Option<&str>,
+        ) -> Result<AdminSurfaceStatusView, String> {
+            let local_addr =
+                crate::admin_surface::AdminSurfaceHost::permissions(&host, instance_id)?
+                    .first()
+                    .map(|permission| permission.as_str())
+                    .unwrap_or("none")
+                    .to_string();
+            Ok(AdminSurfaceStatusView {
+                endpoints: vec![AdminSurfaceEndpointView {
+                    surface: instance_id.to_string(),
+                    local_addr,
+                }],
+            })
+        }
+
+        fn pause_for_upgrade(
+            &self,
+            _instance_id: &str,
+            _host: admin_surface::SdkAdminSurfaceHost,
+        ) -> Result<AdminSurfacePauseView, String> {
+            Ok(AdminSurfacePauseView {
+                resume_payload: b"paused".to_vec(),
+            })
+        }
+
+        fn resume_from_upgrade(
+            &self,
+            instance_id: &str,
+            host: admin_surface::SdkAdminSurfaceHost,
+            _surface_config_path: Option<&str>,
+            _resume_payload: &[u8],
+        ) -> Result<AdminSurfaceStatusView, String> {
+            self.start(instance_id, host, None)
+        }
+
+        fn resume_after_upgrade_rollback(
+            &self,
+            instance_id: &str,
+            host: admin_surface::SdkAdminSurfaceHost,
+        ) -> Result<AdminSurfaceStatusView, String> {
+            self.start(instance_id, host, None)
+        }
+
+        fn shutdown(
+            &self,
+            _instance_id: &str,
+            _host: admin_surface::SdkAdminSurfaceHost,
+        ) -> Result<(), String> {
+            Ok(())
         }
     }
 
-    const MANIFEST: manifest::StaticPluginManifest = manifest::StaticPluginManifest::admin_ui(
-        "admin-ui-test",
-        "Admin UI Test Plugin",
+    const MANIFEST: manifest::StaticPluginManifest = manifest::StaticPluginManifest::admin_surface(
+        "admin-surface-test",
+        "Admin Surface Test Plugin",
         "console-v1",
     );
 
-    export_plugin!(admin_ui, ConsoleAdminUiPlugin, MANIFEST);
+    export_plugin!(admin_surface, TestAdminSurfacePlugin, MANIFEST);
 }
 
 #[allow(unexpected_cfgs)]
@@ -693,12 +759,13 @@ unsafe fn invoke_gameplay(
     decode_gameplay_response(request, &bytes).expect("gameplay response should decode")
 }
 
-unsafe fn invoke_admin_ui(
-    api: &mc_plugin_api::host_api::AdminUiPluginApiV1,
-    host_api: Option<&HostApiTableV1>,
-    request: &AdminUiInput,
-) -> AdminUiOutput {
-    let payload = encode_admin_ui_input(request).expect("admin-ui request should encode");
+unsafe fn invoke_admin_surface(
+    api: &AdminSurfacePluginApiV1,
+    host_api: Option<&AdminSurfaceHostApiV1>,
+    request: &AdminSurfaceRequest,
+) -> AdminSurfaceResponse {
+    let payload =
+        encode_admin_surface_request(request).expect("admin-surface request should encode");
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
@@ -728,7 +795,7 @@ unsafe fn invoke_admin_ui(
     unsafe {
         (api.free_buffer)(output);
     }
-    decode_admin_ui_output(request, &bytes).expect("admin-ui response should decode")
+    decode_admin_surface_response(request, &bytes).expect("admin-surface response should decode")
 }
 
 #[test]
@@ -837,60 +904,72 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
-        "gameplay host api ABI 2.0 did not match plugin ABI 4.0"
+        format!(
+            "gameplay host api ABI 2.0 did not match plugin ABI {}",
+            CURRENT_PLUGIN_ABI
+        )
     );
 }
 
 #[test]
-fn exported_admin_ui_plugins_parse_and_render_round_trip() {
+fn exported_admin_surface_plugins_start_round_trip_uses_host_api_callbacks() {
     let context_a = TestHostContext {
         level_name: "host-a",
     };
     let context_b = TestHostContext {
         level_name: "host-b",
     };
-    let host_api_a = admin_ui_host_api_for(&context_a);
-    let host_api_b = admin_ui_host_api_for(&context_b);
-    let entrypoints = console_admin_ui_plugin::in_process_plugin_entrypoints();
+    let host_api_a = admin_surface_host_api_for(&context_a);
+    let host_api_b = admin_surface_host_api_for(&context_b);
+    let entrypoints = test_admin_surface_plugin::in_process_plugin_entrypoints();
 
     assert_eq!(
         unsafe {
-            invoke_admin_ui(
+            invoke_admin_surface(
                 entrypoints.api,
                 Some(&host_api_a),
-                &AdminUiInput::ParseLine {
-                    line: "status".to_string(),
+                &AdminSurfaceRequest::Start {
+                    instance_id: "console-a".to_string(),
+                    surface_config_path: None,
                 },
             )
         },
-        AdminUiOutput::ParsedRequest(AdminRequest::Status)
+        AdminSurfaceResponse::Started(AdminSurfaceStatusView {
+            endpoints: vec![AdminSurfaceEndpointView {
+                surface: "console-a".to_string(),
+                local_addr: "status".to_string(),
+            }],
+        })
     );
     assert_eq!(
         unsafe {
-            invoke_admin_ui(
+            invoke_admin_surface(
                 entrypoints.api,
                 Some(&host_api_b),
-                &AdminUiInput::RenderResponse {
-                    response: AdminResponse::PermissionDenied {
-                        principal: AdminPrincipal::LocalConsole,
-                        permission: AdminPermission::ReloadRuntime,
-                    },
+                &AdminSurfaceRequest::Start {
+                    instance_id: "console-b".to_string(),
+                    surface_config_path: None,
                 },
             )
         },
-        AdminUiOutput::RenderedText(
-            "permission denied: principal=local-console permission=reload-runtime".to_string()
-        )
+        AdminSurfaceResponse::Started(AdminSurfaceStatusView {
+            endpoints: vec![AdminSurfaceEndpointView {
+                surface: "console-b".to_string(),
+                local_addr: "shutdown".to_string(),
+            }],
+        })
     );
 }
 
 #[test]
-fn exported_admin_ui_plugins_reject_null_host_api() {
-    let entrypoints = console_admin_ui_plugin::in_process_plugin_entrypoints();
-    let request = AdminUiInput::ParseLine {
-        line: "status".to_string(),
+fn exported_admin_surface_plugins_reject_null_host_api() {
+    let entrypoints = test_admin_surface_plugin::in_process_plugin_entrypoints();
+    let request = AdminSurfaceRequest::Start {
+        instance_id: "console".to_string(),
+        surface_config_path: None,
     };
-    let payload = encode_admin_ui_input(&request).expect("admin-ui request should encode");
+    let payload =
+        encode_admin_surface_request(&request).expect("admin-surface request should encode");
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
@@ -911,22 +990,24 @@ fn exported_admin_ui_plugins_reject_null_host_api() {
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
-        "admin-ui host api was null"
+        "admin-surface host api was null"
     );
 }
 
 #[test]
-fn exported_admin_ui_plugins_reject_mismatched_host_api_abi() {
+fn exported_admin_surface_plugins_reject_mismatched_host_api_abi() {
     let context = TestHostContext {
         level_name: "host-a",
     };
-    let mut host_api = admin_ui_host_api_for(&context);
+    let mut host_api = admin_surface_host_api_for(&context);
     host_api.abi = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
-    let entrypoints = console_admin_ui_plugin::in_process_plugin_entrypoints();
-    let request = AdminUiInput::ParseLine {
-        line: "status".to_string(),
+    let entrypoints = test_admin_surface_plugin::in_process_plugin_entrypoints();
+    let request = AdminSurfaceRequest::Start {
+        instance_id: "console".to_string(),
+        surface_config_path: None,
     };
-    let payload = encode_admin_ui_input(&request).expect("admin-ui request should encode");
+    let payload =
+        encode_admin_surface_request(&request).expect("admin-surface request should encode");
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
@@ -947,7 +1028,10 @@ fn exported_admin_ui_plugins_reject_mismatched_host_api_abi() {
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
-        "admin-ui host api ABI 2.0 did not match plugin ABI 4.0"
+        format!(
+            "admin-surface host api ABI 2.0 did not match plugin ABI {}",
+            CURRENT_PLUGIN_ABI
+        )
     );
 }
 

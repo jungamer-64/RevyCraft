@@ -1,8 +1,7 @@
 use mc_core::{
-    AdminTransportCapability, AdminTransportCapabilitySet, AdminUiCapability, AdminUiCapabilitySet,
-    AuthCapability, AuthCapabilitySet, CapabilityAnnouncement, GameplayCapability,
-    GameplayCapabilitySet, PluginBuildTag, ProtocolCapability, ProtocolCapabilitySet,
-    StorageCapability, StorageCapabilitySet,
+    AdminSurfaceCapability, AdminSurfaceCapabilitySet, AuthCapability, AuthCapabilitySet,
+    CapabilityAnnouncement, GameplayCapability, GameplayCapabilitySet, PluginBuildTag,
+    ProtocolCapability, ProtocolCapabilitySet, StorageCapability, StorageCapabilitySet,
 };
 
 #[must_use]
@@ -26,14 +25,9 @@ pub fn auth_capabilities(capabilities: &[AuthCapability]) -> AuthCapabilitySet {
 }
 
 #[must_use]
-pub fn admin_transport_capabilities(
-    capabilities: &[AdminTransportCapability],
-) -> AdminTransportCapabilitySet {
-    capability_set(capabilities)
-}
-
-#[must_use]
-pub fn admin_ui_capabilities(capabilities: &[AdminUiCapability]) -> AdminUiCapabilitySet {
+pub fn admin_surface_capabilities(
+    capabilities: &[AdminSurfaceCapability],
+) -> AdminSurfaceCapabilitySet {
     capability_set(capabilities)
 }
 
@@ -72,16 +66,9 @@ pub(crate) fn auth_announcement(
 }
 
 #[must_use]
-pub(crate) fn admin_transport_announcement(
-    capabilities: &AdminTransportCapabilitySet,
-) -> CapabilityAnnouncement<AdminTransportCapability> {
-    capability_announcement_for_build_tag(capabilities, option_env!("REVY_PLUGIN_BUILD_TAG"))
-}
-
-#[must_use]
-pub(crate) fn admin_ui_announcement(
-    capabilities: &AdminUiCapabilitySet,
-) -> CapabilityAnnouncement<AdminUiCapability> {
+pub(crate) fn admin_surface_announcement(
+    capabilities: &AdminSurfaceCapabilitySet,
+) -> CapabilityAnnouncement<AdminSurfaceCapability> {
     capability_announcement_for_build_tag(capabilities, option_env!("REVY_PLUGIN_BUILD_TAG"))
 }
 

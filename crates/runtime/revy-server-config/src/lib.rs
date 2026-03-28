@@ -1,9 +1,10 @@
 use mc_core::{
-    AdapterId, AdminTransportProfileId, AdminUiProfileId, AuthProfileId, CoreConfig,
-    GameplayProfileId, StorageProfileId,
+    AdapterId, AdminSurfaceProfileId, AuthProfileId, CoreConfig, GameplayProfileId,
+    StorageProfileId,
 };
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use mc_plugin_host::config::{
+    AdminSurfaceSelectionConfig as PluginHostAdminSurfaceSelectionConfig,
     BootstrapConfig as PluginHostBootstrapConfig, PluginBufferLimits as PluginHostBufferLimits,
     RuntimeSelectionConfig as PluginHostRuntimeSelectionConfig,
 };
@@ -210,36 +211,23 @@ impl Default for ProfilesConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminConfig {
-    pub ui_profile: AdminUiProfileId,
-    pub local_console_permissions: Vec<AdminPermission>,
-    pub remote: AdminRemoteConfig,
+    pub surfaces: HashMap<String, AdminSurfaceConfig>,
     pub principals: HashMap<String, AdminPrincipalConfig>,
 }
 
 impl Default for AdminConfig {
     fn default() -> Self {
         Self {
-            ui_profile: AdminUiProfileId::new("console-v1"),
-            local_console_permissions: all_admin_permissions().to_vec(),
-            remote: AdminRemoteConfig::default(),
+            surfaces: HashMap::new(),
             principals: HashMap::new(),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminRemoteConfig {
-    pub transport_profile: AdminTransportProfileId,
-    pub transport_config: Option<PathBuf>,
-}
-
-impl Default for AdminRemoteConfig {
-    fn default() -> Self {
-        Self {
-            transport_profile: AdminTransportProfileId::new(""),
-            transport_config: None,
-        }
-    }
+pub struct AdminSurfaceConfig {
+    pub profile: AdminSurfaceProfileId,
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -338,6 +326,18 @@ impl From<ServerConfig> for NormalizedServerConfig {
 }
 
 impl NormalizedServerConfig {
+    fn effective_admin_surface_configs(&self) -> Vec<(String, AdminSurfaceConfig)> {
+        let mut entries = self
+            .server
+            .admin
+            .surfaces
+            .iter()
+            .map(|(instance_id, config)| (instance_id.clone(), config.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
     fn into_validated(self) -> Result<ServerConfig, ServerConfigError> {
         self.server.validate()?;
         Ok(self.server)
@@ -369,26 +369,31 @@ impl NormalizedServerConfig {
     }
 
     fn plugin_host_runtime_selection_config(&self) -> PluginHostRuntimeSelectionConfig {
+        let admin_surfaces = self
+            .effective_admin_surface_configs()
+            .into_iter()
+            .map(
+                |(instance_id, surface)| PluginHostAdminSurfaceSelectionConfig {
+                    instance_id,
+                    profile: surface.profile,
+                    config_path: surface.config,
+                },
+            )
+            .collect();
         PluginHostRuntimeSelectionConfig {
             be_enabled: self.server.topology.be_enabled,
             auth_profile: self.server.profiles.auth.clone(),
             bedrock_auth_profile: self.server.profiles.bedrock_auth.clone(),
             default_gameplay_profile: self.server.profiles.default_gameplay.clone(),
             gameplay_profile_map: self.server.profiles.gameplay_map.clone(),
-            admin_transport_profile: self.server.admin.remote.transport_profile.clone(),
-            admin_ui_profile: self.server.admin.ui_profile.clone(),
+            admin_surfaces,
             plugin_allowlist: self.server.plugins.allowlist.clone(),
             buffer_limits: self.server.plugins.buffer_limits,
             plugin_failure_policy_protocol: self.server.plugins.failure_policy.protocol,
             plugin_failure_policy_gameplay: self.server.plugins.failure_policy.gameplay,
             plugin_failure_policy_storage: self.server.plugins.failure_policy.storage,
             plugin_failure_policy_auth: self.server.plugins.failure_policy.auth,
-            plugin_failure_policy_admin_transport: self
-                .server
-                .plugins
-                .failure_policy
-                .admin_transport,
-            plugin_failure_policy_admin_ui: self.server.plugins.failure_policy.admin_ui,
+            plugin_failure_policy_admin_surface: self.server.plugins.failure_policy.admin_surface,
         }
     }
 }
@@ -507,7 +512,8 @@ impl ServerConfig {
     ///
     /// Returns [`ServerConfigError`] when validated fields are inconsistent.
     pub fn validate(&self) -> Result<(), ServerConfigError> {
-        validate_admin_remote_config(&self.admin.remote, &self.admin.principals)
+        validate_admin_surfaces(&self.admin.surfaces)?;
+        validate_admin_principals(&self.admin.principals)
     }
 }
 
@@ -551,7 +557,6 @@ struct StaticPluginsDocument {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct StaticAdminDocument {
-    remote: AdminRemoteDocument,
     principals: HashMap<String, AdminPrincipalDocument>,
 }
 
@@ -602,7 +607,7 @@ struct PluginBufferLimitsDocument {
     gameplay_response_bytes: Option<usize>,
     storage_response_bytes: Option<usize>,
     auth_response_bytes: Option<usize>,
-    admin_ui_response_bytes: Option<usize>,
+    admin_surface_response_bytes: Option<usize>,
     callback_payload_bytes: Option<usize>,
     metadata_bytes: Option<usize>,
 }
@@ -614,8 +619,7 @@ struct FailurePolicyDocument {
     gameplay: Option<String>,
     storage: Option<String>,
     auth: Option<String>,
-    admin_transport: Option<String>,
-    admin_ui: Option<String>,
+    admin_surface: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -630,21 +634,20 @@ struct ProfilesDocument {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct LiveAdminDocument {
-    ui_profile: Option<AdminUiProfileId>,
-    local_console_permissions: Option<Vec<String>>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct AdminRemoteDocument {
-    transport_profile: Option<AdminTransportProfileId>,
-    transport_config: Option<PathBuf>,
+    surfaces: HashMap<String, AdminSurfaceDocument>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct AdminPrincipalDocument {
     permissions: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct AdminSurfaceDocument {
+    profile: Option<AdminSurfaceProfileId>,
+    config: Option<PathBuf>,
 }
 
 impl ServerConfigDocument {
@@ -772,15 +775,10 @@ impl ServerConfigDocument {
                         PluginFailureMatrix::parse_auth,
                         PluginFailureMatrix::default().auth,
                     )?,
-                    admin_transport: parse_failure_policy(
-                        self.live.plugins.failure_policy.admin_transport.as_deref(),
-                        PluginFailureMatrix::parse_admin_transport,
-                        PluginFailureMatrix::default().admin_transport,
-                    )?,
-                    admin_ui: parse_failure_policy(
-                        self.live.plugins.failure_policy.admin_ui.as_deref(),
-                        PluginFailureMatrix::parse_admin_ui,
-                        PluginFailureMatrix::default().admin_ui,
+                    admin_surface: parse_failure_policy(
+                        self.live.plugins.failure_policy.admin_surface.as_deref(),
+                        PluginFailureMatrix::parse_admin_surface,
+                        PluginFailureMatrix::default().admin_surface,
                     )?,
                 },
             },
@@ -803,38 +801,32 @@ impl ServerConfigDocument {
                 gameplay_map: self.live.profiles.gameplay_map,
             },
             admin: AdminConfig {
-                ui_profile: self
-                    .live
-                    .admin
-                    .ui_profile
-                    .unwrap_or_else(|| AdminUiProfileId::new("console-v1")),
-                local_console_permissions: parse_admin_permissions(
-                    self.live.admin.local_console_permissions,
-                    "live.admin.local_console_permissions",
-                    Some(all_admin_permissions().to_vec()),
-                    false,
-                )?,
-                remote: parse_admin_remote_config(parent, self.static_config.admin.remote)?,
+                surfaces: parse_admin_surface_config(parent, self.live.admin.surfaces)?,
                 principals: parse_admin_principal_config(self.static_config.admin.principals)?,
             },
         }))
     }
 }
 
-fn parse_admin_remote_config(
+fn parse_admin_surface_config(
     parent: &Path,
-    document: AdminRemoteDocument,
-) -> Result<AdminRemoteConfig, ServerConfigError> {
-    let transport_profile = document
-        .transport_profile
-        .unwrap_or_else(|| AdminTransportProfileId::new(""));
-    let transport_config = document
-        .transport_config
-        .map(|path| resolve_config_path(parent, Some(path.as_path()), Path::new("")));
-    Ok(AdminRemoteConfig {
-        transport_profile,
-        transport_config,
-    })
+    document: HashMap<String, AdminSurfaceDocument>,
+) -> Result<HashMap<String, AdminSurfaceConfig>, ServerConfigError> {
+    let mut surfaces = HashMap::new();
+    let mut entries = document.into_iter().collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    for (instance_id, surface) in entries {
+        let profile = surface.profile.ok_or_else(|| {
+            ServerConfigError::Config(format!(
+                "live.admin.surfaces.{instance_id}.profile is required"
+            ))
+        })?;
+        let config = surface
+            .config
+            .map(|path| resolve_config_path(parent, Some(path.as_path()), Path::new("")));
+        surfaces.insert(instance_id, AdminSurfaceConfig { profile, config });
+    }
+    Ok(surfaces)
 }
 
 fn parse_admin_principal_config(
@@ -912,9 +904,9 @@ fn parse_plugin_buffer_limits(document: PluginBufferLimitsDocument) -> PluginHos
         auth_response_bytes: document
             .auth_response_bytes
             .unwrap_or(defaults.auth_response_bytes),
-        admin_ui_response_bytes: document
-            .admin_ui_response_bytes
-            .unwrap_or(defaults.admin_ui_response_bytes),
+        admin_surface_response_bytes: document
+            .admin_surface_response_bytes
+            .unwrap_or(defaults.admin_surface_response_bytes),
         callback_payload_bytes: document
             .callback_payload_bytes
             .unwrap_or(defaults.callback_payload_bytes),
@@ -957,43 +949,38 @@ fn parse_server_ip(value: Option<&str>) -> Result<Option<IpAddr>, ServerConfigEr
     }
 }
 
-fn validate_admin_remote_config(
-    remote: &AdminRemoteConfig,
+fn validate_admin_principals(
     principals: &HashMap<String, AdminPrincipalConfig>,
 ) -> Result<(), ServerConfigError> {
-    let transport_enabled = !remote.transport_profile.as_str().is_empty();
-    if transport_enabled && remote.transport_config.is_none() {
-        return Err(ServerConfigError::Config(
-            "static.admin.remote.transport_profile requires static.admin.remote.transport_config"
-                .to_string(),
-        ));
-    }
-    if !transport_enabled && remote.transport_config.is_some() {
-        return Err(ServerConfigError::Config(
-            "static.admin.remote.transport_config requires static.admin.remote.transport_profile"
-                .to_string(),
-        ));
-    }
-    if transport_enabled && principals.is_empty() {
-        return Err(ServerConfigError::Config(
-            "static.admin.remote.transport_profile requires at least one static.admin.principals entry"
-                .to_string(),
-        ));
-    }
-    if let Some(transport_config) = &remote.transport_config
-        && !transport_config.is_file()
-    {
-        return Err(ServerConfigError::Config(format!(
-            "static.admin.remote.transport_config `{}` was not found",
-            transport_config.display()
-        )));
-    }
     let mut principal_entries = principals.iter().collect::<Vec<_>>();
     principal_entries.sort_by(|left, right| left.0.cmp(right.0));
     for (principal_id, principal) in principal_entries {
         if principal.permissions.is_empty() {
             return Err(ServerConfigError::Config(format!(
                 "static.admin.principals.{principal_id}.permissions must not be empty"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_admin_surfaces(
+    surfaces: &HashMap<String, AdminSurfaceConfig>,
+) -> Result<(), ServerConfigError> {
+    let mut entries = surfaces.iter().collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(right.0));
+    for (instance_id, surface) in entries {
+        if surface.profile.as_str().trim().is_empty() {
+            return Err(ServerConfigError::Config(format!(
+                "live.admin.surfaces.{instance_id}.profile must not be empty"
+            )));
+        }
+        if let Some(config) = &surface.config
+            && !config.is_file()
+        {
+            return Err(ServerConfigError::Config(format!(
+                "live.admin.surfaces.{instance_id}.config `{}` was not found",
+                config.display()
             )));
         }
     }
@@ -1013,16 +1000,6 @@ where
         Some(value) => parser(value).map_err(Into::into),
         None => Ok(default),
     }
-}
-
-const fn all_admin_permissions() -> [AdminPermission; 5] {
-    [
-        AdminPermission::Status,
-        AdminPermission::Sessions,
-        AdminPermission::ReloadRuntime,
-        AdminPermission::UpgradeRuntime,
-        AdminPermission::Shutdown,
-    ]
 }
 
 fn parse_admin_permissions(
@@ -1098,10 +1075,20 @@ mod tests {
         config.topology.enabled_adapters = Some(vec![AdapterId::new("je-47")]);
         config.plugins.allowlist = Some(vec!["proto-initial".to_string()]);
         config.profiles.default_gameplay = GameplayProfileId::new("canonical");
-        config.admin.ui_profile = AdminUiProfileId::new("console-v1");
-        config.admin.remote.transport_profile = AdminTransportProfileId::new("grpc-v1");
-        config.admin.remote.transport_config =
-            Some(PathBuf::from("runtime").join("admin-transport-grpc.toml"));
+        config.admin.surfaces.insert(
+            "console".to_string(),
+            AdminSurfaceConfig {
+                profile: AdminSurfaceProfileId::new("console-v1"),
+                config: None,
+            },
+        );
+        config.admin.surfaces.insert(
+            "remote".to_string(),
+            AdminSurfaceConfig {
+                profile: AdminSurfaceProfileId::new("grpc-v1"),
+                config: Some(PathBuf::from("runtime").join("admin-transport-grpc.toml")),
+            },
+        );
         config.admin.principals.insert(
             "ops".to_string(),
             AdminPrincipalConfig {
@@ -1135,7 +1122,13 @@ mod tests {
         candidate.topology.enabled_adapters = Some(vec![AdapterId::new("je-5")]);
         candidate.plugins.allowlist = Some(vec!["proto-candidate".to_string()]);
         candidate.profiles.default_gameplay = GameplayProfileId::new("readonly");
-        candidate.admin.ui_profile = AdminUiProfileId::new("console-v2");
+        candidate.admin.surfaces.insert(
+            "console".to_string(),
+            AdminSurfaceConfig {
+                profile: AdminSurfaceProfileId::new("console-v2"),
+                config: None,
+            },
+        );
 
         let plan = active.plan_topology_reload(&candidate)?;
 
@@ -1161,11 +1154,16 @@ mod tests {
     }
 
     #[test]
-    fn topology_reload_plan_ignores_admin_remote_diff() -> Result<(), ServerConfigError> {
+    fn topology_reload_plan_ignores_admin_surface_diff() -> Result<(), ServerConfigError> {
         let active = configured_server_config();
         let mut candidate = active.clone();
-        candidate.admin.remote.transport_config =
-            Some(PathBuf::from("runtime").join("other-admin-transport.toml"));
+        candidate.admin.surfaces.insert(
+            "remote".to_string(),
+            AdminSurfaceConfig {
+                profile: AdminSurfaceProfileId::new("grpc-v1"),
+                config: Some(PathBuf::from("runtime").join("other-grpc-admin-surface.toml")),
+            },
+        );
         candidate.admin.principals.insert(
             "backup".to_string(),
             AdminPrincipalConfig {
@@ -1190,7 +1188,13 @@ mod tests {
         candidate.network.motd = "candidate-motd".to_string();
         candidate.plugins.allowlist = Some(vec!["proto-candidate".to_string()]);
         candidate.profiles.default_gameplay = GameplayProfileId::new("readonly");
-        candidate.admin.ui_profile = AdminUiProfileId::new("console-v2");
+        candidate.admin.surfaces.insert(
+            "console".to_string(),
+            AdminSurfaceConfig {
+                profile: AdminSurfaceProfileId::new("console-v2"),
+                config: None,
+            },
+        );
 
         let plan = active.plan_core_reload(&candidate)?;
 
@@ -1240,10 +1244,16 @@ mod tests {
     }
 
     #[test]
-    fn core_reload_plan_ignores_admin_remote_diff() -> Result<(), ServerConfigError> {
+    fn core_reload_plan_ignores_admin_surface_diff() -> Result<(), ServerConfigError> {
         let active = configured_server_config();
         let mut candidate = active.clone();
-        candidate.admin.remote.transport_profile = AdminTransportProfileId::new("grpc-v2");
+        candidate.admin.surfaces.insert(
+            "remote".to_string(),
+            AdminSurfaceConfig {
+                profile: AdminSurfaceProfileId::new("grpc-v2"),
+                config: Some(PathBuf::from("runtime").join("admin-transport-grpc.toml")),
+            },
+        );
         candidate.admin.principals.insert(
             "backup".to_string(),
             AdminPrincipalConfig {
@@ -1268,7 +1278,13 @@ mod tests {
         candidate.network.motd = "candidate-motd".to_string();
         candidate.plugins.allowlist = Some(vec!["proto-candidate".to_string()]);
         candidate.profiles.default_gameplay = GameplayProfileId::new("readonly");
-        candidate.admin.ui_profile = AdminUiProfileId::new("console-v2");
+        candidate.admin.surfaces.insert(
+            "console".to_string(),
+            AdminSurfaceConfig {
+                profile: AdminSurfaceProfileId::new("console-v2"),
+                config: None,
+            },
+        );
 
         let plan = active.plan_full_reload(&candidate)?;
 
@@ -1320,5 +1336,113 @@ mod tests {
             }
             other => panic!("unexpected config error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn from_toml_parses_admin_surfaces_and_disables_legacy_surface_slots()
+    -> Result<(), ServerConfigError> {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "revy-admin-surfaces-config-{}-{nonce}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("admin"))?;
+        let surface_config = root.join("admin").join("grpc.toml");
+        std::fs::write(&surface_config, "bind_addr = \"127.0.0.1:50051\"\n")?;
+        let server_path = root.join("server.toml");
+        std::fs::write(
+            &server_path,
+            r#"
+[live.admin.surfaces.console]
+profile = "console-v1"
+
+[live.admin.surfaces.remote]
+profile = "grpc-v1"
+config = "admin/grpc.toml"
+"#,
+        )?;
+
+        let parsed = ServerConfig::from_toml(&server_path)?;
+        assert_eq!(
+            parsed.admin.surfaces.get("console"),
+            Some(&AdminSurfaceConfig {
+                profile: AdminSurfaceProfileId::new("console-v1"),
+                config: None,
+            })
+        );
+        assert_eq!(
+            parsed.admin.surfaces.get("remote"),
+            Some(&AdminSurfaceConfig {
+                profile: AdminSurfaceProfileId::new("grpc-v1"),
+                config: Some(surface_config.clone()),
+            })
+        );
+
+        let runtime_selection = parsed.plugin_host_runtime_selection_config();
+        assert_eq!(runtime_selection.admin_surfaces.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn from_toml_rejects_legacy_admin_keys() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "revy-admin-surface-legacy-{}-{nonce}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp root should be created");
+        let server_path = root.join("server.toml");
+        std::fs::write(
+            &server_path,
+            r#"
+[static.admin.remote]
+transport_profile = "grpc-v1"
+
+[live.admin]
+ui_profile = "console-v1"
+local_console_permissions = ["status"]
+"#,
+        )
+        .expect("server config should be written");
+
+        let error =
+            ServerConfig::from_toml(&server_path).expect_err("legacy admin keys should fail");
+        assert_config_error_contains(error, "unknown field");
+    }
+
+    #[test]
+    fn from_toml_rejects_missing_admin_surface_config_file() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "revy-admin-surface-config-missing-{}-{nonce}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp root should be created");
+        let server_path = root.join("server.toml");
+        std::fs::write(
+            &server_path,
+            r#"
+[live.admin.surfaces.remote]
+profile = "grpc-v1"
+config = "missing-grpc.toml"
+"#,
+        )
+        .expect("server config should be written");
+
+        let error = ServerConfig::from_toml(&server_path)
+            .expect_err("missing admin surface config should be rejected");
+        assert_config_error_contains(error, "live.admin.surfaces.remote.config");
     }
 }

@@ -2,7 +2,7 @@ use crate::codec::protocol::ProtocolCodecError;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-pub const CURRENT_PLUGIN_ABI: PluginAbiVersion = PluginAbiVersion { major: 4, minor: 0 };
+pub const CURRENT_PLUGIN_ABI: PluginAbiVersion = PluginAbiVersion { major: 5, minor: 0 };
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -24,8 +24,7 @@ pub enum PluginKind {
     Storage = 2,
     Auth = 3,
     Gameplay = 4,
-    AdminUi = 5,
-    AdminTransport = 6,
+    AdminSurface = 7,
 }
 
 impl TryFrom<u8> for PluginKind {
@@ -37,8 +36,7 @@ impl TryFrom<u8> for PluginKind {
             2 => Ok(Self::Storage),
             3 => Ok(Self::Auth),
             4 => Ok(Self::Gameplay),
-            5 => Ok(Self::AdminUi),
-            6 => Ok(Self::AdminTransport),
+            7 => Ok(Self::AdminSurface),
             _ => Err(ProtocolCodecError::InvalidPluginKind(value)),
         }
     }

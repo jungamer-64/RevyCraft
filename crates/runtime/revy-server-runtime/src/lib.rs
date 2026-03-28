@@ -9,10 +9,11 @@ pub mod runtime;
 pub use self::api::{
     AdminArtifactsReloadView, AdminCoreReloadView, AdminFullReloadView, AdminGenerationCountView,
     AdminListenerBindingView, AdminNamedCountView, AdminPermission, AdminPhaseCountView,
-    AdminPluginHostView, AdminPrincipal, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
-    AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
-    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, AdminUpgradeRuntimeView,
-    ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot,
-    RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole, RuntimeUpgradeStateView,
+    AdminPluginHostView, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
+    AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionTransportCountView,
+    AdminSessionView, AdminSessionsView, AdminStatusView, AdminTopologyReloadView,
+    AdminUpgradeRuntimeView, ListenerBinding, PluginFailureAction, PluginFailureMatrix,
+    PluginHostStatusSnapshot, RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole,
+    RuntimeUpgradeStateView,
 };
 pub use self::error::RuntimeError;

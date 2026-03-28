@@ -9,24 +9,19 @@ use crate::runtime::{
 use bytes::BytesMut;
 use libloading::Library;
 use mc_core::{
-    AdminTransportCapability, AdminTransportCapabilitySet, AdminTransportProfileId,
-    AdminUiCapability, AdminUiCapabilitySet, AdminUiProfileId, AuthCapability, AuthCapabilitySet,
-    AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId,
-    PlayerId, PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet,
-    ServerCore, SessionCapabilitySet, StorageCapability, StorageCapabilitySet, StorageProfileId,
-    WorldSnapshot,
+    AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapability,
+    AuthCapabilitySet, AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
+    GameplayProfileId, PlayerId, PluginBuildTag, PluginGenerationId, ProtocolCapability,
+    ProtocolCapabilitySet, ServerCore, SessionCapabilitySet, StorageCapability,
+    StorageCapabilitySet, StorageProfileId, WorldSnapshot,
 };
 use mc_plugin_api::abi::{
     ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind,
 };
-use mc_plugin_api::codec::admin_transport::{
-    AdminTransportDescriptor, AdminTransportPauseView, AdminTransportRequest,
-    AdminTransportResponse, AdminTransportStatusView, decode_admin_transport_response,
-    encode_admin_transport_request,
-};
-use mc_plugin_api::codec::admin_ui::{
-    AdminRequest, AdminResponse, AdminUiDescriptor, AdminUiInput, AdminUiOutput,
-    decode_admin_ui_output, encode_admin_ui_input,
+use mc_plugin_api::codec::admin_surface::{
+    AdminSurfaceDescriptor, AdminSurfaceInstanceDeclaration, AdminSurfacePauseView,
+    AdminSurfaceRequest, AdminSurfaceResponse, AdminSurfaceStatusView,
+    decode_admin_surface_response, encode_admin_surface_request,
 };
 use mc_plugin_api::codec::auth::{
     AuthMode, AuthRequest, AuthResponse, BedrockAuthResult, decode_auth_response,
@@ -44,15 +39,14 @@ use mc_plugin_api::codec::storage::{
     StorageRequest, StorageResponse, decode_storage_response, encode_storage_request,
 };
 use mc_plugin_api::host_api::{
-    AdminTransportHostApiV1, AdminTransportPluginApiV1, AdminTransportPluginInvokeV1Fn,
-    AdminUiPluginApiV1, AdminUiPluginInvokeV1Fn, AuthPluginApiV1, GameplayPluginApiV3,
-    GameplayPluginInvokeV3Fn, PluginFreeBufferFn, PluginInvokeFn, ProtocolPluginApiV3,
-    StoragePluginApiV1,
+    AdminSurfaceHostApiV1, AdminSurfacePluginApiV1, AdminSurfacePluginInvokeV1Fn, AuthPluginApiV1,
+    GameplayPluginApiV3, GameplayPluginInvokeV3Fn, PluginFreeBufferFn, PluginInvokeFn,
+    ProtocolPluginApiV3, StoragePluginApiV1,
 };
 use mc_plugin_api::manifest::{
-    PLUGIN_ADMIN_TRANSPORT_API_SYMBOL_V1, PLUGIN_ADMIN_UI_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1,
-    PLUGIN_GAMEPLAY_API_SYMBOL_V3, PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V3,
-    PLUGIN_STORAGE_API_SYMBOL_V1, PluginManifestV1,
+    PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V3,
+    PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V3, PLUGIN_STORAGE_API_SYMBOL_V1,
+    PluginManifestV1,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
@@ -78,10 +72,11 @@ mod status;
 mod support;
 mod topology;
 
+use self::callbacks::admin_surface_host_api;
+use self::callbacks::gameplay_host_api;
 #[cfg(test)]
 pub(crate) use self::callbacks::with_current_gameplay_transaction;
 pub(crate) use self::callbacks::with_gameplay_transaction_and_limits;
-use self::callbacks::{admin_transport_host_api, admin_ui_host_api, gameplay_host_api};
 pub(crate) use self::catalog::PluginCatalog;
 #[cfg(test)]
 pub(crate) use self::catalog::current_artifact_key;
@@ -90,41 +85,38 @@ use self::catalog::{
 };
 #[cfg(any(test, feature = "in-process-testing"))]
 pub use self::catalog::{
-    InProcessAdminTransportPlugin, InProcessAdminUiPlugin, InProcessAuthPlugin,
-    InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+    InProcessAdminSurfacePlugin, InProcessAuthPlugin, InProcessGameplayPlugin,
+    InProcessProtocolPlugin, InProcessStoragePlugin,
 };
 pub(crate) use self::failure::{
     ArtifactQuarantineRecord, PluginFailureDispatch, PluginFailureStage,
 };
 pub use self::failure::{PluginFailureAction, PluginFailureMatrix};
 pub(crate) use self::generation::{
-    AdminTransportGeneration, AdminUiGeneration, AuthGeneration, GameplayGeneration,
-    GenerationManager, ProtocolGeneration, StorageGeneration, decode_plugin_error,
-    write_owned_buffer,
+    AdminSurfaceGeneration, AuthGeneration, GameplayGeneration, GenerationManager,
+    ProtocolGeneration, StorageGeneration, decode_plugin_error, write_owned_buffer,
 };
 pub(crate) use self::loader::PluginLoader;
 pub(crate) use self::profiles::{
-    HotSwappableAdminTransportProfile, HotSwappableAdminUiProfile, HotSwappableAuthProfile,
-    HotSwappableGameplayProfile, HotSwappableProtocolAdapter, HotSwappableStorageProfile,
-    ManagedAdminTransportPlugin, ManagedAdminUiPlugin, ManagedAuthPlugin, ManagedGameplayPlugin,
-    ManagedProtocolPlugin, ManagedStoragePlugin,
+    HotSwappableAdminSurfaceProfile, HotSwappableAuthProfile, HotSwappableGameplayProfile,
+    HotSwappableProtocolAdapter, HotSwappableStorageProfile, ManagedAdminSurfacePlugin,
+    ManagedAuthPlugin, ManagedGameplayPlugin, ManagedProtocolPlugin, ManagedStoragePlugin,
 };
 pub use self::status::{
-    AdminTransportPluginStatusSnapshot, AdminUiPluginStatusSnapshot, AuthPluginStatusSnapshot,
-    GameplayPluginStatusSnapshot, PluginArtifactStatusSnapshot, PluginHostStatusSnapshot,
-    ProtocolPluginStatusSnapshot, StoragePluginStatusSnapshot,
+    AdminSurfacePluginStatusSnapshot, AuthPluginStatusSnapshot, GameplayPluginStatusSnapshot,
+    PluginArtifactStatusSnapshot, PluginHostStatusSnapshot, ProtocolPluginStatusSnapshot,
+    StoragePluginStatusSnapshot,
 };
 use self::support::{
     DecodedManifest, ManifestCapabilities, decode_manifest, decode_utf8_slice,
-    ensure_known_profiles, ensure_profile_known, expect_admin_transport_capabilities,
-    expect_admin_transport_descriptor, expect_admin_ui_capabilities, expect_admin_ui_descriptor,
-    expect_auth_capabilities, expect_auth_descriptor, expect_gameplay_capabilities,
-    expect_gameplay_descriptor, expect_protocol_bedrock_listener_descriptor,
-    expect_protocol_capabilities, expect_protocol_descriptor, expect_storage_capabilities,
-    expect_storage_descriptor, import_storage_runtime_state, invoke_admin_transport,
-    invoke_admin_ui, invoke_auth, invoke_gameplay, invoke_protocol, invoke_storage,
-    protocol_reload_compatible, read_byte_slice, take_owned_buffer,
-    validate_gameplay_session_migration, validate_protocol_session_migration,
+    ensure_known_profiles, ensure_profile_known, expect_admin_surface_capabilities,
+    expect_admin_surface_descriptor, expect_auth_capabilities, expect_auth_descriptor,
+    expect_gameplay_capabilities, expect_gameplay_descriptor,
+    expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
+    expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
+    import_storage_runtime_state, invoke_admin_surface, invoke_auth, invoke_gameplay,
+    invoke_protocol, invoke_storage, protocol_reload_compatible, read_byte_slice,
+    take_owned_buffer, validate_gameplay_session_migration, validate_protocol_session_migration,
 };
 pub(crate) use self::topology::PreparedProtocolTopology;
 
@@ -184,8 +176,7 @@ pub struct PluginHost {
     gameplay: Mutex<HashMap<GameplayProfileId, ManagedGameplayPlugin>>,
     storage: Mutex<HashMap<StorageProfileId, ManagedStoragePlugin>>,
     auth: Mutex<HashMap<AuthProfileId, ManagedAuthPlugin>>,
-    admin_transport: Mutex<HashMap<AdminTransportProfileId, ManagedAdminTransportPlugin>>,
-    admin_ui: Mutex<HashMap<AdminUiProfileId, ManagedAdminUiPlugin>>,
+    admin_surface: Mutex<HashMap<AdminSurfaceProfileId, ManagedAdminSurfacePlugin>>,
 }
 
 impl PluginHost {
@@ -234,8 +225,7 @@ impl PluginHost {
             gameplay: Mutex::new(HashMap::new()),
             storage: Mutex::new(HashMap::new()),
             auth: Mutex::new(HashMap::new()),
-            admin_transport: Mutex::new(HashMap::new()),
-            admin_ui: Mutex::new(HashMap::new()),
+            admin_surface: Mutex::new(HashMap::new()),
         }
     }
 
@@ -297,37 +287,20 @@ impl PluginHost {
             .map(|managed| Arc::clone(&managed.profile))
     }
 
-    /// Resolves an active admin transport profile by id.
+    /// Resolves an active admin-surface profile by id.
     ///
     /// # Panics
     ///
-    /// Panics if the admin-transport plugin registry mutex is poisoned.
+    /// Panics if the admin-surface plugin registry mutex is poisoned.
     #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn resolve_admin_transport_profile(
+    pub(crate) fn resolve_admin_surface_profile(
         &self,
         profile_id: &str,
-    ) -> Option<Arc<HotSwappableAdminTransportProfile>> {
-        self.admin_transport
+    ) -> Option<Arc<HotSwappableAdminSurfaceProfile>> {
+        self.admin_surface
             .lock()
             .expect("plugin host mutex should not be poisoned")
-            .get(&AdminTransportProfileId::new(profile_id))
-            .map(|managed| Arc::clone(&managed.profile))
-    }
-
-    /// Resolves an active admin UI profile by id.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the admin-ui plugin registry mutex is poisoned.
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn resolve_admin_ui_profile(
-        &self,
-        profile_id: &str,
-    ) -> Option<Arc<HotSwappableAdminUiProfile>> {
-        self.admin_ui
-            .lock()
-            .expect("plugin host mutex should not be poisoned")
-            .get(&AdminUiProfileId::new(profile_id))
+            .get(&AdminSurfaceProfileId::new(profile_id))
             .map(|managed| Arc::clone(&managed.profile))
     }
 

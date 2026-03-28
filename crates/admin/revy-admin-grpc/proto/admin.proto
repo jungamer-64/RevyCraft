@@ -61,7 +61,7 @@ message AdminListenerBindingView {
   repeated string adapter_ids = 3;
 }
 
-message AdminTransportCountView {
+message AdminSessionTransportCountView {
   TransportKind transport = 1;
   uint64 count = 2;
 }
@@ -83,7 +83,7 @@ message AdminNamedCountView {
 
 message AdminSessionSummaryView {
   uint64 total = 1;
-  repeated AdminTransportCountView by_transport = 2;
+  repeated AdminSessionTransportCountView by_transport = 2;
   repeated AdminPhaseCountView by_phase = 3;
   repeated AdminGenerationCountView by_generation = 4;
   repeated AdminNamedCountView by_adapter_id = 5;
@@ -95,11 +95,10 @@ message AdminPluginHostView {
   uint64 gameplay_count = 2;
   uint64 storage_count = 3;
   uint64 auth_count = 4;
-  uint64 admin_ui_count = 5;
+  uint64 admin_surface_count = 5;
   uint64 active_quarantine_count = 6;
   uint64 artifact_quarantine_count = 7;
   optional string pending_fatal_error = 8;
-  uint64 admin_transport_count = 9;
 }
 
 message AdminStatusView {

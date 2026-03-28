@@ -97,11 +97,9 @@ async fn wildcard_ipv4_dual_stack_listener_is_reused_on_noop_reload() -> Result<
 #[tokio::test]
 async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = build_test_server(
-        loopback_server_config(temp_dir.path().join("world")),
-        plugin_test_registries_tcp_only()?,
-    )
-    .await?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    set_console_surface(&mut config, "console-v1");
+    let server = build_test_server(config, plugin_test_registries_tcp_only()?).await?;
 
     let status = server.status().await;
     assert_eq!(
@@ -126,7 +124,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
     assert_eq!(plugin_host.gameplay_count, 1);
     assert_eq!(plugin_host.storage_count, 1);
     assert_eq!(plugin_host.auth_count, 1);
-    assert_eq!(plugin_host.admin_ui_count, 1);
+    assert_eq!(plugin_host.admin_surface_count, 1);
     assert_eq!(
         plugin_host.failure_matrix.protocol,
         crate::PluginFailureAction::Quarantine
@@ -139,7 +137,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
             "runtime active-generation=1 draining-generations=0 listeners=1 sessions=0 dirty=false\n",
             "generation tcp-default=je-5 tcp-enabled=je-5 udp-default=- udp-enabled=- max-players=20 motd=\"Multi-version Rust server\"\n",
             "session-summary transport=tcp:0,udp:0 phase=handshaking:0,status:0,login:0,play:0\n",
-            "plugins protocol=5 gameplay=1 storage=1 auth=1 admin-ui=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
+            "plugins protocol=5 gameplay=1 storage=1 auth=1 admin-surface=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
         )
     );
     let serialized = toml::to_string(&status).expect("runtime status snapshot should serialize");
@@ -150,7 +148,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
 }
 
 #[tokio::test]
-async fn supervisor_boot_keeps_listener_and_admin_transport_snapshot_after_toml_changes()
+async fn supervisor_boot_keeps_listener_and_admin_surface_snapshot_after_toml_changes()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
@@ -176,19 +174,24 @@ async fn supervisor_boot_keeps_listener_and_admin_transport_snapshot_after_toml_
     let server =
         crate::runtime::ServerSupervisor::boot(ServerConfigSource::Toml(config_path.clone()))
             .await?;
-    let expected_admin_transport = server.current_admin_transport().await.map(|selection| {
-        (
-            selection.profile.profile_id().clone(),
-            selection.transport_config_path,
-        )
-    });
+    let expected_remote_surface = server
+        .current_admin_surfaces()
+        .await
+        .into_iter()
+        .find(|selection| selection.instance_id == REMOTE_SURFACE_ID)
+        .map(|selection| {
+            (
+                selection.profile.profile_id().clone(),
+                selection.surface_config_path,
+            )
+        });
     let expected_listener_bindings = server.listener_bindings();
 
     let mut updated = initial;
     updated.network.server_port = 25565;
-    let next_transport_config = temp_dir.path().join("next-admin-transport-grpc.toml");
+    let next_surface_config = temp_dir.path().join("next-grpc-admin-surface.toml");
     fs::write(
-        &next_transport_config,
+        &next_surface_config,
         r#"bind_addr = "127.0.0.1:50052"
 allow_non_loopback = false
 
@@ -196,15 +199,20 @@ allow_non_loopback = false
 token_file = "ops.token"
 "#,
     )?;
-    updated.admin.remote.transport_config = Some(next_transport_config);
+    set_remote_surface(&mut updated, "grpc-v1", next_surface_config);
     write_server_toml(&config_path, &updated)?;
 
     assert_eq!(
-        server.current_admin_transport().await.map(|selection| (
-            selection.profile.profile_id().clone(),
-            selection.transport_config_path,
-        )),
-        expected_admin_transport
+        server
+            .current_admin_surfaces()
+            .await
+            .into_iter()
+            .find(|selection| selection.instance_id == REMOTE_SURFACE_ID)
+            .map(|selection| (
+                selection.profile.profile_id().clone(),
+                selection.surface_config_path,
+            )),
+        expected_remote_surface
     );
     assert_eq!(server.listener_bindings(), expected_listener_bindings);
 

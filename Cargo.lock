@@ -1688,6 +1688,7 @@ dependencies = [
 name = "mc-plugin-admin-ui-console"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",

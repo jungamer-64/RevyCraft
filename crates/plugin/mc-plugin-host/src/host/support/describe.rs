@@ -1,9 +1,8 @@
 use super::{
-    AdminTransportCapability, AdminTransportDescriptor, AdminTransportResponse, AdminUiCapability,
-    AdminUiDescriptor, AdminUiOutput, AuthCapability, AuthDescriptor, AuthResponse,
-    BedrockListenerDescriptor, GameplayCapability, GameplayDescriptor, GameplayResponse,
-    ProtocolCapability, ProtocolDescriptor, ProtocolResponse, RuntimeError, StorageCapability,
-    StorageDescriptor, StorageResponse,
+    AdminSurfaceCapability, AdminSurfaceDescriptor, AdminSurfaceResponse, AuthCapability,
+    AuthDescriptor, AuthResponse, BedrockListenerDescriptor, GameplayCapability,
+    GameplayDescriptor, GameplayResponse, ProtocolCapability, ProtocolDescriptor, ProtocolResponse,
+    RuntimeError, StorageCapability, StorageDescriptor, StorageResponse,
 };
 use mc_core::CapabilityAnnouncement;
 
@@ -115,50 +114,26 @@ pub(crate) fn expect_auth_capabilities(
     }
 }
 
-pub(crate) fn expect_admin_transport_descriptor(
+pub(crate) fn expect_admin_surface_descriptor(
     plugin_id: &str,
-    response: AdminTransportResponse,
-) -> Result<AdminTransportDescriptor, RuntimeError> {
+    response: AdminSurfaceResponse,
+) -> Result<AdminSurfaceDescriptor, RuntimeError> {
     match response {
-        AdminTransportResponse::Descriptor(descriptor) => Ok(descriptor),
+        AdminSurfaceResponse::Descriptor(descriptor) => Ok(descriptor),
         other => Err(RuntimeError::Config(format!(
-            "plugin `{plugin_id}` returned unexpected admin-transport describe payload: {other:?}"
+            "plugin `{plugin_id}` returned unexpected admin-surface describe payload: {other:?}"
         ))),
     }
 }
 
-pub(crate) fn expect_admin_transport_capabilities(
+pub(crate) fn expect_admin_surface_capabilities(
     plugin_id: &str,
-    response: AdminTransportResponse,
-) -> Result<CapabilityAnnouncement<AdminTransportCapability>, RuntimeError> {
+    response: AdminSurfaceResponse,
+) -> Result<CapabilityAnnouncement<AdminSurfaceCapability>, RuntimeError> {
     match response {
-        AdminTransportResponse::CapabilitySet(capabilities) => Ok(capabilities),
+        AdminSurfaceResponse::CapabilitySet(capabilities) => Ok(capabilities),
         other => Err(RuntimeError::Config(format!(
-            "plugin `{plugin_id}` returned unexpected admin-transport capability payload: {other:?}"
-        ))),
-    }
-}
-
-pub(crate) fn expect_admin_ui_descriptor(
-    plugin_id: &str,
-    response: AdminUiOutput,
-) -> Result<AdminUiDescriptor, RuntimeError> {
-    match response {
-        AdminUiOutput::Descriptor(descriptor) => Ok(descriptor),
-        other => Err(RuntimeError::Config(format!(
-            "plugin `{plugin_id}` returned unexpected admin-ui describe payload: {other:?}"
-        ))),
-    }
-}
-
-pub(crate) fn expect_admin_ui_capabilities(
-    plugin_id: &str,
-    response: AdminUiOutput,
-) -> Result<CapabilityAnnouncement<AdminUiCapability>, RuntimeError> {
-    match response {
-        AdminUiOutput::CapabilitySet(capabilities) => Ok(capabilities),
-        other => Err(RuntimeError::Config(format!(
-            "plugin `{plugin_id}` returned unexpected admin-ui capability payload: {other:?}"
+            "plugin `{plugin_id}` returned unexpected admin-surface capability payload: {other:?}"
         ))),
     }
 }

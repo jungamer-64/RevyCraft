@@ -12,8 +12,8 @@ storage_profile = "je-anvil-1_7_10"
 
 [static.plugins]
 plugins_dir = "plugins"
-plugin_abi_min = "4.0"
-plugin_abi_max = "4.0"
+plugin_abi_min = "5.0"
+plugin_abi_max = "5.0"
 
 [live.network]
 server_ip = ""
@@ -51,7 +51,7 @@ protocol_response_bytes = 4194304
 gameplay_response_bytes = 1048576
 storage_response_bytes = 33554432
 auth_response_bytes = 262144
-admin_ui_response_bytes = 1048576
+admin_surface_response_bytes = 1048576
 callback_payload_bytes = 1048576
 metadata_bytes = 65536
 
@@ -60,37 +60,38 @@ protocol = "quarantine"
 gameplay = "quarantine"
 storage = "fail-fast"
 auth = "skip"
-admin_transport = "skip"
-admin_ui = "skip"
+admin_surface = "skip"
 
 [live.profiles]
 auth = "offline-v1"
 bedrock_auth = "bedrock-offline-v1"
 default_gameplay = "canonical"
 
-[live.admin]
-ui_profile = "console-v1"
-local_console_permissions = [
+[static.admin.principals."console:console"]
+permissions = [
   "status",
   "sessions",
   "reload-runtime",
   "shutdown",
 ]
 
+[live.admin.surfaces.console]
+profile = "console-v1"
+
 # To enable remote unary gRPC admin control:
 # 1. create a token file outside version control, for example `runtime/admin/ops.token`
 # 2. put a bearer token on its first line
 # 3. copy `runtime/admin-transport-grpc.toml.example` to `runtime/admin-transport-grpc.toml`
-# 4. point server.toml at that transport config and define at least one principal:
+# 4. point server.toml at that surface config and define at least one principal:
 #
-# [static.admin.remote]
-# transport_profile = "grpc-v1"
-# transport_config = "admin-transport-grpc.toml"
+# [live.admin.surfaces.grpc]
+# profile = "grpc-v1"
+# config = "admin-transport-grpc.toml"
 #
 # [static.admin.principals.ops]
 # permissions = ["status", "sessions", "reload-runtime", "shutdown"]
 #
-# The gRPC admin transport plugin is plaintext h2 only. Non-loopback exposure is rejected
+# The gRPC admin surface plugin is plaintext h2 only. Non-loopback exposure is rejected
 # unless `allow_non_loopback = true` is set in the transport config. Put TLS and
 # public exposure policy in a reverse proxy or ingress in front of this process.
 

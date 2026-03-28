@@ -1,95 +1,400 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::{AdminUiCapability, AdminUiCapabilitySet};
-use mc_plugin_api::codec::admin_ui::{
+
+use mc_core::{AdminSurfaceCapability, AdminSurfaceCapabilitySet};
+use mc_plugin_api::codec::admin::{
     AdminNamedCountView, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
     AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionsView, AdminStatusView,
-    AdminTopologyReloadView, AdminUiDescriptor, RuntimeReloadMode,
+    AdminTopologyReloadView, RuntimeReloadMode,
 };
-use mc_plugin_sdk_rust::admin_ui::RustAdminUiPlugin;
+use mc_plugin_api::codec::admin_surface::{
+    AdminSurfaceEndpointView, AdminSurfaceInstanceDeclaration, AdminSurfacePauseView,
+    AdminSurfaceResource, AdminSurfaceStatusView,
+};
+use mc_plugin_sdk_rust::admin_surface::{
+    AdminSurfaceHost, RustAdminSurfacePlugin, SdkAdminSurfaceHost,
+};
 use mc_plugin_sdk_rust::capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+use std::collections::HashMap;
+use std::io::Write;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread;
+
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+
+const MANIFEST: StaticPluginManifest = StaticPluginManifest::admin_surface(
+    "admin-ui-console",
+    "Console Admin Surface Plugin",
+    "console-v1",
+);
 
 #[derive(Default)]
-pub struct ConsoleAdminUiPlugin;
+pub struct ConsoleAdminSurfacePlugin {
+    instances: Arc<Mutex<HashMap<String, ConsoleInstance>>>,
+}
 
-impl RustAdminUiPlugin for ConsoleAdminUiPlugin {
-    fn descriptor(&self) -> AdminUiDescriptor {
-        AdminUiDescriptor {
-            ui_profile: "console-v1".into(),
+struct ConsoleInstance {
+    principal_id: String,
+    stdin_fd: RawFd,
+    stdout_fd: RawFd,
+    worker: Option<ConsoleWorker>,
+}
+
+struct ConsoleWorker {
+    stop: Arc<AtomicBool>,
+    join: thread::JoinHandle<()>,
+}
+
+impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
+    fn descriptor(&self) -> mc_plugin_api::codec::admin_surface::AdminSurfaceDescriptor {
+        mc_plugin_sdk_rust::admin_surface::admin_surface_descriptor("console-v1")
+    }
+
+    fn capability_set(&self) -> AdminSurfaceCapabilitySet {
+        capabilities::admin_surface_capabilities(&[AdminSurfaceCapability::RuntimeReload])
+    }
+
+    fn declare_instance(
+        &self,
+        _instance_id: &str,
+        _surface_config_path: Option<&str>,
+    ) -> Result<AdminSurfaceInstanceDeclaration, String> {
+        Ok(AdminSurfaceInstanceDeclaration {
+            principals: Vec::new(),
+            required_process_resources: vec!["stdio.stdin".to_string(), "stdio.stdout".to_string()],
+            supports_upgrade_handoff: false,
+        })
+    }
+
+    fn start(
+        &self,
+        instance_id: &str,
+        host: SdkAdminSurfaceHost,
+        _surface_config_path: Option<&str>,
+    ) -> Result<AdminSurfaceStatusView, String> {
+        let stdin_fd = take_fd_resource(&host, "stdio.stdin")?;
+        let stdout_fd = take_fd_resource(&host, "stdio.stdout")?;
+        let principal_id = console_principal_id(instance_id);
+        let worker = start_worker(
+            instance_id.to_string(),
+            principal_id.clone(),
+            stdin_fd,
+            stdout_fd,
+            host,
+        )?;
+        let mut instances = self
+            .instances
+            .lock()
+            .expect("console admin surface mutex should not be poisoned");
+        if let Some(previous) = instances.insert(
+            instance_id.to_string(),
+            ConsoleInstance {
+                principal_id,
+                stdin_fd,
+                stdout_fd,
+                worker: Some(worker),
+            },
+        ) {
+            stop_worker(previous.worker);
+            close_fd(previous.stdin_fd);
+            close_fd(previous.stdout_fd);
         }
+        Ok(console_status())
     }
 
-    fn capability_set(&self) -> AdminUiCapabilitySet {
-        capabilities::admin_ui_capabilities(&[AdminUiCapability::RuntimeReload])
+    fn pause_for_upgrade(
+        &self,
+        instance_id: &str,
+        _host: SdkAdminSurfaceHost,
+    ) -> Result<AdminSurfacePauseView, String> {
+        let instances = self
+            .instances
+            .lock()
+            .expect("console admin surface mutex should not be poisoned");
+        if !instances.contains_key(instance_id) {
+            return Err(format!("console instance `{instance_id}` is not active"));
+        }
+        Ok(AdminSurfacePauseView {
+            resume_payload: Vec::new(),
+        })
     }
 
-    fn parse_line(&self, line: &str) -> Result<AdminRequest, String> {
-        let trimmed = line.trim();
-        let normalized = trimmed
-            .split_whitespace()
-            .map(str::to_ascii_lowercase)
-            .collect::<Vec<_>>()
-            .join(" ");
-        match normalized.as_str() {
-            "help" => Ok(AdminRequest::Help),
-            "status" => Ok(AdminRequest::Status),
-            "sessions" => Ok(AdminRequest::Sessions),
-            "reload runtime artifacts" => Ok(AdminRequest::ReloadRuntime {
-                mode: RuntimeReloadMode::Artifacts,
-            }),
-            "reload runtime topology" => Ok(AdminRequest::ReloadRuntime {
-                mode: RuntimeReloadMode::Topology,
-            }),
-            "reload runtime core" => Ok(AdminRequest::ReloadRuntime {
-                mode: RuntimeReloadMode::Core,
-            }),
-            "reload runtime full" => Ok(AdminRequest::ReloadRuntime {
-                mode: RuntimeReloadMode::Full,
-            }),
-            _ if normalized.starts_with("upgrade runtime executable ") => {
-                let executable_path = trimmed["upgrade runtime executable ".len()..].trim();
-                if executable_path.is_empty() {
-                    Err(format!("unknown command `{line}`; try `help`"))
-                } else {
-                    Ok(AdminRequest::UpgradeRuntime {
-                        executable_path: executable_path.to_string(),
-                    })
+    fn resume_from_upgrade(
+        &self,
+        instance_id: &str,
+        host: SdkAdminSurfaceHost,
+        _surface_config_path: Option<&str>,
+        _resume_payload: &[u8],
+    ) -> Result<AdminSurfaceStatusView, String> {
+        let mut instances = self
+            .instances
+            .lock()
+            .expect("console admin surface mutex should not be poisoned");
+        if let Some(instance) = instances.get_mut(instance_id) {
+            if instance.worker.is_none() {
+                instance.worker = Some(start_worker(
+                    instance_id.to_string(),
+                    instance.principal_id.clone(),
+                    instance.stdin_fd,
+                    instance.stdout_fd,
+                    host,
+                )?);
+            }
+            return Ok(console_status());
+        }
+
+        let stdin_fd = take_fd_resource(&host, "stdio.stdin")?;
+        let stdout_fd = take_fd_resource(&host, "stdio.stdout")?;
+        let principal_id = console_principal_id(instance_id);
+        instances.insert(
+            instance_id.to_string(),
+            ConsoleInstance {
+                principal_id: principal_id.clone(),
+                stdin_fd,
+                stdout_fd,
+                worker: None,
+            },
+        );
+        Ok(console_status())
+    }
+
+    fn activate_after_upgrade_commit(
+        &self,
+        instance_id: &str,
+        host: SdkAdminSurfaceHost,
+    ) -> Result<(), String> {
+        let mut instances = self
+            .instances
+            .lock()
+            .expect("console admin surface mutex should not be poisoned");
+        let instance = instances
+            .get_mut(instance_id)
+            .ok_or_else(|| format!("console instance `{instance_id}` is not active"))?;
+        if instance.worker.is_none() {
+            instance.worker = Some(start_worker(
+                instance_id.to_string(),
+                instance.principal_id.clone(),
+                instance.stdin_fd,
+                instance.stdout_fd,
+                host,
+            )?);
+        }
+        Ok(())
+    }
+
+    fn resume_after_upgrade_rollback(
+        &self,
+        instance_id: &str,
+        host: SdkAdminSurfaceHost,
+    ) -> Result<AdminSurfaceStatusView, String> {
+        let mut instances = self
+            .instances
+            .lock()
+            .expect("console admin surface mutex should not be poisoned");
+        let Some(instance) = instances.get_mut(instance_id) else {
+            return Ok(console_status());
+        };
+        if instance.worker.is_none() {
+            instance.worker = Some(start_worker(
+                instance_id.to_string(),
+                instance.principal_id.clone(),
+                instance.stdin_fd,
+                instance.stdout_fd,
+                host,
+            )?);
+        }
+        Ok(console_status())
+    }
+
+    fn shutdown(&self, instance_id: &str, _host: SdkAdminSurfaceHost) -> Result<(), String> {
+        let mut instances = self
+            .instances
+            .lock()
+            .expect("console admin surface mutex should not be poisoned");
+        if let Some(instance) = instances.remove(instance_id) {
+            match instance.worker {
+                Some(worker) => detach_worker(Some(worker)),
+                None => {
+                    close_fd(instance.stdin_fd);
+                    close_fd(instance.stdout_fd);
                 }
             }
-            "shutdown" => Ok(AdminRequest::Shutdown),
-            _ => Err(format!("unknown command `{line}`; try `help`")),
         }
-    }
-
-    fn render_response(&self, response: &AdminResponse) -> Result<String, String> {
-        Ok(match response {
-            AdminResponse::Help => render_help(),
-            AdminResponse::Status(status) => render_status(status),
-            AdminResponse::Sessions(sessions) => render_sessions(sessions),
-            AdminResponse::ReloadRuntime(result) => render_runtime_reload(result),
-            AdminResponse::UpgradeRuntime(result) => {
-                format!(
-                    "upgrade runtime: scheduled executable={}",
-                    result.executable_path
-                )
-            }
-            AdminResponse::ShutdownScheduled => "shutdown scheduled".to_string(),
-            AdminResponse::PermissionDenied {
-                principal,
-                permission,
-            } => format!(
-                "permission denied: principal={} permission={}",
-                principal.as_str(),
-                permission.as_str()
-            ),
-            AdminResponse::Error { message } => format!("error: {message}"),
-        })
+        Ok(())
     }
 }
 
-const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::admin_ui("admin-ui-console", "Console Admin UI Plugin", "console-v1");
+fn console_principal_id(instance_id: &str) -> String {
+    format!("console:{instance_id}")
+}
+
+fn console_status() -> AdminSurfaceStatusView {
+    AdminSurfaceStatusView {
+        endpoints: vec![AdminSurfaceEndpointView {
+            surface: "console".to_string(),
+            local_addr: "stdio".to_string(),
+        }],
+    }
+}
+
+fn start_worker(
+    instance_id: String,
+    principal_id: String,
+    stdin_fd: RawFd,
+    stdout_fd: RawFd,
+    host: SdkAdminSurfaceHost,
+) -> Result<ConsoleWorker, String> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+    let stdin_dup = dup_fd(stdin_fd)?;
+    let stdout_dup = dup_fd(stdout_fd)?;
+    let join = thread::Builder::new()
+        .name(format!("console-admin-surface-{instance_id}"))
+        .spawn(move || {
+            let stdin = unsafe { std::fs::File::from_raw_fd(stdin_dup) };
+            let mut stdout = unsafe { std::fs::File::from_raw_fd(stdout_dup) };
+            if let Err(error) = run_console_loop(
+                &host,
+                &principal_id,
+                stdin.as_raw_fd(),
+                &mut stdout,
+                stop_for_thread,
+            ) {
+                let _ = writeln!(stdout, "error: {error}");
+                let _ = stdout.flush();
+            }
+        })
+        .map_err(|error| format!("failed to spawn console thread: {error}"))?;
+    Ok(ConsoleWorker { stop, join })
+}
+
+fn stop_worker(worker: Option<ConsoleWorker>) {
+    let Some(worker) = worker else {
+        return;
+    };
+    worker.stop.store(true, Ordering::SeqCst);
+    let _ = worker.join.join();
+}
+
+fn detach_worker(worker: Option<ConsoleWorker>) {
+    let Some(worker) = worker else {
+        return;
+    };
+    worker.stop.store(true, Ordering::SeqCst);
+    drop(worker);
+}
+
+fn run_console_loop(
+    host: &SdkAdminSurfaceHost,
+    principal_id: &str,
+    stdin_fd: RawFd,
+    stdout: &mut std::fs::File,
+    stop: Arc<AtomicBool>,
+) -> Result<(), String> {
+    let mut pending = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    while !stop.load(Ordering::SeqCst) {
+        match poll_fd(stdin_fd, 200)? {
+            PollResult::Ready => {
+                let read = read_fd(stdin_fd, &mut chunk)?;
+                if read == 0 {
+                    break;
+                }
+                pending.extend_from_slice(&chunk[..read]);
+                while let Some(line) = take_line(&mut pending)? {
+                    handle_line(host, principal_id, stdout, &line)?;
+                }
+            }
+            PollResult::TimedOut => {}
+        }
+    }
+    Ok(())
+}
+
+fn handle_line(
+    host: &SdkAdminSurfaceHost,
+    principal_id: &str,
+    stdout: &mut std::fs::File,
+    line: &str,
+) -> Result<(), String> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(());
+    }
+    let request = parse_line(line)?;
+    let response = host.execute(principal_id, &request)?;
+    let rendered = render_response(&response);
+    writeln!(stdout, "{rendered}").map_err(|error| format!("failed to write stdout: {error}"))?;
+    stdout
+        .flush()
+        .map_err(|error| format!("failed to flush stdout: {error}"))?;
+    Ok(())
+}
+
+fn parse_line(line: &str) -> Result<AdminRequest, String> {
+    let trimmed = line.trim();
+    let normalized = trimmed
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ");
+    match normalized.as_str() {
+        "help" => Ok(AdminRequest::Help),
+        "status" => Ok(AdminRequest::Status),
+        "sessions" => Ok(AdminRequest::Sessions),
+        "reload runtime artifacts" => Ok(AdminRequest::ReloadRuntime {
+            mode: RuntimeReloadMode::Artifacts,
+        }),
+        "reload runtime topology" => Ok(AdminRequest::ReloadRuntime {
+            mode: RuntimeReloadMode::Topology,
+        }),
+        "reload runtime core" => Ok(AdminRequest::ReloadRuntime {
+            mode: RuntimeReloadMode::Core,
+        }),
+        "reload runtime full" => Ok(AdminRequest::ReloadRuntime {
+            mode: RuntimeReloadMode::Full,
+        }),
+        _ if normalized.starts_with("upgrade runtime executable ") => {
+            let executable_path = trimmed["upgrade runtime executable ".len()..].trim();
+            if executable_path.is_empty() {
+                Err(format!("unknown command `{line}`; try `help`"))
+            } else {
+                Ok(AdminRequest::UpgradeRuntime {
+                    executable_path: executable_path.to_string(),
+                })
+            }
+        }
+        "shutdown" => Ok(AdminRequest::Shutdown),
+        _ => Err(format!("unknown command `{line}`; try `help`")),
+    }
+}
+
+fn render_response(response: &AdminResponse) -> String {
+    match response {
+        AdminResponse::Help => render_help(),
+        AdminResponse::Status(status) => render_status(status),
+        AdminResponse::Sessions(sessions) => render_sessions(sessions),
+        AdminResponse::ReloadRuntime(result) => render_runtime_reload(result),
+        AdminResponse::UpgradeRuntime(result) => {
+            format!("upgrade runtime: executable={}", result.executable_path)
+        }
+        AdminResponse::ShutdownScheduled => "shutdown: scheduled".to_string(),
+        AdminResponse::PermissionDenied {
+            principal_id,
+            permission,
+        } => format!(
+            "permission denied: principal={} permission={}",
+            principal_id,
+            permission.as_str()
+        ),
+        AdminResponse::Error { message } => format!("error: {message}"),
+    }
+}
 
 fn render_help() -> String {
     [
@@ -175,13 +480,12 @@ fn render_status(status: &AdminStatusView) -> String {
     ];
     if let Some(plugin_host) = &status.plugin_host {
         lines.push(format!(
-            "plugins protocol={} gameplay={} storage={} auth={} admin-transport={} admin-ui={} active-quarantines={} artifact-quarantines={} pending-fatal={}",
+            "plugins protocol={} gameplay={} storage={} auth={} admin-surface={} active-quarantines={} artifact-quarantines={} pending-fatal={}",
             plugin_host.protocol_count,
             plugin_host.gameplay_count,
             plugin_host.storage_count,
             plugin_host.auth_count,
-            plugin_host.admin_transport_count,
-            plugin_host.admin_ui_count,
+            plugin_host.admin_surface_count,
             plugin_host.active_quarantine_count,
             plugin_host.artifact_quarantine_count,
             plugin_host.pending_fatal_error.as_deref().unwrap_or("none"),
@@ -291,47 +595,81 @@ fn render_runtime_reload(result: &AdminRuntimeReloadView) -> String {
     }
 }
 
-export_plugin!(admin_ui, ConsoleAdminUiPlugin, MANIFEST);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mc_plugin_api::codec::admin_ui::{
-        AdminPermission, AdminPrincipal, AdminUpgradeRuntimeView,
+fn take_line(buffer: &mut Vec<u8>) -> Result<Option<String>, String> {
+    let Some(newline_index) = buffer.iter().position(|byte| *byte == b'\n') else {
+        return Ok(None);
     };
-
-    #[test]
-    fn parses_upgrade_runtime_executable_command() {
-        let plugin = ConsoleAdminUiPlugin;
-        assert_eq!(
-            plugin
-                .parse_line("upgrade runtime executable /tmp/server-bootstrap")
-                .expect("upgrade command should parse"),
-            AdminRequest::UpgradeRuntime {
-                executable_path: "/tmp/server-bootstrap".to_string(),
-            }
-        );
+    let mut line = buffer.drain(..=newline_index).collect::<Vec<_>>();
+    while matches!(line.last(), Some(b'\n' | b'\r')) {
+        let _ = line.pop();
     }
+    String::from_utf8(line)
+        .map(Some)
+        .map_err(|_| "console input was not valid utf-8".to_string())
+}
 
-    #[test]
-    fn renders_upgrade_runtime_and_permission_denied_responses() {
-        let plugin = ConsoleAdminUiPlugin;
-        assert_eq!(
-            plugin
-                .render_response(&AdminResponse::UpgradeRuntime(AdminUpgradeRuntimeView {
-                    executable_path: "/tmp/server-bootstrap".to_string(),
-                }))
-                .expect("upgrade response should render"),
-            "upgrade runtime: scheduled executable=/tmp/server-bootstrap"
-        );
-        assert_eq!(
-            plugin
-                .render_response(&AdminResponse::PermissionDenied {
-                    principal: AdminPrincipal::LocalConsole,
-                    permission: AdminPermission::UpgradeRuntime,
-                })
-                .expect("permission denied response should render"),
-            "permission denied: principal=local-console permission=upgrade-runtime"
-        );
+fn take_fd_resource(host: &SdkAdminSurfaceHost, name: &str) -> Result<RawFd, String> {
+    match host.take_process_resource(name)? {
+        Some(AdminSurfaceResource::NativeHandle {
+            handle_kind,
+            raw_handle,
+        }) if handle_kind == "fd" => i32::try_from(raw_handle)
+            .map_err(|_| format!("admin surface resource `{name}` did not fit in a raw fd")),
+        Some(other) => Err(format!(
+            "admin surface resource `{name}` had unexpected shape: {other:?}"
+        )),
+        None => Err(format!(
+            "required admin surface resource `{name}` was not available"
+        )),
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PollResult {
+    Ready,
+    TimedOut,
+}
+
+fn dup_fd(fd: RawFd) -> Result<RawFd, String> {
+    let duplicated = unsafe { libc::dup(fd) };
+    if duplicated < 0 {
+        Err(std::io::Error::last_os_error().to_string())
+    } else {
+        Ok(duplicated)
+    }
+}
+
+fn close_fd(fd: RawFd) {
+    let _ = unsafe { libc::close(fd) };
+}
+
+fn poll_fd(fd: RawFd, timeout_ms: i32) -> Result<PollResult, String> {
+    let mut descriptor = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+    if ready < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    if ready == 0 {
+        Ok(PollResult::TimedOut)
+    } else {
+        Ok(PollResult::Ready)
+    }
+}
+
+fn read_fd(fd: RawFd, buffer: &mut [u8]) -> Result<usize, String> {
+    let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+    if read < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            return Ok(0);
+        }
+        return Err(error.to_string());
+    }
+    usize::try_from(read).map_err(|_| "console read length overflowed usize".to_string())
+}
+
+export_plugin!(admin_surface, ConsoleAdminSurfacePlugin, MANIFEST);

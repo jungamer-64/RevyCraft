@@ -202,12 +202,12 @@ pub fn format_runtime_status_summary(snapshot: &RuntimeStatusSnapshot) -> String
 
     if let Some(plugin_host) = &snapshot.plugin_host {
         lines.push(format!(
-            "plugins protocol={} gameplay={} storage={} auth={} admin-ui={} active-quarantines={} artifact-quarantines={} pending-fatal={}",
+            "plugins protocol={} gameplay={} storage={} auth={} admin-surface={} active-quarantines={} artifact-quarantines={} pending-fatal={}",
             plugin_host.protocol_count,
             plugin_host.gameplay_count,
             plugin_host.storage_count,
             plugin_host.auth_count,
-            plugin_host.admin_ui_count,
+            plugin_host.admin_surface_count,
             plugin_host.active_quarantine_count,
             plugin_host.artifact_quarantine_count,
             plugin_host.pending_fatal_error.as_deref().unwrap_or("none"),
@@ -267,16 +267,14 @@ fn summarize_plugin_host_status(
             gameplay: map_failure_action(snapshot.failure_matrix.gameplay),
             storage: map_failure_action(snapshot.failure_matrix.storage),
             auth: map_failure_action(snapshot.failure_matrix.auth),
-            admin_transport: map_failure_action(snapshot.failure_matrix.admin_transport),
-            admin_ui: map_failure_action(snapshot.failure_matrix.admin_ui),
+            admin_surface: map_failure_action(snapshot.failure_matrix.admin_surface),
         },
         pending_fatal_error: snapshot.pending_fatal_error,
         protocol_count: snapshot.protocols.len(),
         gameplay_count: snapshot.gameplay.len(),
         storage_count: snapshot.storage.len(),
         auth_count: snapshot.auth.len(),
-        admin_transport_count: snapshot.admin_transport.len(),
-        admin_ui_count: snapshot.admin_ui.len(),
+        admin_surface_count: snapshot.admin_surface.len(),
         active_quarantine_count,
         artifact_quarantine_count,
     }

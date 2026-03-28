@@ -23,18 +23,19 @@ use crate::transport::AcceptedTransportSession;
 pub use crate::{
     AdminArtifactsReloadView, AdminCoreReloadView, AdminFullReloadView, AdminGenerationCountView,
     AdminListenerBindingView, AdminNamedCountView, AdminPermission, AdminPhaseCountView,
-    AdminPluginHostView, AdminPrincipal, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
-    AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
-    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, AdminUpgradeRuntimeView,
-    ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot,
-    RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole, RuntimeUpgradeStateView,
+    AdminPluginHostView, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
+    AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionTransportCountView,
+    AdminSessionView, AdminSessionsView, AdminStatusView, AdminTopologyReloadView,
+    AdminUpgradeRuntimeView, ListenerBinding, PluginFailureAction, PluginFailureMatrix,
+    PluginHostStatusSnapshot, RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole,
+    RuntimeUpgradeStateView,
 };
 use mc_core::{
     CoreEvent, EntityId, GameplayProfileId, PlayerId, PluginGenerationId, SessionCapabilitySet,
 };
 use mc_plugin_host::registry::ProtocolRegistry;
 use mc_plugin_host::runtime::{
-    AdminTransportProfileHandle, AuthGenerationHandle, GameplayProfileHandle, RuntimeReloadContext,
+    AdminSurfaceProfileHandle, AuthGenerationHandle, GameplayProfileHandle, RuntimeReloadContext,
 };
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use serde::{Deserialize, Serialize};
@@ -74,9 +75,10 @@ pub struct ServerSupervisor {
 }
 
 #[derive(Clone)]
-pub struct AdminTransportSelection {
-    pub transport_config_path: PathBuf,
-    pub profile: Arc<dyn AdminTransportProfileHandle>,
+pub struct AdminSurfaceSelection {
+    pub instance_id: String,
+    pub surface_config_path: Option<PathBuf>,
+    pub profile: Arc<dyn AdminSurfaceProfileHandle>,
 }
 
 impl ServerSupervisor {
@@ -111,8 +113,8 @@ impl ServerSupervisor {
         self.running.admin_control_plane()
     }
 
-    pub async fn current_admin_transport(&self) -> Option<AdminTransportSelection> {
-        self.running.current_admin_transport().await
+    pub async fn current_admin_surfaces(&self) -> Vec<AdminSurfaceSelection> {
+        self.running.current_admin_surfaces().await
     }
 
     /// # Errors
@@ -239,8 +241,8 @@ impl RunningServer {
         AdminControlPlaneHandle::new(Arc::clone(&self.runtime))
     }
 
-    pub async fn current_admin_transport(&self) -> Option<AdminTransportSelection> {
-        self.runtime.current_admin_transport().await
+    pub async fn current_admin_surfaces(&self) -> Vec<AdminSurfaceSelection> {
+        self.runtime.current_admin_surfaces().await
     }
 
     /// # Errors
@@ -363,14 +365,17 @@ impl RunningServer {
 }
 
 impl RuntimeServer {
-    pub(crate) async fn current_admin_transport(&self) -> Option<AdminTransportSelection> {
-        let selection = self.selection.current().await;
-        let transport_config_path = selection.config.admin.remote.transport_config.clone()?;
-        let profile = selection.admin_transport?;
-        Some(AdminTransportSelection {
-            transport_config_path,
-            profile,
-        })
+    pub(crate) async fn current_admin_surfaces(&self) -> Vec<AdminSurfaceSelection> {
+        self.selection
+            .current_admin_surfaces()
+            .await
+            .into_iter()
+            .map(|selection| AdminSurfaceSelection {
+                instance_id: selection.instance_id,
+                surface_config_path: selection.surface_config_path,
+                profile: selection.profile,
+            })
+            .collect()
     }
 
     pub(crate) async fn selection_state(&self) -> ResolvedRuntimeSelection {

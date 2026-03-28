@@ -3,9 +3,9 @@
 # This file is interpreted by `admin-transport-grpc`, not by the main server config loader.
 # `server.toml` should point to this file with:
 #
-# [static.admin.remote]
-# transport_profile = "grpc-v1"
-# transport_config = "admin-transport-grpc.toml"
+# [live.admin.surfaces.remote]
+# profile = "grpc-v1"
+# config = "admin-transport-grpc.toml"
 
 bind_addr = "127.0.0.1:50051"
 allow_non_loopback = false

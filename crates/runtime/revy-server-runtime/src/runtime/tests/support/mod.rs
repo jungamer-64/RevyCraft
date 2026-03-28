@@ -12,6 +12,10 @@ pub(crate) use self::network::*;
 pub(crate) use self::packets::*;
 pub(crate) use self::plugins::*;
 
+pub(crate) const CONSOLE_SURFACE_ID: &str = "console";
+pub(crate) const REMOTE_SURFACE_ID: &str = "remote";
+pub(crate) const CONSOLE_PRINCIPAL_ID: &str = "console:console";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UdpDatagramAction {
     Ignore,
@@ -36,6 +40,58 @@ pub(crate) fn loopback_server_config(world_dir: PathBuf) -> ServerConfig {
     config
 }
 
+pub(crate) fn set_console_surface(config: &mut ServerConfig, profile: &str) {
+    config.admin.surfaces.insert(
+        CONSOLE_SURFACE_ID.to_string(),
+        crate::config::AdminSurfaceConfig {
+            profile: profile.into(),
+            config: None,
+        },
+    );
+}
+
+pub(crate) fn set_remote_surface(
+    config: &mut ServerConfig,
+    profile: &str,
+    surface_config_path: impl Into<PathBuf>,
+) {
+    config.admin.surfaces.insert(
+        REMOTE_SURFACE_ID.to_string(),
+        crate::config::AdminSurfaceConfig {
+            profile: profile.into(),
+            config: Some(surface_config_path.into()),
+        },
+    );
+}
+
+pub(crate) fn set_console_permissions(
+    config: &mut ServerConfig,
+    permissions: Vec<crate::config::AdminPermission>,
+) {
+    config.admin.principals.insert(
+        CONSOLE_PRINCIPAL_ID.to_string(),
+        crate::config::AdminPrincipalConfig { permissions },
+    );
+}
+
+pub(crate) fn console_permissions(
+    config: &ServerConfig,
+) -> Option<&Vec<crate::config::AdminPermission>> {
+    config
+        .admin
+        .principals
+        .get(CONSOLE_PRINCIPAL_ID)
+        .map(|principal| &principal.permissions)
+}
+
+pub(crate) fn console_surface(config: &ServerConfig) -> Option<&crate::config::AdminSurfaceConfig> {
+    config.admin.surfaces.get(CONSOLE_SURFACE_ID)
+}
+
+pub(crate) fn remote_surface(config: &ServerConfig) -> Option<&crate::config::AdminSurfaceConfig> {
+    config.admin.surfaces.get(REMOTE_SURFACE_ID)
+}
+
 pub(crate) fn seed_runtime_plugins_with_loopback_admin(
     config: &mut ServerConfig,
     dist_dir: &Path,
@@ -54,8 +110,8 @@ pub(crate) fn seed_runtime_plugins_with_loopback_admin(
         fs::create_dir_all(parent)?;
     }
     fs::write(&token_path, format!("{token}\n"))?;
-    let transport_config_path = token_root.join("admin-transport-grpc.toml");
-    let transport_config_contents = format!(
+    let grpc_surface_config_path = token_root.join("admin-transport-grpc.toml");
+    let grpc_surface_config_contents = format!(
         "bind_addr = {}\nallow_non_loopback = false\n\n[principals.{}]\ntoken_file = {}\n",
         toml_string(&bind_addr.to_string()),
         toml_string(principal_id),
@@ -66,9 +122,8 @@ pub(crate) fn seed_runtime_plugins_with_loopback_admin(
                 .to_string_lossy()
         ),
     );
-    fs::write(&transport_config_path, transport_config_contents)?;
-    config.admin.remote.transport_profile = "grpc-v1".into();
-    config.admin.remote.transport_config = Some(transport_config_path);
+    fs::write(&grpc_surface_config_path, grpc_surface_config_contents)?;
+    set_remote_surface(config, "grpc-v1", grpc_surface_config_path);
     config.admin.principals.insert(
         principal_id.to_string(),
         crate::config::AdminPrincipalConfig { permissions },
@@ -149,24 +204,6 @@ pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<()
         toml_string(&config.bootstrap.plugin_abi_min.to_string()),
         toml_string(&config.bootstrap.plugin_abi_max.to_string()),
     ));
-    if !config.admin.remote.transport_profile.as_str().is_empty()
-        || config.admin.remote.transport_config.is_some()
-    {
-        contents.push_str("[static.admin.remote]\n");
-        if !config.admin.remote.transport_profile.as_str().is_empty() {
-            contents.push_str(&format!(
-                "transport_profile = {}\n",
-                toml_string(config.admin.remote.transport_profile.as_str())
-            ));
-        }
-        if let Some(transport_config) = &config.admin.remote.transport_config {
-            contents.push_str(&format!(
-                "transport_config = {}\n",
-                toml_string(&transport_config.display().to_string())
-            ));
-        }
-        contents.push('\n');
-    }
     let mut principals = config.admin.principals.iter().collect::<Vec<_>>();
     principals.sort_by(|left, right| left.0.cmp(right.0));
     for (principal_id, principal) in principals {
@@ -221,24 +258,25 @@ pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<()
     }
     contents.push_str("\n[live.plugins.buffer_limits]\n");
     contents.push_str(&format!(
-        "protocol_response_bytes = {}\ngameplay_response_bytes = {}\nstorage_response_bytes = {}\nauth_response_bytes = {}\nadmin_ui_response_bytes = {}\ncallback_payload_bytes = {}\nmetadata_bytes = {}\n",
+        "protocol_response_bytes = {}\ngameplay_response_bytes = {}\nstorage_response_bytes = {}\nauth_response_bytes = {}\nadmin_surface_response_bytes = {}\ncallback_payload_bytes = {}\nmetadata_bytes = {}\n",
         config.plugins.buffer_limits.protocol_response_bytes,
         config.plugins.buffer_limits.gameplay_response_bytes,
         config.plugins.buffer_limits.storage_response_bytes,
         config.plugins.buffer_limits.auth_response_bytes,
-        config.plugins.buffer_limits.admin_ui_response_bytes,
+        config.plugins.buffer_limits.admin_surface_response_bytes,
         config.plugins.buffer_limits.callback_payload_bytes,
         config.plugins.buffer_limits.metadata_bytes,
     ));
     contents.push_str("\n[live.plugins.failure_policy]\n");
     contents.push_str(&format!(
-        "protocol = {}\ngameplay = {}\nstorage = {}\nauth = {}\nadmin_transport = {}\nadmin_ui = {}\n\n",
+        "protocol = {}\ngameplay = {}\nstorage = {}\nauth = {}\nadmin_surface = {}\n\n",
         toml_string(failure_policy_name(config.plugins.failure_policy.protocol)),
         toml_string(failure_policy_name(config.plugins.failure_policy.gameplay)),
         toml_string(failure_policy_name(config.plugins.failure_policy.storage)),
         toml_string(failure_policy_name(config.plugins.failure_policy.auth)),
-        toml_string(failure_policy_name(config.plugins.failure_policy.admin_transport)),
-        toml_string(failure_policy_name(config.plugins.failure_policy.admin_ui)),
+        toml_string(failure_policy_name(
+            config.plugins.failure_policy.admin_surface
+        )),
     ));
     contents.push_str("[live.profiles]\n");
     contents.push_str(&format!(
@@ -257,12 +295,21 @@ pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<()
             toml_string(profile_id)
         ));
     }
-    contents.push_str("\n[live.admin]\n");
-    contents.push_str(&format!(
-        "ui_profile = {}\nlocal_console_permissions = {}\n",
-        toml_string(&config.admin.ui_profile),
-        admin_permissions_toml(&config.admin.local_console_permissions),
-    ));
+    let mut admin_surfaces = config.admin.surfaces.iter().collect::<Vec<_>>();
+    admin_surfaces.sort_by(|left, right| left.0.cmp(right.0));
+    for (instance_id, surface) in admin_surfaces {
+        contents.push_str(&format!(
+            "\n[live.admin.surfaces.{}]\nprofile = {}\n",
+            toml_string(instance_id),
+            toml_string(surface.profile.as_str()),
+        ));
+        if let Some(config_path) = &surface.config {
+            contents.push_str(&format!(
+                "config = {}\n",
+                toml_string(&config_path.display().to_string())
+            ));
+        }
+    }
     fs::write(path, contents)?;
     Ok(())
 }

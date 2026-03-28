@@ -774,15 +774,25 @@ fn is_plugin_package(package: &CargoPackage, plugins_root: &Path) -> bool {
 }
 
 fn plugin_spec_from_package_name(package_name: &str) -> Result<PluginSpec, String> {
+    if package_name == "mc-plugin-admin-ui-console" {
+        return Ok(PluginSpec {
+            cargo_package: package_name.to_string(),
+            plugin_id: "admin-ui-console".to_string(),
+            plugin_kind: "admin-surface".to_string(),
+        });
+    }
+    if package_name == "mc-plugin-admin-transport-grpc" {
+        return Ok(PluginSpec {
+            cargo_package: package_name.to_string(),
+            plugin_id: "admin-transport-grpc".to_string(),
+            plugin_kind: "admin-surface".to_string(),
+        });
+    }
     let Some(rest) = package_name.strip_prefix("mc-plugin-") else {
         return Err(format!("unsupported plugin package `{package_name}`"));
     };
     let (plugin_kind, plugin_id) = if let Some(adapter_id) = rest.strip_prefix("proto-") {
         ("protocol", adapter_id.to_string())
-    } else if rest.starts_with("admin-transport-") {
-        ("admin-transport", rest.to_string())
-    } else if rest.starts_with("admin-ui-") {
-        ("admin-ui", rest.to_string())
     } else if rest.starts_with("gameplay-") {
         ("gameplay", rest.to_string())
     } else if rest.starts_with("storage-") {
@@ -1055,20 +1065,20 @@ mod tests {
         );
         assert_eq!(
             plugin_spec_from_package_name("mc-plugin-admin-ui-console")
-                .expect("valid admin-ui plugin"),
+                .expect("valid admin-surface plugin"),
             PluginSpec {
                 cargo_package: "mc-plugin-admin-ui-console".to_string(),
                 plugin_id: "admin-ui-console".to_string(),
-                plugin_kind: "admin-ui".to_string(),
+                plugin_kind: "admin-surface".to_string(),
             }
         );
         assert_eq!(
             plugin_spec_from_package_name("mc-plugin-admin-transport-grpc")
-                .expect("valid admin-transport plugin"),
+                .expect("valid admin-surface plugin"),
             PluginSpec {
                 cargo_package: "mc-plugin-admin-transport-grpc".to_string(),
                 plugin_id: "admin-transport-grpc".to_string(),
-                plugin_kind: "admin-transport".to_string(),
+                plugin_kind: "admin-surface".to_string(),
             }
         );
     }

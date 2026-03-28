@@ -6,15 +6,15 @@ use crate::config::{BootstrapConfig, PluginBufferLimits, RuntimeSelectionConfig}
 use crate::host::{PluginAbiRange, PluginFailureAction, plugin_host_from_config};
 use crate::runtime::{ProtocolReloadSession, RuntimeReloadContext};
 use crate::test_support::{
-    InProcessAdminUiPlugin, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
-    InProcessStoragePlugin, PluginFailureMatrix, TestPluginHost, TestPluginHostBuilder,
+    InProcessAdminSurfacePlugin, InProcessAuthPlugin, InProcessGameplayPlugin,
+    InProcessProtocolPlugin, InProcessStoragePlugin, PluginFailureMatrix, TestPluginHost,
+    TestPluginHostBuilder,
 };
 use mc_core::{ConnectionId, CoreConfig, EntityId, PlayerId, ServerCore};
-use mc_plugin_admin_ui_console::in_process_plugin_entrypoints as console_admin_ui_entrypoints;
+use mc_plugin_admin_ui_console::in_process_plugin_entrypoints as console_admin_surface_entrypoints;
 use mc_plugin_api::abi::{
     CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginAbiVersion, PluginKind, Utf8Slice,
 };
-use mc_plugin_api::codec::admin_ui::{AdminRequest, AdminResponse};
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_api::manifest::PluginManifestV1;
 use mc_plugin_auth_offline::in_process_plugin_entrypoints as offline_auth_entrypoints;
@@ -32,7 +32,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-mod admin_ui;
+mod admin_surface;
 mod discovery;
 mod failure_policy;
 mod gameplay_query;
@@ -46,7 +46,10 @@ use self::support::*;
 use self::test_plugins::*;
 
 fn runtime_selection_config() -> RuntimeSelectionConfig {
-    RuntimeSelectionConfig::default()
+    RuntimeSelectionConfig {
+        admin_surfaces: Vec::new(),
+        ..RuntimeSelectionConfig::default()
+    }
 }
 
 fn bootstrap_config_with_plugins_dir(plugins_dir: PathBuf) -> BootstrapConfig {

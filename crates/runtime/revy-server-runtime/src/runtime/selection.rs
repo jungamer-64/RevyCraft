@@ -6,10 +6,10 @@ use mc_plugin_api::codec::auth::AuthMode;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_host::registry::LoadedPluginSet;
 use mc_plugin_host::runtime::{
-    AdminTransportProfileHandle, AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle,
-    StorageProfileHandle,
+    AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
 };
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock as AsyncRwLock;
 
@@ -35,9 +35,15 @@ pub(crate) struct ResolvedRuntimeSelection {
     pub(crate) loaded_plugins: LoadedPluginSet,
     pub(crate) auth_profile: Arc<dyn AuthProfileHandle>,
     pub(crate) bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,
-    pub(crate) admin_transport: Option<Arc<dyn AdminTransportProfileHandle>>,
-    pub(crate) admin_ui: Option<Arc<dyn AdminUiProfileHandle>>,
+    pub(crate) admin_surfaces: Vec<ResolvedAdminSurfaceSelection>,
     pub(crate) remote_admin_principals: HashMap<String, RemoteAdminPrincipal>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ResolvedAdminSurfaceSelection {
+    pub(crate) instance_id: String,
+    pub(crate) surface_config_path: Option<PathBuf>,
+    pub(crate) profile: Arc<dyn AdminSurfaceProfileHandle>,
 }
 
 pub(crate) struct BootstrapSelectionResolution {
@@ -76,15 +82,8 @@ impl SelectionManager {
         selection_state.config = next_active_config;
     }
 
-    pub(crate) async fn current_admin_ui(&self) -> Option<Arc<dyn AdminUiProfileHandle>> {
-        self.current().await.admin_ui
-    }
-
-    #[expect(dead_code, reason = "used by the upcoming admin transport supervisor")]
-    pub(crate) async fn current_admin_transport(
-        &self,
-    ) -> Option<Arc<dyn AdminTransportProfileHandle>> {
-        self.current().await.admin_transport
+    pub(crate) async fn current_admin_surfaces(&self) -> Vec<ResolvedAdminSurfaceSelection> {
+        self.current().await.admin_surfaces
     }
 
     pub(crate) async fn auth_profile(&self) -> Arc<dyn AuthProfileHandle> {
@@ -227,38 +226,25 @@ impl SelectionResolver {
         } else {
             None
         };
-        let admin_ui = loaded_plugins.resolve_admin_ui_profile(config.admin.ui_profile.as_str());
-        let admin_transport = if config.admin.remote.transport_profile.as_str().is_empty() {
-            None
-        } else {
-            Some(
-                loaded_plugins
-                    .resolve_admin_transport_profile(config.admin.remote.transport_profile.as_str())
-                    .ok_or_else(|| {
-                        RuntimeError::Config(format!(
-                            "unknown admin-transport profile `{}`",
-                            config.admin.remote.transport_profile.as_str()
-                        ))
-                    })?,
-            )
-        };
-        let remote_admin_principals = Self::materialize_remote_admin_principals(&config);
+        let admin_surfaces = Self::resolve_admin_surface_selections(&config, &loaded_plugins)?;
+        let remote_admin_principals =
+            Self::materialize_remote_admin_principals(&config, &admin_surfaces)?;
 
         Ok(ResolvedRuntimeSelection {
             config,
             loaded_plugins,
             auth_profile,
             bedrock_auth_profile,
-            admin_transport,
-            admin_ui,
+            admin_surfaces,
             remote_admin_principals,
         })
     }
 
     pub(crate) fn materialize_remote_admin_principals(
         config: &ServerConfig,
-    ) -> HashMap<String, RemoteAdminPrincipal> {
-        config
+        surfaces: &[ResolvedAdminSurfaceSelection],
+    ) -> Result<HashMap<String, RemoteAdminPrincipal>, RuntimeError> {
+        let mut principals = config
             .admin
             .principals
             .iter()
@@ -275,6 +261,61 @@ impl SelectionResolver {
                             .collect(),
                     ),
                 )
+            })
+            .collect::<HashMap<_, _>>();
+        for surface in surfaces {
+            let declaration = surface
+                .profile
+                .declare_instance(&surface.instance_id, surface.surface_config_path.as_deref())
+                .map_err(|error| RuntimeError::Config(error.to_string()))?;
+            for principal in declaration.principals {
+                let permissions = principal
+                    .permissions
+                    .into_iter()
+                    .map(runtime_permission_from_plugin)
+                    .collect::<Vec<_>>();
+                match principals.get(&principal.principal_id) {
+                    Some(existing) if existing.permissions != permissions => {
+                        return Err(RuntimeError::Config(format!(
+                            "admin principal `{}` permissions conflicted between host config and admin surface `{}`",
+                            principal.principal_id, surface.instance_id
+                        )));
+                    }
+                    Some(_) => {}
+                    None => {
+                        principals.insert(
+                            principal.principal_id.clone(),
+                            RemoteAdminPrincipal::new(principal.principal_id, permissions),
+                        );
+                    }
+                }
+            }
+        }
+        Ok(principals)
+    }
+
+    fn resolve_admin_surface_selections(
+        config: &ServerConfig,
+        loaded_plugins: &LoadedPluginSet,
+    ) -> Result<Vec<ResolvedAdminSurfaceSelection>, RuntimeError> {
+        let mut surfaces = config.admin.surfaces.iter().collect::<Vec<_>>();
+        surfaces.sort_by(|left, right| left.0.cmp(right.0));
+        surfaces
+            .into_iter()
+            .map(|(instance_id, surface)| {
+                let profile_id = surface.profile.to_string();
+                let profile = loaded_plugins
+                    .resolve_admin_surface_profile(&profile_id)
+                    .ok_or_else(|| {
+                        RuntimeError::Config(format!(
+                            "unknown admin-surface profile `{profile_id}` for surface `{instance_id}`"
+                        ))
+                    })?;
+                Ok(ResolvedAdminSurfaceSelection {
+                    instance_id: instance_id.clone(),
+                    surface_config_path: surface.config.clone(),
+                    profile,
+                })
             })
             .collect()
     }
@@ -321,5 +362,21 @@ const fn runtime_permission_from_config(
         crate::config::AdminPermission::ReloadRuntime => AdminPermission::ReloadRuntime,
         crate::config::AdminPermission::UpgradeRuntime => AdminPermission::UpgradeRuntime,
         crate::config::AdminPermission::Shutdown => AdminPermission::Shutdown,
+    }
+}
+
+const fn runtime_permission_from_plugin(
+    permission: mc_plugin_api::codec::admin::AdminPermission,
+) -> AdminPermission {
+    match permission {
+        mc_plugin_api::codec::admin::AdminPermission::Status => AdminPermission::Status,
+        mc_plugin_api::codec::admin::AdminPermission::Sessions => AdminPermission::Sessions,
+        mc_plugin_api::codec::admin::AdminPermission::ReloadRuntime => {
+            AdminPermission::ReloadRuntime
+        }
+        mc_plugin_api::codec::admin::AdminPermission::UpgradeRuntime => {
+            AdminPermission::UpgradeRuntime
+        }
+        mc_plugin_api::codec::admin::AdminPermission::Shutdown => AdminPermission::Shutdown,
     }
 }

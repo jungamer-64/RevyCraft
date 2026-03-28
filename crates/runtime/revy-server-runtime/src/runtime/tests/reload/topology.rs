@@ -231,7 +231,6 @@ async fn config_reload_rotates_generation_for_protocol_buffer_limit_changes()
     let mut updated = initial.clone();
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
     updated.profiles.default_gameplay = "readonly".into();
-    updated.admin.ui_profile = "console-v2".into();
     write_server_toml_for_reload(&config_path, &updated)?;
 
     let result = server.reload_runtime_full().await?;
@@ -323,8 +322,8 @@ async fn generation_reload_ignores_pending_protocol_buffer_limit_changes()
         initial.profiles.default_gameplay
     );
     assert_eq!(
-        server.runtime.active_generation().config.admin.ui_profile,
-        initial.admin.ui_profile
+        server.runtime.active_generation().config.admin.surfaces,
+        initial.admin.surfaces
     );
     assert_eq!(
         server
@@ -337,14 +336,8 @@ async fn generation_reload_ignores_pending_protocol_buffer_limit_changes()
         initial.profiles.default_gameplay
     );
     assert_eq!(
-        server
-            .runtime
-            .selection_state()
-            .await
-            .config
-            .admin
-            .ui_profile,
-        initial.admin.ui_profile
+        server.runtime.selection_state().await.config.admin.surfaces,
+        initial.admin.surfaces
     );
 
     server.shutdown().await

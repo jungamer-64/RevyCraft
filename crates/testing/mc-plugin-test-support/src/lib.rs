@@ -10,7 +10,7 @@ enum PackagedPluginKind {
     Gameplay,
     Storage,
     Auth,
-    AdminUi,
+    AdminSurface,
 }
 
 impl PackagedPluginKind {
@@ -20,7 +20,7 @@ impl PackagedPluginKind {
             Self::Gameplay => "gameplay",
             Self::Storage => "storage",
             Self::Auth => "auth",
-            Self::AdminUi => "admin-ui",
+            Self::AdminSurface => "admin-surface",
         }
     }
 }
@@ -363,7 +363,7 @@ impl PackagedPluginHarness {
     /// # Errors
     ///
     /// Returns an error when the packaged plugin cannot be built, cached, or installed.
-    pub fn install_admin_ui_plugin(
+    pub fn install_admin_surface_plugin(
         &self,
         cargo_package: &str,
         plugin_id: &str,
@@ -375,7 +375,7 @@ impl PackagedPluginHarness {
             PackagedPluginSpec {
                 cargo_package,
                 plugin_id,
-                kind: PackagedPluginKind::AdminUi,
+                kind: PackagedPluginKind::AdminSurface,
                 build_tag,
             },
             dist_dir,
@@ -386,7 +386,7 @@ impl PackagedPluginHarness {
     /// # Errors
     ///
     /// Returns an error when the packaged plugin cannot be built, cached, or installed.
-    pub fn install_admin_ui_plugin_for_reload(
+    pub fn install_admin_surface_plugin_for_reload(
         &self,
         cargo_package: &str,
         plugin_id: &str,
@@ -398,7 +398,7 @@ impl PackagedPluginHarness {
             PackagedPluginSpec {
                 cargo_package,
                 plugin_id,
-                kind: PackagedPluginKind::AdminUi,
+                kind: PackagedPluginKind::AdminSurface,
                 build_tag,
             },
             dist_dir,

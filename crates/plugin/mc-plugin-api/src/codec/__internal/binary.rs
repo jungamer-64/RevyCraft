@@ -48,8 +48,7 @@ impl Encoder {
             PluginKind::Storage => 2,
             PluginKind::Auth => 3,
             PluginKind::Gameplay => 4,
-            PluginKind::AdminUi => 5,
-            PluginKind::AdminTransport => 6,
+            PluginKind::AdminSurface => 7,
         });
         encoder.write_u8(header.op_code);
         encoder.write_u16(header.flags);

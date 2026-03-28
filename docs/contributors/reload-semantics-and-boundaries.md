@@ -135,7 +135,7 @@ plugin kind ごとの failure policy は引き続き次です。
 - gameplay = `quarantine`
 - storage = `fail-fast`
 - auth = `skip`
-- admin-ui = `skip`
+- admin-surface = `skip`
 
 読み方:
 
@@ -155,7 +155,7 @@ runtime には少なくとも 2 種類の世代があります。
 - topology generation
   listener と routing の世代
 - plugin generation
-  protocol / gameplay / storage / auth / admin-ui plugin の世代
+  protocol / gameplay / storage / auth / admin-surface plugin の世代
 
 `core` migration は topology generation のような別番号を持つ公開概念ではなく、live session を同一 connection / entity identity のまま新しい core owner に張り替える内部 operation として扱います。
 

@@ -1,9 +1,9 @@
 use super::{
-    AdminTransportProfileId, AdminUiProfileId, GameplayProfileId, PluginAbiVersion, PluginKind,
-    PluginManifestV1, RuntimeError, Utf8Slice, decode_utf8_slice_with_limit, read_checked_slice,
+    GameplayProfileId, PluginAbiVersion, PluginKind, PluginManifestV1, RuntimeError, Utf8Slice,
+    decode_utf8_slice_with_limit, read_checked_slice,
 };
 use crate::config::PluginBufferLimits;
-use mc_core::{AuthProfileId, StorageProfileId};
+use mc_core::{AdminSurfaceProfileId, AuthProfileId, StorageProfileId};
 use mc_plugin_api::abi::CapabilityDescriptorV1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,8 +23,7 @@ pub(crate) enum ManifestCapabilities {
     Gameplay(ProfileManifestCapabilities<GameplayProfileId>),
     Storage(ProfileManifestCapabilities<StorageProfileId>),
     Auth(ProfileManifestCapabilities<AuthProfileId>),
-    AdminTransport(ProfileManifestCapabilities<AdminTransportProfileId>),
-    AdminUi(ProfileManifestCapabilities<AdminUiProfileId>),
+    AdminSurface(ProfileManifestCapabilities<AdminSurfaceProfileId>),
 }
 
 #[derive(Clone, Debug)]
@@ -115,23 +114,13 @@ fn decode_manifest_capabilities(
             "runtime.reload.auth",
             AuthProfileId::new,
         )?)),
-        PluginKind::AdminTransport => Ok(ManifestCapabilities::AdminTransport(
-            parse_profile_manifest(
-                plugin_id,
-                "admin-transport",
-                capabilities,
-                "admin-transport.profile:",
-                "runtime.reload.admin-transport",
-                AdminTransportProfileId::new,
-            )?,
-        )),
-        PluginKind::AdminUi => Ok(ManifestCapabilities::AdminUi(parse_profile_manifest(
+        PluginKind::AdminSurface => Ok(ManifestCapabilities::AdminSurface(parse_profile_manifest(
             plugin_id,
-            "admin-ui",
+            "admin-surface",
             capabilities,
-            "admin-ui.profile:",
-            "runtime.reload.admin-ui",
-            AdminUiProfileId::new,
+            "admin-surface.profile:",
+            "runtime.reload.admin-surface",
+            AdminSurfaceProfileId::new,
         )?)),
     }
 }

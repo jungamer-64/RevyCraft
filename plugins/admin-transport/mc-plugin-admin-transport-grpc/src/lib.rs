@@ -1,17 +1,18 @@
 #![allow(clippy::multiple_crate_versions)]
 
-use mc_core::{AdminTransportCapability, AdminTransportCapabilitySet};
-use mc_plugin_api::codec::admin_transport::{
-    AdminTransportEndpointView, AdminTransportPauseView, AdminTransportStatusView,
+use mc_core::{AdminSurfaceCapability, AdminSurfaceCapabilitySet};
+use mc_plugin_api::codec::admin::{
+    self as surface_admin, AdminArtifactsReloadView, AdminFullReloadView, AdminNamedCountView,
+    AdminRuntimeReloadDetail, AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionsView,
+    AdminStatusView, AdminTopologyReloadView, AdminUpgradeRuntimeView, RuntimeReloadMode,
+    RuntimeUpgradePhase, RuntimeUpgradeRole,
 };
-use mc_plugin_api::codec::admin_ui::{
-    AdminArtifactsReloadView, AdminFullReloadView, AdminNamedCountView, AdminRuntimeReloadDetail,
-    AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionsView, AdminStatusView,
-    AdminTopologyReloadView, AdminUpgradeRuntimeView, RuntimeReloadMode, RuntimeUpgradePhase,
-    RuntimeUpgradeRole,
+use mc_plugin_api::codec::admin_surface::{
+    AdminSurfaceEndpointView, AdminSurfaceInstanceDeclaration, AdminSurfacePauseView,
+    AdminSurfaceResource, AdminSurfaceStatusView,
 };
-use mc_plugin_sdk_rust::admin_transport::{
-    AdminTransportHost, RustAdminTransportPlugin, SdkAdminTransportHost,
+use mc_plugin_sdk_rust::admin_surface::{
+    AdminSurfaceHost, RustAdminSurfacePlugin, SdkAdminSurfaceHost,
 };
 use mc_plugin_sdk_rust::capabilities;
 use mc_plugin_sdk_rust::export_plugin;
@@ -25,99 +26,92 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
-#[cfg(unix)]
-use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
-#[cfg(windows)]
-use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
-use tokio::net::TcpListener;
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicU8, Ordering},
+};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 
-const MANIFEST: StaticPluginManifest = StaticPluginManifest::admin_transport(
+#[cfg(unix)]
+use std::os::fd::{FromRawFd, IntoRawFd};
+
+#[cfg(windows)]
+use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket, RawSocket};
+
+const MANIFEST: StaticPluginManifest = StaticPluginManifest::admin_surface(
     "admin-transport-grpc",
-    "gRPC Admin Transport Plugin",
+    "gRPC Admin Surface Plugin",
     "grpc-v1",
 );
 
 #[derive(Default)]
-pub struct GrpcAdminTransportPlugin {
+pub struct GrpcAdminSurfacePlugin {
     runtime: OnceLock<Result<tokio::runtime::Runtime, String>>,
-    state: Mutex<GrpcTransportState>,
+    instances: Mutex<HashMap<String, GrpcSurfaceInstanceState>>,
 }
 
-enum GrpcTransportState {
-    Stopped,
-    Active(ActiveGrpcTransport),
-    Paused(PausedGrpcTransport),
-}
-
-impl Default for GrpcTransportState {
-    fn default() -> Self {
-        Self::Stopped
-    }
-}
-
-struct ActiveGrpcTransport {
-    handle: AdminGrpcServerHandle,
-}
-
-struct PausedGrpcTransport {
-    handle: AdminGrpcServerHandle,
+enum GrpcSurfaceInstanceState {
+    Active {
+        config: LoadedGrpcSurfaceConfig,
+        handle: AdminGrpcServerHandle,
+    },
+    Paused {
+        config: LoadedGrpcSurfaceConfig,
+        handle: AdminGrpcServerHandle,
+    },
 }
 
 #[derive(Clone)]
 struct AdminGrpcService {
-    host: SdkAdminTransportHost,
+    host: SdkAdminSurfaceHost,
     auth: ArcAuthMap,
-    shutdown_tx: watch::Sender<bool>,
+    serve_mode: Arc<AtomicU8>,
 }
 
-type ArcAuthMap = std::sync::Arc<HashMap<String, String>>;
+type ArcAuthMap = Arc<HashMap<String, String>>;
+
+enum ListenerSource {
+    Bind(SocketAddr),
+    Inherited(std::net::TcpListener),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AcceptLoopMode {
+    Running,
+    Paused,
+    Shutdown,
+}
+
+impl AcceptLoopMode {
+    const fn as_u8(self) -> u8 {
+        match self {
+            Self::Running => 1,
+            Self::Paused => 2,
+            Self::Shutdown => 3,
+        }
+    }
+}
 
 #[derive(Debug)]
 struct AdminGrpcServerHandle {
-    runtime_handle: tokio::runtime::Handle,
     local_addr: SocketAddr,
-    listener: std::net::TcpListener,
+    handoff_listener: Option<std::net::TcpListener>,
+    serve_mode: Arc<AtomicU8>,
+    accept_mode_tx: watch::Sender<AcceptLoopMode>,
     shutdown_tx: watch::Sender<bool>,
-    shutdown_rx: watch::Receiver<bool>,
-    incoming_tx: mpsc::Sender<Result<TcpListenerStream, std::io::Error>>,
-    accept_state: AdminGrpcAcceptState,
     server_join_handle: JoinHandle<()>,
     server_done_rx: oneshot::Receiver<Result<(), String>>,
 }
 
-#[derive(Debug)]
-enum AdminGrpcAcceptState {
-    Accepting {
-        control_tx: mpsc::Sender<AdminGrpcAcceptControl>,
-        join_handle: JoinHandle<Result<(), String>>,
-    },
-    Paused,
-}
-
-#[derive(Debug)]
-enum AdminGrpcAcceptControl {
-    PauseForUpgrade { ack_tx: oneshot::Sender<()> },
-    Shutdown,
-}
-
-type TcpListenerStream = tokio::net::TcpStream;
-
-#[derive(Debug)]
-struct SpawnedAcceptLoop {
-    control_tx: mpsc::Sender<AdminGrpcAcceptControl>,
-    join_handle: JoinHandle<Result<(), String>>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GrpcTransportConfig {
+struct GrpcSurfaceConfig {
     bind_addr: String,
     #[serde(default)]
     allow_non_loopback: bool,
@@ -131,128 +125,212 @@ struct GrpcPrincipalConfig {
     token_file: PathBuf,
 }
 
-impl RustAdminTransportPlugin for GrpcAdminTransportPlugin {
-    fn descriptor(&self) -> mc_plugin_api::codec::admin_transport::AdminTransportDescriptor {
-        mc_plugin_sdk_rust::admin_transport::admin_transport_descriptor("grpc-v1")
+#[derive(Clone)]
+struct LoadedGrpcSurfaceConfig {
+    bind_addr: SocketAddr,
+    token_principals: ArcAuthMap,
+}
+
+impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
+    fn descriptor(&self) -> mc_plugin_api::codec::admin_surface::AdminSurfaceDescriptor {
+        mc_plugin_sdk_rust::admin_surface::admin_surface_descriptor("grpc-v1")
     }
 
-    fn capability_set(&self) -> AdminTransportCapabilitySet {
-        capabilities::admin_transport_capabilities(&[AdminTransportCapability::RuntimeReload])
+    fn capability_set(&self) -> AdminSurfaceCapabilitySet {
+        capabilities::admin_surface_capabilities(&[AdminSurfaceCapability::RuntimeReload])
+    }
+
+    fn declare_instance(
+        &self,
+        _instance_id: &str,
+        surface_config_path: Option<&str>,
+    ) -> Result<AdminSurfaceInstanceDeclaration, String> {
+        let _config = load_surface_config(surface_config_path)?;
+        Ok(AdminSurfaceInstanceDeclaration {
+            principals: Vec::new(),
+            required_process_resources: Vec::new(),
+            supports_upgrade_handoff: true,
+        })
     }
 
     fn start(
         &self,
-        host: SdkAdminTransportHost,
-        transport_config_path: &str,
-    ) -> Result<AdminTransportStatusView, String> {
-        let config = load_transport_config(transport_config_path)?;
+        instance_id: &str,
+        host: SdkAdminSurfaceHost,
+        surface_config_path: Option<&str>,
+    ) -> Result<AdminSurfaceStatusView, String> {
+        let config = load_surface_config(surface_config_path)?;
         let handle = self.block_on_async(spawn_admin_grpc_server(
             self.runtime_handle()?,
             &config,
             host,
+            ListenerSource::Bind(config.bind_addr),
+            AcceptLoopMode::Running,
         ))?;
         let status = handle.status_view();
-        let mut state = self
-            .state
+        let mut instances = self
+            .instances
             .lock()
-            .expect("admin-transport state mutex should not be poisoned");
-        ensure_stopped(&state)?;
-        *state = GrpcTransportState::Active(ActiveGrpcTransport { handle });
+            .expect("admin-surface grpc mutex should not be poisoned");
+        ensure_instance_absent(&instances, instance_id)?;
+        instances.insert(
+            instance_id.to_string(),
+            GrpcSurfaceInstanceState::Active { config, handle },
+        );
         Ok(status)
     }
 
     fn pause_for_upgrade(
         &self,
-        host: SdkAdminTransportHost,
-    ) -> Result<AdminTransportPauseView, String> {
-        let mut state = self
-            .state
+        instance_id: &str,
+        host: SdkAdminSurfaceHost,
+    ) -> Result<AdminSurfacePauseView, String> {
+        let state = self
+            .instances
             .lock()
-            .expect("admin-transport state mutex should not be poisoned");
-        let mut handle = match std::mem::replace(&mut *state, GrpcTransportState::Stopped) {
-            GrpcTransportState::Active(active) => active.handle,
-            other => {
-                *state = other;
-                return Err("gRPC admin transport is not active".to_string());
+            .expect("admin-surface grpc mutex should not be poisoned")
+            .remove(instance_id)
+            .ok_or_else(|| format!("gRPC admin surface `{instance_id}` is not active"))?;
+        let (config, handle) = match state {
+            GrpcSurfaceInstanceState::Active { config, handle } => (config, handle),
+            GrpcSurfaceInstanceState::Paused { config, handle } => {
+                self.instances
+                    .lock()
+                    .expect("admin-surface grpc mutex should not be poisoned")
+                    .insert(
+                        instance_id.to_string(),
+                        GrpcSurfaceInstanceState::Paused { config, handle },
+                    );
+                return Err(format!(
+                    "gRPC admin surface `{instance_id}` is already paused"
+                ));
             }
         };
-        let listener = self.block_on_async(handle.pause_for_upgrade())?;
-        host.publish_tcp_listener_for_upgrade(listener_into_raw(listener))?;
-        let pause = AdminTransportPauseView {
+        let mut handle = handle;
+        let listener_resource =
+            listener_resource_from_tcp_listener(handle.export_handoff_listener()?)?;
+        host.publish_handoff_resource("listener", &listener_resource)?;
+        self.instances
+            .lock()
+            .expect("admin-surface grpc mutex should not be poisoned")
+            .insert(
+                instance_id.to_string(),
+                GrpcSurfaceInstanceState::Paused { config, handle },
+            );
+        Ok(AdminSurfacePauseView {
             resume_payload: Vec::new(),
-        };
-        *state = GrpcTransportState::Paused(PausedGrpcTransport { handle });
-        Ok(pause)
+        })
     }
 
     fn resume_from_upgrade(
         &self,
-        host: SdkAdminTransportHost,
-        transport_config_path: &str,
+        instance_id: &str,
+        host: SdkAdminSurfaceHost,
+        surface_config_path: Option<&str>,
         _resume_payload: &[u8],
-    ) -> Result<AdminTransportStatusView, String> {
-        let config = load_transport_config(transport_config_path)?;
-        let raw_listener = host.take_tcp_listener_from_upgrade()?.ok_or_else(|| {
-            "admin-transport upgrade resume did not receive a listener".to_string()
-        })?;
-        let listener = listener_from_raw(raw_listener);
-        let handle = self.block_on_async(spawn_admin_grpc_server_from_std_listener(
+    ) -> Result<AdminSurfaceStatusView, String> {
+        let config = load_surface_config(surface_config_path)?;
+        let listener = take_handoff_listener(&host)?;
+        let handle = self.block_on_async(spawn_admin_grpc_server(
             self.runtime_handle()?,
-            listener,
             &config,
             host,
+            ListenerSource::Inherited(listener),
+            AcceptLoopMode::Paused,
         ))?;
         let status = handle.status_view();
-        let mut state = self
-            .state
+        let mut instances = self
+            .instances
             .lock()
-            .expect("admin-transport state mutex should not be poisoned");
-        ensure_stopped(&state)?;
-        *state = GrpcTransportState::Active(ActiveGrpcTransport { handle });
+            .expect("admin-surface grpc mutex should not be poisoned");
+        if let Some(previous) = instances.remove(instance_id) {
+            match previous {
+                GrpcSurfaceInstanceState::Active { .. } => {
+                    return Err(format!(
+                        "gRPC admin surface `{instance_id}` is already active"
+                    ));
+                }
+                GrpcSurfaceInstanceState::Paused { .. } => {}
+            }
+        }
+        instances.insert(
+            instance_id.to_string(),
+            GrpcSurfaceInstanceState::Active { config, handle },
+        );
         Ok(status)
+    }
+
+    fn activate_after_upgrade_commit(
+        &self,
+        instance_id: &str,
+        _host: SdkAdminSurfaceHost,
+    ) -> Result<(), String> {
+        let instances = self
+            .instances
+            .lock()
+            .expect("admin-surface grpc mutex should not be poisoned");
+        let Some(GrpcSurfaceInstanceState::Active { handle, .. }) = instances.get(instance_id)
+        else {
+            return Err(format!("gRPC admin surface `{instance_id}` is not active"));
+        };
+        handle.activate_after_upgrade_commit()
     }
 
     fn resume_after_upgrade_rollback(
         &self,
-        _host: SdkAdminTransportHost,
-    ) -> Result<AdminTransportStatusView, String> {
-        let mut state = self
-            .state
+        instance_id: &str,
+        _host: SdkAdminSurfaceHost,
+    ) -> Result<AdminSurfaceStatusView, String> {
+        let mut instances = self
+            .instances
             .lock()
-            .expect("admin-transport state mutex should not be poisoned");
-        let mut handle = match std::mem::replace(&mut *state, GrpcTransportState::Stopped) {
-            GrpcTransportState::Paused(paused) => paused.handle,
-            other => {
-                *state = other;
-                return Err("gRPC admin transport was not paused for upgrade".to_string());
+            .expect("admin-surface grpc mutex should not be poisoned");
+        match instances.remove(instance_id) {
+            Some(GrpcSurfaceInstanceState::Paused { config, handle }) => {
+                handle.activate_after_upgrade_commit()?;
+                let status = handle.status_view();
+                instances.insert(
+                    instance_id.to_string(),
+                    GrpcSurfaceInstanceState::Active { config, handle },
+                );
+                Ok(status)
             }
-        };
-        handle.resume_after_upgrade_rollback()?;
-        let status = handle.status_view();
-        *state = GrpcTransportState::Active(ActiveGrpcTransport { handle });
-        Ok(status)
+            Some(state @ GrpcSurfaceInstanceState::Active { .. }) => {
+                instances.insert(instance_id.to_string(), state);
+                Err(format!(
+                    "gRPC admin surface `{instance_id}` is already active"
+                ))
+            }
+            None => Err(format!(
+                "gRPC admin surface `{instance_id}` was not paused for upgrade"
+            )),
+        }
     }
 
-    fn shutdown(&self, _host: SdkAdminTransportHost) -> Result<(), String> {
-        let mut state = self
-            .state
+    fn shutdown(&self, instance_id: &str, _host: SdkAdminSurfaceHost) -> Result<(), String> {
+        let state = self
+            .instances
             .lock()
-            .expect("admin-transport state mutex should not be poisoned");
-        let state_value = std::mem::replace(&mut *state, GrpcTransportState::Stopped);
-        match state_value {
-            GrpcTransportState::Stopped => Ok(()),
-            GrpcTransportState::Active(active) => self.block_on_async(active.handle.join()),
-            GrpcTransportState::Paused(paused) => self.block_on_async(paused.handle.join()),
+            .expect("admin-surface grpc mutex should not be poisoned")
+            .remove(instance_id);
+        match state {
+            None => Ok(()),
+            Some(GrpcSurfaceInstanceState::Paused { handle, .. }) => {
+                self.block_on_async(handle.join())
+            }
+            Some(GrpcSurfaceInstanceState::Active { handle, .. }) => {
+                self.block_on_async(handle.join())
+            }
         }
     }
 }
 
-impl GrpcAdminTransportPlugin {
+impl GrpcAdminSurfacePlugin {
     fn runtime(&self) -> Result<&tokio::runtime::Runtime, String> {
         match self.runtime.get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
-                .thread_name("admin-transport-grpc")
+                .thread_name("admin-surface-grpc")
                 .enable_all()
                 .build()
                 .map_err(|error| format!("failed to build admin gRPC runtime: {error}"))
@@ -274,51 +352,57 @@ impl GrpcAdminTransportPlugin {
     }
 }
 
-fn ensure_stopped(state: &GrpcTransportState) -> Result<(), String> {
-    if matches!(state, GrpcTransportState::Stopped) {
-        Ok(())
+fn ensure_instance_absent(
+    instances: &HashMap<String, GrpcSurfaceInstanceState>,
+    instance_id: &str,
+) -> Result<(), String> {
+    if instances.contains_key(instance_id) {
+        Err(format!(
+            "gRPC admin surface `{instance_id}` is already running"
+        ))
     } else {
-        Err("gRPC admin transport is already running".to_string())
+        Ok(())
     }
 }
 
-fn load_transport_config(path: &str) -> Result<LoadedGrpcTransportConfig, String> {
-    let transport_config_path = PathBuf::from(path);
-    let contents = fs::read_to_string(&transport_config_path).map_err(|error| {
+fn load_surface_config(path: Option<&str>) -> Result<LoadedGrpcSurfaceConfig, String> {
+    let path = path.ok_or_else(|| "gRPC admin surface requires a config path".to_string())?;
+    let surface_config_path = PathBuf::from(path);
+    let contents = fs::read_to_string(&surface_config_path).map_err(|error| {
         format!(
-            "failed to read admin transport config {}: {error}",
-            transport_config_path.display()
+            "failed to read admin surface config {}: {error}",
+            surface_config_path.display()
         )
     })?;
-    let document: GrpcTransportConfig = toml::from_str(&contents).map_err(|error| {
+    let document: GrpcSurfaceConfig = toml::from_str(&contents).map_err(|error| {
         format!(
-            "failed to parse admin transport config {}: {error}",
-            transport_config_path.display()
+            "failed to parse admin surface config {}: {error}",
+            surface_config_path.display()
         )
     })?;
     let bind_addr: SocketAddr = document.bind_addr.parse().map_err(|_| {
         format!(
             "invalid bind_addr `{}` in {}",
             document.bind_addr,
-            transport_config_path.display()
+            surface_config_path.display()
         )
     })?;
     if !document.allow_non_loopback && !bind_addr.ip().is_loopback() {
         return Err(format!(
             "bind_addr `{bind_addr}` is non-loopback; set allow_non_loopback=true in {}",
-            transport_config_path.display()
+            surface_config_path.display()
         ));
     }
     if document.principals.is_empty() {
         return Err(format!(
             "{} must define at least one principals.<id>.token_file entry",
-            transport_config_path.display()
+            surface_config_path.display()
         ));
     }
-    let mut token_principals = HashMap::new();
-    let base_dir = transport_config_path
+    let base_dir = surface_config_path
         .parent()
         .unwrap_or_else(|| Path::new("."));
+    let mut token_principals = HashMap::new();
     let mut entries = document.principals.into_iter().collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     for (principal_id, principal) in entries {
@@ -348,15 +432,76 @@ fn load_transport_config(path: &str) -> Result<LoadedGrpcTransportConfig, String
             ));
         }
     }
-    Ok(LoadedGrpcTransportConfig {
+    Ok(LoadedGrpcSurfaceConfig {
         bind_addr,
-        token_principals: std::sync::Arc::new(token_principals),
+        token_principals: Arc::new(token_principals),
     })
 }
 
-struct LoadedGrpcTransportConfig {
-    bind_addr: SocketAddr,
-    token_principals: ArcAuthMap,
+fn take_handoff_listener(host: &SdkAdminSurfaceHost) -> Result<std::net::TcpListener, String> {
+    let resource = host.take_handoff_resource("listener")?.ok_or_else(|| {
+        "gRPC admin surface did not receive a listener handoff resource".to_string()
+    })?;
+    tcp_listener_from_resource(resource)
+}
+
+fn listener_resource_from_tcp_listener(
+    listener: std::net::TcpListener,
+) -> Result<AdminSurfaceResource, String> {
+    #[cfg(unix)]
+    {
+        let _ = listener
+            .local_addr()
+            .map_err(|error| format!("failed to inspect gRPC listener: {error}"))?;
+        Ok(AdminSurfaceResource::NativeHandle {
+            handle_kind: "tcp-listener".to_string(),
+            raw_handle: u64::try_from(listener.into_raw_fd())
+                .expect("unix listener fd should fit into u64"),
+        })
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = listener
+            .local_addr()
+            .map_err(|error| format!("failed to inspect gRPC listener: {error}"))?;
+        Ok(AdminSurfaceResource::NativeHandle {
+            handle_kind: "tcp-listener".to_string(),
+            raw_handle: listener.into_raw_socket() as u64,
+        })
+    }
+}
+
+fn tcp_listener_from_resource(
+    resource: AdminSurfaceResource,
+) -> Result<std::net::TcpListener, String> {
+    match resource {
+        AdminSurfaceResource::NativeHandle {
+            handle_kind,
+            raw_handle,
+        } if handle_kind == "tcp-listener" => {
+            #[cfg(unix)]
+            {
+                let raw_fd = i32::try_from(raw_handle).map_err(|_| {
+                    format!("listener handoff fd `{raw_handle}` did not fit into i32")
+                })?;
+                return Ok(unsafe { std::net::TcpListener::from_raw_fd(raw_fd) });
+            }
+
+            #[cfg(windows)]
+            {
+                return Ok(unsafe {
+                    std::net::TcpListener::from_raw_socket(raw_handle as RawSocket)
+                });
+            }
+        }
+        AdminSurfaceResource::Bytes(_) => {
+            Err("gRPC admin surface expected a native listener handoff resource".to_string())
+        }
+        AdminSurfaceResource::NativeHandle { handle_kind, .. } => Err(format!(
+            "gRPC admin surface expected a tcp-listener handoff, got `{handle_kind}`"
+        )),
+    }
 }
 
 #[tonic::async_trait]
@@ -366,14 +511,16 @@ impl AdminControlPlane for AdminGrpcService {
         request: Request<proto::GetStatusRequest>,
     ) -> Result<Response<GetStatusResponse>, Status> {
         let principal_id = authenticate_request(&self.auth, request.metadata())?;
-        self.host
-            .status(&principal_id)
-            .map(|status| {
-                Response::new(GetStatusResponse {
-                    status: Some(map_status_view(status)),
-                })
-            })
-            .map_err(map_host_error)
+        let response = self
+            .host
+            .execute(&principal_id, &surface_admin::AdminRequest::Status)
+            .map_err(map_host_callback_error)?;
+        match response {
+            surface_admin::AdminResponse::Status(status) => Ok(Response::new(GetStatusResponse {
+                status: Some(map_status_view(status)),
+            })),
+            other => Err(map_surface_response_error(other)),
+        }
     }
 
     async fn list_sessions(
@@ -381,199 +528,227 @@ impl AdminControlPlane for AdminGrpcService {
         request: Request<proto::ListSessionsRequest>,
     ) -> Result<Response<ListSessionsResponse>, Status> {
         let principal_id = authenticate_request(&self.auth, request.metadata())?;
-        self.host
-            .sessions(&principal_id)
-            .map(|sessions| {
-                Response::new(ListSessionsResponse {
+        let response = self
+            .host
+            .execute(&principal_id, &surface_admin::AdminRequest::Sessions)
+            .map_err(map_host_callback_error)?;
+        match response {
+            surface_admin::AdminResponse::Sessions(sessions) => {
+                Ok(Response::new(ListSessionsResponse {
                     sessions: Some(map_sessions_view(sessions)),
-                })
-            })
-            .map_err(map_host_error)
+                }))
+            }
+            other => Err(map_surface_response_error(other)),
+        }
     }
 
     async fn reload_runtime(
         &self,
         request: Request<proto::ReloadRuntimeRequest>,
     ) -> Result<Response<ReloadRuntimeResponse>, Status> {
+        reject_mutating_request_while_paused(&self.serve_mode, "reload runtime")?;
         let principal_id = authenticate_request(&self.auth, request.metadata())?;
         let mode = map_reload_mode_request(request.into_inner().mode)?;
-        self.host
-            .reload_runtime(&principal_id, mode)
-            .map(|result| {
-                Response::new(ReloadRuntimeResponse {
+        let response = self
+            .host
+            .execute(
+                &principal_id,
+                &surface_admin::AdminRequest::ReloadRuntime { mode },
+            )
+            .map_err(map_host_callback_error)?;
+        match response {
+            surface_admin::AdminResponse::ReloadRuntime(result) => {
+                Ok(Response::new(ReloadRuntimeResponse {
                     result: Some(map_runtime_reload_view(result)),
-                })
-            })
-            .map_err(map_host_error)
+                }))
+            }
+            other => Err(map_surface_response_error(other)),
+        }
     }
 
     async fn upgrade_runtime(
         &self,
         request: Request<proto::UpgradeRuntimeRequest>,
     ) -> Result<Response<UpgradeRuntimeResponse>, Status> {
+        reject_mutating_request_while_paused(&self.serve_mode, "upgrade runtime")?;
         let principal_id = authenticate_request(&self.auth, request.metadata())?;
-        self.host
-            .upgrade_runtime(&principal_id, &request.into_inner().executable_path)
-            .map(|result| {
-                Response::new(UpgradeRuntimeResponse {
+        let executable_path = request.into_inner().executable_path;
+        let response = self
+            .host
+            .execute(
+                &principal_id,
+                &surface_admin::AdminRequest::UpgradeRuntime { executable_path },
+            )
+            .map_err(map_host_callback_error)?;
+        match response {
+            surface_admin::AdminResponse::UpgradeRuntime(result) => {
+                Ok(Response::new(UpgradeRuntimeResponse {
                     result: Some(map_upgrade_runtime_view(result)),
-                })
-            })
-            .map_err(map_host_error)
+                }))
+            }
+            other => Err(map_surface_response_error(other)),
+        }
     }
 
     async fn shutdown(
         &self,
         request: Request<proto::ShutdownRequest>,
     ) -> Result<Response<ShutdownResponse>, Status> {
+        reject_mutating_request_while_paused(&self.serve_mode, "shutdown")?;
         let principal_id = authenticate_request(&self.auth, request.metadata())?;
-        self.host.shutdown(&principal_id).map_err(map_host_error)?;
-        let _ = self.shutdown_tx.send(true);
-        Ok(Response::new(ShutdownResponse {}))
+        let response = self
+            .host
+            .execute(&principal_id, &surface_admin::AdminRequest::Shutdown)
+            .map_err(map_host_callback_error)?;
+        match response {
+            surface_admin::AdminResponse::ShutdownScheduled => {
+                Ok(Response::new(ShutdownResponse {}))
+            }
+            other => Err(map_surface_response_error(other)),
+        }
     }
 }
 
 async fn spawn_admin_grpc_server(
     runtime_handle: tokio::runtime::Handle,
-    config: &LoadedGrpcTransportConfig,
-    host: SdkAdminTransportHost,
+    config: &LoadedGrpcSurfaceConfig,
+    host: SdkAdminSurfaceHost,
+    listener_source: ListenerSource,
+    initial_accept_mode: AcceptLoopMode,
 ) -> Result<AdminGrpcServerHandle, String> {
-    let listener = std::net::TcpListener::bind(config.bind_addr).map_err(|error| {
-        format!(
-            "failed to bind admin gRPC listener on {}: {error}",
-            config.bind_addr
-        )
-    })?;
-    spawn_admin_grpc_server_from_std_listener(runtime_handle, listener, config, host).await
-}
-
-async fn spawn_admin_grpc_server_from_std_listener(
-    runtime_handle: tokio::runtime::Handle,
-    listener: std::net::TcpListener,
-    config: &LoadedGrpcTransportConfig,
-    host: SdkAdminTransportHost,
-) -> Result<AdminGrpcServerHandle, String> {
-    let local_addr = listener.local_addr().map_err(|error| error.to_string())?;
+    let handoff_listener = match listener_source {
+        ListenerSource::Bind(bind_addr) => {
+            std::net::TcpListener::bind(bind_addr).map_err(|error| {
+                format!("failed to bind admin gRPC listener on {bind_addr}: {error}")
+            })?
+        }
+        ListenerSource::Inherited(listener) => listener,
+    };
+    let local_addr = handoff_listener
+        .local_addr()
+        .map_err(|error| error.to_string())?;
+    let listener = handoff_listener
+        .try_clone()
+        .map_err(|error| format!("failed to duplicate admin gRPC listener: {error}"))?;
     listener
         .set_nonblocking(true)
         .map_err(|error| error.to_string())?;
+    let listener = TcpListener::from_std(listener).map_err(|error| error.to_string())?;
+    let (accept_mode_tx, accept_mode_rx) = watch::channel(initial_accept_mode);
+    let serve_mode = Arc::new(AtomicU8::new(initial_accept_mode.as_u8()));
+    let (incoming_tx, incoming_rx) = mpsc::channel::<Result<TcpStream, std::io::Error>>(32);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let server_shutdown_rx = shutdown_rx.clone();
-    let (incoming_tx, incoming_rx) = mpsc::channel(64);
-    let spawned_accept = spawn_accept_loop(
-        &runtime_handle,
-        listener.try_clone().map_err(|error| error.to_string())?,
-        incoming_tx.clone(),
-        shutdown_rx.clone(),
-    )?;
     let service = AdminGrpcService {
         host,
-        auth: std::sync::Arc::clone(&config.token_principals),
-        shutdown_tx: shutdown_tx.clone(),
+        auth: Arc::clone(&config.token_principals),
+        serve_mode: Arc::clone(&serve_mode),
     };
+    runtime_handle.spawn(run_accept_loop(listener, incoming_tx, accept_mode_rx));
     let (server_done_tx, server_done_rx) = oneshot::channel();
     let server_join_handle = runtime_handle.spawn(async move {
         let result = tonic::transport::Server::builder()
             .add_service(AdminControlPlaneServer::new(service))
             .serve_with_incoming_shutdown(
                 ReceiverStream::new(incoming_rx),
-                wait_for_shutdown_signal(server_shutdown_rx),
+                wait_for_shutdown_signal(shutdown_rx),
             )
             .await
             .map_err(|error| format!("admin gRPC server failed: {error}"));
         let _ = server_done_tx.send(result);
     });
     Ok(AdminGrpcServerHandle {
-        runtime_handle,
         local_addr,
-        listener,
+        handoff_listener: Some(handoff_listener),
+        serve_mode,
+        accept_mode_tx,
         shutdown_tx,
-        shutdown_rx,
-        incoming_tx,
-        accept_state: AdminGrpcAcceptState::Accepting {
-            control_tx: spawned_accept.control_tx,
-            join_handle: spawned_accept.join_handle,
-        },
         server_join_handle,
         server_done_rx,
     })
 }
 
+async fn run_accept_loop(
+    listener: TcpListener,
+    incoming_tx: mpsc::Sender<Result<TcpStream, std::io::Error>>,
+    mut accept_mode_rx: watch::Receiver<AcceptLoopMode>,
+) {
+    loop {
+        let mode = *accept_mode_rx.borrow_and_update();
+        match mode {
+            AcceptLoopMode::Running => {}
+            AcceptLoopMode::Paused => {
+                if accept_mode_rx.changed().await.is_err() {
+                    break;
+                }
+                continue;
+            }
+            AcceptLoopMode::Shutdown => break,
+        }
+        tokio::select! {
+            changed = accept_mode_rx.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+            }
+            accept = listener.accept() => {
+                match accept {
+                    Ok((stream, _addr)) => {
+                        if incoming_tx.send(Ok(stream)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = incoming_tx.send(Err(error)).await;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl AdminGrpcServerHandle {
-    fn status_view(&self) -> AdminTransportStatusView {
-        AdminTransportStatusView {
-            endpoints: vec![AdminTransportEndpointView {
-                transport: "grpc".to_string(),
+    fn status_view(&self) -> AdminSurfaceStatusView {
+        AdminSurfaceStatusView {
+            endpoints: vec![AdminSurfaceEndpointView {
+                surface: "grpc".to_string(),
                 local_addr: self.local_addr.to_string(),
             }],
         }
     }
 
-    async fn wait_for_server_exit(&mut self) -> Result<(), String> {
-        (&mut self.server_done_rx)
+    async fn wait_for_server_exit(mut self) -> Result<(), String> {
+        let result = (&mut self.server_done_rx)
             .await
-            .map_err(|_| "admin gRPC server task ended unexpectedly".to_string())?
-    }
-
-    fn try_clone_listener(&self) -> Result<std::net::TcpListener, String> {
-        self.listener.try_clone().map_err(|error| error.to_string())
-    }
-
-    async fn pause_for_upgrade(&mut self) -> Result<std::net::TcpListener, String> {
-        match std::mem::replace(&mut self.accept_state, AdminGrpcAcceptState::Paused) {
-            AdminGrpcAcceptState::Accepting {
-                control_tx,
-                join_handle,
-            } => {
-                let (ack_tx, ack_rx) = oneshot::channel();
-                control_tx
-                    .send(AdminGrpcAcceptControl::PauseForUpgrade { ack_tx })
-                    .await
-                    .map_err(|_| {
-                        "admin gRPC accept loop stopped before upgrade pause".to_string()
-                    })?;
-                let _ = ack_rx.await;
-                join_handle.await.map_err(|error| error.to_string())??;
-                self.try_clone_listener()
-            }
-            AdminGrpcAcceptState::Paused => {
-                Err("admin gRPC listener is already paused".to_string())
-            }
-        }
-    }
-
-    fn resume_after_upgrade_rollback(&mut self) -> Result<(), String> {
-        if matches!(self.accept_state, AdminGrpcAcceptState::Accepting { .. }) {
-            return Ok(());
-        }
-        let spawned = spawn_accept_loop(
-            &self.runtime_handle,
-            self.listener
-                .try_clone()
-                .map_err(|error| error.to_string())?,
-            self.incoming_tx.clone(),
-            self.shutdown_rx.clone(),
-        )?;
-        self.accept_state = AdminGrpcAcceptState::Accepting {
-            control_tx: spawned.control_tx,
-            join_handle: spawned.join_handle,
-        };
-        Ok(())
-    }
-
-    async fn join(mut self) -> Result<(), String> {
-        let _ = self.shutdown_tx.send(true);
-        if let AdminGrpcAcceptState::Accepting {
-            control_tx,
-            join_handle,
-        } = std::mem::replace(&mut self.accept_state, AdminGrpcAcceptState::Paused)
-        {
-            let _ = control_tx.send(AdminGrpcAcceptControl::Shutdown).await;
-            join_handle.await.map_err(|error| error.to_string())??;
-        }
-        self.wait_for_server_exit().await?;
+            .map_err(|_| "admin gRPC server task ended unexpectedly".to_string())?;
         self.server_join_handle.abort();
-        Ok(())
+        result
+    }
+
+    fn export_handoff_listener(&mut self) -> Result<std::net::TcpListener, String> {
+        let listener = self.handoff_listener.take().ok_or_else(|| {
+            "admin gRPC server did not retain a listener for upgrade handoff".to_string()
+        })?;
+        self.serve_mode
+            .store(AcceptLoopMode::Paused.as_u8(), Ordering::SeqCst);
+        let _ = self.accept_mode_tx.send(AcceptLoopMode::Paused);
+        Ok(listener)
+    }
+
+    fn activate_after_upgrade_commit(&self) -> Result<(), String> {
+        self.serve_mode
+            .store(AcceptLoopMode::Running.as_u8(), Ordering::SeqCst);
+        self.accept_mode_tx
+            .send(AcceptLoopMode::Running)
+            .map_err(|_| "admin gRPC accept loop was not available".to_string())
+    }
+
+    async fn join(self) -> Result<(), String> {
+        self.serve_mode
+            .store(AcceptLoopMode::Shutdown.as_u8(), Ordering::SeqCst);
+        let _ = self.accept_mode_tx.send(AcceptLoopMode::Shutdown);
+        let _ = self.shutdown_tx.send(true);
+        self.wait_for_server_exit().await
     }
 }
 
@@ -588,40 +763,13 @@ async fn wait_for_shutdown_signal(mut shutdown_rx: watch::Receiver<bool>) {
     }
 }
 
-fn spawn_accept_loop(
-    runtime_handle: &tokio::runtime::Handle,
-    listener: std::net::TcpListener,
-    incoming_tx: mpsc::Sender<Result<TcpListenerStream, std::io::Error>>,
-    shutdown_rx: watch::Receiver<bool>,
-) -> Result<SpawnedAcceptLoop, String> {
-    let (control_tx, mut control_rx) = mpsc::channel(4);
-    let join_handle = runtime_handle.spawn(async move {
-        let listener = TcpListener::from_std(listener).map_err(|error| error.to_string())?;
-        let shutdown = wait_for_shutdown_signal(shutdown_rx);
-        tokio::pin!(shutdown);
-        loop {
-            tokio::select! {
-                _ = &mut shutdown => return Ok(()),
-                Some(control) = control_rx.recv() => match control {
-                    AdminGrpcAcceptControl::PauseForUpgrade { ack_tx } => {
-                        let _ = ack_tx.send(());
-                        return Ok(());
-                    }
-                    AdminGrpcAcceptControl::Shutdown => return Ok(()),
-                },
-                accepted = listener.accept() => {
-                    let (stream, _) = accepted.map_err(|error| error.to_string())?;
-                    if incoming_tx.send(Ok(stream)).await.is_err() {
-                        return Ok(());
-                    }
-                }
-            }
-        }
-    });
-    Ok(SpawnedAcceptLoop {
-        control_tx,
-        join_handle,
-    })
+fn reject_mutating_request_while_paused(serve_mode: &AtomicU8, action: &str) -> Result<(), Status> {
+    if serve_mode.load(Ordering::SeqCst) == AcceptLoopMode::Paused.as_u8() {
+        return Err(Status::failed_precondition(format!(
+            "admin action `{action}` is unavailable while runtime upgrade freeze is active"
+        )));
+    }
+    Ok(())
 }
 
 fn authenticate_request(
@@ -655,34 +803,24 @@ fn authenticate_request(
         .ok_or_else(|| Status::unauthenticated("invalid remote admin token"))
 }
 
-fn map_host_error(message: String) -> Status {
-    if message.starts_with("invalid admin subject:") {
-        Status::unauthenticated(message)
-    } else if message.starts_with("permission denied:") {
-        Status::permission_denied(message)
-    } else {
-        Status::failed_precondition(message)
+fn map_host_callback_error(message: String) -> Status {
+    Status::failed_precondition(message)
+}
+
+fn map_surface_response_error(response: surface_admin::AdminResponse) -> Status {
+    match response {
+        surface_admin::AdminResponse::PermissionDenied { permission, .. } => {
+            Status::permission_denied(format!("permission denied: {}", permission.as_str()))
+        }
+        surface_admin::AdminResponse::Error { message } => {
+            if message.starts_with("invalid admin subject:") {
+                Status::unauthenticated(message)
+            } else {
+                Status::failed_precondition(message)
+            }
+        }
+        other => Status::internal(format!("unexpected admin response: {other:?}")),
     }
-}
-
-#[cfg(unix)]
-fn listener_into_raw(listener: std::net::TcpListener) -> usize {
-    listener.into_raw_fd() as usize
-}
-
-#[cfg(windows)]
-fn listener_into_raw(listener: std::net::TcpListener) -> usize {
-    listener.into_raw_socket() as usize
-}
-
-#[cfg(unix)]
-fn listener_from_raw(raw: usize) -> std::net::TcpListener {
-    unsafe { std::net::TcpListener::from_raw_fd(raw as RawFd) }
-}
-
-#[cfg(windows)]
-fn listener_from_raw(raw: usize) -> std::net::TcpListener {
-    unsafe { std::net::TcpListener::from_raw_socket(raw as RawSocket) }
 }
 
 fn map_transport(transport: mc_proto_common::TransportKind) -> i32 {
@@ -746,7 +884,7 @@ fn map_session_summary(summary: AdminSessionSummaryView) -> proto::AdminSessionS
         by_transport: summary
             .by_transport
             .into_iter()
-            .map(|count| proto::AdminTransportCountView {
+            .map(|count| proto::AdminSessionTransportCountView {
                 transport: map_transport(count.transport),
                 count: count_to_u64(count.count),
             })
@@ -800,8 +938,7 @@ fn map_status_view(status: AdminStatusView) -> proto::AdminStatusView {
                 gameplay_count: count_to_u64(plugin_host.gameplay_count),
                 storage_count: count_to_u64(plugin_host.storage_count),
                 auth_count: count_to_u64(plugin_host.auth_count),
-                admin_transport_count: count_to_u64(plugin_host.admin_transport_count),
-                admin_ui_count: count_to_u64(plugin_host.admin_ui_count),
+                admin_surface_count: count_to_u64(plugin_host.admin_surface_count),
                 active_quarantine_count: count_to_u64(plugin_host.active_quarantine_count),
                 artifact_quarantine_count: count_to_u64(plugin_host.artifact_quarantine_count),
                 pending_fatal_error: plugin_host.pending_fatal_error,
@@ -899,4 +1036,4 @@ fn map_upgrade_runtime_view(result: AdminUpgradeRuntimeView) -> proto::AdminUpgr
     }
 }
 
-export_plugin!(admin_transport, GrpcAdminTransportPlugin, MANIFEST);
+export_plugin!(admin_surface, GrpcAdminSurfacePlugin, MANIFEST);

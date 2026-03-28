@@ -1,7 +1,6 @@
 use crate::host::{PluginFailureAction, PluginFailureMatrix};
 use mc_core::{
-    AdapterId, AdminTransportProfileId, AdminUiProfileId, AuthProfileId, GameplayProfileId,
-    StorageProfileId,
+    AdapterId, AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
 };
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use serde::{Deserialize, Serialize};
@@ -14,7 +13,7 @@ pub struct PluginBufferLimits {
     pub gameplay_response_bytes: usize,
     pub storage_response_bytes: usize,
     pub auth_response_bytes: usize,
-    pub admin_ui_response_bytes: usize,
+    pub admin_surface_response_bytes: usize,
     pub callback_payload_bytes: usize,
     pub metadata_bytes: usize,
 }
@@ -28,7 +27,7 @@ impl Default for PluginBufferLimits {
             gameplay_response_bytes: 1 * MIB,
             storage_response_bytes: 32 * MIB,
             auth_response_bytes: 256 * KIB,
-            admin_ui_response_bytes: 1 * MIB,
+            admin_surface_response_bytes: 1 * MIB,
             callback_payload_bytes: 1 * MIB,
             metadata_bytes: 64 * KIB,
         }
@@ -61,16 +60,21 @@ pub struct RuntimeSelectionConfig {
     pub bedrock_auth_profile: AuthProfileId,
     pub default_gameplay_profile: GameplayProfileId,
     pub gameplay_profile_map: HashMap<AdapterId, GameplayProfileId>,
-    pub admin_transport_profile: AdminTransportProfileId,
-    pub admin_ui_profile: AdminUiProfileId,
+    pub admin_surfaces: Vec<AdminSurfaceSelectionConfig>,
     pub plugin_allowlist: Option<Vec<String>>,
     pub buffer_limits: PluginBufferLimits,
     pub plugin_failure_policy_protocol: PluginFailureAction,
     pub plugin_failure_policy_gameplay: PluginFailureAction,
     pub plugin_failure_policy_storage: PluginFailureAction,
     pub plugin_failure_policy_auth: PluginFailureAction,
-    pub plugin_failure_policy_admin_transport: PluginFailureAction,
-    pub plugin_failure_policy_admin_ui: PluginFailureAction,
+    pub plugin_failure_policy_admin_surface: PluginFailureAction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdminSurfaceSelectionConfig {
+    pub instance_id: String,
+    pub profile: AdminSurfaceProfileId,
+    pub config_path: Option<PathBuf>,
 }
 
 impl Default for RuntimeSelectionConfig {
@@ -82,16 +86,18 @@ impl Default for RuntimeSelectionConfig {
             bedrock_auth_profile: AuthProfileId::new("bedrock-offline-v1"),
             default_gameplay_profile: GameplayProfileId::new("canonical"),
             gameplay_profile_map: HashMap::new(),
-            admin_transport_profile: AdminTransportProfileId::new(""),
-            admin_ui_profile: AdminUiProfileId::new("console-v1"),
+            admin_surfaces: vec![AdminSurfaceSelectionConfig {
+                instance_id: "console".to_string(),
+                profile: AdminSurfaceProfileId::new("console-v1"),
+                config_path: None,
+            }],
             plugin_allowlist: None,
             buffer_limits: PluginBufferLimits::default(),
             plugin_failure_policy_protocol: failure_matrix.protocol,
             plugin_failure_policy_gameplay: failure_matrix.gameplay,
             plugin_failure_policy_storage: failure_matrix.storage,
             plugin_failure_policy_auth: failure_matrix.auth,
-            plugin_failure_policy_admin_transport: failure_matrix.admin_transport,
-            plugin_failure_policy_admin_ui: failure_matrix.admin_ui,
+            plugin_failure_policy_admin_surface: failure_matrix.admin_surface,
         }
     }
 }
@@ -104,8 +110,7 @@ impl RuntimeSelectionConfig {
             gameplay: self.plugin_failure_policy_gameplay,
             storage: self.plugin_failure_policy_storage,
             auth: self.plugin_failure_policy_auth,
-            admin_transport: self.plugin_failure_policy_admin_transport,
-            admin_ui: self.plugin_failure_policy_admin_ui,
+            admin_surface: self.plugin_failure_policy_admin_surface,
         }
     }
 }

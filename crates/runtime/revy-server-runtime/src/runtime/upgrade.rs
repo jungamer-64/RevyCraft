@@ -200,6 +200,13 @@ impl RuntimeUpgradeGuard {
 impl ServerSupervisor {
     /// # Errors
     ///
+    /// Returns [`RuntimeError`] when the current runtime topology cannot support an upgrade.
+    pub async fn preflight_runtime_upgrade(&self) -> Result<(), RuntimeError> {
+        self.running.preflight_runtime_upgrade().await
+    }
+
+    /// # Errors
+    ///
     /// Returns [`RuntimeError`] when the runtime cannot freeze and export a consistent upgrade snapshot.
     pub async fn begin_runtime_upgrade(&self) -> Result<RuntimeUpgradeGuard, RuntimeError> {
         self.running.begin_runtime_upgrade().await
@@ -242,14 +249,20 @@ impl ServerSupervisor {
 }
 
 impl RunningServer {
-    async fn begin_runtime_upgrade(&self) -> Result<RuntimeUpgradeGuard, RuntimeError> {
-        let reload_serial_guard = self.runtime.reload.lock_reload_serial_owned().await;
+    async fn preflight_runtime_upgrade(&self) -> Result<(), RuntimeError> {
         let active_config = self.runtime.selection_state().await.config;
         if active_config.topology.be_enabled {
             return Err(RuntimeError::Unsupported(
                 "runtime upgrade does not support bedrock listener/session transfer".to_string(),
             ));
         }
+        Ok(())
+    }
+
+    async fn begin_runtime_upgrade(&self) -> Result<RuntimeUpgradeGuard, RuntimeError> {
+        let reload_serial_guard = self.runtime.reload.lock_reload_serial_owned().await;
+        let active_config = self.runtime.selection_state().await.config;
+        self.preflight_runtime_upgrade().await?;
 
         self.runtime.reload.set_upgrade_state(
             RuntimeUpgradeRole::Parent,

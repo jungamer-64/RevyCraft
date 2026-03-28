@@ -1,4 +1,8 @@
-use crate::process_surfaces::{PausedProcessSurfaces, ProcessSurfaceCommand};
+use crate::process_surfaces::{
+    PausedAdminSurfaceInstance, PausedAdminSurfaceResource, PausedProcessSurfaces,
+    ProcessSurfaceCommand,
+};
+use mc_plugin_api::codec::admin_surface::AdminSurfaceResource;
 use rand::random;
 use revy_server_runtime::RuntimeError;
 use revy_server_runtime::runtime::{
@@ -40,6 +44,12 @@ use {
     },
 };
 
+#[cfg(unix)]
+type UpgradeNativeHandle = RawFd;
+
+#[cfg(windows)]
+type UpgradeNativeHandle = RawSocket;
+
 #[cfg(any(unix, windows))]
 const UPGRADE_CHILD_ARG: &str = "--upgrade-child";
 #[cfg(any(unix, windows))]
@@ -70,8 +80,7 @@ struct CommittedUpgrade {
 
 pub(crate) struct PendingUpgradeChild {
     pub(crate) server: Arc<ServerSupervisor>,
-    pub(crate) admin_transport_listener_override: Option<std::net::TcpListener>,
-    pub(crate) admin_transport_resume_payload: Option<Vec<u8>>,
+    pub(crate) admin_surface_resume: Vec<PausedAdminSurfaceInstance>,
     commit_gate: UpgradeChildCommitGate,
 }
 
@@ -89,8 +98,8 @@ enum UpgradeControlMessage {
     },
     Bootstrap {
         payload: RuntimeUpgradePayload,
-        has_admin_transport_listener: bool,
-        admin_transport_resume_payload: Option<Vec<u8>>,
+        admin_surface_resume: Vec<UpgradeAdminSurfaceResumeState>,
+        admin_surface_native_handle_count: usize,
         transferred_handle_count: usize,
     },
     Ready,
@@ -108,13 +117,35 @@ fn normalize_pre_ready_child_error(error: RuntimeError) -> RuntimeError {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct UpgradeAdminSurfaceResumeState {
+    instance_id: String,
+    resume_payload: Vec<u8>,
+    handoff_resources: Vec<UpgradeAdminSurfaceResource>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct UpgradeAdminSurfaceResource {
+    name: String,
+    kind: UpgradeAdminSurfaceResourceKind,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum UpgradeAdminSurfaceResourceKind {
+    Bytes(Vec<u8>),
+    NativeHandle {
+        handle_kind: String,
+        handle_index: usize,
+    },
+}
+
 #[cfg(debug_assertions)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UpgradeTestFault {
     SessionTransferFailure,
     ChildImportFailure,
     ChildReadyTimeout,
-    AdminTransportTakeoverFailure,
+    AdminSurfaceTakeoverFailure,
 }
 
 #[cfg(debug_assertions)]
@@ -124,9 +155,7 @@ impl UpgradeTestFault {
             "session-transfer-failure" => Some(Self::SessionTransferFailure),
             "child-import-failure" => Some(Self::ChildImportFailure),
             "child-ready-timeout" => Some(Self::ChildReadyTimeout),
-            "grpc-takeover-failure" | "admin-transport-takeover-failure" => {
-                Some(Self::AdminTransportTakeoverFailure)
-            }
+            "grpc-takeover-failure" => Some(Self::AdminSurfaceTakeoverFailure),
             _ => None,
         }
     }
@@ -181,6 +210,7 @@ impl UpgradeCoordinator {
     ) -> Result<AdminUpgradeRuntimeView, RuntimeError> {
         let _upgrade_guard = self.upgrade_lock.lock().await;
         validate_upgrade_executable(&executable_path)?;
+        self.server.preflight_runtime_upgrade().await?;
         let auth_token = upgrade_auth_token();
         let (mut child, mut transport) =
             spawn_parent_upgrade_transport(&executable_path, &auth_token).await?;
@@ -191,10 +221,7 @@ impl UpgradeCoordinator {
         }
         eprintln!("runtime upgrade handshake: child hello acknowledged");
 
-        let paused_surfaces = match self
-            .pause_process_surfaces(subject.is_local_console())
-            .await
-        {
+        let paused_surfaces = match self.pause_process_surfaces().await {
             Ok(paused) => paused,
             Err(error) => {
                 let _ = child.kill();
@@ -236,6 +263,12 @@ impl UpgradeCoordinator {
                 *self.committed.lock().await = Some(CommittedUpgrade {
                     hold: guard.commit(),
                 });
+                let shutdown_delay = if subject.principal_id().starts_with("console:") {
+                    500
+                } else {
+                    75
+                };
+                tokio::time::sleep(Duration::from_millis(shutdown_delay)).await;
                 if let Some(shutdown_tx) = self.process_shutdown_tx.lock().await.as_ref() {
                     let _ = shutdown_tx.send(true);
                 }
@@ -261,28 +294,18 @@ impl UpgradeCoordinator {
         let game_listener = guard.clone_game_listener()?;
         let sessions = guard.clone_sessions_for_child()?;
         let payload = guard.payload().clone();
+        let (admin_surface_resume, admin_surface_native_handles) =
+            encode_admin_surface_resume(&paused_surfaces.admin_surfaces)?;
         eprintln!("runtime upgrade transfer: sending bootstrap payload");
         transport
             .write_message(&UpgradeControlMessage::Bootstrap {
                 payload,
-                has_admin_transport_listener: paused_surfaces.admin_transport_for_child.is_some(),
-                admin_transport_resume_payload: paused_surfaces
-                    .admin_transport_for_child
-                    .as_ref()
-                    .map(|paused| paused.resume_payload.clone()),
-                transferred_handle_count: 1
-                    + usize::from(paused_surfaces.admin_transport_for_child.is_some())
-                    + sessions.len(),
+                admin_surface_native_handle_count: admin_surface_native_handles.len(),
+                admin_surface_resume,
+                transferred_handle_count: 1 + admin_surface_native_handles.len() + sessions.len(),
             })
             .await?;
-        transport.send_handles(
-            &game_listener,
-            paused_surfaces
-                .admin_transport_for_child
-                .as_ref()
-                .map(|paused| &paused.listener_for_child),
-            &sessions,
-        )?;
+        transport.send_handles(&game_listener, &admin_surface_native_handles, &sessions)?;
         eprintln!("runtime upgrade transfer: handles sent, waiting for child readiness");
         let child_ready =
             tokio::time::timeout(upgrade_ready_timeout(), transport.read_message()).await;
@@ -307,10 +330,7 @@ impl UpgradeCoordinator {
     }
 
     #[cfg(any(unix, windows))]
-    async fn pause_process_surfaces(
-        &self,
-        skip_console: bool,
-    ) -> Result<PausedProcessSurfaces, RuntimeError> {
+    async fn pause_process_surfaces(&self) -> Result<PausedProcessSurfaces, RuntimeError> {
         let surface_control_tx = self
             .surface_control_tx
             .lock()
@@ -324,10 +344,7 @@ impl UpgradeCoordinator {
             })?;
         let (ack_tx, ack_rx) = oneshot::channel();
         surface_control_tx
-            .send(ProcessSurfaceCommand::PauseForUpgrade {
-                skip_console,
-                ack_tx,
-            })
+            .send(ProcessSurfaceCommand::PauseForUpgrade { ack_tx })
             .await
             .map_err(|_| {
                 RuntimeError::Config("failed to pause process surfaces for upgrade".to_string())
@@ -366,15 +383,8 @@ impl PendingUpgradeChild {
         Arc::clone(&self.server)
     }
 
-    pub(crate) fn take_admin_transport_resume(
-        &mut self,
-    ) -> Option<(std::net::TcpListener, Vec<u8>)> {
-        let listener = self.admin_transport_listener_override.take()?;
-        let payload = self
-            .admin_transport_resume_payload
-            .take()
-            .unwrap_or_default();
-        Some((listener, payload))
+    pub(crate) fn take_admin_surface_resume(&mut self) -> Vec<PausedAdminSurfaceInstance> {
+        std::mem::take(&mut self.admin_surface_resume)
     }
 
     pub(crate) async fn report_ready_and_wait_for_commit(&mut self) -> Result<(), RuntimeError> {
@@ -461,19 +471,19 @@ pub(crate) async fn try_boot_upgrade_child(
     let bootstrap = transport.read_message().await?;
     let (
         payload,
-        has_admin_transport_listener,
-        admin_transport_resume_payload,
+        admin_surface_resume,
+        admin_surface_native_handle_count,
         transferred_handle_count,
     ) = match bootstrap {
         UpgradeControlMessage::Bootstrap {
             payload,
-            has_admin_transport_listener,
-            admin_transport_resume_payload,
+            admin_surface_resume,
+            admin_surface_native_handle_count,
             transferred_handle_count,
         } => (
             payload,
-            has_admin_transport_listener,
-            admin_transport_resume_payload,
+            admin_surface_resume,
+            admin_surface_native_handle_count,
             transferred_handle_count,
         ),
         UpgradeControlMessage::ChildHello { .. }
@@ -502,7 +512,9 @@ pub(crate) async fn try_boot_upgrade_child(
     }
 
     let received =
-        transport.receive_handles(transferred_handle_count, has_admin_transport_listener)?;
+        transport.receive_handles(transferred_handle_count, admin_surface_native_handle_count)?;
+    let admin_surface_resume =
+        decode_admin_surface_resume(admin_surface_resume, received.admin_surface_native_handles)?;
     let sessions = payload
         .sessions
         .iter()
@@ -547,8 +559,7 @@ pub(crate) async fn try_boot_upgrade_child(
 
     Ok(Some(PendingUpgradeChild {
         server: Arc::new(server),
-        admin_transport_listener_override: received.admin_transport_listener,
-        admin_transport_resume_payload,
+        admin_surface_resume,
         commit_gate: transport.into_commit_gate(),
     }))
 }
@@ -557,9 +568,9 @@ pub(crate) async fn try_boot_upgrade_child(
 pub(crate) fn child_upgrade_fault_before_ready() -> Option<RuntimeError> {
     #[cfg(debug_assertions)]
     {
-        if UpgradeTestFault::current() == Some(UpgradeTestFault::AdminTransportTakeoverFailure) {
+        if UpgradeTestFault::current() == Some(UpgradeTestFault::AdminSurfaceTakeoverFailure) {
             return Some(RuntimeError::Config(
-                "injected child admin transport takeover failure".to_string(),
+                "injected child admin surface takeover failure".to_string(),
             ));
         }
     }
@@ -616,9 +627,127 @@ fn upgrade_ready_timeout() -> Duration {
     Duration::from_secs(30)
 }
 
+fn encode_admin_surface_resume(
+    paused_instances: &[PausedAdminSurfaceInstance],
+) -> Result<
+    (
+        Vec<UpgradeAdminSurfaceResumeState>,
+        Vec<UpgradeNativeHandle>,
+    ),
+    RuntimeError,
+> {
+    let mut native_handles = Vec::new();
+    let mut encoded = Vec::with_capacity(paused_instances.len());
+    for paused in paused_instances {
+        let mut handoff_resources = paused.handoff_resources.clone();
+        handoff_resources.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut encoded_resources = Vec::with_capacity(handoff_resources.len());
+        for resource in handoff_resources {
+            let kind = match resource.resource {
+                AdminSurfaceResource::Bytes(bytes) => UpgradeAdminSurfaceResourceKind::Bytes(bytes),
+                AdminSurfaceResource::NativeHandle {
+                    handle_kind,
+                    raw_handle,
+                } => {
+                    let handle = upgrade_native_handle_from_u64(raw_handle)?;
+                    native_handles.push(handle);
+                    UpgradeAdminSurfaceResourceKind::NativeHandle {
+                        handle_kind,
+                        handle_index: native_handles.len() - 1,
+                    }
+                }
+            };
+            encoded_resources.push(UpgradeAdminSurfaceResource {
+                name: resource.name,
+                kind,
+            });
+        }
+        encoded.push(UpgradeAdminSurfaceResumeState {
+            instance_id: paused.instance_id.clone(),
+            resume_payload: paused.resume_payload.clone(),
+            handoff_resources: encoded_resources,
+        });
+    }
+    Ok((encoded, native_handles))
+}
+
+fn decode_admin_surface_resume(
+    paused_instances: Vec<UpgradeAdminSurfaceResumeState>,
+    native_handles: Vec<UpgradeNativeHandle>,
+) -> Result<Vec<PausedAdminSurfaceInstance>, RuntimeError> {
+    let mut native_handles = native_handles.into_iter().map(Some).collect::<Vec<_>>();
+    paused_instances
+        .into_iter()
+        .map(|paused| {
+            let handoff_resources = paused
+                .handoff_resources
+                .into_iter()
+                .map(|resource| {
+                    let name = resource.name;
+                    let resource = match resource.kind {
+                        UpgradeAdminSurfaceResourceKind::Bytes(bytes) => {
+                            AdminSurfaceResource::Bytes(bytes)
+                        }
+                        UpgradeAdminSurfaceResourceKind::NativeHandle {
+                            handle_kind,
+                            handle_index,
+                        } => {
+                            let handle = native_handles
+                                .get_mut(handle_index)
+                                .and_then(Option::take)
+                                .ok_or_else(|| {
+                                    RuntimeError::Config(format!(
+                                        "upgrade child did not receive admin surface native handle at index {handle_index}"
+                                    ))
+                                })?;
+                            AdminSurfaceResource::NativeHandle {
+                                handle_kind,
+                                raw_handle: upgrade_native_handle_to_u64(handle),
+                            }
+                        }
+                    };
+                    Ok(PausedAdminSurfaceResource {
+                        name,
+                        resource,
+                    })
+                })
+                .collect::<Result<Vec<_>, RuntimeError>>()?;
+            Ok(PausedAdminSurfaceInstance {
+                instance_id: paused.instance_id,
+                resume_payload: paused.resume_payload,
+                handoff_resources,
+            })
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn upgrade_native_handle_from_u64(raw_handle: u64) -> Result<UpgradeNativeHandle, RuntimeError> {
+    i32::try_from(raw_handle).map_err(|_| {
+        RuntimeError::Config(format!(
+            "admin surface native handle `{raw_handle}` did not fit into a unix fd"
+        ))
+    })
+}
+
+#[cfg(windows)]
+fn upgrade_native_handle_from_u64(raw_handle: u64) -> Result<UpgradeNativeHandle, RuntimeError> {
+    Ok(raw_handle as UpgradeNativeHandle)
+}
+
+#[cfg(unix)]
+fn upgrade_native_handle_to_u64(handle: UpgradeNativeHandle) -> u64 {
+    u64::try_from(handle).expect("unix fd should fit into u64")
+}
+
+#[cfg(windows)]
+fn upgrade_native_handle_to_u64(handle: UpgradeNativeHandle) -> u64 {
+    handle as u64
+}
+
 struct ReceivedUpgradeHandles {
     game_listener: std::net::TcpListener,
-    admin_transport_listener: Option<std::net::TcpListener>,
+    admin_surface_native_handles: Vec<UpgradeNativeHandle>,
     session_streams: Vec<std::net::TcpStream>,
 }
 
@@ -675,17 +804,17 @@ impl ParentUpgradeTransport {
     fn send_handles(
         &self,
         game_listener: &std::net::TcpListener,
-        admin_transport_listener: Option<&std::net::TcpListener>,
+        admin_surface_native_handles: &[UpgradeNativeHandle],
         sessions: &[RuntimeUpgradeSessionHandle],
     ) -> Result<(), RuntimeError> {
         match self {
             #[cfg(unix)]
             Self::Unix(transport) => {
-                transport.send_handles(game_listener, admin_transport_listener, sessions)
+                transport.send_handles(game_listener, admin_surface_native_handles, sessions)
             }
             #[cfg(windows)]
             Self::Windows(transport) => {
-                transport.send_handles(game_listener, admin_transport_listener, sessions)
+                transport.send_handles(game_listener, admin_surface_native_handles, sessions)
             }
         }
     }
@@ -713,16 +842,16 @@ impl ChildUpgradeTransport {
     fn receive_handles(
         &self,
         expected: usize,
-        has_admin_transport_listener: bool,
+        admin_surface_native_handle_count: usize,
     ) -> Result<ReceivedUpgradeHandles, RuntimeError> {
         match self {
             #[cfg(unix)]
             Self::Unix(transport) => {
-                transport.receive_handles(expected, has_admin_transport_listener)
+                transport.receive_handles(expected, admin_surface_native_handle_count)
             }
             #[cfg(windows)]
             Self::Windows(transport) => {
-                transport.receive_handles(expected, has_admin_transport_listener)
+                transport.receive_handles(expected, admin_surface_native_handle_count)
             }
         }
     }
@@ -789,13 +918,11 @@ impl UnixParentUpgradeTransport {
     fn send_handles(
         &self,
         game_listener: &std::net::TcpListener,
-        admin_transport_listener: Option<&std::net::TcpListener>,
+        admin_surface_native_handles: &[UpgradeNativeHandle],
         sessions: &[RuntimeUpgradeSessionHandle],
     ) -> Result<(), RuntimeError> {
         let mut handles = vec![game_listener.as_raw_fd()];
-        if let Some(listener) = admin_transport_listener {
-            handles.push(listener.as_raw_fd());
-        }
+        handles.extend(admin_surface_native_handles.iter().copied());
         handles.extend(sessions.iter().map(|session| session.stream.as_raw_fd()));
         send_rights_chunked(self.stream.as_raw_fd(), &handles)
     }
@@ -814,7 +941,7 @@ impl UnixChildUpgradeTransport {
     fn receive_handles(
         &self,
         expected: usize,
-        has_admin_transport_listener: bool,
+        admin_surface_native_handle_count: usize,
     ) -> Result<ReceivedUpgradeHandles, RuntimeError> {
         let handles = receive_rights_chunked(self.stream.as_raw_fd(), expected)?;
         let mut handles = handles.into_iter();
@@ -825,24 +952,16 @@ impl UnixChildUpgradeTransport {
                 )
             })?)
         };
-        let admin_transport_listener = if has_admin_transport_listener {
-            Some(unsafe {
-                std::net::TcpListener::from_raw_fd(handles.next().ok_or_else(|| {
-                    RuntimeError::Config(
-                        "upgrade child did not receive an admin transport listener handle"
-                            .to_string(),
-                    )
-                })?)
-            })
-        } else {
-            None
-        };
+        let admin_surface_native_handles = handles
+            .by_ref()
+            .take(admin_surface_native_handle_count)
+            .collect::<Vec<_>>();
         let session_streams = handles
             .map(|fd| unsafe { std::net::TcpStream::from_raw_fd(fd) })
             .collect::<Vec<_>>();
         Ok(ReceivedUpgradeHandles {
             game_listener,
-            admin_transport_listener,
+            admin_surface_native_handles,
             session_streams,
         })
     }
@@ -1058,22 +1177,17 @@ impl WindowsParentUpgradeTransport {
     fn send_handles(
         &self,
         game_listener: &std::net::TcpListener,
-        admin_transport_listener: Option<&std::net::TcpListener>,
+        admin_surface_native_handles: &[UpgradeNativeHandle],
         sessions: &[RuntimeUpgradeSessionHandle],
     ) -> Result<(), RuntimeError> {
         ensure_winsock_started()?;
-        let mut infos = Vec::with_capacity(
-            1 + usize::from(admin_transport_listener.is_some()) + sessions.len(),
-        );
+        let mut infos = Vec::with_capacity(1 + admin_surface_native_handles.len() + sessions.len());
         infos.push(duplicate_socket_protocol_info(
             game_listener.as_raw_socket(),
             self.child_pid,
         )?);
-        if let Some(listener) = admin_transport_listener {
-            infos.push(duplicate_socket_protocol_info(
-                listener.as_raw_socket(),
-                self.child_pid,
-            )?);
+        for listener in admin_surface_native_handles {
+            infos.push(duplicate_socket_protocol_info(*listener, self.child_pid)?);
         }
         for session in sessions {
             infos.push(duplicate_socket_protocol_info(
@@ -1098,7 +1212,7 @@ impl WindowsChildUpgradeTransport {
     fn receive_handles(
         &self,
         expected: usize,
-        has_admin_transport_listener: bool,
+        admin_surface_native_handle_count: usize,
     ) -> Result<ReceivedUpgradeHandles, RuntimeError> {
         ensure_winsock_started()?;
         let infos = receive_protocol_infos(&self.pipe, expected)?;
@@ -1112,20 +1226,11 @@ impl WindowsChildUpgradeTransport {
                 })?,
             )?)
         };
-        let admin_transport_listener = if has_admin_transport_listener {
-            Some(unsafe {
-                std::net::TcpListener::from_raw_socket(socket_from_protocol_info(
-                    &infos.next().ok_or_else(|| {
-                        RuntimeError::Config(
-                            "upgrade child did not receive an admin transport listener handle"
-                                .to_string(),
-                        )
-                    })?,
-                )?)
-            })
-        } else {
-            None
-        };
+        let admin_surface_native_handles = infos
+            .by_ref()
+            .take(admin_surface_native_handle_count)
+            .map(|info| unsafe { socket_from_protocol_info(&info) })
+            .collect::<Result<Vec<_>, RuntimeError>>()?;
         let session_streams = infos
             .map(|info| unsafe {
                 socket_from_protocol_info(&info)
@@ -1134,7 +1239,7 @@ impl WindowsChildUpgradeTransport {
             .collect::<Result<Vec<_>, RuntimeError>>()?;
         Ok(ReceivedUpgradeHandles {
             game_listener,
-            admin_transport_listener,
+            admin_surface_native_handles,
             session_streams,
         })
     }

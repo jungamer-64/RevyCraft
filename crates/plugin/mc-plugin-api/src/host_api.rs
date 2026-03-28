@@ -29,22 +29,6 @@ pub type GameplayHostMutationFn =
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct HostApiTableV1 {
-    pub abi: PluginAbiVersion,
-    pub context: *mut c_void,
-    pub log: Option<HostLogFn>,
-    pub read_player_snapshot: Option<HostReadPlayerSnapshotFn>,
-    pub read_world_meta: Option<HostReadWorldMetaFn>,
-    pub read_block_state: Option<HostReadBlockStateFn>,
-    pub read_block_entity: Option<HostReadBlockEntityFn>,
-    pub can_edit_block: Option<HostCanEditBlockFn>,
-}
-
-unsafe impl Send for HostApiTableV1 {}
-unsafe impl Sync for HostApiTableV1 {}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
 pub struct GameplayHostApiV2 {
     pub abi: PluginAbiVersion,
     pub context: *mut c_void,
@@ -79,41 +63,31 @@ pub type GameplayPluginInvokeV3Fn = unsafe extern "C" fn(
     *mut OwnedBuffer,
     *mut OwnedBuffer,
 ) -> PluginErrorCode;
-pub type AdminUiPluginInvokeV1Fn = unsafe extern "C" fn(
+pub type AdminSurfaceHostExecuteFn = unsafe extern "C" fn(
+    *mut c_void,
+    Utf8Slice,
     ByteSlice,
-    *const HostApiTableV1,
     *mut OwnedBuffer,
     *mut OwnedBuffer,
 ) -> PluginErrorCode;
-pub type AdminTransportHostStatusFn = unsafe extern "C" fn(
+pub type AdminSurfaceHostPermissionsFn = unsafe extern "C" fn(
     *mut c_void,
     Utf8Slice,
     *mut OwnedBuffer,
     *mut OwnedBuffer,
 ) -> PluginErrorCode;
-pub type AdminTransportHostReloadRuntimeFn = unsafe extern "C" fn(
+pub type AdminSurfaceHostTakeResourceFn = unsafe extern "C" fn(
     *mut c_void,
     Utf8Slice,
-    u8,
+    *mut bool,
     *mut OwnedBuffer,
     *mut OwnedBuffer,
 ) -> PluginErrorCode;
-pub type AdminTransportHostUpgradeRuntimeFn = unsafe extern "C" fn(
-    *mut c_void,
-    Utf8Slice,
-    Utf8Slice,
-    *mut OwnedBuffer,
-    *mut OwnedBuffer,
-) -> PluginErrorCode;
-pub type AdminTransportHostShutdownFn =
-    unsafe extern "C" fn(*mut c_void, Utf8Slice, *mut OwnedBuffer) -> PluginErrorCode;
-pub type AdminTransportHostPublishTcpListenerForUpgradeFn =
-    unsafe extern "C" fn(*mut c_void, usize, *mut OwnedBuffer) -> PluginErrorCode;
-pub type AdminTransportHostTakeTcpListenerFromUpgradeFn =
-    unsafe extern "C" fn(*mut c_void, *mut bool, *mut usize, *mut OwnedBuffer) -> PluginErrorCode;
-pub type AdminTransportPluginInvokeV1Fn = unsafe extern "C" fn(
+pub type AdminSurfaceHostPublishResourceFn =
+    unsafe extern "C" fn(*mut c_void, Utf8Slice, ByteSlice, *mut OwnedBuffer) -> PluginErrorCode;
+pub type AdminSurfacePluginInvokeV1Fn = unsafe extern "C" fn(
     ByteSlice,
-    *const AdminTransportHostApiV1,
+    *const AdminSurfaceHostApiV1,
     *mut OwnedBuffer,
     *mut OwnedBuffer,
 ) -> PluginErrorCode;
@@ -148,32 +122,23 @@ pub struct GameplayPluginApiV3 {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct AdminUiPluginApiV1 {
-    pub invoke: AdminUiPluginInvokeV1Fn,
-    pub free_buffer: PluginFreeBufferFn,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct AdminTransportHostApiV1 {
+pub struct AdminSurfaceHostApiV1 {
     pub abi: PluginAbiVersion,
     pub context: *mut c_void,
     pub log: Option<HostLogFn>,
-    pub get_status: Option<AdminTransportHostStatusFn>,
-    pub list_sessions: Option<AdminTransportHostStatusFn>,
-    pub reload_runtime: Option<AdminTransportHostReloadRuntimeFn>,
-    pub upgrade_runtime: Option<AdminTransportHostUpgradeRuntimeFn>,
-    pub shutdown: Option<AdminTransportHostShutdownFn>,
-    pub publish_tcp_listener_for_upgrade: Option<AdminTransportHostPublishTcpListenerForUpgradeFn>,
-    pub take_tcp_listener_from_upgrade: Option<AdminTransportHostTakeTcpListenerFromUpgradeFn>,
+    pub execute: Option<AdminSurfaceHostExecuteFn>,
+    pub permissions: Option<AdminSurfaceHostPermissionsFn>,
+    pub take_process_resource: Option<AdminSurfaceHostTakeResourceFn>,
+    pub publish_handoff_resource: Option<AdminSurfaceHostPublishResourceFn>,
+    pub take_handoff_resource: Option<AdminSurfaceHostTakeResourceFn>,
 }
 
-unsafe impl Send for AdminTransportHostApiV1 {}
-unsafe impl Sync for AdminTransportHostApiV1 {}
+unsafe impl Send for AdminSurfaceHostApiV1 {}
+unsafe impl Sync for AdminSurfaceHostApiV1 {}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct AdminTransportPluginApiV1 {
-    pub invoke: AdminTransportPluginInvokeV1Fn,
+pub struct AdminSurfacePluginApiV1 {
+    pub invoke: AdminSurfacePluginInvokeV1Fn,
     pub free_buffer: PluginFreeBufferFn,
 }

@@ -43,7 +43,7 @@ fn tracked_runtime_config_path(file_name: &str) -> PathBuf {
     );
 }
 
-fn write_dummy_admin_transport_config(
+fn write_dummy_grpc_admin_surface_config(
     dir: &Path,
     file_name: &str,
     bind_addr: &str,
@@ -163,12 +163,9 @@ auth = "offline-v1"
 fn tracked_runtime_server_toml_parses() -> Result<(), RuntimeError> {
     let config = ServerConfig::from_toml(&tracked_runtime_config_path("server.toml"))?;
     assert!(config.topology.be_enabled);
-    assert!(
-        config
-            .admin
-            .local_console_permissions
-            .contains(&crate::config::AdminPermission::ReloadRuntime)
-    );
+    assert!(console_permissions(&config).is_some_and(|permissions| {
+        permissions.contains(&crate::config::AdminPermission::ReloadRuntime)
+    }));
     Ok(())
 }
 
@@ -176,12 +173,9 @@ fn tracked_runtime_server_toml_parses() -> Result<(), RuntimeError> {
 fn tracked_runtime_server_toml_example_parses() -> Result<(), RuntimeError> {
     let config = ServerConfig::from_toml(&tracked_runtime_config_path("server.toml.example"))?;
     assert!(config.topology.be_enabled);
-    assert!(
-        config
-            .admin
-            .local_console_permissions
-            .contains(&crate::config::AdminPermission::ReloadRuntime)
-    );
+    assert!(console_permissions(&config).is_some_and(|permissions| {
+        permissions.contains(&crate::config::AdminPermission::ReloadRuntime)
+    }));
     Ok(())
 }
 
@@ -286,7 +280,7 @@ fn server_toml_parse_auth_profile() -> Result<(), RuntimeError> {
 #[test]
 fn server_toml_parse_admin_section_and_failure_policy() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let transport_config = write_dummy_admin_transport_config(
+    let surface_config = write_dummy_grpc_admin_surface_config(
         temp_dir.path(),
         "admin-transport-grpc.toml",
         "127.0.0.1:50052",
@@ -297,47 +291,49 @@ fn server_toml_parse_admin_section_and_failure_policy() -> Result<(), RuntimeErr
         format!(
             r#"
 [live.plugins.failure_policy]
-admin_transport = "skip"
-admin_ui = "quarantine"
+admin_surface = "skip"
 
-[live.admin]
-ui_profile = "console-v2"
-local_console_permissions = ["status", "reload-runtime", "status"]
+[live.admin.surfaces.console]
+profile = "console-v2"
 
-[static.admin.remote]
-transport_profile = "grpc-v1"
-transport_config = {}
+[live.admin.surfaces.remote]
+profile = "grpc-v1"
+config = {}
+
+[static.admin.principals."console:console"]
+permissions = ["status", "reload-runtime", "status"]
 
 [static.admin.principals.ops]
 permissions = ["status", "reload-runtime", "status"]
 "#,
-            format!("{:?}", transport_config.display().to_string())
+            format!("{:?}", surface_config.display().to_string())
         ),
     )?;
 
     let parsed = ServerConfig::from_toml(&path)?;
 
     assert_eq!(
-        parsed.plugins.failure_policy.admin_transport,
+        parsed.plugins.failure_policy.admin_surface,
         PluginFailureAction::Skip
     );
     assert_eq!(
-        parsed.plugins.failure_policy.admin_ui,
-        PluginFailureAction::Quarantine
+        console_surface(&parsed).map(|surface| surface.profile.clone()),
+        Some(mc_core::AdminSurfaceProfileId::new("console-v2"))
     );
-    assert_eq!(parsed.admin.ui_profile, "console-v2");
     assert_eq!(
-        parsed.admin.local_console_permissions,
+        console_permissions(&parsed).cloned().unwrap_or_default(),
         vec![
             crate::config::AdminPermission::Status,
             crate::config::AdminPermission::ReloadRuntime,
         ]
     );
     assert_eq!(
-        parsed.admin.remote.transport_profile,
-        mc_core::AdminTransportProfileId::new("grpc-v1")
+        remote_surface(&parsed).cloned(),
+        Some(crate::config::AdminSurfaceConfig {
+            profile: mc_core::AdminSurfaceProfileId::new("grpc-v1"),
+            config: Some(surface_config),
+        })
     );
-    assert_eq!(parsed.admin.remote.transport_config, Some(transport_config));
     assert_eq!(
         parsed
             .admin
@@ -360,8 +356,8 @@ fn server_toml_accepts_reload_runtime_admin_permission() -> Result<(), RuntimeEr
     fs::write(
         &path,
         r#"
-[live.admin]
-local_console_permissions = ["reload-runtime"]
+[static.admin.principals."console:console"]
+permissions = ["reload-runtime"]
 
 [static.admin.principals.ops]
 permissions = ["reload-runtime"]
@@ -370,7 +366,7 @@ permissions = ["reload-runtime"]
 
     let parsed = ServerConfig::from_toml(&path)?;
     assert_eq!(
-        parsed.admin.local_console_permissions,
+        console_permissions(&parsed).cloned().unwrap_or_default(),
         vec![crate::config::AdminPermission::ReloadRuntime]
     );
     assert_eq!(
@@ -392,8 +388,8 @@ fn server_toml_rejects_reload_topology_admin_permission_token() {
     fs::write(
         &path,
         r#"
-[live.admin]
-local_console_permissions = ["reload-topology"]
+[static.admin.principals."console:console"]
+permissions = ["reload-topology"]
 "#,
     )
     .expect("server.toml should write");
@@ -403,12 +399,12 @@ local_console_permissions = ["reload-topology"]
     assert!(matches!(
         error,
         crate::config::ServerConfigError::Config(message)
-            if message.contains("unsupported live.admin.local_console_permissions entry `reload-topology`")
+            if message.contains("unsupported static.admin.principals.console:console.permissions entry `reload-topology`")
     ));
 }
 
 #[test]
-fn server_toml_reject_transport_profile_without_transport_config() {
+fn server_toml_rejects_legacy_remote_admin_keys() {
     let temp_dir = tempdir().expect("tempdir should be available");
     let path = temp_dir.path().join("server.toml");
     fs::write(
@@ -416,69 +412,61 @@ fn server_toml_reject_transport_profile_without_transport_config() {
         r#"
 [static.admin.remote]
 transport_profile = "grpc-v1"
-
-[static.admin.principals.ops]
-permissions = ["status"]
 "#,
     )
     .expect("server.toml should write");
 
-    let error = ServerConfig::from_toml(&path).expect_err("transport config should be required");
-    assert_server_config_error_contains(
-        error,
-        "static.admin.remote.transport_profile requires static.admin.remote.transport_config",
-    );
+    let error = ServerConfig::from_toml(&path).expect_err("legacy admin keys should fail");
+    assert_server_config_error_contains(error, "unknown field `remote`");
 }
 
 #[test]
-fn inline_server_config_source_rejects_transport_config_without_profile() {
+fn inline_server_config_source_rejects_missing_admin_surface_config_file() {
     let mut config = ServerConfig::default();
-    config.admin.remote.transport_config = Some(PathBuf::from("runtime/admin/grpc.toml"));
-    config.admin.principals.insert(
-        "ops".to_string(),
-        crate::config::AdminPrincipalConfig {
-            permissions: vec![crate::config::AdminPermission::Status],
-        },
+    set_remote_surface(
+        &mut config,
+        "grpc-v1",
+        PathBuf::from("runtime/admin/grpc.toml"),
     );
 
     let error = ServerConfigSource::Inline(config)
         .load()
-        .expect_err("transport profile should be required for inline configs");
-    assert_server_config_error_contains(
-        error,
-        "static.admin.remote.transport_config requires static.admin.remote.transport_profile",
-    );
+        .expect_err("missing surface config file should be rejected");
+    assert_server_config_error_contains(error, "live.admin.surfaces.remote.config");
 }
 
 #[test]
-fn server_toml_reject_transport_profile_without_principals() {
+fn server_toml_allows_remote_surface_without_principals() -> Result<(), RuntimeError> {
     let temp_dir = tempdir().expect("tempdir should be available");
-    let transport_config = write_dummy_admin_transport_config(
+    let surface_config = write_dummy_grpc_admin_surface_config(
         temp_dir.path(),
         "admin-transport-grpc.toml",
         "127.0.0.1:50051",
     )
-    .expect("transport config should write");
+    .expect("surface config should write");
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
         format!(
             r#"
-[static.admin.remote]
-transport_profile = "grpc-v1"
-transport_config = {}
+[live.admin.surfaces.remote]
+profile = "grpc-v1"
+config = {}
 "#,
-            format!("{:?}", transport_config.display().to_string())
+            format!("{:?}", surface_config.display().to_string())
         ),
     )
     .expect("server.toml should write");
 
-    let error = ServerConfig::from_toml(&path)
-        .expect_err("remote transport without principals should fail");
-    assert_server_config_error_contains(
-        error,
-        "requires at least one static.admin.principals entry",
+    let parsed = ServerConfig::from_toml(&path)?;
+    assert_eq!(
+        remote_surface(&parsed).cloned(),
+        Some(crate::config::AdminSurfaceConfig {
+            profile: mc_core::AdminSurfaceProfileId::new("grpc-v1"),
+            config: Some(surface_config),
+        })
     );
+    Ok(())
 }
 
 #[test]
@@ -504,40 +492,37 @@ permissions = []
 }
 
 #[test]
-fn server_toml_reject_missing_admin_transport_config_file() {
+fn server_toml_reject_missing_admin_surface_config_file() {
     let temp_dir = tempdir().expect("tempdir should be available");
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
         r#"
-[static.admin.remote]
-transport_profile = "grpc-v1"
-transport_config = "missing-admin-transport.toml"
-
-[static.admin.principals.ops]
-permissions = ["status"]
+[live.admin.surfaces.remote]
+profile = "grpc-v1"
+config = "missing-grpc-admin-surface.toml"
 "#,
     )
     .expect("server.toml should write");
 
     let error =
-        ServerConfig::from_toml(&path).expect_err("missing admin transport config should fail");
-    assert_server_config_error_contains(error, "static.admin.remote.transport_config");
+        ServerConfig::from_toml(&path).expect_err("missing admin surface config should fail");
+    assert_server_config_error_contains(error, "live.admin.surfaces.remote.config");
 }
 
 #[test]
-fn server_toml_accepts_relative_admin_transport_config_path() -> Result<(), RuntimeError> {
+fn server_toml_accepts_relative_admin_surface_config_path() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let transport_config =
-        write_dummy_admin_transport_config(temp_dir.path(), "grpc.toml", "0.0.0.0:50051")?;
+    let surface_config =
+        write_dummy_grpc_admin_surface_config(temp_dir.path(), "grpc.toml", "0.0.0.0:50051")?;
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
         format!(
             r#"
-[static.admin.remote]
-transport_profile = "grpc-v1"
-transport_config = "grpc.toml"
+[live.admin.surfaces.remote]
+profile = "grpc-v1"
+config = "grpc.toml"
 
 [static.admin.principals.ops]
 permissions = ["status"]
@@ -547,10 +532,12 @@ permissions = ["status"]
 
     let parsed = ServerConfig::from_toml(&path)?;
     assert_eq!(
-        parsed.admin.remote.transport_profile,
-        mc_core::AdminTransportProfileId::new("grpc-v1")
+        remote_surface(&parsed).cloned(),
+        Some(crate::config::AdminSurfaceConfig {
+            profile: mc_core::AdminSurfaceProfileId::new("grpc-v1"),
+            config: Some(surface_config),
+        })
     );
-    assert_eq!(parsed.admin.remote.transport_config, Some(transport_config));
     Ok(())
 }
 
@@ -601,21 +588,27 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
     config.plugins.buffer_limits.gameplay_response_bytes = 2345;
     config.plugins.buffer_limits.storage_response_bytes = 3456;
     config.plugins.buffer_limits.auth_response_bytes = 4567;
-    config.plugins.buffer_limits.admin_ui_response_bytes = 5678;
+    config.plugins.buffer_limits.admin_surface_response_bytes = 5678;
     config.plugins.buffer_limits.callback_payload_bytes = 6789;
     config.plugins.buffer_limits.metadata_bytes = 7890;
     config.plugins.failure_policy.protocol = PluginFailureAction::Skip;
     config.plugins.failure_policy.gameplay = PluginFailureAction::FailFast;
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     config.plugins.failure_policy.auth = PluginFailureAction::FailFast;
-    config.plugins.failure_policy.admin_transport = PluginFailureAction::Skip;
-    config.plugins.failure_policy.admin_ui = PluginFailureAction::Quarantine;
-    config.admin.ui_profile = "console-v2".into();
-    config.admin.local_console_permissions = vec![
-        crate::config::AdminPermission::Status,
-        crate::config::AdminPermission::ReloadRuntime,
-    ];
-    config.admin.remote.transport_profile = "grpc-v1".into();
+    config.plugins.failure_policy.admin_surface = PluginFailureAction::Skip;
+    set_console_surface(&mut config, "console-v2");
+    set_console_permissions(
+        &mut config,
+        vec![
+            crate::config::AdminPermission::Status,
+            crate::config::AdminPermission::ReloadRuntime,
+        ],
+    );
+    set_remote_surface(
+        &mut config,
+        "grpc-v1",
+        PathBuf::from("runtime").join("grpc.toml"),
+    );
     config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 0 };
     config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 1 };
 
@@ -641,11 +634,7 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
         runtime_selection.gameplay_profile_map,
         config.profiles.gameplay_map
     );
-    assert_eq!(
-        runtime_selection.admin_transport_profile,
-        config.admin.remote.transport_profile
-    );
-    assert_eq!(runtime_selection.admin_ui_profile, config.admin.ui_profile);
+    assert_eq!(runtime_selection.admin_surfaces.len(), 2);
     assert_eq!(runtime_selection.plugin_allowlist, config.plugins.allowlist);
     assert_eq!(
         runtime_selection.buffer_limits,
@@ -668,12 +657,8 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
         config.plugins.failure_policy.auth
     );
     assert_eq!(
-        runtime_selection.plugin_failure_policy_admin_transport,
-        config.plugins.failure_policy.admin_transport
-    );
-    assert_eq!(
-        runtime_selection.plugin_failure_policy_admin_ui,
-        config.plugins.failure_policy.admin_ui
+        runtime_selection.plugin_failure_policy_admin_surface,
+        config.plugins.failure_policy.admin_surface
     );
 }
 
@@ -689,9 +674,12 @@ fn server_config_splits_static_and_live_views() {
     config.topology.reload_watch = true;
     config.plugins.reload_watch = true;
     config.profiles.default_gameplay = "readonly".into();
-    config.admin.ui_profile = "console-v2".into();
-    config.admin.remote.transport_profile = "grpc-v1".into();
-    config.admin.remote.transport_config = Some(PathBuf::from("runtime").join("grpc.toml"));
+    set_console_surface(&mut config, "console-v2");
+    set_remote_surface(
+        &mut config,
+        "grpc-v1",
+        PathBuf::from("runtime").join("grpc.toml"),
+    );
     config.admin.principals.insert(
         "ops".to_string(),
         crate::config::AdminPrincipalConfig {
@@ -748,7 +736,7 @@ fn server_toml_parse_per_kind_failure_policies() -> Result<(), RuntimeError> {
     config.plugins.failure_policy.gameplay = PluginFailureAction::FailFast;
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     config.plugins.failure_policy.auth = PluginFailureAction::FailFast;
-    config.plugins.failure_policy.admin_transport = PluginFailureAction::Skip;
+    config.plugins.failure_policy.admin_surface = PluginFailureAction::Skip;
     let path = temp_dir.path().join("server.toml");
     write_server_toml(&path, &config)?;
 
@@ -770,7 +758,7 @@ fn server_toml_parse_per_kind_failure_policies() -> Result<(), RuntimeError> {
         PluginFailureAction::FailFast
     );
     assert_eq!(
-        parsed.plugins.failure_policy.admin_transport,
+        parsed.plugins.failure_policy.admin_surface,
         PluginFailureAction::Skip
     );
     Ok(())
@@ -784,7 +772,7 @@ fn server_toml_parse_plugin_buffer_limits() -> Result<(), RuntimeError> {
     config.plugins.buffer_limits.gameplay_response_bytes = 22;
     config.plugins.buffer_limits.storage_response_bytes = 33;
     config.plugins.buffer_limits.auth_response_bytes = 44;
-    config.plugins.buffer_limits.admin_ui_response_bytes = 55;
+    config.plugins.buffer_limits.admin_surface_response_bytes = 55;
     config.plugins.buffer_limits.callback_payload_bytes = 66;
     config.plugins.buffer_limits.metadata_bytes = 77;
     let path = temp_dir.path().join("server.toml");
@@ -823,7 +811,7 @@ fn server_toml_use_balanced_failure_policy_defaults() -> Result<(), RuntimeError
         PluginFailureAction::Skip
     );
     assert_eq!(
-        config.plugins.failure_policy.admin_transport,
+        config.plugins.failure_policy.admin_surface,
         PluginFailureAction::Skip
     );
     Ok(())

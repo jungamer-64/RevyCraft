@@ -1,11 +1,9 @@
 use crate::PluginHostError as RuntimeError;
 use crate::runtime::{
-    AdminTransportProfileHandle, AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle,
-    StorageProfileHandle,
+    AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
 };
 use mc_core::{
-    AdapterId, AdminTransportProfileId, AdminUiProfileId, AuthProfileId, GameplayProfileId,
-    StorageProfileId,
+    AdapterId, AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
 };
 use mc_proto_common::{
     Edition, HandshakeIntent, HandshakeProbe, ProtocolAdapter, ProtocolError, TransportKind,
@@ -157,9 +155,7 @@ pub struct LoadedPluginSet {
     gameplay_profiles: HashMap<GameplayProfileId, Arc<dyn GameplayProfileHandle>>,
     storage_profiles: HashMap<StorageProfileId, Arc<dyn StorageProfileHandle>>,
     auth_profiles: HashMap<AuthProfileId, Arc<dyn AuthProfileHandle>>,
-    admin_transport_profiles:
-        HashMap<AdminTransportProfileId, Arc<dyn AdminTransportProfileHandle>>,
-    admin_ui_profiles: HashMap<AdminUiProfileId, Arc<dyn AdminUiProfileHandle>>,
+    admin_surface_profiles: HashMap<AdminSurfaceProfileId, Arc<dyn AdminSurfaceProfileHandle>>,
 }
 
 impl LoadedPluginSet {
@@ -170,8 +166,7 @@ impl LoadedPluginSet {
             gameplay_profiles: HashMap::new(),
             storage_profiles: HashMap::new(),
             auth_profiles: HashMap::new(),
-            admin_transport_profiles: HashMap::new(),
-            admin_ui_profiles: HashMap::new(),
+            admin_surface_profiles: HashMap::new(),
         }
     }
 
@@ -202,21 +197,12 @@ impl LoadedPluginSet {
         self
     }
 
-    pub(crate) fn register_admin_transport_profile(
+    pub(crate) fn register_admin_surface_profile(
         &mut self,
-        profile_id: AdminTransportProfileId,
-        profile: Arc<dyn AdminTransportProfileHandle>,
+        profile_id: AdminSurfaceProfileId,
+        profile: Arc<dyn AdminSurfaceProfileHandle>,
     ) -> &mut Self {
-        self.admin_transport_profiles.insert(profile_id, profile);
-        self
-    }
-
-    pub(crate) fn register_admin_ui_profile(
-        &mut self,
-        profile_id: AdminUiProfileId,
-        profile: Arc<dyn AdminUiProfileHandle>,
-    ) -> &mut Self {
-        self.admin_ui_profiles.insert(profile_id, profile);
+        self.admin_surface_profiles.insert(profile_id, profile);
         self
     }
 
@@ -252,18 +238,10 @@ impl LoadedPluginSet {
     }
 
     #[must_use]
-    pub fn resolve_admin_transport_profile(
+    pub fn resolve_admin_surface_profile(
         &self,
         profile_id: &str,
-    ) -> Option<Arc<dyn AdminTransportProfileHandle>> {
-        self.admin_transport_profiles.get(profile_id).cloned()
-    }
-
-    #[must_use]
-    pub fn resolve_admin_ui_profile(
-        &self,
-        profile_id: &str,
-    ) -> Option<Arc<dyn AdminUiProfileHandle>> {
-        self.admin_ui_profiles.get(profile_id).cloned()
+    ) -> Option<Arc<dyn AdminSurfaceProfileHandle>> {
+        self.admin_surface_profiles.get(profile_id).cloned()
     }
 }

@@ -2,8 +2,8 @@ use crate::PluginHostError as RuntimeError;
 use mc_plugin_api::abi::PluginKind;
 #[cfg(any(test, feature = "in-process-testing"))]
 use mc_plugin_api::host_api::{
-    AdminTransportPluginApiV1, AdminUiPluginApiV1, AuthPluginApiV1, GameplayPluginApiV3,
-    ProtocolPluginApiV3, StoragePluginApiV1,
+    AdminSurfacePluginApiV1, AuthPluginApiV1, GameplayPluginApiV3, ProtocolPluginApiV3,
+    StoragePluginApiV1,
 };
 #[cfg(any(test, feature = "in-process-testing"))]
 use mc_plugin_api::manifest::PluginManifestV1;
@@ -53,18 +53,11 @@ pub struct InProcessAuthPlugin {
 
 #[cfg(any(test, feature = "in-process-testing"))]
 #[derive(Clone, Debug)]
-pub struct InProcessAdminTransportPlugin {
+#[allow(dead_code)]
+pub struct InProcessAdminSurfacePlugin {
     pub plugin_id: String,
     pub manifest: &'static PluginManifestV1,
-    pub api: &'static AdminTransportPluginApiV1,
-}
-
-#[cfg(any(test, feature = "in-process-testing"))]
-#[derive(Clone, Debug)]
-pub struct InProcessAdminUiPlugin {
-    pub plugin_id: String,
-    pub manifest: &'static PluginManifestV1,
-    pub api: &'static AdminUiPluginApiV1,
+    pub api: &'static AdminSurfacePluginApiV1,
 }
 
 #[derive(Clone, Debug)]
@@ -82,9 +75,8 @@ pub(crate) enum PluginSource {
     #[cfg(any(test, feature = "in-process-testing"))]
     InProcessAuth(InProcessAuthPlugin),
     #[cfg(any(test, feature = "in-process-testing"))]
-    InProcessAdminTransport(InProcessAdminTransportPlugin),
-    #[cfg(any(test, feature = "in-process-testing"))]
-    InProcessAdminUi(InProcessAdminUiPlugin),
+    #[allow(dead_code)]
+    InProcessAdminSurface(InProcessAdminSurfacePlugin),
 }
 
 #[derive(Clone, Debug)]
@@ -113,8 +105,7 @@ impl PluginPackage {
             | PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessStorage(_)
             | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminTransport(_)
-            | PluginSource::InProcessAdminUi(_) => Ok(SystemTime::UNIX_EPOCH),
+            | PluginSource::InProcessAdminSurface(_) => Ok(SystemTime::UNIX_EPOCH),
         }
     }
 
@@ -176,8 +167,7 @@ impl PluginPackage {
             | PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessStorage(_)
             | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminTransport(_)
-            | PluginSource::InProcessAdminUi(_) => "in-process".to_string(),
+            | PluginSource::InProcessAdminSurface(_) => "in-process".to_string(),
         };
         ArtifactIdentity {
             source,
@@ -271,28 +261,17 @@ impl PluginCatalog {
     }
 
     #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn register_in_process_admin_transport_plugin(
+    #[allow(dead_code)]
+    pub(crate) fn register_in_process_admin_surface_plugin(
         &mut self,
-        plugin: InProcessAdminTransportPlugin,
+        plugin: InProcessAdminSurfacePlugin,
     ) {
         self.packages.insert(
             plugin.plugin_id.clone(),
             PluginPackage {
                 plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::AdminTransport,
-                source: PluginSource::InProcessAdminTransport(plugin),
-            },
-        );
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn register_in_process_admin_ui_plugin(&mut self, plugin: InProcessAdminUiPlugin) {
-        self.packages.insert(
-            plugin.plugin_id.clone(),
-            PluginPackage {
-                plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::AdminUi,
-                source: PluginSource::InProcessAdminUi(plugin),
+                plugin_kind: PluginKind::AdminSurface,
+                source: PluginSource::InProcessAdminSurface(plugin),
             },
         );
     }
@@ -368,8 +347,7 @@ fn parse_plugin_kind(value: &str) -> Result<PluginKind, RuntimeError> {
         "storage" => Ok(PluginKind::Storage),
         "auth" => Ok(PluginKind::Auth),
         "gameplay" => Ok(PluginKind::Gameplay),
-        "admin-transport" => Ok(PluginKind::AdminTransport),
-        "admin-ui" => Ok(PluginKind::AdminUi),
+        "admin-surface" => Ok(PluginKind::AdminSurface),
         _ => Err(RuntimeError::Config(format!(
             "unsupported plugin kind `{value}`"
         ))),

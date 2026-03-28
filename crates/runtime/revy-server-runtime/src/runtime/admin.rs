@@ -1,13 +1,13 @@
 use super::{
     AdminArtifactsReloadView, AdminCoreReloadView, AdminFullReloadView, AdminGenerationCountView,
     AdminListenerBindingView, AdminNamedCountView, AdminPermission, AdminPhaseCountView,
-    AdminPluginHostView, AdminPrincipal, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
-    AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionView, AdminSessionsView,
-    AdminStatusView, AdminTopologyReloadView, AdminTransportCountView, AdminUpgradeRuntimeView,
-    RuntimeReloadMode, RuntimeReloadResult, RuntimeServer,
+    AdminPluginHostView, AdminRequest, AdminRuntimeReloadDetail, AdminRuntimeReloadView,
+    AdminSessionSummaryView, AdminSessionTransportCountView, AdminSessionView, AdminSessionsView,
+    AdminStatusView, AdminTopologyReloadView, AdminUpgradeRuntimeView, RuntimeReloadMode,
+    RuntimeReloadResult, RuntimeServer,
 };
 use crate::RuntimeError;
-use mc_plugin_api::codec::admin_ui as plugin_admin;
+use mc_plugin_api::codec::admin as surface_admin;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
@@ -21,65 +21,29 @@ pub type RuntimeUpgradeCallback =
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct AdminSubject {
-    kind: AdminSubjectKind,
+    principal_id: String,
 }
 
 impl AdminSubject {
     #[must_use]
-    pub fn is_local_console(&self) -> bool {
-        matches!(&self.kind, AdminSubjectKind::LocalConsole)
-    }
-
-    #[must_use]
     pub fn principal_id(&self) -> &str {
-        match &self.kind {
-            AdminSubjectKind::LocalConsole => AdminPrincipal::LocalConsole.as_str(),
-            AdminSubjectKind::Remote(remote) => remote.principal_id.as_str(),
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn local_console() -> Self {
-        Self {
-            kind: AdminSubjectKind::LocalConsole,
-        }
+        &self.principal_id
     }
 
     #[must_use]
     pub(crate) fn remote(principal_id: impl Into<String>) -> Self {
         Self {
-            kind: AdminSubjectKind::Remote(RemoteAdminSubject {
-                principal_id: principal_id.into(),
-            }),
+            principal_id: principal_id.into(),
         }
     }
 }
 
 impl Debug for AdminSubject {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match &self.kind {
-            AdminSubjectKind::LocalConsole => f
-                .debug_struct("AdminSubject")
-                .field("kind", &"local-console")
-                .finish(),
-            AdminSubjectKind::Remote(remote) => f
-                .debug_struct("AdminSubject")
-                .field("kind", &"remote")
-                .field("principal_id", &remote.principal_id)
-                .finish(),
-        }
+        f.debug_struct("AdminSubject")
+            .field("principal_id", &self.principal_id)
+            .finish()
     }
-}
-
-#[derive(Clone, PartialEq, Eq)]
-enum AdminSubjectKind {
-    LocalConsole,
-    Remote(RemoteAdminSubject),
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct RemoteAdminSubject {
-    principal_id: String,
 }
 
 impl Display for AdminSubject {
@@ -112,18 +76,12 @@ pub enum AdminCommandError {
 #[derive(Clone)]
 pub struct AdminControlPlaneHandle {
     service: AdminService,
-    ui_adapter: AdminUiAdapter,
 }
 
 #[derive(Clone)]
 struct AdminService {
     runtime: Arc<RuntimeServer>,
     upgrade_callback: Option<RuntimeUpgradeCallback>,
-}
-
-#[derive(Clone)]
-struct AdminUiAdapter {
-    runtime: Arc<RuntimeServer>,
 }
 
 impl AdminControlPlaneHandle {
@@ -133,7 +91,6 @@ impl AdminControlPlaneHandle {
                 runtime: Arc::clone(&runtime),
                 upgrade_callback: None,
             },
-            ui_adapter: AdminUiAdapter { runtime },
         }
     }
 
@@ -150,6 +107,13 @@ impl AdminControlPlaneHandle {
         self.service
             .subject_for_remote_principal(principal_id)
             .await
+    }
+
+    pub async fn permissions_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> Result<Vec<AdminPermission>, AdminAuthError> {
+        self.service.permissions_for_principal(principal_id).await
     }
 
     pub async fn status(
@@ -186,39 +150,98 @@ impl AdminControlPlaneHandle {
         self.service.shutdown(subject).await
     }
 
-    pub async fn parse_local_command(&self, line: &str) -> Result<AdminRequest, String> {
-        self.ui_adapter.parse_local_command(line).await
+    pub async fn execute_surface(
+        &self,
+        principal_id: &str,
+        request: surface_admin::AdminRequest,
+    ) -> surface_admin::AdminResponse {
+        let subject = match self.subject_for_remote_principal(principal_id).await {
+            Ok(subject) => subject,
+            Err(error) => {
+                return surface_admin::AdminResponse::Error {
+                    message: error.to_string(),
+                };
+            }
+        };
+        let response = match runtime_request_from_surface_request(request) {
+            AdminRequest::Help => return surface_admin::AdminResponse::Help,
+            AdminRequest::Status => self
+                .status(&subject)
+                .await
+                .map(|status| {
+                    surface_admin::AdminResponse::Status(surface_status_view_from_runtime(&status))
+                })
+                .unwrap_or_else(|error| surface_response_from_error(principal_id, error)),
+            AdminRequest::Sessions => self
+                .sessions(&subject)
+                .await
+                .map(|sessions| {
+                    surface_admin::AdminResponse::Sessions(surface_sessions_view_from_runtime(
+                        &sessions,
+                    ))
+                })
+                .unwrap_or_else(|error| surface_response_from_error(principal_id, error)),
+            AdminRequest::ReloadRuntime { mode } => self
+                .reload_runtime(&subject, mode)
+                .await
+                .map(|reload| {
+                    surface_admin::AdminResponse::ReloadRuntime(
+                        surface_runtime_reload_view_from_runtime(&reload),
+                    )
+                })
+                .unwrap_or_else(|error| surface_response_from_error(principal_id, error)),
+            AdminRequest::UpgradeRuntime { executable_path } => self
+                .upgrade_runtime(&subject, executable_path)
+                .await
+                .map(|result| {
+                    surface_admin::AdminResponse::UpgradeRuntime(
+                        surface_admin::AdminUpgradeRuntimeView {
+                            executable_path: result.executable_path,
+                        },
+                    )
+                })
+                .unwrap_or_else(|error| surface_response_from_error(principal_id, error)),
+            AdminRequest::Shutdown => self
+                .shutdown(&subject)
+                .await
+                .map(|()| surface_admin::AdminResponse::ShutdownScheduled)
+                .unwrap_or_else(|error| surface_response_from_error(principal_id, error)),
+        };
+        response
     }
 
-    pub async fn render_local_response(&self, response: &AdminResponse) -> Result<String, String> {
-        self.ui_adapter.render_local_response(response).await
-    }
-
-    pub async fn execute_local_console(&self, request: AdminRequest) -> AdminResponse {
-        self.service.execute_local_console(request).await
-    }
-
-    pub async fn execute(&self, principal: AdminPrincipal, request: AdminRequest) -> AdminResponse {
-        self.service.execute(principal, request).await
+    pub async fn surface_permissions_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> Result<Vec<surface_admin::AdminPermission>, AdminAuthError> {
+        self.permissions_for_principal(principal_id)
+            .await
+            .map(|permissions| {
+                permissions
+                    .into_iter()
+                    .map(surface_permission_from_runtime)
+                    .collect()
+            })
     }
 }
 
-impl AdminControlPlaneHandle {
-    fn local_response_from_error(error: AdminCommandError) -> AdminResponse {
-        match error {
-            AdminCommandError::PermissionDenied { permission, .. } => {
-                AdminResponse::PermissionDenied {
-                    principal: AdminPrincipal::LocalConsole,
-                    permission,
-                }
+fn surface_response_from_error(
+    principal_id: &str,
+    error: AdminCommandError,
+) -> surface_admin::AdminResponse {
+    match error {
+        AdminCommandError::PermissionDenied { permission, .. } => {
+            surface_admin::AdminResponse::PermissionDenied {
+                principal_id: principal_id.to_string(),
+                permission: surface_permission_from_runtime(permission),
             }
-            AdminCommandError::InvalidSubject { subject } => AdminResponse::Error {
-                message: format!("invalid admin subject: subject={subject}"),
-            },
-            AdminCommandError::Runtime(error) => AdminResponse::Error {
-                message: error.to_string(),
-            },
         }
+        AdminCommandError::InvalidSubject { subject } => surface_admin::AdminResponse::Error {
+            message: format!("invalid admin subject: subject={subject}"),
+        },
+        AdminCommandError::Runtime(error) => surface_admin::AdminResponse::Error {
+            message: error.to_string(),
+        },
     }
 }
 
@@ -230,6 +253,13 @@ impl AdminService {
         self.runtime
             .subject_for_remote_principal(principal_id)
             .await
+    }
+
+    async fn permissions_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> Result<Vec<AdminPermission>, AdminAuthError> {
+        self.runtime.permissions_for_principal(principal_id).await
     }
 
     async fn status(&self, subject: &AdminSubject) -> Result<AdminStatusView, AdminCommandError> {
@@ -296,74 +326,9 @@ impl AdminService {
             .await
             .map_err(Into::into)
     }
-
-    async fn execute_local_console(&self, request: AdminRequest) -> AdminResponse {
-        let subject = AdminSubject::local_console();
-        match request {
-            AdminRequest::Help => AdminResponse::Help,
-            AdminRequest::Status => self
-                .status(&subject)
-                .await
-                .map(AdminResponse::Status)
-                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
-            AdminRequest::Sessions => self
-                .sessions(&subject)
-                .await
-                .map(AdminResponse::Sessions)
-                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
-            AdminRequest::ReloadRuntime { mode } => self
-                .reload_runtime(&subject, mode)
-                .await
-                .map(AdminResponse::ReloadRuntime)
-                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
-            AdminRequest::UpgradeRuntime { executable_path } => self
-                .upgrade_runtime(&subject, executable_path)
-                .await
-                .map(AdminResponse::UpgradeRuntime)
-                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
-            AdminRequest::Shutdown => self
-                .shutdown(&subject)
-                .await
-                .map(|()| AdminResponse::ShutdownScheduled)
-                .unwrap_or_else(AdminControlPlaneHandle::local_response_from_error),
-        }
-    }
-
-    async fn execute(&self, principal: AdminPrincipal, request: AdminRequest) -> AdminResponse {
-        match principal {
-            AdminPrincipal::LocalConsole => self.execute_local_console(request).await,
-        }
-    }
-}
-
-impl AdminUiAdapter {
-    async fn parse_local_command(&self, line: &str) -> Result<AdminRequest, String> {
-        if let Some(ui) = self.runtime.current_admin_ui().await {
-            return ui
-                .parse_line(line)
-                .map(runtime_request_from_plugin_request)
-                .map_err(|error| error.to_string());
-        }
-        parse_builtin_local_command(line)
-    }
-
-    async fn render_local_response(&self, response: &AdminResponse) -> Result<String, String> {
-        if let Some(ui) = self.runtime.current_admin_ui().await {
-            return ui
-                .render_response(&plugin_response_from_runtime_response(response))
-                .map_err(|error| error.to_string());
-        }
-        Ok(render_builtin_local_response(response))
-    }
 }
 
 impl RuntimeServer {
-    pub(crate) async fn current_admin_ui(
-        &self,
-    ) -> Option<Arc<dyn mc_plugin_host::runtime::AdminUiProfileHandle>> {
-        self.selection.current_admin_ui().await
-    }
-
     pub(crate) fn request_shutdown(&self) -> bool {
         self.reload.request_shutdown()
     }
@@ -396,47 +361,43 @@ impl RuntimeServer {
             .ok_or(AdminAuthError::InvalidPrincipalId)
     }
 
+    pub(crate) async fn permissions_for_principal(
+        &self,
+        principal_id: &str,
+    ) -> Result<Vec<AdminPermission>, AdminAuthError> {
+        let principal_id = principal_id.trim();
+        if principal_id.is_empty() {
+            return Err(AdminAuthError::MissingPrincipalId);
+        }
+        self.selection_state()
+            .await
+            .remote_admin_principals
+            .get(principal_id)
+            .map(|principal| principal.permissions.clone())
+            .ok_or(AdminAuthError::InvalidPrincipalId)
+    }
+
     async fn authorize(
         &self,
         subject: &AdminSubject,
         permission: AdminPermission,
     ) -> Result<(), AdminCommandError> {
         let selection_state = self.selection_state().await;
-        match &subject.kind {
-            AdminSubjectKind::LocalConsole => {
-                if selection_state
-                    .config
-                    .admin
-                    .local_console_permissions
-                    .iter()
-                    .any(|configured| runtime_permission_from_config(*configured) == permission)
-                {
-                    Ok(())
-                } else {
-                    Err(AdminCommandError::PermissionDenied {
-                        subject: subject.clone(),
-                        permission,
-                    })
-                }
-            }
-            AdminSubjectKind::Remote(remote) => {
-                let Some(principal) = selection_state
-                    .remote_admin_principals
-                    .get(&remote.principal_id)
-                else {
-                    return Err(AdminCommandError::InvalidSubject {
-                        subject: subject.clone(),
-                    });
-                };
-                if principal.permissions.contains(&permission) {
-                    Ok(())
-                } else {
-                    Err(AdminCommandError::PermissionDenied {
-                        subject: subject.clone(),
-                        permission,
-                    })
-                }
-            }
+        let Some(principal) = selection_state
+            .remote_admin_principals
+            .get(subject.principal_id())
+        else {
+            return Err(AdminCommandError::InvalidSubject {
+                subject: subject.clone(),
+            });
+        };
+        if principal.permissions.contains(&permission) {
+            Ok(())
+        } else {
+            Err(AdminCommandError::PermissionDenied {
+                subject: subject.clone(),
+                permission,
+            })
         }
     }
 
@@ -474,7 +435,7 @@ impl RuntimeServer {
                     .session_summary
                     .by_transport
                     .into_iter()
-                    .map(|count| AdminTransportCountView {
+                    .map(|count| AdminSessionTransportCountView {
                         transport: count.transport,
                         count: count.count,
                     })
@@ -522,8 +483,7 @@ impl RuntimeServer {
                 gameplay_count: status.gameplay_count,
                 storage_count: status.storage_count,
                 auth_count: status.auth_count,
-                admin_transport_count: status.admin_transport_count,
-                admin_ui_count: status.admin_ui_count,
+                admin_surface_count: status.admin_surface_count,
                 active_quarantine_count: status.active_quarantine_count,
                 artifact_quarantine_count: status.artifact_quarantine_count,
                 pending_fatal_error: status.pending_fatal_error,
@@ -541,7 +501,7 @@ impl RuntimeServer {
                 by_transport: summary
                     .by_transport
                     .into_iter()
-                    .map(|count| AdminTransportCountView {
+                    .map(|count| AdminSessionTransportCountView {
                         transport: count.transport,
                         count: count.count,
                     })
@@ -629,167 +589,39 @@ impl RuntimeServer {
     }
 }
 
-fn runtime_request_from_plugin_request(request: plugin_admin::AdminRequest) -> AdminRequest {
+fn runtime_request_from_surface_request(request: surface_admin::AdminRequest) -> AdminRequest {
     match request {
-        plugin_admin::AdminRequest::Help => AdminRequest::Help,
-        plugin_admin::AdminRequest::Status => AdminRequest::Status,
-        plugin_admin::AdminRequest::Sessions => AdminRequest::Sessions,
-        plugin_admin::AdminRequest::ReloadRuntime { mode } => AdminRequest::ReloadRuntime {
-            mode: runtime_reload_mode_from_plugin(mode),
+        surface_admin::AdminRequest::Help => AdminRequest::Help,
+        surface_admin::AdminRequest::Status => AdminRequest::Status,
+        surface_admin::AdminRequest::Sessions => AdminRequest::Sessions,
+        surface_admin::AdminRequest::ReloadRuntime { mode } => AdminRequest::ReloadRuntime {
+            mode: runtime_reload_mode_from_surface(mode),
         },
-        plugin_admin::AdminRequest::UpgradeRuntime { executable_path } => {
+        surface_admin::AdminRequest::UpgradeRuntime { executable_path } => {
             AdminRequest::UpgradeRuntime { executable_path }
         }
-        plugin_admin::AdminRequest::Shutdown => AdminRequest::Shutdown,
+        surface_admin::AdminRequest::Shutdown => AdminRequest::Shutdown,
     }
 }
 
-fn parse_builtin_local_command(line: &str) -> Result<AdminRequest, String> {
-    let trimmed = line.trim();
-    let normalized = trimmed
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase();
-    match normalized.as_str() {
-        "" => Err("empty command".to_string()),
-        "help" | "?" => Ok(AdminRequest::Help),
-        "status" => Ok(AdminRequest::Status),
-        "sessions" => Ok(AdminRequest::Sessions),
-        "reload runtime artifacts" => Ok(AdminRequest::ReloadRuntime {
-            mode: RuntimeReloadMode::Artifacts,
-        }),
-        "reload runtime topology" => Ok(AdminRequest::ReloadRuntime {
-            mode: RuntimeReloadMode::Topology,
-        }),
-        "reload runtime core" => Ok(AdminRequest::ReloadRuntime {
-            mode: RuntimeReloadMode::Core,
-        }),
-        "reload runtime full" => Ok(AdminRequest::ReloadRuntime {
-            mode: RuntimeReloadMode::Full,
-        }),
-        _ if normalized.starts_with("upgrade runtime executable ") => {
-            let executable_path = trimmed["upgrade runtime executable ".len()..].trim();
-            if executable_path.is_empty() {
-                Err(format!("unknown command: {line}"))
-            } else {
-                Ok(AdminRequest::UpgradeRuntime {
-                    executable_path: executable_path.to_string(),
-                })
-            }
-        }
-        "shutdown" | "stop" => Ok(AdminRequest::Shutdown),
-        _ => Err(format!("unknown command: {line}")),
-    }
-}
-
-fn render_builtin_local_response(response: &AdminResponse) -> String {
-    match response {
-        AdminResponse::Help => [
-            "commands:",
-            "  status",
-            "  sessions",
-            "  reload runtime artifacts",
-            "  reload runtime topology",
-            "  reload runtime core",
-            "  reload runtime full",
-            "  upgrade runtime executable <path>",
-            "  shutdown",
-        ]
-        .join("\n"),
-        AdminResponse::Status(status) => format!(
-            "status: generation={} sessions={} dirty={} motd={:?} max_players={}",
-            status.active_generation_id,
-            status.session_summary.total,
-            status.dirty,
-            status.motd,
-            status.max_players,
-        ),
-        AdminResponse::Sessions(sessions) => format!(
-            "sessions: total={} listed={}",
-            sessions.summary.total,
-            sessions.sessions.len(),
-        ),
-        AdminResponse::ReloadRuntime(result) => render_builtin_runtime_reload_response(result),
-        AdminResponse::UpgradeRuntime(result) => {
-            format!("upgrade runtime: executable={}", result.executable_path)
-        }
-        AdminResponse::ShutdownScheduled => "shutdown: scheduled".to_string(),
-        AdminResponse::PermissionDenied {
-            principal,
-            permission,
-        } => format!(
-            "permission denied: principal={} permission={}",
-            principal.as_str(),
-            permission.as_str(),
-        ),
-        AdminResponse::Error { message } => format!("error: {message}"),
-    }
-}
-
-fn render_csv_or_dash(values: &[String]) -> String {
-    if values.is_empty() {
-        "-".to_string()
-    } else {
-        values.join(",")
-    }
-}
-
-fn plugin_principal_from_runtime(principal: AdminPrincipal) -> plugin_admin::AdminPrincipal {
-    match principal {
-        AdminPrincipal::LocalConsole => plugin_admin::AdminPrincipal::LocalConsole,
-    }
-}
-
-fn plugin_permission_from_runtime(permission: AdminPermission) -> plugin_admin::AdminPermission {
+fn surface_permission_from_runtime(permission: AdminPermission) -> surface_admin::AdminPermission {
     match permission {
-        AdminPermission::Status => plugin_admin::AdminPermission::Status,
-        AdminPermission::Sessions => plugin_admin::AdminPermission::Sessions,
-        AdminPermission::ReloadRuntime => plugin_admin::AdminPermission::ReloadRuntime,
-        AdminPermission::UpgradeRuntime => plugin_admin::AdminPermission::UpgradeRuntime,
-        AdminPermission::Shutdown => plugin_admin::AdminPermission::Shutdown,
+        AdminPermission::Status => surface_admin::AdminPermission::Status,
+        AdminPermission::Sessions => surface_admin::AdminPermission::Sessions,
+        AdminPermission::ReloadRuntime => surface_admin::AdminPermission::ReloadRuntime,
+        AdminPermission::UpgradeRuntime => surface_admin::AdminPermission::UpgradeRuntime,
+        AdminPermission::Shutdown => surface_admin::AdminPermission::Shutdown,
     }
 }
 
-fn plugin_response_from_runtime_response(response: &AdminResponse) -> plugin_admin::AdminResponse {
-    match response {
-        AdminResponse::Help => plugin_admin::AdminResponse::Help,
-        AdminResponse::Status(status) => {
-            plugin_admin::AdminResponse::Status(plugin_status_view_from_runtime(status))
-        }
-        AdminResponse::Sessions(sessions) => {
-            plugin_admin::AdminResponse::Sessions(plugin_sessions_view_from_runtime(sessions))
-        }
-        AdminResponse::ReloadRuntime(result) => plugin_admin::AdminResponse::ReloadRuntime(
-            plugin_runtime_reload_view_from_runtime(result),
-        ),
-        AdminResponse::UpgradeRuntime(result) => {
-            plugin_admin::AdminResponse::UpgradeRuntime(plugin_admin::AdminUpgradeRuntimeView {
-                executable_path: result.executable_path.clone(),
-            })
-        }
-        AdminResponse::ShutdownScheduled => plugin_admin::AdminResponse::ShutdownScheduled,
-        AdminResponse::PermissionDenied {
-            principal,
-            permission,
-        } => plugin_admin::AdminResponse::PermissionDenied {
-            principal: plugin_principal_from_runtime(*principal),
-            permission: plugin_permission_from_runtime(*permission),
-        },
-        AdminResponse::Error { message } => plugin_admin::AdminResponse::Error {
-            message: message.clone(),
-        },
-    }
-}
-
-fn plugin_status_view_from_runtime(status: &AdminStatusView) -> plugin_admin::AdminStatusView {
-    plugin_admin::AdminStatusView {
+fn surface_status_view_from_runtime(status: &AdminStatusView) -> surface_admin::AdminStatusView {
+    surface_admin::AdminStatusView {
         active_generation_id: status.active_generation_id,
         draining_generation_ids: status.draining_generation_ids.clone(),
         listener_bindings: status
             .listener_bindings
             .iter()
-            .map(|binding| plugin_admin::AdminListenerBindingView {
+            .map(|binding| surface_admin::AdminListenerBindingView {
                 transport: binding.transport,
                 local_addr: binding.local_addr.clone(),
                 adapter_ids: binding.adapter_ids.clone(),
@@ -801,16 +633,15 @@ fn plugin_status_view_from_runtime(status: &AdminStatusView) -> plugin_admin::Ad
         enabled_bedrock_adapter_ids: status.enabled_bedrock_adapter_ids.clone(),
         motd: status.motd.clone(),
         max_players: status.max_players,
-        session_summary: plugin_summary_view_from_runtime(&status.session_summary),
+        session_summary: surface_summary_view_from_runtime(&status.session_summary),
         dirty: status.dirty,
         plugin_host: status.plugin_host.as_ref().map(|plugin_host| {
-            plugin_admin::AdminPluginHostView {
+            surface_admin::AdminPluginHostView {
                 protocol_count: plugin_host.protocol_count,
                 gameplay_count: plugin_host.gameplay_count,
                 storage_count: plugin_host.storage_count,
                 auth_count: plugin_host.auth_count,
-                admin_transport_count: plugin_host.admin_transport_count,
-                admin_ui_count: plugin_host.admin_ui_count,
+                admin_surface_count: plugin_host.admin_surface_count,
                 active_quarantine_count: plugin_host.active_quarantine_count,
                 artifact_quarantine_count: plugin_host.artifact_quarantine_count,
                 pending_fatal_error: plugin_host.pending_fatal_error.clone(),
@@ -818,38 +649,38 @@ fn plugin_status_view_from_runtime(status: &AdminStatusView) -> plugin_admin::Ad
         }),
         upgrade: status
             .upgrade
-            .map(|upgrade| plugin_admin::RuntimeUpgradeStateView {
+            .map(|upgrade| surface_admin::RuntimeUpgradeStateView {
                 role: match upgrade.role {
-                    super::RuntimeUpgradeRole::Parent => plugin_admin::RuntimeUpgradeRole::Parent,
-                    super::RuntimeUpgradeRole::Child => plugin_admin::RuntimeUpgradeRole::Child,
+                    super::RuntimeUpgradeRole::Parent => surface_admin::RuntimeUpgradeRole::Parent,
+                    super::RuntimeUpgradeRole::Child => surface_admin::RuntimeUpgradeRole::Child,
                 },
                 phase: match upgrade.phase {
                     super::RuntimeUpgradePhase::ParentFreezing => {
-                        plugin_admin::RuntimeUpgradePhase::ParentFreezing
+                        surface_admin::RuntimeUpgradePhase::ParentFreezing
                     }
                     super::RuntimeUpgradePhase::ParentWaitingChildReady => {
-                        plugin_admin::RuntimeUpgradePhase::ParentWaitingChildReady
+                        surface_admin::RuntimeUpgradePhase::ParentWaitingChildReady
                     }
                     super::RuntimeUpgradePhase::ParentRollingBack => {
-                        plugin_admin::RuntimeUpgradePhase::ParentRollingBack
+                        surface_admin::RuntimeUpgradePhase::ParentRollingBack
                     }
                     super::RuntimeUpgradePhase::ChildWaitingCommit => {
-                        plugin_admin::RuntimeUpgradePhase::ChildWaitingCommit
+                        surface_admin::RuntimeUpgradePhase::ChildWaitingCommit
                     }
                 },
             }),
     }
 }
 
-fn plugin_summary_view_from_runtime(
+fn surface_summary_view_from_runtime(
     summary: &AdminSessionSummaryView,
-) -> plugin_admin::AdminSessionSummaryView {
-    plugin_admin::AdminSessionSummaryView {
+) -> surface_admin::AdminSessionSummaryView {
+    surface_admin::AdminSessionSummaryView {
         total: summary.total,
         by_transport: summary
             .by_transport
             .iter()
-            .map(|entry| plugin_admin::AdminTransportCountView {
+            .map(|entry| surface_admin::AdminSessionTransportCountView {
                 transport: entry.transport,
                 count: entry.count,
             })
@@ -857,7 +688,7 @@ fn plugin_summary_view_from_runtime(
         by_phase: summary
             .by_phase
             .iter()
-            .map(|entry| plugin_admin::AdminPhaseCountView {
+            .map(|entry| surface_admin::AdminPhaseCountView {
                 phase: entry.phase,
                 count: entry.count,
             })
@@ -865,7 +696,7 @@ fn plugin_summary_view_from_runtime(
         by_generation: summary
             .by_generation
             .iter()
-            .map(|entry| plugin_admin::AdminGenerationCountView {
+            .map(|entry| surface_admin::AdminGenerationCountView {
                 generation_id: entry.generation_id,
                 count: entry.count,
             })
@@ -873,7 +704,7 @@ fn plugin_summary_view_from_runtime(
         by_adapter_id: summary
             .by_adapter_id
             .iter()
-            .map(|entry| plugin_admin::AdminNamedCountView {
+            .map(|entry| surface_admin::AdminNamedCountView {
                 value: entry.value.clone(),
                 count: entry.count,
             })
@@ -881,7 +712,7 @@ fn plugin_summary_view_from_runtime(
         by_gameplay_profile: summary
             .by_gameplay_profile
             .iter()
-            .map(|entry| plugin_admin::AdminNamedCountView {
+            .map(|entry| surface_admin::AdminNamedCountView {
                 value: entry.value.clone(),
                 count: entry.count,
             })
@@ -889,15 +720,15 @@ fn plugin_summary_view_from_runtime(
     }
 }
 
-fn plugin_sessions_view_from_runtime(
+fn surface_sessions_view_from_runtime(
     sessions: &AdminSessionsView,
-) -> plugin_admin::AdminSessionsView {
-    plugin_admin::AdminSessionsView {
-        summary: plugin_summary_view_from_runtime(&sessions.summary),
+) -> surface_admin::AdminSessionsView {
+    surface_admin::AdminSessionsView {
+        summary: surface_summary_view_from_runtime(&sessions.summary),
         sessions: sessions
             .sessions
             .iter()
-            .map(|session| plugin_admin::AdminSessionView {
+            .map(|session| surface_admin::AdminSessionView {
                 connection_id: session.connection_id,
                 generation_id: session.generation_id,
                 transport: session.transport,
@@ -910,18 +741,6 @@ fn plugin_sessions_view_from_runtime(
                 gameplay_generation: session.gameplay_generation,
             })
             .collect(),
-    }
-}
-
-const fn runtime_permission_from_config(
-    permission: crate::config::AdminPermission,
-) -> AdminPermission {
-    match permission {
-        crate::config::AdminPermission::Status => AdminPermission::Status,
-        crate::config::AdminPermission::Sessions => AdminPermission::Sessions,
-        crate::config::AdminPermission::ReloadRuntime => AdminPermission::ReloadRuntime,
-        crate::config::AdminPermission::UpgradeRuntime => AdminPermission::UpgradeRuntime,
-        crate::config::AdminPermission::Shutdown => AdminPermission::Shutdown,
     }
 }
 
@@ -938,93 +757,65 @@ fn admin_topology_reload_view(result: super::TopologyReloadResult) -> AdminTopol
     }
 }
 
-fn render_builtin_runtime_reload_response(result: &AdminRuntimeReloadView) -> String {
-    match &result.detail {
-        AdminRuntimeReloadDetail::Artifacts(detail) => format!(
-            "reload runtime {}: {}",
-            result.mode.as_str(),
-            render_csv_or_dash(&detail.reloaded_plugin_ids),
-        ),
-        AdminRuntimeReloadDetail::Topology(detail) => format!(
-            "reload runtime {}: activated_generation={} reconfigured={}",
-            result.mode.as_str(),
-            detail.activated_generation_id,
-            render_csv_or_dash(&detail.reconfigured_adapter_ids),
-        ),
-        AdminRuntimeReloadDetail::Core(_) => {
-            format!("reload runtime {}: completed", result.mode.as_str())
-        }
-        AdminRuntimeReloadDetail::Full(result_view) => format!(
-            "reload runtime {}: plugins={} activated_generation={} reconfigured={}",
-            result.mode.as_str(),
-            render_csv_or_dash(&result_view.reloaded_plugin_ids),
-            result_view.topology.activated_generation_id,
-            render_csv_or_dash(&result_view.topology.reconfigured_adapter_ids),
-        ),
-    }
-}
-
-const fn plugin_reload_mode_from_runtime(
+const fn surface_reload_mode_from_runtime(
     mode: RuntimeReloadMode,
-) -> plugin_admin::RuntimeReloadMode {
+) -> surface_admin::RuntimeReloadMode {
     match mode {
-        RuntimeReloadMode::Artifacts => plugin_admin::RuntimeReloadMode::Artifacts,
-        RuntimeReloadMode::Topology => plugin_admin::RuntimeReloadMode::Topology,
-        RuntimeReloadMode::Core => plugin_admin::RuntimeReloadMode::Core,
-        RuntimeReloadMode::Full => plugin_admin::RuntimeReloadMode::Full,
+        RuntimeReloadMode::Artifacts => surface_admin::RuntimeReloadMode::Artifacts,
+        RuntimeReloadMode::Topology => surface_admin::RuntimeReloadMode::Topology,
+        RuntimeReloadMode::Core => surface_admin::RuntimeReloadMode::Core,
+        RuntimeReloadMode::Full => surface_admin::RuntimeReloadMode::Full,
     }
 }
 
-const fn runtime_reload_mode_from_plugin(
-    mode: plugin_admin::RuntimeReloadMode,
+const fn runtime_reload_mode_from_surface(
+    mode: surface_admin::RuntimeReloadMode,
 ) -> RuntimeReloadMode {
     match mode {
-        plugin_admin::RuntimeReloadMode::Artifacts => RuntimeReloadMode::Artifacts,
-        plugin_admin::RuntimeReloadMode::Topology => RuntimeReloadMode::Topology,
-        plugin_admin::RuntimeReloadMode::Core => RuntimeReloadMode::Core,
-        plugin_admin::RuntimeReloadMode::Full => RuntimeReloadMode::Full,
+        surface_admin::RuntimeReloadMode::Artifacts => RuntimeReloadMode::Artifacts,
+        surface_admin::RuntimeReloadMode::Topology => RuntimeReloadMode::Topology,
+        surface_admin::RuntimeReloadMode::Core => RuntimeReloadMode::Core,
+        surface_admin::RuntimeReloadMode::Full => RuntimeReloadMode::Full,
     }
 }
 
-fn plugin_topology_reload_view_from_runtime(
-    result: &AdminTopologyReloadView,
-) -> plugin_admin::AdminTopologyReloadView {
-    plugin_admin::AdminTopologyReloadView {
-        activated_generation_id: result.activated_generation_id,
-        retired_generation_ids: result.retired_generation_ids.clone(),
-        applied_config_change: result.applied_config_change,
-        reconfigured_adapter_ids: result.reconfigured_adapter_ids.clone(),
-    }
-}
-
-fn plugin_runtime_reload_view_from_runtime(
+fn surface_runtime_reload_view_from_runtime(
     result: &AdminRuntimeReloadView,
-) -> plugin_admin::AdminRuntimeReloadView {
-    let detail = match &result.detail {
-        AdminRuntimeReloadDetail::Artifacts(result) => {
-            plugin_admin::AdminRuntimeReloadDetail::Artifacts(
-                plugin_admin::AdminArtifactsReloadView {
-                    reloaded_plugin_ids: result.reloaded_plugin_ids.clone(),
-                },
-            )
-        }
-        AdminRuntimeReloadDetail::Topology(result) => {
-            plugin_admin::AdminRuntimeReloadDetail::Topology(
-                plugin_topology_reload_view_from_runtime(result),
-            )
-        }
-        AdminRuntimeReloadDetail::Core(_result) => {
-            plugin_admin::AdminRuntimeReloadDetail::Core(plugin_admin::AdminCoreReloadView {})
-        }
-        AdminRuntimeReloadDetail::Full(result) => {
-            plugin_admin::AdminRuntimeReloadDetail::Full(plugin_admin::AdminFullReloadView {
-                reloaded_plugin_ids: result.reloaded_plugin_ids.clone(),
-                topology: plugin_topology_reload_view_from_runtime(&result.topology),
-            })
-        }
-    };
-    plugin_admin::AdminRuntimeReloadView {
-        mode: plugin_reload_mode_from_runtime(result.mode),
-        detail,
+) -> surface_admin::AdminRuntimeReloadView {
+    surface_admin::AdminRuntimeReloadView {
+        mode: surface_reload_mode_from_runtime(result.mode),
+        detail: match &result.detail {
+            AdminRuntimeReloadDetail::Artifacts(detail) => {
+                surface_admin::AdminRuntimeReloadDetail::Artifacts(
+                    surface_admin::AdminArtifactsReloadView {
+                        reloaded_plugin_ids: detail.reloaded_plugin_ids.clone(),
+                    },
+                )
+            }
+            AdminRuntimeReloadDetail::Topology(detail) => {
+                surface_admin::AdminRuntimeReloadDetail::Topology(
+                    surface_admin::AdminTopologyReloadView {
+                        activated_generation_id: detail.activated_generation_id,
+                        retired_generation_ids: detail.retired_generation_ids.clone(),
+                        applied_config_change: detail.applied_config_change,
+                        reconfigured_adapter_ids: detail.reconfigured_adapter_ids.clone(),
+                    },
+                )
+            }
+            AdminRuntimeReloadDetail::Core(_) => {
+                surface_admin::AdminRuntimeReloadDetail::Core(surface_admin::AdminCoreReloadView {})
+            }
+            AdminRuntimeReloadDetail::Full(detail) => {
+                surface_admin::AdminRuntimeReloadDetail::Full(surface_admin::AdminFullReloadView {
+                    reloaded_plugin_ids: detail.reloaded_plugin_ids.clone(),
+                    topology: surface_admin::AdminTopologyReloadView {
+                        activated_generation_id: detail.topology.activated_generation_id,
+                        retired_generation_ids: detail.topology.retired_generation_ids.clone(),
+                        applied_config_change: detail.topology.applied_config_change,
+                        reconfigured_adapter_ids: detail.topology.reconfigured_adapter_ids.clone(),
+                    },
+                })
+            }
+        },
     }
 }

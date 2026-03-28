@@ -1,19 +1,16 @@
-use crate::admin_transport::RustAdminTransportPlugin;
-use crate::admin_ui::RustAdminUiPlugin;
+use crate::admin_surface::RustAdminSurfacePlugin;
 use crate::auth::RustAuthPlugin;
 use crate::gameplay::RustGameplayPlugin;
 use crate::protocol::RustProtocolPlugin;
 use crate::storage::RustStoragePlugin;
-use mc_plugin_api::codec::admin_transport::{AdminTransportRequest, AdminTransportResponse};
-use mc_plugin_api::codec::admin_ui::{AdminUiInput, AdminUiOutput};
+use mc_plugin_api::codec::admin_surface::{AdminSurfaceRequest, AdminSurfaceResponse};
 use mc_plugin_api::codec::auth::{AuthRequest, AuthResponse};
 use mc_plugin_api::codec::gameplay::{GameplayRequest, GameplayResponse};
 use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse};
 use mc_plugin_api::codec::storage::{StorageRequest, StorageResponse};
-use mc_plugin_api::host_api::{AdminTransportHostApiV1, GameplayHostApiV2, HostApiTableV1};
+use mc_plugin_api::host_api::{AdminSurfaceHostApiV1, GameplayHostApiV2};
 
-pub mod admin_transport;
-pub mod admin_ui;
+pub mod admin_surface;
 #[doc(hidden)]
 pub mod auth;
 #[doc(hidden)]
@@ -26,37 +23,20 @@ pub mod protocol;
 pub mod storage;
 
 #[doc(hidden)]
-pub fn handle_admin_transport_request<P: RustAdminTransportPlugin>(
+pub fn handle_admin_surface_request<P: RustAdminSurfacePlugin>(
     plugin: &P,
-    request: AdminTransportRequest,
-) -> Result<AdminTransportResponse, String> {
-    admin_transport::handle_admin_transport_request(plugin, request)
+    request: AdminSurfaceRequest,
+) -> Result<AdminSurfaceResponse, String> {
+    admin_surface::handle_admin_surface_request(plugin, request)
 }
 
 #[doc(hidden)]
-pub fn handle_admin_transport_request_with_host_api<P: RustAdminTransportPlugin>(
+pub fn handle_admin_surface_request_with_host_api<P: RustAdminSurfacePlugin>(
     plugin: &P,
-    request: AdminTransportRequest,
-    host_api: Option<AdminTransportHostApiV1>,
-) -> Result<AdminTransportResponse, String> {
-    admin_transport::handle_admin_transport_request_with_host_api(plugin, request, host_api)
-}
-
-#[doc(hidden)]
-pub fn handle_admin_ui_request<P: RustAdminUiPlugin>(
-    plugin: &P,
-    request: AdminUiInput,
-) -> Result<AdminUiOutput, String> {
-    admin_ui::handle_admin_ui_request(plugin, request)
-}
-
-#[doc(hidden)]
-pub fn handle_admin_ui_request_with_host_api<P: RustAdminUiPlugin>(
-    plugin: &P,
-    request: AdminUiInput,
-    host_api: Option<HostApiTableV1>,
-) -> Result<AdminUiOutput, String> {
-    admin_ui::handle_admin_ui_request_with_host_api(plugin, request, host_api)
+    request: AdminSurfaceRequest,
+    host_api: Option<AdminSurfaceHostApiV1>,
+) -> Result<AdminSurfaceResponse, String> {
+    admin_surface::handle_admin_surface_request_with_host_api(plugin, request, host_api)
 }
 
 #[doc(hidden)]

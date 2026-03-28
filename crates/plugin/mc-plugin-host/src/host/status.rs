@@ -1,8 +1,8 @@
 use super::{
-    AdminTransportProfileId, AdminUiProfileId, ArtifactIdentity, ArtifactQuarantineRecord,
-    AuthMode, AuthProfileId, Deserialize, Edition, GameplayProfileId, PluginBuildTag,
-    PluginFailureAction, PluginFailureMatrix, PluginGenerationId, PluginHost, PluginKind,
-    Serialize, StorageProfileId, TransportKind, system_time_ms,
+    AdminSurfaceProfileId, ArtifactIdentity, ArtifactQuarantineRecord, AuthMode, AuthProfileId,
+    Deserialize, Edition, GameplayProfileId, PluginBuildTag, PluginFailureAction,
+    PluginFailureMatrix, PluginGenerationId, PluginHost, PluginKind, Serialize, StorageProfileId,
+    TransportKind, system_time_ms,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,23 +75,9 @@ pub struct AuthPluginStatusSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminTransportPluginStatusSnapshot {
+pub struct AdminSurfacePluginStatusSnapshot {
     pub plugin_id: String,
-    pub profile_id: AdminTransportProfileId,
-    pub generation_id: PluginGenerationId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub build_tag: Option<PluginBuildTag>,
-    pub loaded_at_ms: u64,
-    pub failure_action: PluginFailureAction,
-    pub current_artifact: PluginArtifactStatusSnapshot,
-    pub active_quarantine_reason: Option<String>,
-    pub artifact_quarantine: Option<PluginArtifactStatusSnapshot>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminUiPluginStatusSnapshot {
-    pub plugin_id: String,
-    pub profile_id: AdminUiProfileId,
+    pub profile_id: AdminSurfaceProfileId,
     pub generation_id: PluginGenerationId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_tag: Option<PluginBuildTag>,
@@ -110,8 +96,7 @@ pub struct PluginHostStatusSnapshot {
     pub gameplay: Vec<GameplayPluginStatusSnapshot>,
     pub storage: Vec<StoragePluginStatusSnapshot>,
     pub auth: Vec<AuthPluginStatusSnapshot>,
-    pub admin_transport: Vec<AdminTransportPluginStatusSnapshot>,
-    pub admin_ui: Vec<AdminUiPluginStatusSnapshot>,
+    pub admin_surface: Vec<AdminSurfacePluginStatusSnapshot>,
 }
 
 impl PluginHostStatusSnapshot {
@@ -137,12 +122,7 @@ impl PluginHostStatusSnapshot {
                 .filter(|plugin| plugin.active_quarantine_reason.is_some())
                 .count()
             + self
-                .admin_transport
-                .iter()
-                .filter(|plugin| plugin.active_quarantine_reason.is_some())
-                .count()
-            + self
-                .admin_ui
+                .admin_surface
                 .iter()
                 .filter(|plugin| plugin.active_quarantine_reason.is_some())
                 .count()
@@ -170,12 +150,7 @@ impl PluginHostStatusSnapshot {
                 .filter(|plugin| plugin.artifact_quarantine.is_some())
                 .count()
             + self
-                .admin_transport
-                .iter()
-                .filter(|plugin| plugin.artifact_quarantine.is_some())
-                .count()
-            + self
-                .admin_ui
+                .admin_surface
                 .iter()
                 .filter(|plugin| plugin.artifact_quarantine.is_some())
                 .count()
@@ -335,20 +310,20 @@ impl PluginHost {
             .collect::<Vec<_>>();
         auth.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
 
-        let mut admin_transport = self
-            .admin_transport
+        let mut admin_surface = self
+            .admin_surface
             .lock()
             .expect("plugin host mutex should not be poisoned")
             .values()
             .map(|managed| {
                 let generation = managed.profile.current_generation();
-                AdminTransportPluginStatusSnapshot {
+                AdminSurfacePluginStatusSnapshot {
                     plugin_id: managed.package.plugin_id.clone(),
                     profile_id: managed.profile_id.clone(),
                     generation_id: generation.generation_id,
                     build_tag: generation.build_tag.clone(),
                     loaded_at_ms: system_time_ms(managed.active_loaded_at),
-                    failure_action: self.failures.action_for_kind(PluginKind::AdminTransport),
+                    failure_action: self.failures.action_for_kind(PluginKind::AdminSurface),
                     current_artifact: artifact_status_snapshot(
                         managed.package.artifact_identity(managed.active_loaded_at),
                         None,
@@ -363,37 +338,7 @@ impl PluginHost {
                 }
             })
             .collect::<Vec<_>>();
-        admin_transport.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
-
-        let mut admin_ui = self
-            .admin_ui
-            .lock()
-            .expect("plugin host mutex should not be poisoned")
-            .values()
-            .map(|managed| {
-                let generation = managed.profile.current_generation();
-                AdminUiPluginStatusSnapshot {
-                    plugin_id: managed.package.plugin_id.clone(),
-                    profile_id: managed.profile_id.clone(),
-                    generation_id: generation.generation_id,
-                    build_tag: generation.build_tag.clone(),
-                    loaded_at_ms: system_time_ms(managed.active_loaded_at),
-                    failure_action: self.failures.action_for_kind(PluginKind::AdminUi),
-                    current_artifact: artifact_status_snapshot(
-                        managed.package.artifact_identity(managed.active_loaded_at),
-                        None,
-                    ),
-                    active_quarantine_reason: self
-                        .failures
-                        .active_reason(&managed.package.plugin_id),
-                    artifact_quarantine: self
-                        .failures
-                        .artifact_record(&managed.package.plugin_id)
-                        .map(artifact_quarantine_status_snapshot),
-                }
-            })
-            .collect::<Vec<_>>();
-        admin_ui.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+        admin_surface.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
 
         PluginHostStatusSnapshot {
             failure_matrix: self.failures.matrix(),
@@ -402,8 +347,7 @@ impl PluginHost {
             gameplay,
             storage,
             auth,
-            admin_transport,
-            admin_ui,
+            admin_surface,
         }
     }
 }

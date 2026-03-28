@@ -23,8 +23,7 @@ pub struct PluginFailureMatrix {
     pub gameplay: PluginFailureAction,
     pub storage: PluginFailureAction,
     pub auth: PluginFailureAction,
-    pub admin_transport: PluginFailureAction,
-    pub admin_ui: PluginFailureAction,
+    pub admin_surface: PluginFailureAction,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,24 +34,9 @@ pub struct PluginHostStatusSnapshot {
     pub gameplay_count: usize,
     pub storage_count: usize,
     pub auth_count: usize,
-    pub admin_transport_count: usize,
-    pub admin_ui_count: usize,
+    pub admin_surface_count: usize,
     pub active_quarantine_count: usize,
     pub artifact_quarantine_count: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum AdminPrincipal {
-    LocalConsole,
-}
-
-impl AdminPrincipal {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::LocalConsole => "local-console",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -149,7 +133,7 @@ pub struct AdminListenerBindingView {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminTransportCountView {
+pub struct AdminSessionTransportCountView {
     pub transport: TransportKind,
     pub count: usize,
 }
@@ -175,7 +159,7 @@ pub struct AdminNamedCountView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminSessionSummaryView {
     pub total: usize,
-    pub by_transport: Vec<AdminTransportCountView>,
+    pub by_transport: Vec<AdminSessionTransportCountView>,
     pub by_phase: Vec<AdminPhaseCountView>,
     pub by_generation: Vec<AdminGenerationCountView>,
     pub by_adapter_id: Vec<AdminNamedCountView>,
@@ -188,8 +172,7 @@ pub struct AdminPluginHostView {
     pub gameplay_count: usize,
     pub storage_count: usize,
     pub auth_count: usize,
-    pub admin_transport_count: usize,
-    pub admin_ui_count: usize,
+    pub admin_surface_count: usize,
     pub active_quarantine_count: usize,
     pub artifact_quarantine_count: usize,
     pub pending_fatal_error: Option<String>,
@@ -282,7 +265,7 @@ pub enum AdminResponse {
     UpgradeRuntime(AdminUpgradeRuntimeView),
     ShutdownScheduled,
     PermissionDenied {
-        principal: AdminPrincipal,
+        principal_id: String,
         permission: AdminPermission,
     },
     Error {

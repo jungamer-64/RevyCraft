@@ -1,8 +1,8 @@
 use super::*;
-use mc_plugin_api::codec::admin_ui::{AdminPermission, AdminPrincipal};
+use mc_core::AdminSurfaceCapability;
 
 #[test]
-fn in_process_admin_ui_profile_parses_and_renders() -> Result<(), RuntimeError> {
+fn in_process_admin_surface_profile_declares_console_resources() -> Result<(), RuntimeError> {
     let host = TestPluginHostBuilder::new()
         .gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-canonical".to_string(),
@@ -24,42 +24,49 @@ fn in_process_admin_ui_profile_parses_and_renders() -> Result<(), RuntimeError> 
             manifest: offline_auth_entrypoints().manifest,
             api: offline_auth_entrypoints().api,
         })
-        .admin_ui_raw(InProcessAdminUiPlugin {
+        .admin_surface_raw(InProcessAdminSurfacePlugin {
             plugin_id: "admin-ui-console".to_string(),
-            manifest: console_admin_ui_entrypoints().manifest,
-            api: console_admin_ui_entrypoints().api,
+            manifest: console_admin_surface_entrypoints().manifest,
+            api: console_admin_surface_entrypoints().api,
         })
         .build();
-    let _loaded = host.load_plugin_set(&runtime_selection_config())?;
+    let runtime_selection = RuntimeSelectionConfig {
+        admin_surfaces: vec![crate::config::AdminSurfaceSelectionConfig {
+            instance_id: "console".to_string(),
+            profile: "console-v1".into(),
+            config_path: None,
+        }],
+        ..runtime_selection_config()
+    };
+    let _loaded = host.load_plugin_set(&runtime_selection)?;
     let profile = host
-        .resolve_admin_ui_profile("console-v1")
-        .expect("console admin-ui profile should resolve");
+        .resolve_admin_surface_profile("console-v1")
+        .expect("console admin-surface profile should resolve");
+    let declaration = profile.declare_instance("console", None)?;
 
-    assert_eq!(
-        profile.parse_line("reload runtime artifacts")?,
-        AdminRequest::ReloadRuntime {
-            mode: mc_plugin_api::codec::admin_ui::RuntimeReloadMode::Artifacts,
-        }
-    );
     assert!(
         profile
-            .render_response(&AdminResponse::PermissionDenied {
-                principal: AdminPrincipal::LocalConsole,
-                permission: AdminPermission::Shutdown,
-            })?
-            .contains("permission denied")
+            .capability_set()
+            .contains(&AdminSurfaceCapability::RuntimeReload)
     );
+    assert!(declaration.principals.is_empty());
+    assert_eq!(
+        declaration.required_process_resources,
+        vec!["stdio.stdin".to_string(), "stdio.stdout".to_string()]
+    );
+    assert!(!declaration.supports_upgrade_handoff);
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn packaged_admin_ui_reload_swaps_generation_and_keeps_last_good() -> Result<(), RuntimeError> {
+fn packaged_admin_surface_reload_swaps_generation_and_keeps_last_good() -> Result<(), RuntimeError>
+{
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
-    let target_dir = harness.scoped_target_dir("plugin-host-admin-ui-reload");
+    let target_dir = harness.scoped_target_dir("plugin-host-admin-surface-reload");
     seed_packaged_plugins(
         &dist_dir,
         &[
@@ -84,23 +91,36 @@ fn packaged_admin_ui_reload_swaps_generation_and_keeps_last_good() -> Result<(),
     };
     let host =
         TestPluginHost::discover(&bootstrap)?.expect("packaged plugins should be discovered");
+    let runtime_selection = RuntimeSelectionConfig {
+        admin_surfaces: vec![crate::config::AdminSurfaceSelectionConfig {
+            instance_id: "console".to_string(),
+            profile: "console-v1".into(),
+            config_path: None,
+        }],
+        ..runtime_selection
+    };
     let _loaded = host.load_plugin_set(&runtime_selection)?;
     let profile = host
-        .resolve_admin_ui_profile("console-v1")
-        .expect("console admin-ui profile should resolve");
+        .resolve_admin_surface_profile("console-v1")
+        .expect("console admin-surface profile should resolve");
     let first_generation = profile
         .plugin_generation_id()
-        .expect("admin-ui profile should report plugin generation");
+        .expect("admin-surface profile should report plugin generation");
 
-    assert_eq!(profile.parse_line("status")?, AdminRequest::Status);
+    assert_eq!(
+        profile
+            .declare_instance("console", None)?
+            .required_process_resources,
+        vec!["stdio.stdin".to_string(), "stdio.stdout".to_string()]
+    );
 
     harness
-        .install_admin_ui_plugin_for_reload(
+        .install_admin_surface_plugin_for_reload(
             "mc-plugin-admin-ui-console",
             "admin-ui-console",
             &dist_dir,
             &target_dir,
-            "admin-ui-reload-v2",
+            "admin-surface-reload-v2",
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
@@ -108,24 +128,34 @@ fn packaged_admin_ui_reload_swaps_generation_and_keeps_last_good() -> Result<(),
     assert_eq!(reloaded, vec!["admin-ui-console".to_string()]);
     let second_generation = profile
         .plugin_generation_id()
-        .expect("reloaded admin-ui should report plugin generation");
+        .expect("reloaded admin-surface should report plugin generation");
     assert_ne!(first_generation, second_generation);
-    assert_eq!(profile.parse_line("sessions")?, AdminRequest::Sessions);
+    assert_eq!(
+        profile
+            .declare_instance("console", None)?
+            .required_process_resources,
+        vec!["stdio.stdin".to_string(), "stdio.stdout".to_string()]
+    );
 
     harness
-        .install_admin_ui_plugin_for_reload(
+        .install_admin_surface_plugin_for_reload(
             "mc-plugin-proto-je-5",
             "admin-ui-console",
             &dist_dir,
             &target_dir,
-            "admin-ui-broken",
+            "admin-surface-broken",
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let reloaded = host.reload_modified_with_context(&protocol_reload_context(Vec::new()))?;
     assert!(reloaded.is_empty());
     assert_eq!(profile.plugin_generation_id(), Some(second_generation));
-    assert_eq!(profile.parse_line("help")?, AdminRequest::Help);
+    assert_eq!(
+        profile
+            .declare_instance("console", None)?
+            .required_process_resources,
+        vec!["stdio.stdin".to_string(), "stdio.stdout".to_string()]
+    );
 
     Ok(())
 }

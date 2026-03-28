@@ -1,14 +1,12 @@
 use super::{
-    AdminTransportPluginApiV1, AdminTransportRequest, AdminTransportResponse, AdminUiInput,
-    AdminUiOutput, AdminUiPluginApiV1, AuthPluginApiV1, AuthRequest, AuthResponse, ByteSlice,
-    GameplayPluginApiV3, GameplayRequest, GameplayResponse, OwnedBuffer, PluginErrorCode,
-    ProtocolPluginApiV3, ProtocolRequest, ProtocolResponse, RuntimeError, StoragePluginApiV1,
-    StorageRequest, StorageResponse, admin_transport_host_api, admin_ui_host_api,
-    decode_admin_transport_response, decode_admin_ui_output, decode_auth_response,
-    decode_gameplay_response, decode_plugin_error, decode_protocol_response,
-    decode_storage_response, encode_admin_transport_request, encode_admin_ui_input,
-    encode_auth_request, encode_gameplay_request, encode_protocol_request, encode_storage_request,
-    gameplay_host_api, take_owned_buffer,
+    AdminSurfacePluginApiV1, AdminSurfaceRequest, AdminSurfaceResponse, AuthPluginApiV1,
+    AuthRequest, AuthResponse, ByteSlice, GameplayPluginApiV3, GameplayRequest, GameplayResponse,
+    OwnedBuffer, PluginErrorCode, ProtocolPluginApiV3, ProtocolRequest, ProtocolResponse,
+    RuntimeError, StoragePluginApiV1, StorageRequest, StorageResponse, admin_surface_host_api,
+    decode_admin_surface_response, decode_auth_response, decode_gameplay_response,
+    decode_plugin_error, decode_protocol_response, decode_storage_response,
+    encode_admin_surface_request, encode_auth_request, encode_gameplay_request,
+    encode_protocol_request, encode_storage_request, gameplay_host_api, take_owned_buffer,
 };
 use crate::config::PluginBufferLimits;
 
@@ -182,60 +180,17 @@ pub(crate) fn invoke_auth(
         .map_err(|error| RuntimeError::Config(error.to_string()))
 }
 
-pub(crate) fn invoke_admin_ui(
+pub(crate) fn invoke_admin_surface(
     plugin_id: &str,
-    api: &AdminUiPluginApiV1,
-    request: &AdminUiInput,
+    api: &AdminSurfacePluginApiV1,
+    request: &AdminSurfaceRequest,
     buffer_limits: PluginBufferLimits,
-) -> Result<AdminUiOutput, RuntimeError> {
-    let request_bytes =
-        encode_admin_ui_input(request).map_err(|error| RuntimeError::Config(error.to_string()))?;
-    let mut output = OwnedBuffer::empty();
-    let mut error = OwnedBuffer::empty();
-    let host_api = admin_ui_host_api();
-    let status = unsafe {
-        (api.invoke)(
-            ByteSlice {
-                ptr: request_bytes.as_ptr(),
-                len: request_bytes.len(),
-            },
-            &raw const host_api,
-            &raw mut output,
-            &raw mut error,
-        )
-    };
-    if status != PluginErrorCode::Ok {
-        return Err(RuntimeError::Config(decode_plugin_error(
-            plugin_id,
-            status,
-            api.free_buffer,
-            error,
-            buffer_limits.metadata_bytes,
-        )));
-    }
-
-    let response_bytes = take_owned_buffer(
-        api.free_buffer,
-        output,
-        buffer_limits.admin_ui_response_bytes,
-        "admin-ui response buffer",
-    )
-    .map_err(RuntimeError::Config)?;
-    decode_admin_ui_output(request, &response_bytes)
-        .map_err(|error| RuntimeError::Config(error.to_string()))
-}
-
-pub(crate) fn invoke_admin_transport(
-    plugin_id: &str,
-    api: &AdminTransportPluginApiV1,
-    request: &AdminTransportRequest,
-    buffer_limits: PluginBufferLimits,
-) -> Result<AdminTransportResponse, RuntimeError> {
-    let request_bytes = encode_admin_transport_request(request)
+) -> Result<AdminSurfaceResponse, RuntimeError> {
+    let request_bytes = encode_admin_surface_request(request)
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
-    let host_api = admin_transport_host_api();
+    let host_api = admin_surface_host_api();
     let status = unsafe {
         (api.invoke)(
             ByteSlice {
@@ -260,10 +215,10 @@ pub(crate) fn invoke_admin_transport(
     let response_bytes = take_owned_buffer(
         api.free_buffer,
         output,
-        buffer_limits.admin_ui_response_bytes,
-        "admin-transport response buffer",
+        buffer_limits.admin_surface_response_bytes,
+        "admin-surface response buffer",
     )
     .map_err(RuntimeError::Config)?;
-    decode_admin_transport_response(request, &response_bytes)
+    decode_admin_surface_response(request, &response_bytes)
         .map_err(|error| RuntimeError::Config(error.to_string()))
 }

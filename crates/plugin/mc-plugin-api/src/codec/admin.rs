@@ -1,27 +1,6 @@
-use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
-use crate::codec::__internal::binary::{
-    EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope, encode_envelope,
-};
-use mc_core::{
-    AdminUiCapability, AdminUiProfileId, CapabilityAnnouncement, ConnectionId, EntityId, PlayerId,
-    PluginGenerationId,
-};
+use mc_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use mc_proto_common::{ConnectionPhase, TransportKind};
 use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum AdminPrincipal {
-    LocalConsole,
-}
-
-impl AdminPrincipal {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::LocalConsole => "local-console",
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RuntimeReloadMode {
@@ -85,34 +64,6 @@ pub struct RuntimeUpgradeStateView {
     pub phase: RuntimeUpgradePhase,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum AdminUiOpCode {
-    Describe = 1,
-    CapabilitySet = 2,
-    ParseLine = 3,
-    RenderResponse = 4,
-}
-
-impl TryFrom<u8> for AdminUiOpCode {
-    type Error = ProtocolCodecError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            1 => Ok(Self::Describe),
-            2 => Ok(Self::CapabilitySet),
-            3 => Ok(Self::ParseLine),
-            4 => Ok(Self::RenderResponse),
-            _ => Err(ProtocolCodecError::InvalidValue("invalid admin-ui op code")),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminUiDescriptor {
-    pub ui_profile: AdminUiProfileId,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdminRequest {
     Help,
@@ -145,7 +96,7 @@ pub struct AdminListenerBindingView {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminTransportCountView {
+pub struct AdminSessionTransportCountView {
     pub transport: TransportKind,
     pub count: usize,
 }
@@ -171,7 +122,7 @@ pub struct AdminNamedCountView {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminSessionSummaryView {
     pub total: usize,
-    pub by_transport: Vec<AdminTransportCountView>,
+    pub by_transport: Vec<AdminSessionTransportCountView>,
     pub by_phase: Vec<AdminPhaseCountView>,
     pub by_generation: Vec<AdminGenerationCountView>,
     pub by_adapter_id: Vec<AdminNamedCountView>,
@@ -184,8 +135,7 @@ pub struct AdminPluginHostView {
     pub gameplay_count: usize,
     pub storage_count: usize,
     pub auth_count: usize,
-    pub admin_transport_count: usize,
-    pub admin_ui_count: usize,
+    pub admin_surface_count: usize,
     pub active_quarantine_count: usize,
     pub artifact_quarantine_count: usize,
     pub pending_fatal_error: Option<String>,
@@ -278,127 +228,10 @@ pub enum AdminResponse {
     UpgradeRuntime(AdminUpgradeRuntimeView),
     ShutdownScheduled,
     PermissionDenied {
-        principal: AdminPrincipal,
+        principal_id: String,
         permission: AdminPermission,
     },
     Error {
         message: String,
     },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AdminUiInput {
-    Describe,
-    CapabilitySet,
-    ParseLine { line: String },
-    RenderResponse { response: AdminResponse },
-}
-
-impl AdminUiInput {
-    #[must_use]
-    pub const fn op_code(&self) -> AdminUiOpCode {
-        match self {
-            Self::Describe => AdminUiOpCode::Describe,
-            Self::CapabilitySet => AdminUiOpCode::CapabilitySet,
-            Self::ParseLine { .. } => AdminUiOpCode::ParseLine,
-            Self::RenderResponse { .. } => AdminUiOpCode::RenderResponse,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AdminUiOutput {
-    Descriptor(AdminUiDescriptor),
-    CapabilitySet(CapabilityAnnouncement<AdminUiCapability>),
-    ParsedRequest(AdminRequest),
-    RenderedText(String),
-}
-
-fn encode_admin_ui_payload<T: Serialize>(value: &T) -> Result<Vec<u8>, ProtocolCodecError> {
-    serde_json::to_vec(value)
-        .map_err(|_| ProtocolCodecError::InvalidValue("failed to encode admin-ui payload"))
-}
-
-fn decode_admin_ui_payload<T: for<'de> Deserialize<'de>>(
-    bytes: &[u8],
-) -> Result<T, ProtocolCodecError> {
-    serde_json::from_slice(bytes)
-        .map_err(|_| ProtocolCodecError::InvalidValue("failed to decode admin-ui payload"))
-}
-
-pub fn encode_admin_ui_input(input: &AdminUiInput) -> Result<Vec<u8>, ProtocolCodecError> {
-    let payload = encode_admin_ui_payload(input)?;
-    encode_envelope(
-        EnvelopeHeader {
-            abi: CURRENT_PLUGIN_ABI,
-            plugin_kind: PluginKind::AdminUi,
-            op_code: input.op_code() as u8,
-            flags: 0,
-            payload_len: u32::try_from(payload.len())
-                .map_err(|_| ProtocolCodecError::LengthOverflow)?,
-        },
-        &payload,
-    )
-}
-
-pub fn decode_admin_ui_input(bytes: &[u8]) -> Result<AdminUiInput, ProtocolCodecError> {
-    let (header, payload) = decode_envelope(bytes)?;
-    if header.plugin_kind != PluginKind::AdminUi {
-        return Err(ProtocolCodecError::InvalidEnvelope(
-            "admin-ui input had wrong plugin kind",
-        ));
-    }
-    if header.flags & PROTOCOL_FLAG_RESPONSE != 0 {
-        return Err(ProtocolCodecError::InvalidEnvelope(
-            "admin-ui input unexpectedly set response flag",
-        ));
-    }
-    let input = decode_admin_ui_payload::<AdminUiInput>(payload)?;
-    if input.op_code() != AdminUiOpCode::try_from(header.op_code)? {
-        return Err(ProtocolCodecError::InvalidEnvelope(
-            "admin-ui input opcode did not match payload",
-        ));
-    }
-    Ok(input)
-}
-
-pub fn encode_admin_ui_output(
-    input: &AdminUiInput,
-    output: &AdminUiOutput,
-) -> Result<Vec<u8>, ProtocolCodecError> {
-    let payload = encode_admin_ui_payload(output)?;
-    encode_envelope(
-        EnvelopeHeader {
-            abi: CURRENT_PLUGIN_ABI,
-            plugin_kind: PluginKind::AdminUi,
-            op_code: input.op_code() as u8,
-            flags: PROTOCOL_FLAG_RESPONSE,
-            payload_len: u32::try_from(payload.len())
-                .map_err(|_| ProtocolCodecError::LengthOverflow)?,
-        },
-        &payload,
-    )
-}
-
-pub fn decode_admin_ui_output(
-    input: &AdminUiInput,
-    bytes: &[u8],
-) -> Result<AdminUiOutput, ProtocolCodecError> {
-    let (header, payload) = decode_envelope(bytes)?;
-    if header.plugin_kind != PluginKind::AdminUi {
-        return Err(ProtocolCodecError::InvalidEnvelope(
-            "admin-ui output had wrong plugin kind",
-        ));
-    }
-    if header.flags & PROTOCOL_FLAG_RESPONSE == 0 {
-        return Err(ProtocolCodecError::InvalidEnvelope(
-            "admin-ui output was missing response flag",
-        ));
-    }
-    if input.op_code() != AdminUiOpCode::try_from(header.op_code)? {
-        return Err(ProtocolCodecError::InvalidEnvelope(
-            "admin-ui output opcode did not match input",
-        ));
-    }
-    decode_admin_ui_payload(payload)
 }

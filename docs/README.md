@@ -14,7 +14,7 @@
 
 - package / 起動 / release bundle
   [`operators/getting-started.md`](operators/getting-started.md)
-- `runtime/server.toml` の解釈、相対 path 解決、reload、admin console / gRPC
+- `runtime/server.toml` の解釈、相対 path 解決、reload、admin surfaces
   [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md)
 - workspace の責務分割、boot path、公開 surface と内部 surface
   [`contributors/repository-overview.md`](contributors/repository-overview.md)
@@ -28,7 +28,7 @@
   [`contributors/reload-semantics-and-boundaries.md`](contributors/reload-semantics-and-boundaries.md)
 - plugin kind、packaged layout、discovery と activation
   [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md)
-- Rust SDK、macro、manifest、ABI `4.0`
+- Rust SDK、macro、manifest、ABI `5.0`
   [`plugin-authors/rust-sdk-and-manifest.md`](plugin-authors/rust-sdk-and-manifest.md)
 
 ## 共通用語
@@ -42,7 +42,7 @@
 - `generation`
   topology reload と plugin reload をまたいで観測するための世代番号です。
 - `profile`
-  auth / gameplay / storage / admin-ui の kind ごとに config で選ぶ実行プロファイルです。
+  auth / gameplay / storage / admin-surface の kind ごとに config で選ぶ実行プロファイルです。
 - `quarantine`
   壊れた candidate artifact や active plugin を隔離する failure policy です。
 

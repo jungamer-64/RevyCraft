@@ -1,21 +1,18 @@
 use super::{
-    AdminTransportCapability, AdminTransportGeneration, AdminTransportPluginApiV1,
-    AdminTransportRequest, AdminUiCapability, AdminUiGeneration, AdminUiInput, AdminUiPluginApiV1,
+    AdminSurfaceCapability, AdminSurfaceGeneration, AdminSurfacePluginApiV1, AdminSurfaceRequest,
     Arc, AuthCapability, AuthGeneration, AuthPluginApiV1, AuthRequest, CURRENT_PLUGIN_ABI,
     DecodedManifest, GameplayCapability, GameplayGeneration, GameplayPluginApiV3, GameplayRequest,
-    Library, ManifestCapabilities, Mutex, PLUGIN_ADMIN_TRANSPORT_API_SYMBOL_V1,
-    PLUGIN_ADMIN_UI_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V3,
-    PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V3, PLUGIN_STORAGE_API_SYMBOL_V1, Path,
-    PluginGenerationId, PluginManifestV1, PluginPackage, PluginSource, ProtocolCapability,
-    ProtocolGeneration, ProtocolPluginApiV3, ProtocolRequest, RuntimeError, StorageCapability,
-    StorageGeneration, StoragePluginApiV1, StorageRequest, decode_manifest,
-    expect_admin_transport_capabilities, expect_admin_transport_descriptor,
-    expect_admin_ui_capabilities, expect_admin_ui_descriptor, expect_auth_capabilities,
-    expect_auth_descriptor, expect_gameplay_capabilities, expect_gameplay_descriptor,
+    Library, ManifestCapabilities, Mutex, PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1,
+    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V3, PLUGIN_MANIFEST_SYMBOL_V1,
+    PLUGIN_PROTOCOL_API_SYMBOL_V3, PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginGenerationId,
+    PluginManifestV1, PluginPackage, PluginSource, ProtocolCapability, ProtocolGeneration,
+    ProtocolPluginApiV3, ProtocolRequest, RuntimeError, StorageCapability, StorageGeneration,
+    StoragePluginApiV1, StorageRequest, decode_manifest, expect_admin_surface_capabilities,
+    expect_admin_surface_descriptor, expect_auth_capabilities, expect_auth_descriptor,
+    expect_gameplay_capabilities, expect_gameplay_descriptor,
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
-    invoke_admin_transport, invoke_admin_ui, invoke_auth, invoke_gameplay, invoke_protocol,
-    invoke_storage,
+    invoke_admin_surface, invoke_auth, invoke_gameplay, invoke_protocol, invoke_storage,
 };
 use crate::config::PluginBufferLimits;
 
@@ -24,8 +21,7 @@ type LoadedProtocolApi = (LibraryGuard, DecodedManifest, ProtocolPluginApiV3);
 type LoadedGameplayApi = (LibraryGuard, DecodedManifest, GameplayPluginApiV3);
 type LoadedStorageApi = (LibraryGuard, DecodedManifest, StoragePluginApiV1);
 type LoadedAuthApi = (LibraryGuard, DecodedManifest, AuthPluginApiV1);
-type LoadedAdminTransportApi = (LibraryGuard, DecodedManifest, AdminTransportPluginApiV1);
-type LoadedAdminUiApi = (LibraryGuard, DecodedManifest, AdminUiPluginApiV1);
+type LoadedAdminSurfaceApi = (LibraryGuard, DecodedManifest, AdminSurfacePluginApiV1);
 
 pub(crate) struct PluginLoader {
     abi_range: super::PluginAbiRange,
@@ -57,8 +53,7 @@ impl PluginLoader {
             PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessStorage(_)
             | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminTransport(_)
-            | PluginSource::InProcessAdminUi(_) => Err(RuntimeError::Config(format!(
+            | PluginSource::InProcessAdminSurface(_) => Err(RuntimeError::Config(format!(
                 "plugin `{}` is not a protocol plugin",
                 package.plugin_id
             ))),
@@ -83,8 +78,7 @@ impl PluginLoader {
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessStorage(_)
             | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminTransport(_)
-            | PluginSource::InProcessAdminUi(_) => Err(RuntimeError::Config(format!(
+            | PluginSource::InProcessAdminSurface(_) => Err(RuntimeError::Config(format!(
                 "plugin `{}` is not a gameplay plugin",
                 package.plugin_id
             ))),
@@ -109,8 +103,7 @@ impl PluginLoader {
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminTransport(_)
-            | PluginSource::InProcessAdminUi(_) => Err(RuntimeError::Config(format!(
+            | PluginSource::InProcessAdminSurface(_) => Err(RuntimeError::Config(format!(
                 "plugin `{}` is not a storage plugin",
                 package.plugin_id
             ))),
@@ -135,24 +128,23 @@ impl PluginLoader {
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAdminTransport(_)
-            | PluginSource::InProcessAdminUi(_) => Err(RuntimeError::Config(format!(
+            | PluginSource::InProcessAdminSurface(_) => Err(RuntimeError::Config(format!(
                 "plugin `{}` is not an auth plugin",
                 package.plugin_id
             ))),
         }
     }
 
-    fn load_admin_transport_api(
+    fn load_admin_surface_api(
         package: &PluginPackage,
         buffer_limits: PluginBufferLimits,
-    ) -> Result<LoadedAdminTransportApi, RuntimeError> {
+    ) -> Result<LoadedAdminSurfaceApi, RuntimeError> {
         match &package.source {
             PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                Self::load_dynamic_admin_transport(library_path, buffer_limits)
+                Self::load_dynamic_admin_surface(library_path, buffer_limits)
             },
             #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessAdminTransport(plugin) => Ok((
+            PluginSource::InProcessAdminSurface(plugin) => Ok((
                 None,
                 decode_manifest(plugin.manifest, buffer_limits)?,
                 *plugin.api,
@@ -161,35 +153,8 @@ impl PluginLoader {
             PluginSource::InProcessProtocol(_)
             | PluginSource::InProcessGameplay(_)
             | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminUi(_) => Err(RuntimeError::Config(format!(
-                "plugin `{}` is not an admin-transport plugin",
-                package.plugin_id
-            ))),
-        }
-    }
-
-    fn load_admin_ui_api(
-        package: &PluginPackage,
-        buffer_limits: PluginBufferLimits,
-    ) -> Result<LoadedAdminUiApi, RuntimeError> {
-        match &package.source {
-            PluginSource::DynamicLibrary { library_path, .. } => unsafe {
-                Self::load_dynamic_admin_ui(library_path, buffer_limits)
-            },
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessAdminUi(plugin) => Ok((
-                None,
-                decode_manifest(plugin.manifest, buffer_limits)?,
-                *plugin.api,
-            )),
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessProtocol(_)
-            | PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminTransport(_) => Err(RuntimeError::Config(format!(
-                "plugin `{}` is not an admin-ui plugin",
+            | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
+                "plugin `{}` is not an admin-surface plugin",
                 package.plugin_id
             ))),
         }
@@ -426,74 +391,15 @@ impl PluginLoader {
         })
     }
 
-    pub(super) fn load_admin_ui_generation(
+    pub(super) fn load_admin_surface_generation(
         &self,
         package: &PluginPackage,
         generation_id: PluginGenerationId,
         buffer_limits: PluginBufferLimits,
-    ) -> Result<AdminUiGeneration, RuntimeError> {
-        let (guard, manifest, api) = Self::load_admin_ui_api(package, buffer_limits)?;
+    ) -> Result<AdminSurfaceGeneration, RuntimeError> {
+        let (guard, manifest, api) = Self::load_admin_surface_api(package, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
-        let ManifestCapabilities::AdminUi(manifest_capabilities) = &manifest.capabilities else {
-            return Err(RuntimeError::Config(format!(
-                "plugin `{}` manifest kind mismatch",
-                package.plugin_id
-            )));
-        };
-        let profile_id = manifest_capabilities.profile_id.clone();
-        let descriptor = expect_admin_ui_descriptor(
-            &package.plugin_id,
-            invoke_admin_ui(
-                &package.plugin_id,
-                &api,
-                &AdminUiInput::Describe,
-                buffer_limits,
-            )?,
-        )?;
-        if descriptor.ui_profile != profile_id {
-            return Err(RuntimeError::Config(format!(
-                "admin-ui plugin `{}` describe profile `{}` did not match manifest profile `{}`",
-                package.plugin_id, descriptor.ui_profile, profile_id
-            )));
-        }
-        let capabilities = expect_admin_ui_capabilities(
-            &package.plugin_id,
-            invoke_admin_ui(
-                &package.plugin_id,
-                &api,
-                &AdminUiInput::CapabilitySet,
-                buffer_limits,
-            )?,
-        )?;
-        if !capabilities.contains(AdminUiCapability::RuntimeReload) {
-            return Err(RuntimeError::Config(format!(
-                "admin-ui plugin `{}` is missing {} capability",
-                package.plugin_id,
-                AdminUiCapability::RuntimeReload.as_str()
-            )));
-        }
-        Ok(AdminUiGeneration {
-            generation_id,
-            plugin_id: package.plugin_id.clone(),
-            profile_id,
-            capabilities: capabilities.capabilities,
-            buffer_limits,
-            build_tag: capabilities.build_tag,
-            invoke: api.invoke,
-            free_buffer: api.free_buffer,
-            _library_guard: guard,
-        })
-    }
-
-    pub(super) fn load_admin_transport_generation(
-        &self,
-        package: &PluginPackage,
-        generation_id: PluginGenerationId,
-        buffer_limits: PluginBufferLimits,
-    ) -> Result<AdminTransportGeneration, RuntimeError> {
-        let (guard, manifest, api) = Self::load_admin_transport_api(package, buffer_limits)?;
-        self.validate_manifest(package, &manifest)?;
-        let ManifestCapabilities::AdminTransport(manifest_capabilities) = &manifest.capabilities
+        let ManifestCapabilities::AdminSurface(manifest_capabilities) = &manifest.capabilities
         else {
             return Err(RuntimeError::Config(format!(
                 "plugin `{}` manifest kind mismatch",
@@ -501,40 +407,40 @@ impl PluginLoader {
             )));
         };
         let profile_id = manifest_capabilities.profile_id.clone();
-        let descriptor = expect_admin_transport_descriptor(
+        let descriptor = expect_admin_surface_descriptor(
             &package.plugin_id,
-            invoke_admin_transport(
+            invoke_admin_surface(
                 &package.plugin_id,
                 &api,
-                &AdminTransportRequest::Describe,
+                &AdminSurfaceRequest::Describe,
                 buffer_limits,
             )?,
         )?;
-        if descriptor.transport_profile != profile_id {
+        if descriptor.surface_profile != profile_id {
             return Err(RuntimeError::Config(format!(
-                "admin-transport plugin `{}` describe profile `{}` did not match manifest profile `{}`",
+                "admin-surface plugin `{}` describe profile `{}` did not match manifest profile `{}`",
                 package.plugin_id,
-                descriptor.transport_profile.as_str(),
+                descriptor.surface_profile.as_str(),
                 profile_id.as_str()
             )));
         }
-        let capabilities = expect_admin_transport_capabilities(
+        let capabilities = expect_admin_surface_capabilities(
             &package.plugin_id,
-            invoke_admin_transport(
+            invoke_admin_surface(
                 &package.plugin_id,
                 &api,
-                &AdminTransportRequest::CapabilitySet,
+                &AdminSurfaceRequest::CapabilitySet,
                 buffer_limits,
             )?,
         )?;
-        if !capabilities.contains(AdminTransportCapability::RuntimeReload) {
+        if !capabilities.contains(AdminSurfaceCapability::RuntimeReload) {
             return Err(RuntimeError::Config(format!(
-                "admin-transport plugin `{}` is missing {} capability",
+                "admin-surface plugin `{}` is missing {} capability",
                 package.plugin_id,
-                AdminTransportCapability::RuntimeReload.as_str()
+                AdminSurfaceCapability::RuntimeReload.as_str()
             )));
         }
-        Ok(AdminTransportGeneration {
+        Ok(AdminSurfaceGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
             profile_id,
@@ -699,48 +605,10 @@ impl PluginLoader {
         ))
     }
 
-    unsafe fn load_dynamic_admin_ui(
+    unsafe fn load_dynamic_admin_surface(
         library_path: &Path,
         buffer_limits: PluginBufferLimits,
-    ) -> Result<LoadedAdminUiApi, RuntimeError> {
-        let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
-        let manifest_ptr = {
-            let library = library
-                .lock()
-                .expect("dynamic library mutex should not be poisoned");
-            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
-                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
-                    RuntimeError::Config(format!(
-                        "failed to resolve plugin manifest symbol in {}: {error}",
-                        library_path.display()
-                    ))
-                })?;
-            unsafe { manifest_fn() }
-        };
-        let api = {
-            let library = library
-                .lock()
-                .expect("dynamic library mutex should not be poisoned");
-            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const AdminUiPluginApiV1> =
-                unsafe { library.get(PLUGIN_ADMIN_UI_API_SYMBOL_V1) }.map_err(|error| {
-                    RuntimeError::Config(format!(
-                        "failed to resolve admin-ui api symbol in {}: {error}",
-                        library_path.display()
-                    ))
-                })?;
-            unsafe { *api_fn() }
-        };
-        Ok((
-            Some(library),
-            decode_manifest(manifest_ptr, buffer_limits)?,
-            api,
-        ))
-    }
-
-    unsafe fn load_dynamic_admin_transport(
-        library_path: &Path,
-        buffer_limits: PluginBufferLimits,
-    ) -> Result<LoadedAdminTransportApi, RuntimeError> {
+    ) -> Result<LoadedAdminSurfaceApi, RuntimeError> {
         let library = Arc::new(Mutex::new(unsafe { Library::new(library_path) }?));
         let manifest_ptr = {
             let library = library
@@ -760,10 +628,10 @@ impl PluginLoader {
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
             let api_fn: libloading::Symbol<
-                unsafe extern "C" fn() -> *const AdminTransportPluginApiV1,
-            > = unsafe { library.get(PLUGIN_ADMIN_TRANSPORT_API_SYMBOL_V1) }.map_err(|error| {
+                unsafe extern "C" fn() -> *const AdminSurfacePluginApiV1,
+            > = unsafe { library.get(PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1) }.map_err(|error| {
                 RuntimeError::Config(format!(
-                    "failed to resolve admin-transport api symbol in {}: {error}",
+                    "failed to resolve admin-surface api symbol in {}: {error}",
                     library_path.display()
                 ))
             })?;

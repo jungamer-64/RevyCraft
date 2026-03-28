@@ -79,7 +79,6 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
     updated.network.motd = "ignored-core-motd".to_string();
     updated.plugins.buffer_limits.protocol_response_bytes = 8192;
     updated.profiles.default_gameplay = "readonly".into();
-    updated.admin.ui_profile = "console-v2".into();
     write_server_toml_for_reload(&config_path, &updated)?;
 
     let result = server.reload_runtime_core().await?;
@@ -129,7 +128,7 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
         selection.config.profiles.default_gameplay,
         initial.profiles.default_gameplay
     );
-    assert_eq!(selection.config.admin.ui_profile, initial.admin.ui_profile);
+    assert_eq!(selection.config.admin.surfaces, initial.admin.surfaces);
 
     server.shutdown().await
 }

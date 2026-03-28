@@ -1,10 +1,10 @@
 use super::{
-    AdminTransportProfileId, AdminUiProfileId, Arc, AuthProfileId, GameplayProfileId, HashMap,
-    HashSet, HotSwappableAdminTransportProfile, HotSwappableAdminUiProfile,
-    HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableStorageProfile,
-    ManagedAdminTransportPlugin, ManagedAdminUiPlugin, ManagedAuthPlugin, ManagedGameplayPlugin,
-    ManagedStoragePlugin, PluginFailureStage, PluginHost, PluginKind, PluginPackage, RuntimeError,
-    RuntimeSelectionConfig, StorageProfileId, ensure_known_profiles, ensure_profile_known,
+    AdminSurfaceProfileId, Arc, AuthProfileId, GameplayProfileId, HashMap, HashSet,
+    HotSwappableAdminSurfaceProfile, HotSwappableAuthProfile, HotSwappableGameplayProfile,
+    HotSwappableStorageProfile, ManagedAdminSurfacePlugin, ManagedAuthPlugin,
+    ManagedGameplayPlugin, ManagedStoragePlugin, PluginFailureStage, PluginHost, PluginKind,
+    PluginPackage, RuntimeError, RuntimeSelectionConfig, StorageProfileId, ensure_known_profiles,
+    ensure_profile_known,
 };
 use crate::config::PluginBufferLimits;
 use crate::registry::LoadedPluginSet;
@@ -15,8 +15,7 @@ impl PluginHost {
         gameplay: &HashMap<GameplayProfileId, ManagedGameplayPlugin>,
         storage: &HashMap<StorageProfileId, ManagedStoragePlugin>,
         auth: &HashMap<AuthProfileId, ManagedAuthPlugin>,
-        admin_transport: &HashMap<AdminTransportProfileId, ManagedAdminTransportPlugin>,
-        admin_ui: &HashMap<AdminUiProfileId, ManagedAdminUiPlugin>,
+        admin_surface: &HashMap<AdminSurfaceProfileId, ManagedAdminSurfacePlugin>,
     ) -> LoadedPluginSet {
         let mut loaded = LoadedPluginSet::new();
         loaded.replace_protocols(protocols);
@@ -42,18 +41,10 @@ impl PluginHost {
             );
         }
 
-        for (profile_id, managed) in admin_transport {
-            loaded.register_admin_transport_profile(
+        for (profile_id, managed) in admin_surface {
+            loaded.register_admin_surface_profile(
                 profile_id.clone(),
-                Arc::clone(&managed.profile)
-                    as Arc<dyn crate::runtime::AdminTransportProfileHandle>,
-            );
-        }
-
-        for (profile_id, managed) in admin_ui {
-            loaded.register_admin_ui_profile(
-                profile_id.clone(),
-                Arc::clone(&managed.profile) as Arc<dyn crate::runtime::AdminUiProfileHandle>,
+                Arc::clone(&managed.profile) as Arc<dyn crate::runtime::AdminSurfaceProfileHandle>,
             );
         }
 
@@ -73,23 +64,12 @@ impl PluginHost {
             .auth
             .lock()
             .expect("plugin host mutex should not be poisoned");
-        let admin_transport = self
-            .admin_transport
-            .lock()
-            .expect("plugin host mutex should not be poisoned");
-        let admin_ui = self
-            .admin_ui
+        let admin_surface = self
+            .admin_surface
             .lock()
             .expect("plugin host mutex should not be poisoned");
 
-        Self::loaded_plugin_set_from_parts(
-            protocols,
-            &gameplay,
-            &storage,
-            &auth,
-            &admin_transport,
-            &admin_ui,
-        )
+        Self::loaded_plugin_set_from_parts(protocols, &gameplay, &storage, &auth, &admin_surface)
     }
 
     fn required_gameplay_profiles(config: &RuntimeSelectionConfig) -> HashSet<GameplayProfileId> {
@@ -123,15 +103,15 @@ impl PluginHost {
         Ok(requested)
     }
 
-    fn requested_admin_ui_profile(config: &RuntimeSelectionConfig) -> Option<&AdminUiProfileId> {
-        (!config.admin_ui_profile.as_str().is_empty()).then_some(&config.admin_ui_profile)
-    }
-
-    fn requested_admin_transport_profile(
+    fn requested_admin_surface_profiles(
         config: &RuntimeSelectionConfig,
-    ) -> Option<&AdminTransportProfileId> {
-        (!config.admin_transport_profile.as_str().is_empty())
-            .then_some(&config.admin_transport_profile)
+    ) -> HashSet<AdminSurfaceProfileId> {
+        config
+            .admin_surfaces
+            .iter()
+            .filter(|surface| !surface.profile.as_str().is_empty())
+            .map(|surface| surface.profile.clone())
+            .collect()
     }
 
     fn load_requested_gameplay_plugin(
@@ -343,18 +323,18 @@ impl PluginHost {
         Ok(())
     }
 
-    fn load_requested_admin_ui_plugin(
+    fn load_requested_admin_surface_plugin(
         &self,
-        admin_ui: &mut HashMap<AdminUiProfileId, ManagedAdminUiPlugin>,
+        admin_surface: &mut HashMap<AdminSurfaceProfileId, ManagedAdminSurfacePlugin>,
         package: &PluginPackage,
-        requested_profile: Option<&AdminUiProfileId>,
+        requested_profiles: &HashSet<AdminSurfaceProfileId>,
         config: &RuntimeSelectionConfig,
         stage: PluginFailureStage,
         clear_failure_state: bool,
     ) -> Result<(), RuntimeError> {
-        let Some(requested_profile) = requested_profile else {
+        if requested_profiles.is_empty() {
             return Ok(());
-        };
+        }
         let modified_at = package.modified_at()?;
         let identity = package.artifact_identity(modified_at);
         if self
@@ -363,7 +343,7 @@ impl PluginHost {
         {
             return Ok(());
         }
-        let generation = match self.loader.load_admin_ui_generation(
+        let generation = match self.loader.load_admin_surface_generation(
             package,
             self.generations.next_generation_id(),
             config.buffer_limits,
@@ -372,12 +352,12 @@ impl PluginHost {
             Err(error) => {
                 let reason = error.to_string();
                 eprintln!(
-                    "admin-ui {} load failed for `{}`: {reason}",
+                    "admin-surface {} load failed for `{}`: {reason}",
                     stage.as_str(),
                     package.plugin_id
                 );
                 self.failures.handle_candidate_failure(
-                    PluginKind::AdminUi,
+                    PluginKind::AdminSurface,
                     stage,
                     &package.plugin_id,
                     identity,
@@ -386,96 +366,25 @@ impl PluginHost {
                 return Ok(());
             }
         };
-        if generation.profile_id != *requested_profile {
+        if !requested_profiles.contains(&generation.profile_id) {
             return Ok(());
         }
 
-        if admin_ui.contains_key(requested_profile) {
+        let profile_id = generation.profile_id.clone();
+        if admin_surface.contains_key(&profile_id) {
             return Err(RuntimeError::Config(format!(
-                "duplicate admin-ui profile `{requested_profile}` discovered"
+                "duplicate admin-surface profile `{}` discovered",
+                profile_id.as_str()
             )));
         }
-        admin_ui.insert(
-            requested_profile.clone(),
-            ManagedAdminUiPlugin {
+        admin_surface.insert(
+            profile_id.clone(),
+            ManagedAdminSurfacePlugin {
                 package: package.clone(),
-                profile_id: requested_profile.clone(),
-                profile: Arc::new(HotSwappableAdminUiProfile::new(
+                profile_id: profile_id.clone(),
+                profile: Arc::new(HotSwappableAdminSurfaceProfile::new(
                     package.plugin_id.clone(),
-                    requested_profile.clone(),
-                    generation,
-                    Arc::clone(&self.failures),
-                )),
-                loaded_at: modified_at,
-                active_loaded_at: modified_at,
-            },
-        );
-        if clear_failure_state {
-            self.failures.clear_plugin_state(&package.plugin_id);
-        }
-        Ok(())
-    }
-
-    fn load_requested_admin_transport_plugin(
-        &self,
-        admin_transport: &mut HashMap<AdminTransportProfileId, ManagedAdminTransportPlugin>,
-        package: &PluginPackage,
-        requested_profile: Option<&AdminTransportProfileId>,
-        config: &RuntimeSelectionConfig,
-        stage: PluginFailureStage,
-        clear_failure_state: bool,
-    ) -> Result<(), RuntimeError> {
-        let Some(requested_profile) = requested_profile else {
-            return Ok(());
-        };
-        let modified_at = package.modified_at()?;
-        let identity = package.artifact_identity(modified_at);
-        if self
-            .failures
-            .is_artifact_quarantined(&package.plugin_id, &identity)
-        {
-            return Ok(());
-        }
-        let generation = match self.loader.load_admin_transport_generation(
-            package,
-            self.generations.next_generation_id(),
-            config.buffer_limits,
-        ) {
-            Ok(generation) => Arc::new(generation),
-            Err(error) => {
-                let reason = error.to_string();
-                eprintln!(
-                    "admin-transport {} load failed for `{}`: {reason}",
-                    stage.as_str(),
-                    package.plugin_id
-                );
-                self.failures.handle_candidate_failure(
-                    PluginKind::AdminTransport,
-                    stage,
-                    &package.plugin_id,
-                    identity,
-                    &reason,
-                )?;
-                return Ok(());
-            }
-        };
-        if generation.profile_id != *requested_profile {
-            return Ok(());
-        }
-
-        if admin_transport.contains_key(requested_profile) {
-            return Err(RuntimeError::Config(format!(
-                "duplicate admin-transport profile `{requested_profile}` discovered"
-            )));
-        }
-        admin_transport.insert(
-            requested_profile.clone(),
-            ManagedAdminTransportPlugin {
-                package: package.clone(),
-                profile_id: requested_profile.clone(),
-                profile: Arc::new(HotSwappableAdminTransportProfile::new(
-                    package.plugin_id.clone(),
-                    requested_profile.clone(),
+                    profile_id,
                     generation,
                     Arc::clone(&self.failures),
                 )),
@@ -596,21 +505,21 @@ impl PluginHost {
         Ok(auth)
     }
 
-    pub(crate) fn prepare_admin_ui_profiles(
+    pub(crate) fn prepare_admin_surface_profiles(
         &self,
         config: &RuntimeSelectionConfig,
         stage: PluginFailureStage,
-    ) -> Result<HashMap<AdminUiProfileId, ManagedAdminUiPlugin>, RuntimeError> {
-        let requested_profile = Self::requested_admin_ui_profile(config);
+    ) -> Result<HashMap<AdminSurfaceProfileId, ManagedAdminSurfacePlugin>, RuntimeError> {
+        let requested_profiles = Self::requested_admin_surface_profiles(config);
         let allowlist = config
             .plugin_allowlist
             .as_ref()
             .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
         let catalog = self.protocol_catalog()?;
-        let mut admin_ui = HashMap::new();
+        let mut admin_surface = HashMap::new();
 
         for package in catalog.packages() {
-            if package.plugin_kind != PluginKind::AdminUi {
+            if package.plugin_kind != PluginKind::AdminSurface {
                 continue;
             }
             if let Some(allowlist) = allowlist.as_ref()
@@ -618,52 +527,18 @@ impl PluginHost {
             {
                 continue;
             }
-            self.load_requested_admin_ui_plugin(
-                &mut admin_ui,
+            self.load_requested_admin_surface_plugin(
+                &mut admin_surface,
                 package,
-                requested_profile,
+                &requested_profiles,
                 config,
                 stage,
                 false,
             )?;
         }
 
-        Ok(admin_ui)
-    }
-
-    pub(crate) fn prepare_admin_transport_profiles(
-        &self,
-        config: &RuntimeSelectionConfig,
-        stage: PluginFailureStage,
-    ) -> Result<HashMap<AdminTransportProfileId, ManagedAdminTransportPlugin>, RuntimeError> {
-        let requested_profile = Self::requested_admin_transport_profile(config);
-        let allowlist = config
-            .plugin_allowlist
-            .as_ref()
-            .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
-        let catalog = self.protocol_catalog()?;
-        let mut admin_transport = HashMap::new();
-
-        for package in catalog.packages() {
-            if package.plugin_kind != PluginKind::AdminTransport {
-                continue;
-            }
-            if let Some(allowlist) = allowlist.as_ref()
-                && !allowlist.contains(&package.plugin_id)
-            {
-                continue;
-            }
-            self.load_requested_admin_transport_plugin(
-                &mut admin_transport,
-                package,
-                requested_profile,
-                config,
-                stage,
-                false,
-            )?;
-        }
-
-        Ok(admin_transport)
+        ensure_known_profiles(&admin_surface, &requested_profiles, "admin-surface")?;
+        Ok(admin_surface)
     }
 
     /// Activates every gameplay profile required by the current server configuration.
@@ -817,29 +692,30 @@ impl PluginHost {
         result
     }
 
-    /// Activates the requested admin UI profile when available.
+    /// Activates the admin surface profiles referenced by the runtime configuration.
     ///
     /// # Errors
     ///
-    /// Returns an error when duplicate matching admin UI profiles are discovered.
-    pub(crate) fn activate_admin_ui_profile(
+    /// Returns an error when duplicate matching admin surface profiles are discovered or when a
+    /// referenced profile is unavailable.
+    pub(crate) fn activate_admin_surface_profiles(
         &self,
         config: &RuntimeSelectionConfig,
     ) -> Result<(), RuntimeError> {
-        let requested_profile = Self::requested_admin_ui_profile(config);
+        let requested_profiles = Self::requested_admin_surface_profiles(config);
         let allowlist = self
             .current_runtime_selection()
             .plugin_allowlist
             .map(|entries| entries.into_iter().collect::<HashSet<_>>());
         let catalog = self.protocol_catalog()?;
-        let mut admin_ui = self
-            .admin_ui
+        let mut admin_surface = self
+            .admin_surface
             .lock()
             .expect("plugin host mutex should not be poisoned");
-        admin_ui.clear();
+        admin_surface.clear();
 
         for package in catalog.packages() {
-            if package.plugin_kind != PluginKind::AdminUi {
+            if package.plugin_kind != PluginKind::AdminSurface {
                 continue;
             }
             if let Some(allowlist) = allowlist.as_ref()
@@ -847,60 +723,19 @@ impl PluginHost {
             {
                 continue;
             }
-            self.load_requested_admin_ui_plugin(
-                &mut admin_ui,
+            self.load_requested_admin_surface_plugin(
+                &mut admin_surface,
                 package,
-                requested_profile,
+                &requested_profiles,
                 config,
                 PluginFailureStage::Boot,
                 true,
             )?;
         }
 
-        Ok(())
-    }
-
-    /// Activates the requested admin transport profile when available.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when duplicate matching admin transport profiles are discovered.
-    pub(crate) fn activate_admin_transport_profile(
-        &self,
-        config: &RuntimeSelectionConfig,
-    ) -> Result<(), RuntimeError> {
-        let requested_profile = Self::requested_admin_transport_profile(config);
-        let allowlist = self
-            .current_runtime_selection()
-            .plugin_allowlist
-            .map(|entries| entries.into_iter().collect::<HashSet<_>>());
-        let catalog = self.protocol_catalog()?;
-        let mut admin_transport = self
-            .admin_transport
-            .lock()
-            .expect("plugin host mutex should not be poisoned");
-        admin_transport.clear();
-
-        for package in catalog.packages() {
-            if package.plugin_kind != PluginKind::AdminTransport {
-                continue;
-            }
-            if let Some(allowlist) = allowlist.as_ref()
-                && !allowlist.contains(&package.plugin_id)
-            {
-                continue;
-            }
-            self.load_requested_admin_transport_plugin(
-                &mut admin_transport,
-                package,
-                requested_profile,
-                config,
-                PluginFailureStage::Boot,
-                true,
-            )?;
-        }
-
-        Ok(())
+        let result = ensure_known_profiles(&admin_surface, &requested_profiles, "admin-surface");
+        drop(admin_surface);
+        result
     }
 
     /// Activates a single auth profile.
@@ -925,8 +760,7 @@ impl PluginHost {
         self.activate_gameplay_profiles(config)?;
         self.activate_storage_profile(&self.bootstrap_config.storage_profile)?;
         self.activate_auth_profiles(&Self::runtime_auth_profiles(config))?;
-        self.activate_admin_transport_profile(config)?;
-        self.activate_admin_ui_profile(config)
+        self.activate_admin_surface_profiles(config)
     }
 
     /// Loads protocol adapters and activates runtime-selected profiles, then snapshots the active
