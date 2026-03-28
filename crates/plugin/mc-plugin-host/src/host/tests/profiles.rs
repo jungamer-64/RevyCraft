@@ -362,6 +362,7 @@ fn unknown_gameplay_profile_fails_activation() {
 #[test]
 fn storage_and_auth_profiles_activate_and_resolve() {
     let storage = storage_entrypoints();
+    let modern_storage = storage_1_18_2_entrypoints();
     let auth = offline_auth_entrypoints();
     let host = build_test_plugin_host(
         TestPluginHostBuilder::new()
@@ -369,6 +370,11 @@ fn storage_and_auth_profiles_activate_and_resolve() {
                 plugin_id: "storage-je-anvil-1_7_10".to_string(),
                 manifest: storage.manifest,
                 api: storage.api,
+            })
+            .storage_raw(InProcessStoragePlugin {
+                plugin_id: JE_1_18_2_STORAGE_PLUGIN_ID.to_string(),
+                manifest: modern_storage.manifest,
+                api: modern_storage.api,
             })
             .auth_raw(InProcessAuthPlugin {
                 plugin_id: "auth-offline".to_string(),
@@ -384,7 +390,43 @@ fn storage_and_auth_profiles_activate_and_resolve() {
         .expect("known auth profile should activate");
 
     assert!(host.resolve_storage_profile("je-anvil-1_7_10").is_some());
+    assert!(
+        host.resolve_storage_profile(JE_1_18_2_STORAGE_PROFILE_ID)
+            .is_none()
+    );
     assert!(host.resolve_auth_profile("offline-v1").is_some());
+}
+
+#[test]
+fn modern_storage_profile_activates_and_resolves() {
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new()
+            .storage_raw(InProcessStoragePlugin {
+                plugin_id: JE_1_18_2_STORAGE_PLUGIN_ID.to_string(),
+                manifest: storage_1_18_2_entrypoints().manifest,
+                api: storage_1_18_2_entrypoints().api,
+            })
+            .bootstrap_config(BootstrapConfig {
+                storage_profile: JE_1_18_2_STORAGE_PROFILE_ID.into(),
+                ..BootstrapConfig::default()
+            }),
+        PluginAbiRange::default(),
+        PluginFailureMatrix::default(),
+    );
+
+    host.activate_storage_profile(JE_1_18_2_STORAGE_PROFILE_ID)
+        .expect("known 1.18.2 storage profile should activate");
+
+    assert!(
+        host.resolve_storage_profile(JE_1_18_2_STORAGE_PROFILE_ID)
+            .is_some()
+    );
+    assert!(
+        host.status()
+            .storage
+            .iter()
+            .any(|plugin| plugin.plugin_id == JE_1_18_2_STORAGE_PLUGIN_ID)
+    );
 }
 
 #[test]

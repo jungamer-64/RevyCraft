@@ -9,6 +9,8 @@ difficulty = 1
 view_distance = 2
 world_dir = "world"
 storage_profile = "je-anvil-1_7_10"
+# Opt-in example for JE 1.18.2 worlds:
+# storage_profile = "je-anvil-1_18_2"
 
 [static.plugins]
 plugins_dir = "plugins"
@@ -45,6 +47,8 @@ allowlist = [
   "admin-grpc",
   "admin-console",
 ]
+# Opt-in example for JE 1.18.2 worlds:
+# replace "storage-je-anvil-1_7_10" above with "storage-je-anvil-1_18_2"
 reload_watch = false
 
 [live.plugins.buffer_limits]

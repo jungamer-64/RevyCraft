@@ -50,6 +50,7 @@ mc-plugin-proto-je-340 = { path = "../../../plugins/protocol/je-340/mc-plugin-pr
 mc-plugin-proto-je-404 = { path = "../../../plugins/protocol/je-404/mc-plugin-proto-je-404", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-plugin-proto-je-5", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-plugin-proto-je-47", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-storage-je-anvil-1_18_2 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_18_2", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-test-support = { path = "../../testing/mc-plugin-test-support" }
 mc-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-proto-be-924" }

@@ -1805,6 +1805,7 @@ dependencies = [
  "mc-plugin-proto-je-47",
  "mc-plugin-proto-je-5",
  "mc-plugin-sdk-rust",
+ "mc-plugin-storage-je-anvil-1_18_2",
  "mc-plugin-storage-je-anvil-1_7_10",
  "mc-plugin-test-support",
  "mc-proto-be-924",
@@ -1920,6 +1921,19 @@ dependencies = [
  "mc-proto-common",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "mc-plugin-storage-je-anvil-1_18_2"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-proto-common",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -3008,6 +3022,7 @@ dependencies = [
  "mc-plugin-proto-je-47",
  "mc-plugin-proto-je-5",
  "mc-plugin-sdk-rust",
+ "mc-plugin-storage-je-anvil-1_18_2",
  "mc-plugin-storage-je-anvil-1_7_10",
  "mc-plugin-test-support",
  "mc-proto-be-924",

@@ -1,6 +1,35 @@
 use super::*;
 
 #[tokio::test]
+async fn packaged_1_18_2_storage_profile_boots() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let dist_dir = temp_dir.path().join("runtime").join("plugins");
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.plugins_dir = dist_dir.clone();
+    config.bootstrap.storage_profile = JE_1_18_2_STORAGE_PROFILE_ID.into();
+    config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
+        &[JE_5_ADAPTER_ID],
+        STORAGE_1_18_2_AND_AUTH_PLUGIN_IDS,
+    ));
+    seed_runtime_plugins(
+        &dist_dir,
+        &[JE_5_ADAPTER_ID],
+        STORAGE_1_18_2_AND_AUTH_PLUGIN_IDS,
+    )?;
+
+    let server =
+        build_test_server(config.clone(), plugin_test_registries_from_config(&config)?).await?;
+
+    assert!(
+        loaded_plugins_snapshot(&server)
+            .await
+            .resolve_storage_profile(JE_1_18_2_STORAGE_PROFILE_ID)
+            .is_some()
+    );
+    server.shutdown().await
+}
+
+#[tokio::test]
 async fn storage_skip_keeps_dirty_state_after_runtime_save_failure() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));

@@ -27,6 +27,10 @@ use mc_plugin_proto_je_47::in_process_plugin_entrypoints as je_1_8_x_entrypoints
 use mc_plugin_proto_je_340::in_process_plugin_entrypoints as je_1_12_2_entrypoints;
 use mc_plugin_proto_je_404::in_process_plugin_entrypoints as je_1_13_2_entrypoints;
 use mc_plugin_storage_je_anvil_1_7_10::in_process_plugin_entrypoints as storage_entrypoints;
+use mc_plugin_storage_je_anvil_1_18_2::{
+    JE_1_18_2_STORAGE_PLUGIN_ID, JE_1_18_2_STORAGE_PROFILE_ID,
+    in_process_plugin_entrypoints as storage_1_18_2_entrypoints,
+};
 use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_common::{ConnectionPhase, Edition, PacketWriter, TransportKind, WireFormatKind};
 use std::fs;

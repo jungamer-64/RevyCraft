@@ -65,6 +65,12 @@ pub(crate) const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &[
     "auth-bedrock-offline",
     "auth-bedrock-xbl",
 ];
+pub(crate) const STORAGE_1_18_2_AND_AUTH_PLUGIN_IDS: &[&str] = &[
+    JE_1_18_2_STORAGE_PLUGIN_ID,
+    "auth-offline",
+    "auth-bedrock-offline",
+    "auth-bedrock-xbl",
+];
 pub(crate) const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
 
 pub(crate) fn plugin_test_registries_with_allowlist(
