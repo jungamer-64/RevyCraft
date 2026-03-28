@@ -165,11 +165,11 @@ operator surface は `server-runtime` に集約されています。
 - local principal
   `local-console`
 - remote principal
-  `static.admin.grpc.principals.<id>`
+  `static.admin.principals.<id>`
 - local console の parse / render
   active admin-ui plugin が担当
 - gRPC transport
-  plugin を経由せず `AdminControlPlaneHandle` を直接叩く
+  active admin-transport plugin が認証後に `AdminControlPlaneHandle` を叩く
 
 admin reload surface は `reload runtime <mode>` に統一されています。permission も `reload-runtime` に一本化されており、進行中 request は開始時点の snapshot で完了し、次の request から新設定へ切り替わります。
 

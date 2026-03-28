@@ -43,6 +43,22 @@ fn tracked_runtime_config_path(file_name: &str) -> PathBuf {
     );
 }
 
+fn write_dummy_admin_transport_config(
+    dir: &Path,
+    file_name: &str,
+    bind_addr: &str,
+) -> Result<PathBuf, RuntimeError> {
+    let path = dir.join(file_name);
+    fs::write(
+        &path,
+        format!(
+            "bind_addr = {:?}\nallow_non_loopback = false\n\n[principals.ops]\ntoken_file = {:?}\n",
+            bind_addr, "ops.token"
+        ),
+    )?;
+    Ok(path)
+}
+
 async fn assert_spawn_fails_with_message(
     mut config: ServerConfig,
     expected_fragment: &str,
@@ -270,30 +286,41 @@ fn server_toml_parse_auth_profile() -> Result<(), RuntimeError> {
 #[test]
 fn server_toml_parse_admin_section_and_failure_policy() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    fs::write(temp_dir.path().join("ops.token"), "token-ops\n")?;
+    let transport_config = write_dummy_admin_transport_config(
+        temp_dir.path(),
+        "admin-transport-grpc.toml",
+        "127.0.0.1:50052",
+    )?;
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
-        r#"
+        format!(
+            r#"
 [live.plugins.failure_policy]
+admin_transport = "skip"
 admin_ui = "quarantine"
 
 [live.admin]
 ui_profile = "console-v2"
 local_console_permissions = ["status", "reload-runtime", "status"]
 
-[static.admin.grpc]
-enabled = true
-bind_addr = "127.0.0.1:50052"
+[static.admin.remote]
+transport_profile = "grpc-v1"
+transport_config = {}
 
-[static.admin.grpc.principals.ops]
-token_file = "ops.token"
+[static.admin.principals.ops]
 permissions = ["status", "reload-runtime", "status"]
 "#,
+            format!("{:?}", transport_config.display().to_string())
+        ),
     )?;
 
     let parsed = ServerConfig::from_toml(&path)?;
 
+    assert_eq!(
+        parsed.plugins.failure_policy.admin_transport,
+        PluginFailureAction::Skip
+    );
     assert_eq!(
         parsed.plugins.failure_policy.admin_ui,
         PluginFailureAction::Quarantine
@@ -306,26 +333,14 @@ permissions = ["status", "reload-runtime", "status"]
             crate::config::AdminPermission::ReloadRuntime,
         ]
     );
-    assert!(parsed.admin.grpc.enabled);
     assert_eq!(
-        parsed.admin.grpc.bind_addr,
-        "127.0.0.1:50052".parse().expect("socket addr should parse")
+        parsed.admin.remote.transport_profile,
+        mc_core::AdminTransportProfileId::new("grpc-v1")
     );
-    assert!(!parsed.admin.grpc.allow_non_loopback);
+    assert_eq!(parsed.admin.remote.transport_config, Some(transport_config));
     assert_eq!(
         parsed
             .admin
-            .grpc
-            .principals
-            .get("ops")
-            .expect("ops principal should exist")
-            .token,
-        "token-ops"
-    );
-    assert_eq!(
-        parsed
-            .admin
-            .grpc
             .principals
             .get("ops")
             .expect("ops principal should exist")
@@ -341,7 +356,6 @@ permissions = ["status", "reload-runtime", "status"]
 #[test]
 fn server_toml_accepts_reload_runtime_admin_permission() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    fs::write(temp_dir.path().join("ops.token"), "token-ops\n")?;
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
@@ -349,12 +363,7 @@ fn server_toml_accepts_reload_runtime_admin_permission() -> Result<(), RuntimeEr
 [live.admin]
 local_console_permissions = ["reload-runtime"]
 
-[static.admin.grpc]
-enabled = true
-bind_addr = "127.0.0.1:50052"
-
-[static.admin.grpc.principals.ops]
-token_file = "ops.token"
+[static.admin.principals.ops]
 permissions = ["reload-runtime"]
 "#,
     )?;
@@ -367,7 +376,6 @@ permissions = ["reload-runtime"]
     assert_eq!(
         parsed
             .admin
-            .grpc
             .principals
             .get("ops")
             .expect("ops principal should exist")
@@ -400,103 +408,87 @@ local_console_permissions = ["reload-topology"]
 }
 
 #[test]
-fn server_toml_reject_duplicate_admin_grpc_tokens() {
+fn server_toml_reject_transport_profile_without_transport_config() {
     let temp_dir = tempdir().expect("tempdir should be available");
-    fs::write(temp_dir.path().join("ops-a.token"), "shared-token\n")
-        .expect("ops-a token should write");
-    fs::write(temp_dir.path().join("ops-b.token"), "shared-token\n")
-        .expect("ops-b token should write");
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
         r#"
-[static.admin.grpc]
-enabled = true
+[static.admin.remote]
+transport_profile = "grpc-v1"
 
-[static.admin.grpc.principals.ops_a]
-token_file = "ops-a.token"
-permissions = ["status"]
-
-[static.admin.grpc.principals.ops_b]
-token_file = "ops-b.token"
+[static.admin.principals.ops]
 permissions = ["status"]
 "#,
     )
     .expect("server.toml should write");
 
-    let error = ServerConfig::from_toml(&path)
-        .expect_err("duplicate remote admin tokens should be rejected");
-    assert!(matches!(
+    let error = ServerConfig::from_toml(&path).expect_err("transport config should be required");
+    assert_server_config_error_contains(
         error,
-        crate::config::ServerConfigError::Config(message)
-            if message.contains("resolved to the same token")
-    ));
+        "static.admin.remote.transport_profile requires static.admin.remote.transport_config",
+    );
 }
 
 #[test]
-fn inline_server_config_source_rejects_duplicate_admin_grpc_tokens() {
+fn inline_server_config_source_rejects_transport_config_without_profile() {
     let mut config = ServerConfig::default();
-    config.admin.grpc.enabled = true;
-    config.admin.grpc.principals.insert(
-        "ops_a".to_string(),
-        crate::config::AdminGrpcPrincipalConfig {
-            token_file: PathBuf::from("runtime/admin/ops-a.token"),
-            token: "shared-token".to_string(),
+    config.admin.remote.transport_config = Some(PathBuf::from("runtime/admin/grpc.toml"));
+    config.admin.principals.insert(
+        "ops".to_string(),
+        crate::config::AdminPrincipalConfig {
             permissions: vec![crate::config::AdminPermission::Status],
-        },
-    );
-    config.admin.grpc.principals.insert(
-        "ops_b".to_string(),
-        crate::config::AdminGrpcPrincipalConfig {
-            token_file: PathBuf::from("runtime/admin/ops-b.token"),
-            token: "shared-token".to_string(),
-            permissions: vec![crate::config::AdminPermission::Sessions],
         },
     );
 
     let error = ServerConfigSource::Inline(config)
         .load()
-        .expect_err("duplicate remote admin tokens should be rejected for inline configs");
-    assert!(matches!(
-        error,
-        crate::config::ServerConfigError::Config(message)
-            if message.contains("resolved to the same token")
-    ));
-}
-
-#[test]
-fn server_toml_reject_enabled_admin_grpc_without_principals() {
-    let temp_dir = tempdir().expect("tempdir should be available");
-    let path = temp_dir.path().join("server.toml");
-    fs::write(
-        &path,
-        r#"
-[static.admin.grpc]
-enabled = true
-"#,
-    )
-    .expect("server.toml should write");
-
-    let error = ServerConfig::from_toml(&path)
-        .expect_err("enabled admin gRPC without principals should fail");
+        .expect_err("transport profile should be required for inline configs");
     assert_server_config_error_contains(
         error,
-        "requires at least one static.admin.grpc.principals entry",
+        "static.admin.remote.transport_config requires static.admin.remote.transport_profile",
     );
 }
 
 #[test]
-fn server_toml_reject_empty_admin_grpc_permissions() {
+fn server_toml_reject_transport_profile_without_principals() {
     let temp_dir = tempdir().expect("tempdir should be available");
-    fs::write(temp_dir.path().join("ops.token"), "ops-token\n").expect("ops token should write");
+    let transport_config = write_dummy_admin_transport_config(
+        temp_dir.path(),
+        "admin-transport-grpc.toml",
+        "127.0.0.1:50051",
+    )
+    .expect("transport config should write");
+    let path = temp_dir.path().join("server.toml");
+    fs::write(
+        &path,
+        format!(
+            r#"
+[static.admin.remote]
+transport_profile = "grpc-v1"
+transport_config = {}
+"#,
+            format!("{:?}", transport_config.display().to_string())
+        ),
+    )
+    .expect("server.toml should write");
+
+    let error = ServerConfig::from_toml(&path)
+        .expect_err("remote transport without principals should fail");
+    assert_server_config_error_contains(
+        error,
+        "requires at least one static.admin.principals entry",
+    );
+}
+
+#[test]
+fn server_toml_reject_empty_admin_principal_permissions() {
+    let temp_dir = tempdir().expect("tempdir should be available");
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
         r#"
-[static.admin.grpc]
-
-[static.admin.grpc.principals.ops]
-token_file = "ops.token"
+[static.admin.principals.ops]
 permissions = []
 "#,
     )
@@ -507,98 +499,84 @@ permissions = []
     assert!(matches!(
         error,
         crate::config::ServerConfigError::Config(message)
-            if message.contains("admin.grpc.principals.ops.permissions must not be empty")
+            if message.contains("admin.principals.ops.permissions must not be empty")
     ));
 }
 
 #[test]
-fn server_toml_reject_non_loopback_admin_grpc_bind_without_opt_in() {
+fn server_toml_reject_missing_admin_transport_config_file() {
     let temp_dir = tempdir().expect("tempdir should be available");
-    fs::write(temp_dir.path().join("ops.token"), "ops-token\n").expect("ops token should write");
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
         r#"
-[static.admin.grpc]
-enabled = true
-bind_addr = "0.0.0.0:50051"
+[static.admin.remote]
+transport_profile = "grpc-v1"
+transport_config = "missing-admin-transport.toml"
 
-[static.admin.grpc.principals.ops]
-token_file = "ops.token"
+[static.admin.principals.ops]
 permissions = ["status"]
 "#,
     )
     .expect("server.toml should write");
 
-    let error = ServerConfig::from_toml(&path)
-        .expect_err("non-loopback admin gRPC bind should require explicit opt-in");
-    assert!(matches!(
-        error,
-        crate::config::ServerConfigError::Config(message)
-            if message.contains("admin.grpc.allow_non_loopback=true")
-                || message.contains("static.admin.grpc.allow_non_loopback=true")
-    ));
+    let error =
+        ServerConfig::from_toml(&path).expect_err("missing admin transport config should fail");
+    assert_server_config_error_contains(error, "static.admin.remote.transport_config");
 }
 
 #[test]
-fn server_toml_accepts_non_loopback_admin_grpc_bind_with_opt_in() -> Result<(), RuntimeError> {
+fn server_toml_accepts_relative_admin_transport_config_path() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    fs::write(temp_dir.path().join("ops.token"), "ops-token\n")?;
+    let transport_config =
+        write_dummy_admin_transport_config(temp_dir.path(), "grpc.toml", "0.0.0.0:50051")?;
     let path = temp_dir.path().join("server.toml");
     fs::write(
         &path,
-        r#"
-[static.admin.grpc]
-enabled = true
-bind_addr = "0.0.0.0:50051"
-allow_non_loopback = true
+        format!(
+            r#"
+[static.admin.remote]
+transport_profile = "grpc-v1"
+transport_config = "grpc.toml"
 
-[static.admin.grpc.principals.ops]
-token_file = "ops.token"
+[static.admin.principals.ops]
 permissions = ["status"]
 "#,
+        ),
     )?;
 
     let parsed = ServerConfig::from_toml(&path)?;
     assert_eq!(
-        parsed.admin.grpc.bind_addr,
-        "0.0.0.0:50051".parse().expect("socket addr should parse")
+        parsed.admin.remote.transport_profile,
+        mc_core::AdminTransportProfileId::new("grpc-v1")
     );
-    assert!(parsed.admin.grpc.allow_non_loopback);
+    assert_eq!(parsed.admin.remote.transport_config, Some(transport_config));
     Ok(())
 }
 
 #[test]
-fn admin_grpc_debug_redacts_tokens() {
-    let principal = crate::config::AdminGrpcPrincipalConfig {
-        token_file: PathBuf::from("runtime/admin/ops.token"),
-        token: "super-secret-token".to_string(),
+fn admin_principal_debug_lists_permissions() {
+    let principal = crate::config::AdminPrincipalConfig {
         permissions: vec![crate::config::AdminPermission::Status],
     };
 
     let principal_debug = format!("{principal:?}");
-    assert!(principal_debug.contains("***redacted***"));
-    assert!(!principal_debug.contains("super-secret-token"));
+    assert!(principal_debug.contains("permissions"));
+    assert!(principal_debug.contains("Status"));
 
     let mut config = ServerConfig::default();
-    config
-        .admin
-        .grpc
-        .principals
-        .insert("ops".to_string(), principal);
+    config.admin.principals.insert("ops".to_string(), principal);
     let config_debug = format!("{config:?}");
-    assert!(config_debug.contains("***redacted***"));
-    assert!(!config_debug.contains("super-secret-token"));
+    assert!(config_debug.contains("ops"));
+    assert!(config_debug.contains("Status"));
 }
 
 #[test]
-fn admin_subject_debug_redacts_remote_credentials() {
-    let subject = crate::runtime::AdminSubject::remote("super-secret-token", "ops");
+fn admin_subject_debug_lists_remote_principal_id() {
+    let subject = crate::runtime::AdminSubject::remote("ops");
     let subject_debug = format!("{subject:?}");
 
-    assert!(subject_debug.contains("***redacted***"));
     assert!(subject_debug.contains("ops"));
-    assert!(!subject_debug.contains("super-secret-token"));
 }
 
 #[test]
@@ -630,12 +608,14 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
     config.plugins.failure_policy.gameplay = PluginFailureAction::FailFast;
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     config.plugins.failure_policy.auth = PluginFailureAction::FailFast;
+    config.plugins.failure_policy.admin_transport = PluginFailureAction::Skip;
     config.plugins.failure_policy.admin_ui = PluginFailureAction::Quarantine;
     config.admin.ui_profile = "console-v2".into();
     config.admin.local_console_permissions = vec![
         crate::config::AdminPermission::Status,
         crate::config::AdminPermission::ReloadRuntime,
     ];
+    config.admin.remote.transport_profile = "grpc-v1".into();
     config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 0 };
     config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 1 };
 
@@ -661,6 +641,10 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
         runtime_selection.gameplay_profile_map,
         config.profiles.gameplay_map
     );
+    assert_eq!(
+        runtime_selection.admin_transport_profile,
+        config.admin.remote.transport_profile
+    );
     assert_eq!(runtime_selection.admin_ui_profile, config.admin.ui_profile);
     assert_eq!(runtime_selection.plugin_allowlist, config.plugins.allowlist);
     assert_eq!(
@@ -684,6 +668,10 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
         config.plugins.failure_policy.auth
     );
     assert_eq!(
+        runtime_selection.plugin_failure_policy_admin_transport,
+        config.plugins.failure_policy.admin_transport
+    );
+    assert_eq!(
         runtime_selection.plugin_failure_policy_admin_ui,
         config.plugins.failure_policy.admin_ui
     );
@@ -702,21 +690,19 @@ fn server_config_splits_static_and_live_views() {
     config.plugins.reload_watch = true;
     config.profiles.default_gameplay = "readonly".into();
     config.admin.ui_profile = "console-v2".into();
-    config.admin.grpc.enabled = true;
-    config.admin.grpc.bind_addr = "127.0.0.1:50052".parse().expect("socket addr should parse");
-    config.admin.grpc.allow_non_loopback = true;
+    config.admin.remote.transport_profile = "grpc-v1".into();
+    config.admin.remote.transport_config = Some(PathBuf::from("runtime").join("grpc.toml"));
+    config.admin.principals.insert(
+        "ops".to_string(),
+        crate::config::AdminPrincipalConfig {
+            permissions: vec![crate::config::AdminPermission::Status],
+        },
+    );
 
     let static_config = config.static_config();
     let live_config = config.live_config();
 
     assert_eq!(static_config.bootstrap, config.bootstrap);
-    assert!(static_config.admin_grpc.enabled);
-    assert_eq!(
-        static_config.admin_grpc.bind_addr,
-        config.admin.grpc.bind_addr
-    );
-    assert!(static_config.admin_grpc.allow_non_loopback);
-
     assert_eq!(live_config.network, config.network);
     assert_eq!(live_config.topology, config.topology);
     assert_eq!(live_config.plugins, config.plugins);
@@ -762,6 +748,7 @@ fn server_toml_parse_per_kind_failure_policies() -> Result<(), RuntimeError> {
     config.plugins.failure_policy.gameplay = PluginFailureAction::FailFast;
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
     config.plugins.failure_policy.auth = PluginFailureAction::FailFast;
+    config.plugins.failure_policy.admin_transport = PluginFailureAction::Skip;
     let path = temp_dir.path().join("server.toml");
     write_server_toml(&path, &config)?;
 
@@ -781,6 +768,10 @@ fn server_toml_parse_per_kind_failure_policies() -> Result<(), RuntimeError> {
     assert_eq!(
         parsed.plugins.failure_policy.auth,
         PluginFailureAction::FailFast
+    );
+    assert_eq!(
+        parsed.plugins.failure_policy.admin_transport,
+        PluginFailureAction::Skip
     );
     Ok(())
 }
@@ -829,6 +820,10 @@ fn server_toml_use_balanced_failure_policy_defaults() -> Result<(), RuntimeError
     );
     assert_eq!(
         config.plugins.failure_policy.auth,
+        PluginFailureAction::Skip
+    );
+    assert_eq!(
+        config.plugins.failure_policy.admin_transport,
         PluginFailureAction::Skip
     );
     Ok(())

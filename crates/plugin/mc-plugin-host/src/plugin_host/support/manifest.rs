@@ -1,6 +1,6 @@
 use super::{
-    AdminUiProfileId, GameplayProfileId, PluginAbiVersion, PluginKind, PluginManifestV1,
-    RuntimeError, Utf8Slice, decode_utf8_slice_with_limit, read_checked_slice,
+    AdminTransportProfileId, AdminUiProfileId, GameplayProfileId, PluginAbiVersion, PluginKind,
+    PluginManifestV1, RuntimeError, Utf8Slice, decode_utf8_slice_with_limit, read_checked_slice,
 };
 use crate::config::PluginBufferLimits;
 use mc_core::{AuthProfileId, StorageProfileId};
@@ -23,6 +23,7 @@ pub(crate) enum ManifestCapabilities {
     Gameplay(ProfileManifestCapabilities<GameplayProfileId>),
     Storage(ProfileManifestCapabilities<StorageProfileId>),
     Auth(ProfileManifestCapabilities<AuthProfileId>),
+    AdminTransport(ProfileManifestCapabilities<AdminTransportProfileId>),
     AdminUi(ProfileManifestCapabilities<AdminUiProfileId>),
 }
 
@@ -114,6 +115,16 @@ fn decode_manifest_capabilities(
             "runtime.reload.auth",
             AuthProfileId::new,
         )?)),
+        PluginKind::AdminTransport => Ok(ManifestCapabilities::AdminTransport(
+            parse_profile_manifest(
+                plugin_id,
+                "admin-transport",
+                capabilities,
+                "admin-transport.profile:",
+                "runtime.reload.admin-transport",
+                AdminTransportProfileId::new,
+            )?,
+        )),
         PluginKind::AdminUi => Ok(ManifestCapabilities::AdminUi(parse_profile_manifest(
             plugin_id,
             "admin-ui",

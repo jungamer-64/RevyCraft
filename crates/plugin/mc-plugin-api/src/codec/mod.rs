@@ -1,5 +1,6 @@
 #[doc(hidden)]
 pub(crate) mod __internal;
+pub mod admin_transport;
 pub mod admin_ui;
 pub mod auth;
 pub mod gameplay;

@@ -35,6 +35,7 @@ pub struct PluginFailureMatrix {
     pub gameplay: PluginFailureAction,
     pub storage: PluginFailureAction,
     pub auth: PluginFailureAction,
+    pub admin_transport: PluginFailureAction,
     pub admin_ui: PluginFailureAction,
 }
 
@@ -45,6 +46,7 @@ impl Default for PluginFailureMatrix {
             gameplay: PluginFailureAction::Quarantine,
             storage: PluginFailureAction::FailFast,
             auth: PluginFailureAction::Skip,
+            admin_transport: PluginFailureAction::Skip,
             admin_ui: PluginFailureAction::Skip,
         }
     }
@@ -91,6 +93,18 @@ impl PluginFailureMatrix {
         )
     }
 
+    pub fn parse_admin_transport(value: &str) -> Result<PluginFailureAction, RuntimeError> {
+        PluginFailureAction::parse_with_allowed(
+            value,
+            "plugin-failure-policy-admin-transport",
+            &[
+                PluginFailureAction::Quarantine,
+                PluginFailureAction::Skip,
+                PluginFailureAction::FailFast,
+            ],
+        )
+    }
+
     pub fn parse_admin_ui(value: &str) -> Result<PluginFailureAction, RuntimeError> {
         PluginFailureAction::parse_with_allowed(
             value,
@@ -109,6 +123,7 @@ impl PluginFailureMatrix {
             PluginKind::Gameplay => self.gameplay,
             PluginKind::Storage => self.storage,
             PluginKind::Auth => self.auth,
+            PluginKind::AdminTransport => self.admin_transport,
             PluginKind::AdminUi => self.admin_ui,
         }
     }
@@ -336,6 +351,7 @@ impl PluginFailureDispatch {
             PluginKind::Gameplay => "gameplay",
             PluginKind::Storage => "storage",
             PluginKind::Auth => "auth",
+            PluginKind::AdminTransport => "admin-transport",
             PluginKind::AdminUi => "admin-ui",
         }
     }
@@ -361,6 +377,7 @@ impl PluginFailureDispatch {
                 PluginKind::Gameplay => "gameplay",
                 PluginKind::Storage => "storage",
                 PluginKind::Auth => "auth",
+                PluginKind::AdminTransport => "admin-transport",
                 PluginKind::AdminUi => "admin-ui",
             },
             stage.as_str(),

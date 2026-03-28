@@ -33,11 +33,13 @@ use mc_core::{
     CoreEvent, EntityId, GameplayProfileId, PlayerId, PluginGenerationId, SessionCapabilitySet,
 };
 use mc_plugin_host::registry::ProtocolRegistry;
-use mc_plugin_host::runtime::{AuthGenerationHandle, GameplayProfileHandle, RuntimeReloadContext};
+use mc_plugin_host::runtime::{
+    AdminTransportProfileHandle, AuthGenerationHandle, GameplayProfileHandle, RuntimeReloadContext,
+};
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
+use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -69,6 +71,12 @@ pub(crate) const SESSION_OUTBOUND_QUEUE_CAPACITY: usize = 256;
 
 pub struct ServerSupervisor {
     running: RunningServer,
+}
+
+#[derive(Clone)]
+pub struct AdminTransportSelection {
+    pub transport_config_path: PathBuf,
+    pub profile: Arc<dyn AdminTransportProfileHandle>,
 }
 
 impl ServerSupervisor {
@@ -103,9 +111,8 @@ impl ServerSupervisor {
         self.running.admin_control_plane()
     }
 
-    #[must_use]
-    pub fn admin_grpc_bind_addr(&self) -> Option<SocketAddr> {
-        self.running.admin_grpc_bind_addr()
+    pub async fn current_admin_transport(&self) -> Option<AdminTransportSelection> {
+        self.running.current_admin_transport().await
     }
 
     /// # Errors
@@ -232,9 +239,8 @@ impl RunningServer {
         AdminControlPlaneHandle::new(Arc::clone(&self.runtime))
     }
 
-    #[must_use]
-    pub fn admin_grpc_bind_addr(&self) -> Option<SocketAddr> {
-        self.runtime.admin_grpc_bind_addr()
+    pub async fn current_admin_transport(&self) -> Option<AdminTransportSelection> {
+        self.runtime.current_admin_transport().await
     }
 
     /// # Errors
@@ -357,9 +363,14 @@ impl RunningServer {
 }
 
 impl RuntimeServer {
-    #[must_use]
-    pub(crate) fn admin_grpc_bind_addr(&self) -> Option<SocketAddr> {
-        self.reload.admin_grpc_bind_addr()
+    pub(crate) async fn current_admin_transport(&self) -> Option<AdminTransportSelection> {
+        let selection = self.selection.current().await;
+        let transport_config_path = selection.config.admin.remote.transport_config.clone()?;
+        let profile = selection.admin_transport?;
+        Some(AdminTransportSelection {
+            transport_config_path,
+            profile,
+        })
     }
 
     pub(crate) async fn selection_state(&self) -> ResolvedRuntimeSelection {

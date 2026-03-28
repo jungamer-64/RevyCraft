@@ -1,5 +1,8 @@
 use crate::host::{PluginFailureAction, PluginFailureMatrix};
-use mc_core::{AdapterId, AdminUiProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
+use mc_core::{
+    AdapterId, AdminTransportProfileId, AdminUiProfileId, AuthProfileId, GameplayProfileId,
+    StorageProfileId,
+};
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -58,6 +61,7 @@ pub struct RuntimeSelectionConfig {
     pub bedrock_auth_profile: AuthProfileId,
     pub default_gameplay_profile: GameplayProfileId,
     pub gameplay_profile_map: HashMap<AdapterId, GameplayProfileId>,
+    pub admin_transport_profile: AdminTransportProfileId,
     pub admin_ui_profile: AdminUiProfileId,
     pub plugin_allowlist: Option<Vec<String>>,
     pub buffer_limits: PluginBufferLimits,
@@ -65,6 +69,7 @@ pub struct RuntimeSelectionConfig {
     pub plugin_failure_policy_gameplay: PluginFailureAction,
     pub plugin_failure_policy_storage: PluginFailureAction,
     pub plugin_failure_policy_auth: PluginFailureAction,
+    pub plugin_failure_policy_admin_transport: PluginFailureAction,
     pub plugin_failure_policy_admin_ui: PluginFailureAction,
 }
 
@@ -77,6 +82,7 @@ impl Default for RuntimeSelectionConfig {
             bedrock_auth_profile: AuthProfileId::new("bedrock-offline-v1"),
             default_gameplay_profile: GameplayProfileId::new("canonical"),
             gameplay_profile_map: HashMap::new(),
+            admin_transport_profile: AdminTransportProfileId::new(""),
             admin_ui_profile: AdminUiProfileId::new("console-v1"),
             plugin_allowlist: None,
             buffer_limits: PluginBufferLimits::default(),
@@ -84,6 +90,7 @@ impl Default for RuntimeSelectionConfig {
             plugin_failure_policy_gameplay: failure_matrix.gameplay,
             plugin_failure_policy_storage: failure_matrix.storage,
             plugin_failure_policy_auth: failure_matrix.auth,
+            plugin_failure_policy_admin_transport: failure_matrix.admin_transport,
             plugin_failure_policy_admin_ui: failure_matrix.admin_ui,
         }
     }
@@ -97,6 +104,7 @@ impl RuntimeSelectionConfig {
             gameplay: self.plugin_failure_policy_gameplay,
             storage: self.plugin_failure_policy_storage,
             auth: self.plugin_failure_policy_auth,
+            admin_transport: self.plugin_failure_policy_admin_transport,
             admin_ui: self.plugin_failure_policy_admin_ui,
         }
     }

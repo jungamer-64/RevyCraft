@@ -23,6 +23,7 @@ pub struct PluginFailureMatrix {
     pub gameplay: PluginFailureAction,
     pub storage: PluginFailureAction,
     pub auth: PluginFailureAction,
+    pub admin_transport: PluginFailureAction,
     pub admin_ui: PluginFailureAction,
 }
 
@@ -34,6 +35,7 @@ pub struct PluginHostStatusSnapshot {
     pub gameplay_count: usize,
     pub storage_count: usize,
     pub auth_count: usize,
+    pub admin_transport_count: usize,
     pub admin_ui_count: usize,
     pub active_quarantine_count: usize,
     pub artifact_quarantine_count: usize,
@@ -186,6 +188,7 @@ pub struct AdminPluginHostView {
     pub gameplay_count: usize,
     pub storage_count: usize,
     pub auth_count: usize,
+    pub admin_transport_count: usize,
     pub admin_ui_count: usize,
     pub active_quarantine_count: usize,
     pub artifact_quarantine_count: usize,

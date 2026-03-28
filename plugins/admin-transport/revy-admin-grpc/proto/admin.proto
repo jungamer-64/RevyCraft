@@ -99,6 +99,7 @@ message AdminPluginHostView {
   uint64 active_quarantine_count = 6;
   uint64 artifact_quarantine_count = 7;
   optional string pending_fatal_error = 8;
+  uint64 admin_transport_count = 9;
 }
 
 message AdminStatusView {

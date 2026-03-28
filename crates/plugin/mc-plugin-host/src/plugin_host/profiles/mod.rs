@@ -1,3 +1,4 @@
+mod admin_transport;
 mod admin_ui;
 mod auth;
 mod gameplay;
@@ -7,7 +8,9 @@ mod shared;
 mod storage;
 
 use super::{
-    AdminRequest, AdminResponse, AdminUiCapabilitySet, AdminUiGeneration, AdminUiProfileId, Arc,
+    AdminRequest, AdminResponse, AdminTransportCapabilitySet, AdminTransportGeneration,
+    AdminTransportHostApiV1, AdminTransportPauseView, AdminTransportProfileId,
+    AdminTransportStatusView, AdminUiCapabilitySet, AdminUiGeneration, AdminUiProfileId, Arc,
     AuthCapabilitySet, AuthGeneration, AuthGenerationHandle, AuthMode, AuthProfileId,
     BedrockAuthResult, BedrockListenerDescriptor, BytesMut, ConnectionPhase, GameplayCapabilitySet,
     GameplayCommand, GameplayGeneration, GameplayProfileHandle, GameplayProfileId, GameplayRequest,
@@ -22,12 +25,13 @@ use super::{
 };
 use mc_proto_common::Edition;
 
+pub(crate) use self::admin_transport::HotSwappableAdminTransportProfile;
 pub(crate) use self::admin_ui::HotSwappableAdminUiProfile;
 pub(crate) use self::auth::HotSwappableAuthProfile;
 pub(crate) use self::gameplay::HotSwappableGameplayProfile;
 pub(crate) use self::managed::{
-    ManagedAdminUiPlugin, ManagedAuthPlugin, ManagedGameplayPlugin, ManagedProtocolPlugin,
-    ManagedStoragePlugin,
+    ManagedAdminTransportPlugin, ManagedAdminUiPlugin, ManagedAuthPlugin, ManagedGameplayPlugin,
+    ManagedProtocolPlugin, ManagedStoragePlugin,
 };
 pub(crate) use self::protocol::HotSwappableProtocolAdapter;
 pub(crate) use self::shared::{GenerationSlot, ReloadableGenerationSlot};

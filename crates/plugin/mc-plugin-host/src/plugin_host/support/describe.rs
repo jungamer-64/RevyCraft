@@ -1,8 +1,9 @@
 use super::{
-    AdminUiCapability, AdminUiDescriptor, AdminUiOutput, AuthCapability, AuthDescriptor,
-    AuthResponse, BedrockListenerDescriptor, GameplayCapability, GameplayDescriptor,
-    GameplayResponse, ProtocolCapability, ProtocolDescriptor, ProtocolResponse, RuntimeError,
-    StorageCapability, StorageDescriptor, StorageResponse,
+    AdminTransportCapability, AdminTransportDescriptor, AdminTransportResponse, AdminUiCapability,
+    AdminUiDescriptor, AdminUiOutput, AuthCapability, AuthDescriptor, AuthResponse,
+    BedrockListenerDescriptor, GameplayCapability, GameplayDescriptor, GameplayResponse,
+    ProtocolCapability, ProtocolDescriptor, ProtocolResponse, RuntimeError, StorageCapability,
+    StorageDescriptor, StorageResponse,
 };
 use mc_core::CapabilityAnnouncement;
 
@@ -110,6 +111,30 @@ pub(crate) fn expect_auth_capabilities(
         AuthResponse::CapabilitySet(capabilities) => Ok(capabilities),
         other => Err(RuntimeError::Config(format!(
             "plugin `{plugin_id}` returned unexpected auth capability payload: {other:?}"
+        ))),
+    }
+}
+
+pub(crate) fn expect_admin_transport_descriptor(
+    plugin_id: &str,
+    response: AdminTransportResponse,
+) -> Result<AdminTransportDescriptor, RuntimeError> {
+    match response {
+        AdminTransportResponse::Descriptor(descriptor) => Ok(descriptor),
+        other => Err(RuntimeError::Config(format!(
+            "plugin `{plugin_id}` returned unexpected admin-transport describe payload: {other:?}"
+        ))),
+    }
+}
+
+pub(crate) fn expect_admin_transport_capabilities(
+    plugin_id: &str,
+    response: AdminTransportResponse,
+) -> Result<CapabilityAnnouncement<AdminTransportCapability>, RuntimeError> {
+    match response {
+        AdminTransportResponse::CapabilitySet(capabilities) => Ok(capabilities),
+        other => Err(RuntimeError::Config(format!(
+            "plugin `{plugin_id}` returned unexpected admin-transport capability payload: {other:?}"
         ))),
     }
 }

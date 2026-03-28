@@ -7,7 +7,6 @@ use super::{
     RuntimeReloadMode, RuntimeReloadResult, RuntimeServer,
 };
 use crate::RuntimeError;
-use crate::runtime::selection::AdminCredentialTag;
 use mc_plugin_api::codec::admin_ui as plugin_admin;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -47,10 +46,9 @@ impl AdminSubject {
     }
 
     #[must_use]
-    pub(crate) fn remote(token: &str, principal_id: impl Into<String>) -> Self {
+    pub(crate) fn remote(principal_id: impl Into<String>) -> Self {
         Self {
             kind: AdminSubjectKind::Remote(RemoteAdminSubject {
-                credential_tag: AdminCredentialTag::from_token(token),
                 principal_id: principal_id.into(),
             }),
         }
@@ -68,7 +66,6 @@ impl Debug for AdminSubject {
                 .debug_struct("AdminSubject")
                 .field("kind", &"remote")
                 .field("principal_id", &remote.principal_id)
-                .field("credential_tag", &remote.credential_tag)
                 .finish(),
         }
     }
@@ -82,7 +79,6 @@ enum AdminSubjectKind {
 
 #[derive(Clone, PartialEq, Eq)]
 struct RemoteAdminSubject {
-    credential_tag: AdminCredentialTag,
     principal_id: String,
 }
 
@@ -94,10 +90,10 @@ impl Display for AdminSubject {
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum AdminAuthError {
-    #[error("missing remote admin token")]
-    MissingToken,
-    #[error("invalid remote admin token")]
-    InvalidToken,
+    #[error("missing remote admin principal id")]
+    MissingPrincipalId,
+    #[error("invalid remote admin principal id")]
+    InvalidPrincipalId,
 }
 
 #[derive(Debug, Error)]
@@ -147,11 +143,13 @@ impl AdminControlPlaneHandle {
         self
     }
 
-    pub async fn authenticate_remote_token(
+    pub async fn subject_for_remote_principal(
         &self,
-        token: &str,
+        principal_id: &str,
     ) -> Result<AdminSubject, AdminAuthError> {
-        self.service.authenticate_remote_token(token).await
+        self.service
+            .subject_for_remote_principal(principal_id)
+            .await
     }
 
     pub async fn status(
@@ -225,8 +223,13 @@ impl AdminControlPlaneHandle {
 }
 
 impl AdminService {
-    async fn authenticate_remote_token(&self, token: &str) -> Result<AdminSubject, AdminAuthError> {
-        self.runtime.authenticate_remote_token(token).await
+    async fn subject_for_remote_principal(
+        &self,
+        principal_id: &str,
+    ) -> Result<AdminSubject, AdminAuthError> {
+        self.runtime
+            .subject_for_remote_principal(principal_id)
+            .await
     }
 
     async fn status(&self, subject: &AdminSubject) -> Result<AdminStatusView, AdminCommandError> {
@@ -377,20 +380,20 @@ impl RuntimeServer {
             .reject_mutating_admin_action_during_upgrade(action)
     }
 
-    pub(crate) async fn authenticate_remote_token(
+    pub(crate) async fn subject_for_remote_principal(
         &self,
-        token: &str,
+        principal_id: &str,
     ) -> Result<AdminSubject, AdminAuthError> {
-        let token = token.trim();
-        if token.is_empty() {
-            return Err(AdminAuthError::InvalidToken);
+        let principal_id = principal_id.trim();
+        if principal_id.is_empty() {
+            return Err(AdminAuthError::MissingPrincipalId);
         }
         self.selection_state()
             .await
-            .remote_admin_subjects
-            .get(token)
-            .map(|principal| AdminSubject::remote(token, principal.principal_id.clone()))
-            .ok_or(AdminAuthError::InvalidToken)
+            .remote_admin_principals
+            .get(principal_id)
+            .map(|principal| AdminSubject::remote(principal.principal_id.clone()))
+            .ok_or(AdminAuthError::InvalidPrincipalId)
     }
 
     async fn authorize(
@@ -417,14 +420,9 @@ impl RuntimeServer {
                 }
             }
             AdminSubjectKind::Remote(remote) => {
-                let Some(principal) =
-                    selection_state
-                        .remote_admin_subjects
-                        .values()
-                        .find(|principal| {
-                            principal.principal_id == remote.principal_id
-                                && principal.credential_tag == remote.credential_tag
-                        })
+                let Some(principal) = selection_state
+                    .remote_admin_principals
+                    .get(&remote.principal_id)
                 else {
                     return Err(AdminCommandError::InvalidSubject {
                         subject: subject.clone(),
@@ -524,6 +522,7 @@ impl RuntimeServer {
                 gameplay_count: status.gameplay_count,
                 storage_count: status.storage_count,
                 auth_count: status.auth_count,
+                admin_transport_count: status.admin_transport_count,
                 admin_ui_count: status.admin_ui_count,
                 active_quarantine_count: status.active_quarantine_count,
                 artifact_quarantine_count: status.artifact_quarantine_count,
@@ -810,6 +809,7 @@ fn plugin_status_view_from_runtime(status: &AdminStatusView) -> plugin_admin::Ad
                 gameplay_count: plugin_host.gameplay_count,
                 storage_count: plugin_host.storage_count,
                 auth_count: plugin_host.auth_count,
+                admin_transport_count: plugin_host.admin_transport_count,
                 admin_ui_count: plugin_host.admin_ui_count,
                 active_quarantine_count: plugin_host.active_quarantine_count,
                 artifact_quarantine_count: plugin_host.artifact_quarantine_count,

@@ -6,50 +6,24 @@ use mc_plugin_api::codec::auth::AuthMode;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_host::registry::LoadedPluginSet;
 use mc_plugin_host::runtime::{
-    AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
+    AdminTransportProfileHandle, AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle,
+    StorageProfileHandle,
 };
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tokio::sync::RwLock as AsyncRwLock;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AdminCredentialTag([u8; 32]);
-
-impl AdminCredentialTag {
-    #[must_use]
-    pub(crate) fn from_token(token: &str) -> Self {
-        let digest = Sha256::digest(token.as_bytes());
-        let mut bytes = [0_u8; 32];
-        bytes.copy_from_slice(&digest);
-        Self(bytes)
-    }
-}
-
-impl Debug for AdminCredentialTag {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("***redacted***")
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RemoteAdminPrincipal {
     pub(crate) principal_id: String,
-    pub(crate) credential_tag: AdminCredentialTag,
     pub(crate) permissions: Vec<AdminPermission>,
 }
 
 impl RemoteAdminPrincipal {
     #[must_use]
-    pub(crate) fn new(
-        principal_id: impl Into<String>,
-        token: &str,
-        permissions: Vec<AdminPermission>,
-    ) -> Self {
+    pub(crate) fn new(principal_id: impl Into<String>, permissions: Vec<AdminPermission>) -> Self {
         Self {
             principal_id: principal_id.into(),
-            credential_tag: AdminCredentialTag::from_token(token),
             permissions,
         }
     }
@@ -61,8 +35,9 @@ pub(crate) struct ResolvedRuntimeSelection {
     pub(crate) loaded_plugins: LoadedPluginSet,
     pub(crate) auth_profile: Arc<dyn AuthProfileHandle>,
     pub(crate) bedrock_auth_profile: Option<Arc<dyn AuthProfileHandle>>,
+    pub(crate) admin_transport: Option<Arc<dyn AdminTransportProfileHandle>>,
     pub(crate) admin_ui: Option<Arc<dyn AdminUiProfileHandle>>,
-    pub(crate) remote_admin_subjects: HashMap<String, RemoteAdminPrincipal>,
+    pub(crate) remote_admin_principals: HashMap<String, RemoteAdminPrincipal>,
 }
 
 pub(crate) struct BootstrapSelectionResolution {
@@ -103,6 +78,13 @@ impl SelectionManager {
 
     pub(crate) async fn current_admin_ui(&self) -> Option<Arc<dyn AdminUiProfileHandle>> {
         self.current().await.admin_ui
+    }
+
+    #[expect(dead_code, reason = "used by the upcoming admin transport supervisor")]
+    pub(crate) async fn current_admin_transport(
+        &self,
+    ) -> Option<Arc<dyn AdminTransportProfileHandle>> {
+        self.current().await.admin_transport
     }
 
     pub(crate) async fn auth_profile(&self) -> Arc<dyn AuthProfileHandle> {
@@ -246,32 +228,45 @@ impl SelectionResolver {
             None
         };
         let admin_ui = loaded_plugins.resolve_admin_ui_profile(config.admin.ui_profile.as_str());
-        let remote_admin_subjects = Self::materialize_remote_admin_subjects(&config);
+        let admin_transport = if config.admin.remote.transport_profile.as_str().is_empty() {
+            None
+        } else {
+            Some(
+                loaded_plugins
+                    .resolve_admin_transport_profile(config.admin.remote.transport_profile.as_str())
+                    .ok_or_else(|| {
+                        RuntimeError::Config(format!(
+                            "unknown admin-transport profile `{}`",
+                            config.admin.remote.transport_profile.as_str()
+                        ))
+                    })?,
+            )
+        };
+        let remote_admin_principals = Self::materialize_remote_admin_principals(&config);
 
         Ok(ResolvedRuntimeSelection {
             config,
             loaded_plugins,
             auth_profile,
             bedrock_auth_profile,
+            admin_transport,
             admin_ui,
-            remote_admin_subjects,
+            remote_admin_principals,
         })
     }
 
-    pub(crate) fn materialize_remote_admin_subjects(
+    pub(crate) fn materialize_remote_admin_principals(
         config: &ServerConfig,
     ) -> HashMap<String, RemoteAdminPrincipal> {
         config
             .admin
-            .grpc
             .principals
             .iter()
             .map(|(principal_id, principal)| {
                 (
-                    principal.token.trim().to_string(),
+                    principal_id.clone(),
                     RemoteAdminPrincipal::new(
                         principal_id.clone(),
-                        &principal.token,
                         principal
                             .permissions
                             .iter()

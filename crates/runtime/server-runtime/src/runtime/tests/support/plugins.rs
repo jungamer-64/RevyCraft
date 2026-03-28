@@ -56,6 +56,7 @@ pub(crate) const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
 ];
 pub(crate) const TCP_ONLY_PROTOCOL_PLUGIN_IDS: &[&str] = &[JE_5_ADAPTER_ID];
 pub(crate) const GAMEPLAY_PLUGIN_IDS: &[&str] = &["gameplay-canonical", "gameplay-readonly"];
+pub(crate) const ADMIN_TRANSPORT_PLUGIN_IDS: &[&str] = &["admin-transport-grpc"];
 pub(crate) const ADMIN_UI_PLUGIN_IDS: &[&str] = &["admin-ui-console"];
 pub(crate) const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &[
     "storage-je-anvil-1_7_10",
@@ -90,6 +91,11 @@ pub(crate) fn plugin_allowlist_with_supporting_plugins(
     );
     plugin_allowlist.extend(
         supporting_plugin_ids
+            .iter()
+            .map(|plugin_id| (*plugin_id).to_string()),
+    );
+    plugin_allowlist.extend(
+        ADMIN_TRANSPORT_PLUGIN_IDS
             .iter()
             .map(|plugin_id| (*plugin_id).to_string()),
     );
@@ -160,6 +166,7 @@ pub(crate) fn seed_runtime_plugins(
     plugin_ids.extend_from_slice(allowlist);
     plugin_ids.extend_from_slice(GAMEPLAY_PLUGIN_IDS);
     plugin_ids.extend_from_slice(supporting_plugin_ids);
+    plugin_ids.extend_from_slice(ADMIN_TRANSPORT_PLUGIN_IDS);
     plugin_ids.extend_from_slice(ADMIN_UI_PLUGIN_IDS);
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?

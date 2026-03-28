@@ -1,7 +1,7 @@
 use super::{
-    AdminUiCapabilitySet, AdminUiGeneration, Arc, AuthCapabilitySet, AuthGeneration,
-    GameplayCapabilitySet, GameplayGeneration, PluginGenerationId, RwLock, StorageCapabilitySet,
-    StorageGeneration,
+    AdminTransportCapabilitySet, AdminTransportGeneration, AdminUiCapabilitySet, AdminUiGeneration,
+    Arc, AuthCapabilitySet, AuthGeneration, GameplayCapabilitySet, GameplayGeneration,
+    PluginGenerationId, RwLock, StorageCapabilitySet, StorageGeneration,
 };
 
 pub(crate) trait ProfileGenerationMetadata {
@@ -114,6 +114,18 @@ impl<G: ProfileGenerationMetadata> ReloadableGenerationSlot<G> {
 
 impl ProfileGenerationMetadata for AuthGeneration {
     type Capabilities = AuthCapabilitySet;
+
+    fn capabilities(&self) -> &Self::Capabilities {
+        &self.capabilities
+    }
+
+    fn generation_id(&self) -> PluginGenerationId {
+        self.generation_id
+    }
+}
+
+impl ProfileGenerationMetadata for AdminTransportGeneration {
+    type Capabilities = AdminTransportCapabilitySet;
 
     fn capabilities(&self) -> &Self::Capabilities {
         &self.capabilities

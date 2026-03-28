@@ -167,6 +167,7 @@ pub struct PlayerId(pub Uuid);
 pub struct PluginGenerationId(pub u64);
 
 string_id!(AdapterId);
+string_id!(AdminTransportProfileId);
 string_id!(AdminUiProfileId);
 string_id!(AuthProfileId);
 string_id!(GameplayProfileId);
@@ -344,6 +345,10 @@ closed_capability_enum!(AdminUiCapability, "admin-ui", {
     RuntimeReload => "runtime.reload.admin-ui",
 });
 
+closed_capability_enum!(AdminTransportCapability, "admin-transport", {
+    RuntimeReload => "runtime.reload.admin-transport",
+});
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(
     serialize = "C: Ord + Serialize",
@@ -425,6 +430,7 @@ pub type ProtocolCapabilitySet = ClosedCapabilitySet<ProtocolCapability>;
 pub type GameplayCapabilitySet = ClosedCapabilitySet<GameplayCapability>;
 pub type StorageCapabilitySet = ClosedCapabilitySet<StorageCapability>;
 pub type AuthCapabilitySet = ClosedCapabilitySet<AuthCapability>;
+pub type AdminTransportCapabilitySet = ClosedCapabilitySet<AdminTransportCapability>;
 pub type AdminUiCapabilitySet = ClosedCapabilitySet<AdminUiCapability>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

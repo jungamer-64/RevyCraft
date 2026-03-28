@@ -4,16 +4,16 @@ use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
 use crate::host::PluginHostStatusSnapshot;
 use crate::registry::LoadedPluginSet;
 use crate::runtime::{
-    AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimeReloadContext,
-    StorageProfileHandle,
+    AdminTransportProfileHandle, AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle,
+    RuntimeReloadContext, StorageProfileHandle,
 };
 use mc_core::PluginGenerationId;
 use std::sync::Arc;
 
 pub use crate::host::{PluginAbiRange, PluginFailureMatrix};
 pub use crate::plugin_host::{
-    InProcessAdminUiPlugin, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
-    InProcessStoragePlugin,
+    InProcessAdminTransportPlugin, InProcessAdminUiPlugin, InProcessAuthPlugin,
+    InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
 };
 
 #[derive(Clone)]
@@ -104,6 +104,18 @@ impl TestPluginHost {
         hooks::resolve_admin_ui_profile(&self.inner, profile_id)
     }
 
+    #[must_use]
+    #[expect(
+        dead_code,
+        reason = "admin-transport test helpers are available for downstream coverage"
+    )]
+    pub fn resolve_admin_transport_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<dyn AdminTransportProfileHandle>> {
+        hooks::resolve_admin_transport_profile(&self.inner, profile_id)
+    }
+
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the replacement generation cannot be loaded.
@@ -148,6 +160,7 @@ pub struct TestPluginHostBuilder {
     gameplay_plugins: Vec<InProcessGameplayPlugin>,
     storage_plugins: Vec<InProcessStoragePlugin>,
     auth_plugins: Vec<InProcessAuthPlugin>,
+    admin_transport_plugins: Vec<InProcessAdminTransportPlugin>,
     admin_ui_plugins: Vec<InProcessAdminUiPlugin>,
     bootstrap_config: crate::config::BootstrapConfig,
     abi_range: PluginAbiRange,
@@ -185,6 +198,16 @@ impl TestPluginHostBuilder {
     }
 
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "admin-transport test helpers are available for downstream coverage"
+    )]
+    pub fn admin_transport_raw(mut self, plugin: InProcessAdminTransportPlugin) -> Self {
+        self.admin_transport_plugins.push(plugin);
+        self
+    }
+
+    #[must_use]
     pub fn admin_ui_raw(mut self, plugin: InProcessAdminUiPlugin) -> Self {
         self.admin_ui_plugins.push(plugin);
         self
@@ -217,6 +240,7 @@ impl TestPluginHostBuilder {
                 gameplay_plugins: self.gameplay_plugins,
                 storage_plugins: self.storage_plugins,
                 auth_plugins: self.auth_plugins,
+                admin_transport_plugins: self.admin_transport_plugins,
                 admin_ui_plugins: self.admin_ui_plugins,
                 bootstrap_config: self.bootstrap_config,
                 abi_range: self.abi_range,

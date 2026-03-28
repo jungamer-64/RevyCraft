@@ -70,7 +70,8 @@ struct CommittedUpgrade {
 
 pub(crate) struct PendingUpgradeChild {
     pub(crate) server: Arc<ServerSupervisor>,
-    pub(crate) grpc_listener_override: Option<std::net::TcpListener>,
+    pub(crate) admin_transport_listener_override: Option<std::net::TcpListener>,
+    pub(crate) admin_transport_resume_payload: Option<Vec<u8>>,
     commit_gate: UpgradeChildCommitGate,
 }
 
@@ -88,7 +89,8 @@ enum UpgradeControlMessage {
     },
     Bootstrap {
         payload: RuntimeUpgradePayload,
-        has_admin_listener: bool,
+        has_admin_transport_listener: bool,
+        admin_transport_resume_payload: Option<Vec<u8>>,
         transferred_handle_count: usize,
     },
     Ready,
@@ -112,7 +114,7 @@ enum UpgradeTestFault {
     SessionTransferFailure,
     ChildImportFailure,
     ChildReadyTimeout,
-    GrpcTakeoverFailure,
+    AdminTransportTakeoverFailure,
 }
 
 #[cfg(debug_assertions)]
@@ -122,7 +124,9 @@ impl UpgradeTestFault {
             "session-transfer-failure" => Some(Self::SessionTransferFailure),
             "child-import-failure" => Some(Self::ChildImportFailure),
             "child-ready-timeout" => Some(Self::ChildReadyTimeout),
-            "grpc-takeover-failure" => Some(Self::GrpcTakeoverFailure),
+            "grpc-takeover-failure" | "admin-transport-takeover-failure" => {
+                Some(Self::AdminTransportTakeoverFailure)
+            }
             _ => None,
         }
     }
@@ -229,12 +233,12 @@ impl UpgradeCoordinator {
                 transport
                     .write_message(&UpgradeControlMessage::Commit)
                     .await?;
-                if let Some(shutdown_tx) = self.process_shutdown_tx.lock().await.as_ref() {
-                    let _ = shutdown_tx.send(true);
-                }
                 *self.committed.lock().await = Some(CommittedUpgrade {
                     hold: guard.commit(),
                 });
+                if let Some(shutdown_tx) = self.process_shutdown_tx.lock().await.as_ref() {
+                    let _ = shutdown_tx.send(true);
+                }
                 Ok(AdminUpgradeRuntimeView { executable_path })
             }
             Err(error) => {
@@ -261,15 +265,22 @@ impl UpgradeCoordinator {
         transport
             .write_message(&UpgradeControlMessage::Bootstrap {
                 payload,
-                has_admin_listener: paused_surfaces.admin_listener_for_child.is_some(),
+                has_admin_transport_listener: paused_surfaces.admin_transport_for_child.is_some(),
+                admin_transport_resume_payload: paused_surfaces
+                    .admin_transport_for_child
+                    .as_ref()
+                    .map(|paused| paused.resume_payload.clone()),
                 transferred_handle_count: 1
-                    + usize::from(paused_surfaces.admin_listener_for_child.is_some())
+                    + usize::from(paused_surfaces.admin_transport_for_child.is_some())
                     + sessions.len(),
             })
             .await?;
         transport.send_handles(
             &game_listener,
-            paused_surfaces.admin_listener_for_child.as_ref(),
+            paused_surfaces
+                .admin_transport_for_child
+                .as_ref()
+                .map(|paused| &paused.listener_for_child),
             &sessions,
         )?;
         eprintln!("runtime upgrade transfer: handles sent, waiting for child readiness");
@@ -355,8 +366,15 @@ impl PendingUpgradeChild {
         Arc::clone(&self.server)
     }
 
-    pub(crate) fn take_grpc_listener_override(&mut self) -> Option<std::net::TcpListener> {
-        self.grpc_listener_override.take()
+    pub(crate) fn take_admin_transport_resume(
+        &mut self,
+    ) -> Option<(std::net::TcpListener, Vec<u8>)> {
+        let listener = self.admin_transport_listener_override.take()?;
+        let payload = self
+            .admin_transport_resume_payload
+            .take()
+            .unwrap_or_default();
+        Some((listener, payload))
     }
 
     pub(crate) async fn report_ready_and_wait_for_commit(&mut self) -> Result<(), RuntimeError> {
@@ -441,12 +459,23 @@ pub(crate) async fn try_boot_upgrade_child(
 
     let mut transport = open_child_upgrade_transport().await?;
     let bootstrap = transport.read_message().await?;
-    let (payload, has_admin_listener, transferred_handle_count) = match bootstrap {
+    let (
+        payload,
+        has_admin_transport_listener,
+        admin_transport_resume_payload,
+        transferred_handle_count,
+    ) = match bootstrap {
         UpgradeControlMessage::Bootstrap {
             payload,
-            has_admin_listener,
+            has_admin_transport_listener,
+            admin_transport_resume_payload,
             transferred_handle_count,
-        } => (payload, has_admin_listener, transferred_handle_count),
+        } => (
+            payload,
+            has_admin_transport_listener,
+            admin_transport_resume_payload,
+            transferred_handle_count,
+        ),
         UpgradeControlMessage::ChildHello { .. }
         | UpgradeControlMessage::Ready
         | UpgradeControlMessage::Commit
@@ -472,7 +501,8 @@ pub(crate) async fn try_boot_upgrade_child(
         return Err(RuntimeError::Config(message));
     }
 
-    let received = transport.receive_handles(transferred_handle_count, has_admin_listener)?;
+    let received =
+        transport.receive_handles(transferred_handle_count, has_admin_transport_listener)?;
     let sessions = payload
         .sessions
         .iter()
@@ -517,7 +547,8 @@ pub(crate) async fn try_boot_upgrade_child(
 
     Ok(Some(PendingUpgradeChild {
         server: Arc::new(server),
-        grpc_listener_override: received.admin_listener,
+        admin_transport_listener_override: received.admin_transport_listener,
+        admin_transport_resume_payload,
         commit_gate: transport.into_commit_gate(),
     }))
 }
@@ -526,9 +557,9 @@ pub(crate) async fn try_boot_upgrade_child(
 pub(crate) fn child_upgrade_fault_before_ready() -> Option<RuntimeError> {
     #[cfg(debug_assertions)]
     {
-        if UpgradeTestFault::current() == Some(UpgradeTestFault::GrpcTakeoverFailure) {
+        if UpgradeTestFault::current() == Some(UpgradeTestFault::AdminTransportTakeoverFailure) {
             return Some(RuntimeError::Config(
-                "injected child gRPC takeover failure".to_string(),
+                "injected child admin transport takeover failure".to_string(),
             ));
         }
     }
@@ -587,7 +618,7 @@ fn upgrade_ready_timeout() -> Duration {
 
 struct ReceivedUpgradeHandles {
     game_listener: std::net::TcpListener,
-    admin_listener: Option<std::net::TcpListener>,
+    admin_transport_listener: Option<std::net::TcpListener>,
     session_streams: Vec<std::net::TcpStream>,
 }
 
@@ -644,17 +675,17 @@ impl ParentUpgradeTransport {
     fn send_handles(
         &self,
         game_listener: &std::net::TcpListener,
-        admin_listener: Option<&std::net::TcpListener>,
+        admin_transport_listener: Option<&std::net::TcpListener>,
         sessions: &[RuntimeUpgradeSessionHandle],
     ) -> Result<(), RuntimeError> {
         match self {
             #[cfg(unix)]
             Self::Unix(transport) => {
-                transport.send_handles(game_listener, admin_listener, sessions)
+                transport.send_handles(game_listener, admin_transport_listener, sessions)
             }
             #[cfg(windows)]
             Self::Windows(transport) => {
-                transport.send_handles(game_listener, admin_listener, sessions)
+                transport.send_handles(game_listener, admin_transport_listener, sessions)
             }
         }
     }
@@ -682,13 +713,17 @@ impl ChildUpgradeTransport {
     fn receive_handles(
         &self,
         expected: usize,
-        has_admin_listener: bool,
+        has_admin_transport_listener: bool,
     ) -> Result<ReceivedUpgradeHandles, RuntimeError> {
         match self {
             #[cfg(unix)]
-            Self::Unix(transport) => transport.receive_handles(expected, has_admin_listener),
+            Self::Unix(transport) => {
+                transport.receive_handles(expected, has_admin_transport_listener)
+            }
             #[cfg(windows)]
-            Self::Windows(transport) => transport.receive_handles(expected, has_admin_listener),
+            Self::Windows(transport) => {
+                transport.receive_handles(expected, has_admin_transport_listener)
+            }
         }
     }
 
@@ -754,11 +789,11 @@ impl UnixParentUpgradeTransport {
     fn send_handles(
         &self,
         game_listener: &std::net::TcpListener,
-        admin_listener: Option<&std::net::TcpListener>,
+        admin_transport_listener: Option<&std::net::TcpListener>,
         sessions: &[RuntimeUpgradeSessionHandle],
     ) -> Result<(), RuntimeError> {
         let mut handles = vec![game_listener.as_raw_fd()];
-        if let Some(listener) = admin_listener {
+        if let Some(listener) = admin_transport_listener {
             handles.push(listener.as_raw_fd());
         }
         handles.extend(sessions.iter().map(|session| session.stream.as_raw_fd()));
@@ -779,7 +814,7 @@ impl UnixChildUpgradeTransport {
     fn receive_handles(
         &self,
         expected: usize,
-        has_admin_listener: bool,
+        has_admin_transport_listener: bool,
     ) -> Result<ReceivedUpgradeHandles, RuntimeError> {
         let handles = receive_rights_chunked(self.stream.as_raw_fd(), expected)?;
         let mut handles = handles.into_iter();
@@ -790,11 +825,12 @@ impl UnixChildUpgradeTransport {
                 )
             })?)
         };
-        let admin_listener = if has_admin_listener {
+        let admin_transport_listener = if has_admin_transport_listener {
             Some(unsafe {
                 std::net::TcpListener::from_raw_fd(handles.next().ok_or_else(|| {
                     RuntimeError::Config(
-                        "upgrade child did not receive an admin gRPC listener handle".to_string(),
+                        "upgrade child did not receive an admin transport listener handle"
+                            .to_string(),
                     )
                 })?)
             })
@@ -806,7 +842,7 @@ impl UnixChildUpgradeTransport {
             .collect::<Vec<_>>();
         Ok(ReceivedUpgradeHandles {
             game_listener,
-            admin_listener,
+            admin_transport_listener,
             session_streams,
         })
     }
@@ -1022,17 +1058,18 @@ impl WindowsParentUpgradeTransport {
     fn send_handles(
         &self,
         game_listener: &std::net::TcpListener,
-        admin_listener: Option<&std::net::TcpListener>,
+        admin_transport_listener: Option<&std::net::TcpListener>,
         sessions: &[RuntimeUpgradeSessionHandle],
     ) -> Result<(), RuntimeError> {
         ensure_winsock_started()?;
-        let mut infos =
-            Vec::with_capacity(1 + usize::from(admin_listener.is_some()) + sessions.len());
+        let mut infos = Vec::with_capacity(
+            1 + usize::from(admin_transport_listener.is_some()) + sessions.len(),
+        );
         infos.push(duplicate_socket_protocol_info(
             game_listener.as_raw_socket(),
             self.child_pid,
         )?);
-        if let Some(listener) = admin_listener {
+        if let Some(listener) = admin_transport_listener {
             infos.push(duplicate_socket_protocol_info(
                 listener.as_raw_socket(),
                 self.child_pid,
@@ -1061,7 +1098,7 @@ impl WindowsChildUpgradeTransport {
     fn receive_handles(
         &self,
         expected: usize,
-        has_admin_listener: bool,
+        has_admin_transport_listener: bool,
     ) -> Result<ReceivedUpgradeHandles, RuntimeError> {
         ensure_winsock_started()?;
         let infos = receive_protocol_infos(&self.pipe, expected)?;
@@ -1075,12 +1112,12 @@ impl WindowsChildUpgradeTransport {
                 })?,
             )?)
         };
-        let admin_listener = if has_admin_listener {
+        let admin_transport_listener = if has_admin_transport_listener {
             Some(unsafe {
                 std::net::TcpListener::from_raw_socket(socket_from_protocol_info(
                     &infos.next().ok_or_else(|| {
                         RuntimeError::Config(
-                            "upgrade child did not receive an admin gRPC listener handle"
+                            "upgrade child did not receive an admin transport listener handle"
                                 .to_string(),
                         )
                     })?,
@@ -1097,7 +1134,7 @@ impl WindowsChildUpgradeTransport {
             .collect::<Result<Vec<_>, RuntimeError>>()?;
         Ok(ReceivedUpgradeHandles {
             game_listener,
-            admin_listener,
+            admin_transport_listener,
             session_streams,
         })
     }

@@ -21,13 +21,13 @@ TOML file が存在して読み込まれる場合、relative path はその TOML
 
 - `static.bootstrap.world_dir`
 - `static.plugins.plugins_dir`
-- `static.admin.grpc.principals.<id>.token_file`
+- `static.admin.remote.transport_config`
 
 補足:
 
 - `static.bootstrap.world_dir` を省略すると、`<config-dir>/<level_name>` が使われます。`level_name` の既定値は `"world"` です。
 - `static.plugins.plugins_dir` を省略すると、`<config-dir>/plugins` が使われます。
-- `token_file` は non-empty token へ解決される必要があります。空 token、重複 token、空 permission list は config error です。
+- `transport_config` は存在する file へ解決される必要があります。principal permission list は non-empty である必要があります。
 
 ## 設定セクションと restart 境界
 
@@ -35,8 +35,8 @@ TOML file が存在して読み込まれる場合、relative path はその TOML
 | --- | --- | --- |
 | `static.bootstrap` | world、online mode、level type、game mode、difficulty、view distance、storage profile | restart-required |
 | `static.plugins` | plugins dir、plugin ABI range | restart-required |
-| `static.admin.grpc` の transport 部分 | `enabled`、`bind_addr`、`allow_non_loopback` | restart-required |
-| `static.admin.grpc.principals.*` | token file、permissions | `reload runtime full` |
+| `static.admin.remote` | `transport_profile`、`transport_config` | restart-required |
+| `static.admin.principals.*` | permissions | `reload runtime full` |
 | `live.network` | `server_ip`、`server_port`、`motd`、`max_players` | `reload runtime topology` または `reload runtime full` |
 | `live.topology` | adapter 有効化、Bedrock 有効化、watch flag、drain | `reload runtime topology` または `reload runtime full` |
 | `live.plugins` | allowlist、buffer limits、failure policy、watch flag | `reload runtime full` |
@@ -200,15 +200,15 @@ sample の `console-v1` profile で使える command は次です。
 
 実行可否は `live.admin.local_console_permissions` で制御します。permission 名は `status`、`sessions`、`reload-runtime`、`shutdown` です。
 
-### built-in gRPC
+### remote gRPC transport
 
-`static.admin.grpc.enabled = true` のとき、同じ process に unary gRPC control plane が起動します。reload surface は `ReloadRuntime { mode }` を前提にします。
+`static.admin.remote.transport_profile = "grpc-v1"` のとき、選択された admin-transport plugin として unary gRPC control plane が起動します。reload surface は `ReloadRuntime { mode }` を前提にします。
 
 - transport は plaintext h2 のみです。
-- 既定では loopback bind だけを許可します。
-- non-loopback bind には `allow_non_loopback = true` が必要です。
+- bind policy は plugin-owned transport config の `bind_addr` / `allow_non_loopback` で決まります。
 - principal を少なくとも 1 つ定義しないと boot できません。
-- `token_file` は config file 基準で relative 解決されます。
+- `static.admin.principals.<id>` が host 側 permission policy です。
+- `principals.<id>.token_file` は transport config file 基準で relative 解決されます。
 - token は trim した結果が non-empty である必要があります。
 - principal 間で同じ token を使うことはできません。
 - TLS と public exposure は reverse proxy / ingress 側で扱う前提です。
@@ -217,15 +217,15 @@ sample の `console-v1` profile で使える command は次です。
 
 ## stdin EOF と終了条件
 
-console loop の終了条件は stdin の種類と gRPC の有無で変わります。
+console loop の終了条件は stdin の種類と remote admin transport の有無で変わります。
 
 - terminal stdin で EOF
   shutdown を要求します。
-- non-terminal stdin で EOF、かつ gRPC あり
+- non-terminal stdin で EOF、かつ remote admin transport あり
   console だけ detach し、server は継続します。
 - non-terminal stdin で EOF、かつ他の admin surface なし
   headless 実行を避けるため warning を出して shutdown します。
 - `Ctrl-C`
   常に shutdown を要求します。
 
-このため、pipe 経由で起動する運用では gRPC を併用するか、stdin EOF が来ない構成にしておくのが安全です。
+このため、pipe 経由で起動する運用では remote admin transport を併用するか、stdin EOF が来ない構成にしておくのが安全です。

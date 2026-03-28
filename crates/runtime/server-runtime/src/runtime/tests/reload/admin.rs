@@ -1,5 +1,4 @@
 use super::*;
-use crate::config::AdminGrpcPrincipalConfig;
 
 fn admin_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerConfig {
     let mut config = loopback_server_config(world_dir);
@@ -11,24 +10,10 @@ fn admin_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerCo
     config
 }
 
-fn write_remote_admin_token(path: &Path, token: &str) -> Result<(), RuntimeError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, format!("{token}\n"))?;
-    Ok(())
-}
-
 fn remote_admin_principal(
-    path: PathBuf,
-    token: &str,
     permissions: Vec<crate::config::AdminPermission>,
-) -> AdminGrpcPrincipalConfig {
-    AdminGrpcPrincipalConfig {
-        token_file: path,
-        token: token.to_string(),
-        permissions,
-    }
+) -> crate::config::AdminPrincipalConfig {
+    crate::config::AdminPrincipalConfig { permissions }
 }
 
 fn reload_request(mode: crate::runtime::RuntimeReloadMode) -> crate::runtime::AdminRequest {
@@ -318,28 +303,18 @@ async fn admin_control_plane_reload_runtime_full_rejects_bootstrap_changes()
 }
 
 #[tokio::test]
-async fn admin_control_plane_reload_runtime_full_updates_remote_tokens_for_next_request()
+async fn admin_control_plane_reload_runtime_full_updates_remote_principals_for_next_request()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
-    let beta_token_path = temp_dir.path().join("admin").join("beta.token");
-    write_remote_admin_token(&beta_token_path, "beta-token")?;
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
     let mut initial = admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
-    let _alpha_token_path = seed_runtime_plugins_with_loopback_admin(
-        &mut initial,
-        &dist_dir,
-        &[JE_5_ADAPTER_ID],
-        STORAGE_AND_AUTH_PLUGIN_IDS,
-        &temp_dir.path().join("admin"),
-        "ops",
-        "alpha-token",
-        vec![crate::config::AdminPermission::Status],
-        "127.0.0.1:50051"
-            .parse()
-            .expect("loopback admin grpc addr should parse"),
-    )?;
+    initial.admin.principals.insert(
+        "ops".to_string(),
+        remote_admin_principal(vec![crate::config::AdminPermission::Status]),
+    );
     write_server_toml(&config_path, &initial)?;
 
     let server = build_reloadable_test_server_from_source(
@@ -349,14 +324,14 @@ async fn admin_control_plane_reload_runtime_full_updates_remote_tokens_for_next_
     .await?;
     let control = server.admin_control_plane();
 
-    let alpha_subject = control
-        .authenticate_remote_token("alpha-token")
+    let ops_subject = control
+        .subject_for_remote_principal("ops")
         .await
-        .expect("alpha token should authenticate");
-    assert!(control.status(&alpha_subject).await.is_ok());
+        .expect("ops principal should authenticate");
+    assert!(control.status(&ops_subject).await.is_ok());
     assert!(matches!(
         control
-            .reload_runtime(&alpha_subject, crate::runtime::RuntimeReloadMode::Artifacts)
+            .reload_runtime(&ops_subject, crate::runtime::RuntimeReloadMode::Artifacts)
             .await,
         Err(crate::runtime::AdminCommandError::PermissionDenied {
             permission: crate::runtime::AdminPermission::ReloadRuntime,
@@ -365,17 +340,13 @@ async fn admin_control_plane_reload_runtime_full_updates_remote_tokens_for_next_
     ));
 
     let mut updated = initial.clone();
-    updated.admin.grpc.principals.clear();
-    updated.admin.grpc.principals.insert(
-        "ops".to_string(),
-        remote_admin_principal(
-            beta_token_path,
-            "beta-token",
-            vec![
-                crate::config::AdminPermission::Status,
-                crate::config::AdminPermission::ReloadRuntime,
-            ],
-        ),
+    updated.admin.principals.clear();
+    updated.admin.principals.insert(
+        "backup".to_string(),
+        remote_admin_principal(vec![
+            crate::config::AdminPermission::Status,
+            crate::config::AdminPermission::ReloadRuntime,
+        ]),
     );
     write_server_toml_for_reload(&config_path, &updated)?;
 
@@ -391,27 +362,25 @@ async fn admin_control_plane_reload_runtime_full_updates_remote_tokens_for_next_
     ));
 
     assert!(matches!(
-        control.authenticate_remote_token("alpha-token").await,
-        Err(crate::runtime::AdminAuthError::InvalidToken)
+        control.subject_for_remote_principal("ops").await,
+        Err(crate::runtime::AdminAuthError::InvalidPrincipalId)
     ));
     assert!(matches!(
-        control.status(&alpha_subject).await,
-        Err(crate::runtime::AdminCommandError::InvalidSubject { .. })
-    ));
-    assert!(matches!(
-        control
-            .reload_runtime(&alpha_subject, crate::runtime::RuntimeReloadMode::Artifacts)
-            .await,
+        control.status(&ops_subject).await,
         Err(crate::runtime::AdminCommandError::InvalidSubject { .. })
     ));
 
-    let beta_subject = control
-        .authenticate_remote_token("beta-token")
+    let backup_subject = control
+        .subject_for_remote_principal("backup")
         .await
-        .expect("beta token should authenticate after reload");
+        .expect("backup principal should authenticate after reload");
+    assert_eq!(backup_subject.principal_id(), "backup");
     assert!(
         control
-            .reload_runtime(&beta_subject, crate::runtime::RuntimeReloadMode::Artifacts)
+            .reload_runtime(
+                &backup_subject,
+                crate::runtime::RuntimeReloadMode::Artifacts
+            )
             .await
             .is_ok()
     );
@@ -427,24 +396,13 @@ async fn admin_control_plane_reload_runtime_full_updates_remote_permissions_for_
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
-    let token_path = temp_dir.path().join("admin").join("ops.token");
-    write_remote_admin_token(&token_path, "ops-token")?;
-
     let mut initial = admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
-    initial.admin.grpc.enabled = true;
-    initial.admin.grpc.bind_addr = "127.0.0.1:50051"
-        .parse()
-        .expect("loopback admin grpc addr should parse");
-    initial.admin.grpc.principals.insert(
+    initial.admin.principals.insert(
         "ops".to_string(),
-        remote_admin_principal(
-            token_path.clone(),
-            "ops-token",
-            vec![
-                crate::config::AdminPermission::Status,
-                crate::config::AdminPermission::ReloadRuntime,
-            ],
-        ),
+        remote_admin_principal(vec![
+            crate::config::AdminPermission::Status,
+            crate::config::AdminPermission::ReloadRuntime,
+        ]),
     );
     write_server_toml(&config_path, &initial)?;
 
@@ -456,9 +414,9 @@ async fn admin_control_plane_reload_runtime_full_updates_remote_permissions_for_
     let control = server.admin_control_plane();
 
     let subject = control
-        .authenticate_remote_token("ops-token")
+        .subject_for_remote_principal("ops")
         .await
-        .expect("ops token should authenticate");
+        .expect("ops principal should authenticate");
     assert!(
         control
             .reload_runtime(&subject, crate::runtime::RuntimeReloadMode::Artifacts)
@@ -467,13 +425,9 @@ async fn admin_control_plane_reload_runtime_full_updates_remote_permissions_for_
     );
 
     let mut updated = initial.clone();
-    updated.admin.grpc.principals.insert(
+    updated.admin.principals.insert(
         "ops".to_string(),
-        remote_admin_principal(
-            token_path,
-            "ops-token",
-            vec![crate::config::AdminPermission::Status],
-        ),
+        remote_admin_principal(vec![crate::config::AdminPermission::Status]),
     );
     write_server_toml_for_reload(&config_path, &updated)?;
 
@@ -503,28 +457,17 @@ async fn admin_control_plane_reload_runtime_full_updates_remote_permissions_for_
 }
 
 #[tokio::test]
-async fn admin_control_plane_reload_runtime_full_invalidates_existing_subject_when_principal_changes()
+async fn admin_control_plane_reload_runtime_full_invalidates_existing_subject_when_principal_is_removed()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
 
-    let token_path = temp_dir.path().join("admin").join("ops.token");
-    write_remote_admin_token(&token_path, "shared-token")?;
-
     let mut initial = admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
-    initial.admin.grpc.enabled = true;
-    initial.admin.grpc.bind_addr = "127.0.0.1:50051"
-        .parse()
-        .expect("loopback admin grpc addr should parse");
-    initial.admin.grpc.principals.insert(
+    initial.admin.principals.insert(
         "ops".to_string(),
-        remote_admin_principal(
-            token_path.clone(),
-            "shared-token",
-            vec![crate::config::AdminPermission::Status],
-        ),
+        remote_admin_principal(vec![crate::config::AdminPermission::Status]),
     );
     write_server_toml(&config_path, &initial)?;
 
@@ -536,21 +479,13 @@ async fn admin_control_plane_reload_runtime_full_invalidates_existing_subject_wh
     let control = server.admin_control_plane();
 
     let ops_subject = control
-        .authenticate_remote_token("shared-token")
+        .subject_for_remote_principal("ops")
         .await
-        .expect("shared token should authenticate");
+        .expect("ops principal should authenticate");
     assert!(control.status(&ops_subject).await.is_ok());
 
     let mut updated = initial.clone();
-    updated.admin.grpc.principals.clear();
-    updated.admin.grpc.principals.insert(
-        "backup".to_string(),
-        remote_admin_principal(
-            token_path,
-            "shared-token",
-            vec![crate::config::AdminPermission::Status],
-        ),
-    );
+    updated.admin.principals.clear();
     write_server_toml_for_reload(&config_path, &updated)?;
 
     let response = control
@@ -565,119 +500,13 @@ async fn admin_control_plane_reload_runtime_full_invalidates_existing_subject_wh
     ));
 
     assert!(matches!(
+        control.subject_for_remote_principal("ops").await,
+        Err(crate::runtime::AdminAuthError::InvalidPrincipalId)
+    ));
+    assert!(matches!(
         control.status(&ops_subject).await,
         Err(crate::runtime::AdminCommandError::InvalidSubject { .. })
     ));
-    let backup_subject = control
-        .authenticate_remote_token("shared-token")
-        .await
-        .expect("shared token should authenticate for the replacement principal");
-    assert_eq!(backup_subject.principal_id(), "backup");
-    assert!(control.status(&backup_subject).await.is_ok());
-
-    server.shutdown().await
-}
-
-#[tokio::test]
-async fn admin_control_plane_reload_runtime_full_rejects_admin_grpc_transport_changes()
--> Result<(), RuntimeError> {
-    let temp_dir = tempdir()?;
-    let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let config_path = temp_dir.path().join("server.toml");
-    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
-
-    let token_path = temp_dir.path().join("admin").join("ops.token");
-    write_remote_admin_token(&token_path, "ops-token")?;
-
-    let mut initial = admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
-    initial.admin.grpc.enabled = true;
-    initial.admin.grpc.bind_addr = "127.0.0.1:50051"
-        .parse()
-        .expect("loopback admin grpc addr should parse");
-    initial.admin.grpc.principals.insert(
-        "ops".to_string(),
-        remote_admin_principal(
-            token_path,
-            "ops-token",
-            vec![crate::config::AdminPermission::Status],
-        ),
-    );
-    write_server_toml(&config_path, &initial)?;
-
-    let server = build_reloadable_test_server_from_source(
-        ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
-    )
-    .await?;
-    let control = server.admin_control_plane();
-
-    let mut invalid = initial.clone();
-    invalid.admin.grpc.bind_addr = "127.0.0.1:50052"
-        .parse()
-        .expect("loopback admin grpc addr should parse");
-    write_server_toml_for_reload(&config_path, &invalid)?;
-
-    let response = control
-        .execute(
-            crate::runtime::AdminPrincipal::LocalConsole,
-            reload_request(crate::runtime::RuntimeReloadMode::Full),
-        )
-        .await;
-    let crate::runtime::AdminResponse::Error { message } = &response else {
-        panic!("admin gRPC transport diff should surface as admin reload error");
-    };
-    assert!(message.contains("admin.grpc transport changes require a restart"));
-
-    server.shutdown().await
-}
-
-#[tokio::test]
-async fn admin_control_plane_reload_runtime_full_rejects_admin_grpc_allow_non_loopback_changes()
--> Result<(), RuntimeError> {
-    let temp_dir = tempdir()?;
-    let dist_dir = temp_dir.path().join("runtime").join("plugins");
-    let config_path = temp_dir.path().join("server.toml");
-    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], STORAGE_AND_AUTH_PLUGIN_IDS)?;
-
-    let token_path = temp_dir.path().join("admin").join("ops.token");
-    write_remote_admin_token(&token_path, "ops-token")?;
-
-    let mut initial = admin_reload_server_config(temp_dir.path().join("world"), dist_dir.clone());
-    initial.admin.grpc.enabled = true;
-    initial.admin.grpc.bind_addr = "127.0.0.1:50051"
-        .parse()
-        .expect("loopback admin grpc addr should parse");
-    initial.admin.grpc.principals.insert(
-        "ops".to_string(),
-        remote_admin_principal(
-            token_path,
-            "ops-token",
-            vec![crate::config::AdminPermission::Status],
-        ),
-    );
-    write_server_toml(&config_path, &initial)?;
-
-    let server = build_reloadable_test_server_from_source(
-        ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
-    )
-    .await?;
-    let control = server.admin_control_plane();
-
-    let mut invalid = initial.clone();
-    invalid.admin.grpc.allow_non_loopback = true;
-    write_server_toml_for_reload(&config_path, &invalid)?;
-
-    let response = control
-        .execute(
-            crate::runtime::AdminPrincipal::LocalConsole,
-            reload_request(crate::runtime::RuntimeReloadMode::Full),
-        )
-        .await;
-    let crate::runtime::AdminResponse::Error { message } = &response else {
-        panic!("admin gRPC transport policy diff should surface as admin reload error");
-    };
-    assert!(message.contains("admin.grpc transport changes require a restart"));
 
     server.shutdown().await
 }

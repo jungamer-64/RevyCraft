@@ -2,7 +2,6 @@ use crate::RuntimeError;
 use crate::config::{ServerConfigSource, StaticConfig};
 use crate::{RuntimeUpgradePhase, RuntimeUpgradeRole, RuntimeUpgradeStateView};
 use mc_plugin_host::runtime::RuntimePluginHost;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{
@@ -52,13 +51,6 @@ impl ReloadCoordinator {
 
     pub(crate) fn reload_host(&self) -> Option<&Arc<dyn RuntimePluginHost>> {
         self.reload_host.as_ref()
-    }
-
-    pub(crate) fn admin_grpc_bind_addr(&self) -> Option<SocketAddr> {
-        self.static_config
-            .admin_grpc
-            .enabled
-            .then_some(self.static_config.admin_grpc.bind_addr)
     }
 
     pub(crate) async fn read_consistency(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {

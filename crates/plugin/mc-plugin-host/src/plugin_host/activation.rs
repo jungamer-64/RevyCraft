@@ -1,7 +1,8 @@
 use super::{
-    AdminUiProfileId, Arc, AuthProfileId, GameplayProfileId, HashMap, HashSet,
-    HotSwappableAdminUiProfile, HotSwappableAuthProfile, HotSwappableGameplayProfile,
-    HotSwappableStorageProfile, ManagedAdminUiPlugin, ManagedAuthPlugin, ManagedGameplayPlugin,
+    AdminTransportProfileId, AdminUiProfileId, Arc, AuthProfileId, GameplayProfileId, HashMap,
+    HashSet, HotSwappableAdminTransportProfile, HotSwappableAdminUiProfile,
+    HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableStorageProfile,
+    ManagedAdminTransportPlugin, ManagedAdminUiPlugin, ManagedAuthPlugin, ManagedGameplayPlugin,
     ManagedStoragePlugin, PluginFailureStage, PluginHost, PluginKind, PluginPackage, RuntimeError,
     RuntimeSelectionConfig, StorageProfileId, ensure_known_profiles, ensure_profile_known,
 };
@@ -14,6 +15,7 @@ impl PluginHost {
         gameplay: &HashMap<GameplayProfileId, ManagedGameplayPlugin>,
         storage: &HashMap<StorageProfileId, ManagedStoragePlugin>,
         auth: &HashMap<AuthProfileId, ManagedAuthPlugin>,
+        admin_transport: &HashMap<AdminTransportProfileId, ManagedAdminTransportPlugin>,
         admin_ui: &HashMap<AdminUiProfileId, ManagedAdminUiPlugin>,
     ) -> LoadedPluginSet {
         let mut loaded = LoadedPluginSet::new();
@@ -40,6 +42,14 @@ impl PluginHost {
             );
         }
 
+        for (profile_id, managed) in admin_transport {
+            loaded.register_admin_transport_profile(
+                profile_id.clone(),
+                Arc::clone(&managed.profile)
+                    as Arc<dyn crate::runtime::AdminTransportProfileHandle>,
+            );
+        }
+
         for (profile_id, managed) in admin_ui {
             loaded.register_admin_ui_profile(
                 profile_id.clone(),
@@ -63,12 +73,23 @@ impl PluginHost {
             .auth
             .lock()
             .expect("plugin host mutex should not be poisoned");
+        let admin_transport = self
+            .admin_transport
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
         let admin_ui = self
             .admin_ui
             .lock()
             .expect("plugin host mutex should not be poisoned");
 
-        Self::loaded_plugin_set_from_parts(protocols, &gameplay, &storage, &auth, &admin_ui)
+        Self::loaded_plugin_set_from_parts(
+            protocols,
+            &gameplay,
+            &storage,
+            &auth,
+            &admin_transport,
+            &admin_ui,
+        )
     }
 
     fn required_gameplay_profiles(config: &RuntimeSelectionConfig) -> HashSet<GameplayProfileId> {
@@ -104,6 +125,13 @@ impl PluginHost {
 
     fn requested_admin_ui_profile(config: &RuntimeSelectionConfig) -> Option<&AdminUiProfileId> {
         (!config.admin_ui_profile.as_str().is_empty()).then_some(&config.admin_ui_profile)
+    }
+
+    fn requested_admin_transport_profile(
+        config: &RuntimeSelectionConfig,
+    ) -> Option<&AdminTransportProfileId> {
+        (!config.admin_transport_profile.as_str().is_empty())
+            .then_some(&config.admin_transport_profile)
     }
 
     fn load_requested_gameplay_plugin(
@@ -388,6 +416,79 @@ impl PluginHost {
         Ok(())
     }
 
+    fn load_requested_admin_transport_plugin(
+        &self,
+        admin_transport: &mut HashMap<AdminTransportProfileId, ManagedAdminTransportPlugin>,
+        package: &PluginPackage,
+        requested_profile: Option<&AdminTransportProfileId>,
+        config: &RuntimeSelectionConfig,
+        stage: PluginFailureStage,
+        clear_failure_state: bool,
+    ) -> Result<(), RuntimeError> {
+        let Some(requested_profile) = requested_profile else {
+            return Ok(());
+        };
+        let modified_at = package.modified_at()?;
+        let identity = package.artifact_identity(modified_at);
+        if self
+            .failures
+            .is_artifact_quarantined(&package.plugin_id, &identity)
+        {
+            return Ok(());
+        }
+        let generation = match self.loader.load_admin_transport_generation(
+            package,
+            self.generations.next_generation_id(),
+            config.buffer_limits,
+        ) {
+            Ok(generation) => Arc::new(generation),
+            Err(error) => {
+                let reason = error.to_string();
+                eprintln!(
+                    "admin-transport {} load failed for `{}`: {reason}",
+                    stage.as_str(),
+                    package.plugin_id
+                );
+                self.failures.handle_candidate_failure(
+                    PluginKind::AdminTransport,
+                    stage,
+                    &package.plugin_id,
+                    identity,
+                    &reason,
+                )?;
+                return Ok(());
+            }
+        };
+        if generation.profile_id != *requested_profile {
+            return Ok(());
+        }
+
+        if admin_transport.contains_key(requested_profile) {
+            return Err(RuntimeError::Config(format!(
+                "duplicate admin-transport profile `{requested_profile}` discovered"
+            )));
+        }
+        admin_transport.insert(
+            requested_profile.clone(),
+            ManagedAdminTransportPlugin {
+                package: package.clone(),
+                profile_id: requested_profile.clone(),
+                profile: Arc::new(HotSwappableAdminTransportProfile::new(
+                    package.plugin_id.clone(),
+                    requested_profile.clone(),
+                    generation,
+                    Arc::clone(&self.failures),
+                )),
+                loaded_at: modified_at,
+                active_loaded_at: modified_at,
+            },
+        );
+        if clear_failure_state {
+            self.failures.clear_plugin_state(&package.plugin_id);
+        }
+        Ok(())
+    }
+
     pub(crate) fn prepare_gameplay_profiles(
         &self,
         config: &RuntimeSelectionConfig,
@@ -528,6 +629,41 @@ impl PluginHost {
         }
 
         Ok(admin_ui)
+    }
+
+    pub(crate) fn prepare_admin_transport_profiles(
+        &self,
+        config: &RuntimeSelectionConfig,
+        stage: PluginFailureStage,
+    ) -> Result<HashMap<AdminTransportProfileId, ManagedAdminTransportPlugin>, RuntimeError> {
+        let requested_profile = Self::requested_admin_transport_profile(config);
+        let allowlist = config
+            .plugin_allowlist
+            .as_ref()
+            .map(|entries| entries.iter().cloned().collect::<HashSet<_>>());
+        let catalog = self.protocol_catalog()?;
+        let mut admin_transport = HashMap::new();
+
+        for package in catalog.packages() {
+            if package.plugin_kind != PluginKind::AdminTransport {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
+                continue;
+            }
+            self.load_requested_admin_transport_plugin(
+                &mut admin_transport,
+                package,
+                requested_profile,
+                config,
+                stage,
+                false,
+            )?;
+        }
+
+        Ok(admin_transport)
     }
 
     /// Activates every gameplay profile required by the current server configuration.
@@ -724,6 +860,49 @@ impl PluginHost {
         Ok(())
     }
 
+    /// Activates the requested admin transport profile when available.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when duplicate matching admin transport profiles are discovered.
+    pub(crate) fn activate_admin_transport_profile(
+        &self,
+        config: &RuntimeSelectionConfig,
+    ) -> Result<(), RuntimeError> {
+        let requested_profile = Self::requested_admin_transport_profile(config);
+        let allowlist = self
+            .current_runtime_selection()
+            .plugin_allowlist
+            .map(|entries| entries.into_iter().collect::<HashSet<_>>());
+        let catalog = self.protocol_catalog()?;
+        let mut admin_transport = self
+            .admin_transport
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        admin_transport.clear();
+
+        for package in catalog.packages() {
+            if package.plugin_kind != PluginKind::AdminTransport {
+                continue;
+            }
+            if let Some(allowlist) = allowlist.as_ref()
+                && !allowlist.contains(&package.plugin_id)
+            {
+                continue;
+            }
+            self.load_requested_admin_transport_plugin(
+                &mut admin_transport,
+                package,
+                requested_profile,
+                config,
+                PluginFailureStage::Boot,
+                true,
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Activates a single auth profile.
     ///
     /// # Errors
@@ -746,6 +925,7 @@ impl PluginHost {
         self.activate_gameplay_profiles(config)?;
         self.activate_storage_profile(&self.bootstrap_config.storage_profile)?;
         self.activate_auth_profiles(&Self::runtime_auth_profiles(config))?;
+        self.activate_admin_transport_profile(config)?;
         self.activate_admin_ui_profile(config)
     }
 

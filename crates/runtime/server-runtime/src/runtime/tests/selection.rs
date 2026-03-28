@@ -11,11 +11,9 @@ fn selection_resolver_bootstrap_matches_reload_resolution() -> Result<(), Runtim
     let temp_dir = tempdir()?;
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into()]);
-    config.admin.grpc.principals.insert(
+    config.admin.principals.insert(
         "ops".to_string(),
-        crate::config::AdminGrpcPrincipalConfig {
-            token_file: temp_dir.path().join("ops.token"),
-            token: "ops-token".to_string(),
+        crate::config::AdminPrincipalConfig {
             permissions: vec![
                 crate::config::AdminPermission::Status,
                 crate::config::AdminPermission::ReloadRuntime,
@@ -50,12 +48,12 @@ fn selection_resolver_bootstrap_matches_reload_resolution() -> Result<(), Runtim
     assert_eq!(
         bootstrap
             .selection
-            .remote_admin_subjects
+            .remote_admin_principals
             .keys()
             .cloned()
             .collect::<Vec<_>>(),
         reload
-            .remote_admin_subjects
+            .remote_admin_principals
             .keys()
             .cloned()
             .collect::<Vec<_>>(),

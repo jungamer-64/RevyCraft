@@ -49,21 +49,29 @@ pub(crate) fn seed_runtime_plugins_with_loopback_admin(
 ) -> Result<PathBuf, RuntimeError> {
     seed_runtime_plugins(dist_dir, allowlist, supporting_plugin_ids)?;
     config.bootstrap.plugins_dir = dist_dir.to_path_buf();
-    config.admin.grpc.enabled = true;
-    config.admin.grpc.bind_addr = bind_addr;
-
     let token_path = token_root.join(format!("{principal_id}.token"));
     if let Some(parent) = token_path.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(&token_path, format!("{token}\n"))?;
-    config.admin.grpc.principals.insert(
+    let transport_config_path = token_root.join("admin-transport-grpc.toml");
+    let transport_config_contents = format!(
+        "bind_addr = {}\nallow_non_loopback = false\n\n[principals.{}]\ntoken_file = {}\n",
+        toml_string(&bind_addr.to_string()),
+        toml_string(principal_id),
+        toml_string(
+            token_path
+                .file_name()
+                .expect("token file should have a file name")
+                .to_string_lossy()
+        ),
+    );
+    fs::write(&transport_config_path, transport_config_contents)?;
+    config.admin.remote.transport_profile = "grpc-v1".into();
+    config.admin.remote.transport_config = Some(transport_config_path);
+    config.admin.principals.insert(
         principal_id.to_string(),
-        crate::config::AdminGrpcPrincipalConfig {
-            token_file: token_path.clone(),
-            token: token.to_string(),
-            permissions,
-        },
+        crate::config::AdminPrincipalConfig { permissions },
     );
     Ok(token_path)
 }
@@ -141,23 +149,33 @@ pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<()
         toml_string(&config.bootstrap.plugin_abi_min.to_string()),
         toml_string(&config.bootstrap.plugin_abi_max.to_string()),
     ));
-    contents.push_str("[static.admin.grpc]\n");
-    contents.push_str(&format!(
-        "enabled = {}\nbind_addr = {}\nallow_non_loopback = {}\n",
-        config.admin.grpc.enabled,
-        toml_string(&config.admin.grpc.bind_addr.to_string()),
-        config.admin.grpc.allow_non_loopback,
-    ));
-    let mut principals = config.admin.grpc.principals.iter().collect::<Vec<_>>();
+    if !config.admin.remote.transport_profile.as_str().is_empty()
+        || config.admin.remote.transport_config.is_some()
+    {
+        contents.push_str("[static.admin.remote]\n");
+        if !config.admin.remote.transport_profile.as_str().is_empty() {
+            contents.push_str(&format!(
+                "transport_profile = {}\n",
+                toml_string(config.admin.remote.transport_profile.as_str())
+            ));
+        }
+        if let Some(transport_config) = &config.admin.remote.transport_config {
+            contents.push_str(&format!(
+                "transport_config = {}\n",
+                toml_string(&transport_config.display().to_string())
+            ));
+        }
+        contents.push('\n');
+    }
+    let mut principals = config.admin.principals.iter().collect::<Vec<_>>();
     principals.sort_by(|left, right| left.0.cmp(right.0));
     for (principal_id, principal) in principals {
         contents.push_str(&format!(
-            "\n[static.admin.grpc.principals.{}]\n",
+            "[static.admin.principals.{}]\n",
             toml_string(principal_id)
         ));
         contents.push_str(&format!(
-            "token_file = {}\npermissions = {}\n",
-            toml_string(&principal.token_file.display().to_string()),
+            "permissions = {}\n\n",
             admin_permissions_toml(&principal.permissions),
         ));
     }
@@ -214,11 +232,12 @@ pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<()
     ));
     contents.push_str("\n[live.plugins.failure_policy]\n");
     contents.push_str(&format!(
-        "protocol = {}\ngameplay = {}\nstorage = {}\nauth = {}\nadmin_ui = {}\n\n",
+        "protocol = {}\ngameplay = {}\nstorage = {}\nauth = {}\nadmin_transport = {}\nadmin_ui = {}\n\n",
         toml_string(failure_policy_name(config.plugins.failure_policy.protocol)),
         toml_string(failure_policy_name(config.plugins.failure_policy.gameplay)),
         toml_string(failure_policy_name(config.plugins.failure_policy.storage)),
         toml_string(failure_policy_name(config.plugins.failure_policy.auth)),
+        toml_string(failure_policy_name(config.plugins.failure_policy.admin_transport)),
         toml_string(failure_policy_name(config.plugins.failure_policy.admin_ui)),
     ));
     contents.push_str("[live.profiles]\n");

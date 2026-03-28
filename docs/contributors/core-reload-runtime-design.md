@@ -13,7 +13,7 @@ operator 向けの command surface と permission は [`../operators/configurati
 
 非目的:
 
-- `static.bootstrap`、`static.plugins`、`static.admin.grpc` transport を live 変更可能にすること
+- `static.bootstrap`、`static.plugins`、`static.admin.remote` を live 変更可能にすること
 - `storage_profile` を restart なしで切り替えること
 - persistent storage schema と `core` migration blob を共通化すること
 
@@ -226,7 +226,7 @@ artifact / topology / core の全体更新を単一 transaction として扱う 
 
 - `static.bootstrap`
 - `static.plugins`
-- `static.admin.grpc` transport
+- `static.admin.remote`
 - `storage_profile` の切替
 
 `core` mode と `full` mode はこれらを跨ぎません。

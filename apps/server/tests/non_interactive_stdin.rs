@@ -1,5 +1,6 @@
 mod support;
 
+use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol};
 use std::fs;
 use std::io::Write;
 use std::process::Stdio;
@@ -9,17 +10,18 @@ use support::*;
 use tempfile::tempdir;
 
 #[test]
-fn stdin_null_with_admin_grpc_keeps_server_running() -> Result<(), Box<dyn std::error::Error>> {
+fn stdin_null_with_remote_admin_transport_keeps_server_running()
+-> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let repo_root = repo_root()?;
-    let grpc_port = reserve_port()?;
+    let remote_admin_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
     write_server_toml(
         temp_dir.path(),
         &repo_root,
         &world_dir,
-        &ServerTomlOptions::new(true, 0, grpc_port, "stdin-null-admin"),
+        &ServerTomlOptions::new(true, 0, remote_admin_port, "stdin-null-remote-admin"),
     )?;
 
     let mut child = spawn_server(temp_dir.path(), Stdio::null(), Stdio::null(), Stdio::null())?;
@@ -66,18 +68,18 @@ fn stdin_null_without_other_admin_surface_warns_and_exits() -> Result<(), Box<dy
 }
 
 #[test]
-fn piped_status_command_detaches_after_eof_when_admin_grpc_is_available()
+fn piped_status_command_detaches_after_eof_when_remote_admin_transport_is_available()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let repo_root = repo_root()?;
-    let grpc_port = reserve_port()?;
+    let remote_admin_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
     write_server_toml(
         temp_dir.path(),
         &repo_root,
         &world_dir,
-        &ServerTomlOptions::new(true, 0, grpc_port, "stdin-pipe-admin"),
+        &ServerTomlOptions::new(true, 0, remote_admin_port, "stdin-pipe-remote-admin"),
     )?;
 
     let mut child = spawn_server(
@@ -106,12 +108,12 @@ fn piped_status_command_detaches_after_eof_when_admin_grpc_is_available()
 
 #[cfg(unix)]
 #[test]
-fn runtime_failure_exits_even_when_admin_grpc_is_available()
+fn runtime_failure_exits_even_when_remote_admin_transport_is_available()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let repo_root = repo_root()?;
     let server_port = reserve_port()?;
-    let grpc_port = reserve_port()?;
+    let remote_admin_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
     set_world_read_only(&world_dir, true)?;
@@ -119,7 +121,12 @@ fn runtime_failure_exits_even_when_admin_grpc_is_available()
         temp_dir.path(),
         &repo_root,
         &world_dir,
-        &ServerTomlOptions::new(true, server_port, grpc_port, "runtime-failure-admin"),
+        &ServerTomlOptions::new(
+            true,
+            server_port,
+            remote_admin_port,
+            "runtime-failure-remote-admin",
+        ),
     )?;
 
     let mut child = spawn_server(
@@ -133,15 +140,39 @@ fn runtime_failure_exits_even_when_admin_grpc_is_available()
     wait_for_tcp_ready(server_addr, Duration::from_secs(3))?;
 
     let codec = mc_proto_common::MinecraftWireCodec;
-    let mut stream = std::net::TcpStream::connect(server_addr)?;
-    write_packet(&mut stream, &codec, &encode_handshake(5, 2)?)?;
-    write_packet(&mut stream, &codec, &login_start("runtime-failure")?)?;
+    let protocol = TestJavaProtocol::Je5;
+    let (mut stream, mut buffer) =
+        connect_and_login_java_client(server_addr, &codec, protocol, "runtime-failure")?;
+    let _ = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        protocol,
+        TestJavaPacket::HeldItemChange,
+        Duration::from_secs(5),
+        24,
+    )?;
+    write_packet(&mut stream, &codec, &held_item_change(4))?;
+    let held_item = read_until_java_packet(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        protocol,
+        TestJavaPacket::HeldItemChange,
+        Duration::from_secs(5),
+        24,
+    )?;
+    assert_eq!(held_item_from_packet(protocol, &held_item)?, 4);
 
-    let Some(status) = wait_for_exit(&mut child, Duration::from_secs(5))? else {
+    let Some(status) = wait_for_exit(&mut child, Duration::from_secs(8))? else {
         child.kill()?;
         let _ = child.wait()?;
+        let (stdout, stderr) = read_child_output(&mut child)?;
         set_world_read_only(&world_dir, false)?;
-        return Err("server did not exit after runtime loop failure".into());
+        return Err(format!(
+            "server did not exit after runtime loop failure; stdout={stdout}; stderr={stderr}"
+        )
+        .into());
     };
     let (_stdout, stderr) = read_child_output(&mut child)?;
     set_world_read_only(&world_dir, false)?;
@@ -155,7 +186,7 @@ fn runtime_failure_exits_even_when_admin_grpc_is_available()
 fn revy_server_config_override_boots_from_custom_path() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let repo_root = repo_root()?;
-    let grpc_port = reserve_port()?;
+    let remote_admin_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     let custom_config_path = temp_dir.path().join("config").join("server.toml");
     fs::create_dir_all(&world_dir)?;
@@ -164,7 +195,7 @@ fn revy_server_config_override_boots_from_custom_path() -> Result<(), Box<dyn st
         &custom_config_path,
         &repo_root,
         &world_dir,
-        &ServerTomlOptions::new(true, 0, grpc_port, "env-override-admin"),
+        &ServerTomlOptions::new(true, 0, remote_admin_port, "env-override-remote-admin"),
     )?;
 
     let mut child = spawn_server_with_config_path(

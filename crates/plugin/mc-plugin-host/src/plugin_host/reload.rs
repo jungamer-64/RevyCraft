@@ -1,10 +1,10 @@
 use super::{
-    AdminUiGeneration, Arc, ArtifactIdentity, AuthGeneration, GameplayGeneration,
-    ManagedAdminUiPlugin, ManagedAuthPlugin, ManagedGameplayPlugin, ManagedStoragePlugin,
-    PluginFailureStage, PluginHost, PluginKind, PreparedProtocolTopology, RuntimeError,
-    RuntimeReloadContext, RuntimeSelectionConfig, StorageGeneration, SystemTime,
-    import_storage_runtime_state, protocol_reload_compatible, validate_gameplay_session_migration,
-    validate_protocol_session_migration,
+    AdminTransportGeneration, AdminUiGeneration, Arc, ArtifactIdentity, AuthGeneration,
+    GameplayGeneration, ManagedAdminTransportPlugin, ManagedAdminUiPlugin, ManagedAuthPlugin,
+    ManagedGameplayPlugin, ManagedStoragePlugin, PluginFailureStage, PluginHost, PluginKind,
+    PreparedProtocolTopology, RuntimeError, RuntimeReloadContext, RuntimeSelectionConfig,
+    StorageGeneration, SystemTime, import_storage_runtime_state, protocol_reload_compatible,
+    validate_gameplay_session_migration, validate_protocol_session_migration,
 };
 use crate::runtime::ProtocolReloadSession;
 use crate::runtime::{
@@ -18,6 +18,7 @@ struct PreparedFreshRuntimeSelection {
     gameplay: HashMap<mc_core::GameplayProfileId, ManagedGameplayPlugin>,
     storage: HashMap<mc_core::StorageProfileId, ManagedStoragePlugin>,
     auth: HashMap<mc_core::AuthProfileId, ManagedAuthPlugin>,
+    admin_transport: HashMap<mc_core::AdminTransportProfileId, ManagedAdminTransportPlugin>,
     admin_ui: HashMap<mc_core::AdminUiProfileId, ManagedAdminUiPlugin>,
 }
 
@@ -58,11 +59,19 @@ struct PreparedAdminUiArtifactUpdate {
     generation: Arc<AdminUiGeneration>,
 }
 
+struct PreparedAdminTransportArtifactUpdate {
+    plugin_id: String,
+    profile_id: mc_core::AdminTransportProfileId,
+    loaded_at: SystemTime,
+    generation: Arc<AdminTransportGeneration>,
+}
+
 struct PreparedArtifactRuntimeSelection {
     protocol_updates: Vec<PreparedProtocolArtifactUpdate>,
     gameplay_updates: Vec<PreparedGameplayArtifactUpdate>,
     storage_updates: Vec<PreparedStorageArtifactUpdate>,
     auth_updates: Vec<PreparedAuthArtifactUpdate>,
+    admin_transport_updates: Vec<PreparedAdminTransportArtifactUpdate>,
     admin_ui_updates: Vec<PreparedAdminUiArtifactUpdate>,
 }
 
@@ -139,6 +148,7 @@ impl PluginHost {
         gameplay: &HashMap<mc_core::GameplayProfileId, ManagedGameplayPlugin>,
         storage: &HashMap<mc_core::StorageProfileId, ManagedStoragePlugin>,
         auth: &HashMap<mc_core::AuthProfileId, ManagedAuthPlugin>,
+        admin_transport: &HashMap<mc_core::AdminTransportProfileId, ManagedAdminTransportPlugin>,
         admin_ui: &HashMap<mc_core::AdminUiProfileId, ManagedAdminUiPlugin>,
     ) -> Vec<String> {
         let active_protocols = self
@@ -155,6 +165,10 @@ impl PluginHost {
             .expect("plugin host mutex should not be poisoned");
         let active_auth = self
             .auth
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        let active_admin_transport = self
+            .admin_transport
             .lock()
             .expect("plugin host mutex should not be poisoned");
         let active_admin_ui = self
@@ -189,6 +203,14 @@ impl PluginHost {
         }
         for candidate in auth.values() {
             if active_auth
+                .get(&candidate.profile_id)
+                .is_some_and(|active| candidate.loaded_at > active.active_loaded_at)
+            {
+                reloaded.push(candidate.package.plugin_id.clone());
+            }
+        }
+        for candidate in admin_transport.values() {
+            if active_admin_transport
                 .get(&candidate.profile_id)
                 .is_some_and(|active| candidate.loaded_at > active.active_loaded_at)
             {
@@ -686,6 +708,67 @@ impl PluginHost {
         Ok(updates)
     }
 
+    fn prepare_admin_transport_artifact_updates(
+        &self,
+    ) -> Result<Vec<PreparedAdminTransportArtifactUpdate>, RuntimeError> {
+        let mut updates = Vec::new();
+        let mut admin_transport = self
+            .admin_transport
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        for managed in admin_transport.values_mut() {
+            managed.package.refresh_dynamic_manifest()?;
+            let modified_at = managed.package.modified_at()?;
+            if modified_at <= managed.loaded_at {
+                continue;
+            }
+            let identity = managed.package.artifact_identity(modified_at);
+            if self
+                .failures
+                .is_artifact_quarantined(&managed.package.plugin_id, &identity)
+            {
+                continue;
+            }
+            let generation = match self.loader.load_admin_transport_generation(
+                &managed.package,
+                self.generations.next_generation_id(),
+                self.current_runtime_selection().buffer_limits,
+            ) {
+                Ok(generation) => Arc::new(generation),
+                Err(error) => {
+                    self.failures.handle_candidate_failure(
+                        PluginKind::AdminTransport,
+                        PluginFailureStage::Reload,
+                        &managed.package.plugin_id,
+                        identity,
+                        &error.to_string(),
+                    )?;
+                    continue;
+                }
+            };
+            if generation.profile_id != managed.profile_id {
+                self.failures.handle_candidate_failure(
+                    PluginKind::AdminTransport,
+                    PluginFailureStage::Reload,
+                    &managed.package.plugin_id,
+                    identity,
+                    &format!(
+                        "admin-transport plugin `{}` changed profile from `{}` to `{}` during reload",
+                        managed.package.plugin_id, managed.profile_id, generation.profile_id
+                    ),
+                )?;
+                continue;
+            }
+            updates.push(PreparedAdminTransportArtifactUpdate {
+                plugin_id: managed.package.plugin_id.clone(),
+                profile_id: managed.profile_id.clone(),
+                loaded_at: modified_at,
+                generation,
+            });
+        }
+        Ok(updates)
+    }
+
     /// Reloads modified protocol plugins in place.
     ///
     /// # Errors
@@ -711,6 +794,10 @@ impl PluginHost {
                 .auth
                 .lock()
                 .expect("plugin host mutex should not be poisoned");
+            let admin_transport = self
+                .admin_transport
+                .lock()
+                .expect("plugin host mutex should not be poisoned");
             let admin_ui = self
                 .admin_ui
                 .lock()
@@ -720,6 +807,7 @@ impl PluginHost {
                 &gameplay,
                 &storage,
                 &auth,
+                &admin_transport,
                 &admin_ui,
             )
         };
@@ -738,6 +826,7 @@ impl PluginHost {
                 gameplay_updates: Vec::new(),
                 storage_updates: Vec::new(),
                 auth_updates: Vec::new(),
+                admin_transport_updates: Vec::new(),
                 admin_ui_updates: Vec::new(),
             }),
         );
@@ -750,6 +839,7 @@ impl PluginHost {
         let gameplay_updates = self.stage_gameplay_artifact_updates()?;
         let storage_updates = self.stage_storage_artifact_updates()?;
         let auth_updates = self.prepare_auth_artifact_updates()?;
+        let admin_transport_updates = self.prepare_admin_transport_artifact_updates()?;
         let admin_ui_updates = self.prepare_admin_ui_artifact_updates()?;
         let mut reloaded_plugin_ids = protocol_updates
             .iter()
@@ -766,6 +856,11 @@ impl PluginHost {
                 .map(|update| update.plugin_id.clone()),
         );
         reloaded_plugin_ids.extend(auth_updates.iter().map(|update| update.plugin_id.clone()));
+        reloaded_plugin_ids.extend(
+            admin_transport_updates
+                .iter()
+                .map(|update| update.plugin_id.clone()),
+        );
         reloaded_plugin_ids.extend(
             admin_ui_updates
                 .iter()
@@ -789,6 +884,10 @@ impl PluginHost {
                 .auth
                 .lock()
                 .expect("plugin host mutex should not be poisoned");
+            let admin_transport = self
+                .admin_transport
+                .lock()
+                .expect("plugin host mutex should not be poisoned");
             let admin_ui = self
                 .admin_ui
                 .lock()
@@ -798,6 +897,7 @@ impl PluginHost {
                 &gameplay,
                 &storage,
                 &auth,
+                &admin_transport,
                 &admin_ui,
             )
         };
@@ -812,6 +912,7 @@ impl PluginHost {
                 gameplay_updates,
                 storage_updates,
                 auth_updates,
+                admin_transport_updates,
                 admin_ui_updates,
             }),
         ))
@@ -836,6 +937,8 @@ impl PluginHost {
             let gameplay = self.prepare_gameplay_profiles(config, PluginFailureStage::Reload)?;
             let storage = self.prepare_storage_profiles(config, PluginFailureStage::Reload)?;
             let auth = self.prepare_auth_profiles(config, PluginFailureStage::Reload)?;
+            let admin_transport =
+                self.prepare_admin_transport_profiles(config, PluginFailureStage::Reload)?;
             let admin_ui = self.prepare_admin_ui_profiles(config, PluginFailureStage::Reload)?;
 
             let loaded_plugins = Self::loaded_plugin_set_from_parts(
@@ -843,10 +946,16 @@ impl PluginHost {
                 &gameplay,
                 &storage,
                 &auth,
+                &admin_transport,
                 &admin_ui,
             );
             let reloaded_plugin_ids = self.collect_fresh_reloaded_plugin_ids(
-                &protocols, &gameplay, &storage, &auth, &admin_ui,
+                &protocols,
+                &gameplay,
+                &storage,
+                &auth,
+                &admin_transport,
+                &admin_ui,
             );
 
             Ok(StagedRuntimeSelection::new(
@@ -862,6 +971,7 @@ impl PluginHost {
                     gameplay,
                     storage,
                     auth,
+                    admin_transport,
                     admin_ui,
                 }),
             ))
@@ -937,6 +1047,12 @@ impl PluginHost {
                     )
                     .chain(
                         artifacts
+                            .admin_transport_updates
+                            .iter()
+                            .map(|update| update.plugin_id.clone()),
+                    )
+                    .chain(
+                        artifacts
                             .admin_ui_updates
                             .iter()
                             .map(|update| update.plugin_id.clone()),
@@ -979,6 +1095,12 @@ impl PluginHost {
                 );
                 cleared_plugin_ids.extend(
                     fresh
+                        .admin_transport
+                        .values()
+                        .map(|managed| managed.package.plugin_id.clone()),
+                );
+                cleared_plugin_ids.extend(
+                    fresh
                         .admin_ui
                         .values()
                         .map(|managed| managed.package.plugin_id.clone()),
@@ -1003,6 +1125,10 @@ impl PluginHost {
                     .auth
                     .lock()
                     .expect("plugin host mutex should not be poisoned") = fresh.auth;
+                *self
+                    .admin_transport
+                    .lock()
+                    .expect("plugin host mutex should not be poisoned") = fresh.admin_transport;
                 *self
                     .admin_ui
                     .lock()
@@ -1077,6 +1203,20 @@ impl PluginHost {
                         .expect("plugin host mutex should not be poisoned");
                     for update in artifacts.auth_updates {
                         if let Some(managed) = auth.get_mut(&update.profile_id) {
+                            managed.profile.swap_generation(update.generation);
+                            managed.loaded_at = update.loaded_at;
+                            managed.active_loaded_at = update.loaded_at;
+                            self.failures.clear_plugin_state(&update.plugin_id);
+                        }
+                    }
+                }
+                {
+                    let mut admin_transport = self
+                        .admin_transport
+                        .lock()
+                        .expect("plugin host mutex should not be poisoned");
+                    for update in artifacts.admin_transport_updates {
+                        if let Some(managed) = admin_transport.get_mut(&update.profile_id) {
                             managed.profile.swap_generation(update.generation);
                             managed.loaded_at = update.loaded_at;
                             managed.active_loaded_at = update.loaded_at;

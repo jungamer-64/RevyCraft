@@ -1,5 +1,6 @@
 use mc_core::{
-    AdapterId, AdminUiProfileId, AuthProfileId, CoreConfig, GameplayProfileId, StorageProfileId,
+    AdapterId, AdminTransportProfileId, AdminUiProfileId, AuthProfileId, CoreConfig,
+    GameplayProfileId, StorageProfileId,
 };
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use mc_plugin_host::config::{
@@ -19,9 +20,6 @@ use thiserror::Error;
 pub const BEDROCK_BASELINE_ADAPTER_ID: &str = "be-924";
 pub const BEDROCK_OFFLINE_AUTH_PROFILE_ID: &str = "bedrock-offline-v1";
 pub const DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS: u64 = 30;
-pub const DEFAULT_ADMIN_GRPC_BIND_ADDR: SocketAddr =
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 50_051);
-
 #[derive(Debug, Error)]
 pub enum ServerConfigError {
     #[error("i/o error: {0}")]
@@ -214,7 +212,8 @@ impl Default for ProfilesConfig {
 pub struct AdminConfig {
     pub ui_profile: AdminUiProfileId,
     pub local_console_permissions: Vec<AdminPermission>,
-    pub grpc: AdminGrpcConfig,
+    pub remote: AdminRemoteConfig,
+    pub principals: HashMap<String, AdminPrincipalConfig>,
 }
 
 impl Default for AdminConfig {
@@ -222,58 +221,43 @@ impl Default for AdminConfig {
         Self {
             ui_profile: AdminUiProfileId::new("console-v1"),
             local_console_permissions: all_admin_permissions().to_vec(),
-            grpc: AdminGrpcConfig::default(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminGrpcConfig {
-    pub enabled: bool,
-    pub bind_addr: SocketAddr,
-    pub allow_non_loopback: bool,
-    pub principals: HashMap<String, AdminGrpcPrincipalConfig>,
-}
-
-impl Default for AdminGrpcConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            bind_addr: DEFAULT_ADMIN_GRPC_BIND_ADDR,
-            allow_non_loopback: false,
+            remote: AdminRemoteConfig::default(),
             principals: HashMap::new(),
         }
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminRemoteConfig {
+    pub transport_profile: AdminTransportProfileId,
+    pub transport_config: Option<PathBuf>,
+}
+
+impl Default for AdminRemoteConfig {
+    fn default() -> Self {
+        Self {
+            transport_profile: AdminTransportProfileId::new(""),
+            transport_config: None,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminGrpcPrincipalConfig {
-    pub token_file: PathBuf,
-    pub token: String,
+pub struct AdminPrincipalConfig {
     pub permissions: Vec<AdminPermission>,
 }
 
-impl Debug for AdminGrpcPrincipalConfig {
+impl Debug for AdminPrincipalConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AdminGrpcPrincipalConfig")
-            .field("token_file", &self.token_file)
-            .field("token", &"***redacted***")
+        f.debug_struct("AdminPrincipalConfig")
             .field("permissions", &self.permissions)
             .finish()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdminGrpcTransportConfig {
-    pub enabled: bool,
-    pub bind_addr: SocketAddr,
-    pub allow_non_loopback: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StaticConfig {
     pub bootstrap: BootstrapConfig,
-    pub admin_grpc: AdminGrpcTransportConfig,
 }
 
 impl StaticConfig {
@@ -284,11 +268,6 @@ impl StaticConfig {
         if candidate.bootstrap != self.bootstrap {
             return Err(ServerConfigError::Config(
                 "bootstrap config changes require a restart".to_string(),
-            ));
-        }
-        if candidate.admin_grpc != self.admin_grpc {
-            return Err(ServerConfigError::Config(
-                "admin.grpc transport changes require a restart".to_string(),
             ));
         }
         Ok(())
@@ -367,11 +346,6 @@ impl NormalizedServerConfig {
     fn static_config(&self) -> StaticConfig {
         StaticConfig {
             bootstrap: self.server.bootstrap.clone(),
-            admin_grpc: AdminGrpcTransportConfig {
-                enabled: self.server.admin.grpc.enabled,
-                bind_addr: self.server.admin.grpc.bind_addr,
-                allow_non_loopback: self.server.admin.grpc.allow_non_loopback,
-            },
         }
     }
 
@@ -401,6 +375,7 @@ impl NormalizedServerConfig {
             bedrock_auth_profile: self.server.profiles.bedrock_auth.clone(),
             default_gameplay_profile: self.server.profiles.default_gameplay.clone(),
             gameplay_profile_map: self.server.profiles.gameplay_map.clone(),
+            admin_transport_profile: self.server.admin.remote.transport_profile.clone(),
             admin_ui_profile: self.server.admin.ui_profile.clone(),
             plugin_allowlist: self.server.plugins.allowlist.clone(),
             buffer_limits: self.server.plugins.buffer_limits,
@@ -408,6 +383,11 @@ impl NormalizedServerConfig {
             plugin_failure_policy_gameplay: self.server.plugins.failure_policy.gameplay,
             plugin_failure_policy_storage: self.server.plugins.failure_policy.storage,
             plugin_failure_policy_auth: self.server.plugins.failure_policy.auth,
+            plugin_failure_policy_admin_transport: self
+                .server
+                .plugins
+                .failure_policy
+                .admin_transport,
             plugin_failure_policy_admin_ui: self.server.plugins.failure_policy.admin_ui,
         }
     }
@@ -432,16 +412,6 @@ impl ServerConfig {
                 .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
             self.network.server_port,
         )
-    }
-
-    #[must_use]
-    pub fn admin_grpc_enabled(&self) -> bool {
-        self.admin.grpc.enabled
-    }
-
-    #[must_use]
-    pub fn admin_grpc_bind_addr(&self) -> SocketAddr {
-        self.admin.grpc.bind_addr
     }
 
     #[must_use]
@@ -537,7 +507,7 @@ impl ServerConfig {
     ///
     /// Returns [`ServerConfigError`] when validated fields are inconsistent.
     pub fn validate(&self) -> Result<(), ServerConfigError> {
-        validate_admin_grpc_config(&self.admin.grpc)
+        validate_admin_remote_config(&self.admin.remote, &self.admin.principals)
     }
 }
 
@@ -581,7 +551,8 @@ struct StaticPluginsDocument {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct StaticAdminDocument {
-    grpc: AdminGrpcDocument,
+    remote: AdminRemoteDocument,
+    principals: HashMap<String, AdminPrincipalDocument>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -643,6 +614,7 @@ struct FailurePolicyDocument {
     gameplay: Option<String>,
     storage: Option<String>,
     auth: Option<String>,
+    admin_transport: Option<String>,
     admin_ui: Option<String>,
 }
 
@@ -664,17 +636,14 @@ struct LiveAdminDocument {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct AdminGrpcDocument {
-    enabled: Option<bool>,
-    bind_addr: Option<String>,
-    allow_non_loopback: Option<bool>,
-    principals: HashMap<String, AdminGrpcPrincipalDocument>,
+struct AdminRemoteDocument {
+    transport_profile: Option<AdminTransportProfileId>,
+    transport_config: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct AdminGrpcPrincipalDocument {
-    token_file: Option<PathBuf>,
+struct AdminPrincipalDocument {
     permissions: Option<Vec<String>>,
 }
 
@@ -803,6 +772,11 @@ impl ServerConfigDocument {
                         PluginFailureMatrix::parse_auth,
                         PluginFailureMatrix::default().auth,
                     )?,
+                    admin_transport: parse_failure_policy(
+                        self.live.plugins.failure_policy.admin_transport.as_deref(),
+                        PluginFailureMatrix::parse_admin_transport,
+                        PluginFailureMatrix::default().admin_transport,
+                    )?,
                     admin_ui: parse_failure_policy(
                         self.live.plugins.failure_policy.admin_ui.as_deref(),
                         PluginFailureMatrix::parse_admin_ui,
@@ -840,84 +814,51 @@ impl ServerConfigDocument {
                     Some(all_admin_permissions().to_vec()),
                     false,
                 )?,
-                grpc: parse_admin_grpc_config(parent, self.static_config.admin.grpc)?,
+                remote: parse_admin_remote_config(parent, self.static_config.admin.remote)?,
+                principals: parse_admin_principal_config(self.static_config.admin.principals)?,
             },
         }))
     }
 }
 
-fn parse_admin_grpc_config(
+fn parse_admin_remote_config(
     parent: &Path,
-    document: AdminGrpcDocument,
-) -> Result<AdminGrpcConfig, ServerConfigError> {
+    document: AdminRemoteDocument,
+) -> Result<AdminRemoteConfig, ServerConfigError> {
+    let transport_profile = document
+        .transport_profile
+        .unwrap_or_else(|| AdminTransportProfileId::new(""));
+    let transport_config = document
+        .transport_config
+        .map(|path| resolve_config_path(parent, Some(path.as_path()), Path::new("")));
+    Ok(AdminRemoteConfig {
+        transport_profile,
+        transport_config,
+    })
+}
+
+fn parse_admin_principal_config(
+    document: HashMap<String, AdminPrincipalDocument>,
+) -> Result<HashMap<String, AdminPrincipalConfig>, ServerConfigError> {
     let mut principals = HashMap::new();
-    let mut seen_tokens = HashMap::new();
-    let mut principal_entries = document.principals.into_iter().collect::<Vec<_>>();
+    let mut principal_entries = document.into_iter().collect::<Vec<_>>();
     principal_entries.sort_by(|left, right| left.0.cmp(&right.0));
     for (principal_id, principal) in principal_entries {
-        let token_file = principal.token_file.ok_or_else(|| {
-            ServerConfigError::Config(format!(
-                "static.admin.grpc.principals.{principal_id}.token_file is required"
-            ))
-        })?;
-        let token_file = resolve_config_path(parent, Some(token_file.as_path()), Path::new(""));
-        let token = fs::read_to_string(&token_file)?.trim().to_string();
-        if token.is_empty() {
-            return Err(ServerConfigError::Config(format!(
-                "static.admin.grpc.principals.{principal_id}.token_file resolved to an empty token"
-            )));
-        }
-        if let Some(previous_principal) = seen_tokens.insert(token.clone(), principal_id.clone()) {
-            return Err(ServerConfigError::Config(format!(
-                "admin.grpc principals `{previous_principal}` and `{principal_id}` resolved to the same token"
-            )));
-        }
         let permissions = parse_admin_permissions(
             principal.permissions,
-            &format!("static.admin.grpc.principals.{principal_id}.permissions"),
+            &format!("static.admin.principals.{principal_id}.permissions"),
             None,
             true,
         )?;
-        principals.insert(
-            principal_id,
-            AdminGrpcPrincipalConfig {
-                token_file,
-                token,
-                permissions,
-            },
-        );
+        principals.insert(principal_id, AdminPrincipalConfig { permissions });
     }
-    let enabled = document.enabled.unwrap_or(false);
-    if enabled && principals.is_empty() {
-        return Err(ServerConfigError::Config(
-            "static.admin.grpc.enabled=true requires at least one static.admin.grpc.principals entry"
-                .to_string(),
-        ));
-    }
-    let config = AdminGrpcConfig {
-        enabled,
-        bind_addr: parse_socket_addr(
-            document.bind_addr.as_deref(),
-            "static.admin.grpc.bind_addr",
-            DEFAULT_ADMIN_GRPC_BIND_ADDR,
-        )?,
-        allow_non_loopback: document.allow_non_loopback.unwrap_or(false),
-        principals,
-    };
-    validate_admin_grpc_config(&config)?;
-    Ok(config)
+    Ok(principals)
 }
 
 fn validate_core_reload_static_compatibility(
     active: &StaticConfig,
     candidate: &StaticConfig,
 ) -> Result<(), ServerConfigError> {
-    if active.admin_grpc != candidate.admin_grpc {
-        return Err(ServerConfigError::Config(
-            "admin.grpc transport changes require a restart".to_string(),
-        ));
-    }
-
     let active_bootstrap = &active.bootstrap;
     let candidate_bootstrap = &candidate.bootstrap;
     let restart_required_bootstrap_diff = active_bootstrap.online_mode
@@ -1016,57 +957,45 @@ fn parse_server_ip(value: Option<&str>) -> Result<Option<IpAddr>, ServerConfigEr
     }
 }
 
-fn parse_socket_addr(
-    value: Option<&str>,
-    key: &str,
-    default: SocketAddr,
-) -> Result<SocketAddr, ServerConfigError> {
-    match value {
-        Some(value) => value
-            .parse()
-            .map_err(|_| ServerConfigError::Config(format!("invalid {key} `{value}`"))),
-        None => Ok(default),
-    }
-}
-
-fn validate_admin_grpc_config(config: &AdminGrpcConfig) -> Result<(), ServerConfigError> {
-    if config.enabled && config.principals.is_empty() {
+fn validate_admin_remote_config(
+    remote: &AdminRemoteConfig,
+    principals: &HashMap<String, AdminPrincipalConfig>,
+) -> Result<(), ServerConfigError> {
+    let transport_enabled = !remote.transport_profile.as_str().is_empty();
+    if transport_enabled && remote.transport_config.is_none() {
         return Err(ServerConfigError::Config(
-            "static.admin.grpc.enabled=true requires at least one static.admin.grpc.principals entry"
+            "static.admin.remote.transport_profile requires static.admin.remote.transport_config"
                 .to_string(),
         ));
     }
-    let mut seen_tokens = HashMap::new();
-    let mut principal_entries = config.principals.iter().collect::<Vec<_>>();
+    if !transport_enabled && remote.transport_config.is_some() {
+        return Err(ServerConfigError::Config(
+            "static.admin.remote.transport_config requires static.admin.remote.transport_profile"
+                .to_string(),
+        ));
+    }
+    if transport_enabled && principals.is_empty() {
+        return Err(ServerConfigError::Config(
+            "static.admin.remote.transport_profile requires at least one static.admin.principals entry"
+                .to_string(),
+        ));
+    }
+    if let Some(transport_config) = &remote.transport_config
+        && !transport_config.is_file()
+    {
+        return Err(ServerConfigError::Config(format!(
+            "static.admin.remote.transport_config `{}` was not found",
+            transport_config.display()
+        )));
+    }
+    let mut principal_entries = principals.iter().collect::<Vec<_>>();
     principal_entries.sort_by(|left, right| left.0.cmp(right.0));
     for (principal_id, principal) in principal_entries {
-        if principal.token.trim().is_empty() {
-            return Err(ServerConfigError::Config(format!(
-                "static.admin.grpc.principals.{principal_id}.token_file resolved to an empty token"
-            )));
-        }
         if principal.permissions.is_empty() {
             return Err(ServerConfigError::Config(format!(
-                "static.admin.grpc.principals.{principal_id}.permissions must not be empty"
+                "static.admin.principals.{principal_id}.permissions must not be empty"
             )));
         }
-        let normalized_token = principal.token.trim().to_string();
-        if let Some(previous_principal) = seen_tokens.insert(normalized_token, principal_id.clone())
-        {
-            return Err(ServerConfigError::Config(format!(
-                "admin.grpc principals `{previous_principal}` and `{principal_id}` resolved to the same token"
-            )));
-        }
-    }
-    validate_admin_grpc_transport(config)
-}
-
-fn validate_admin_grpc_transport(config: &AdminGrpcConfig) -> Result<(), ServerConfigError> {
-    if config.enabled && !config.allow_non_loopback && !config.bind_addr.ip().is_loopback() {
-        return Err(ServerConfigError::Config(format!(
-            "static.admin.grpc.bind_addr `{}` is non-loopback; set static.admin.grpc.allow_non_loopback=true to expose the built-in plaintext gRPC server",
-            config.bind_addr
-        )));
     }
     Ok(())
 }
@@ -1170,15 +1099,12 @@ mod tests {
         config.plugins.allowlist = Some(vec!["proto-initial".to_string()]);
         config.profiles.default_gameplay = GameplayProfileId::new("canonical");
         config.admin.ui_profile = AdminUiProfileId::new("console-v1");
-        config.admin.grpc.enabled = true;
-        config.admin.grpc.bind_addr = "127.0.0.1:50051"
-            .parse()
-            .expect("loopback admin grpc addr should parse");
-        config.admin.grpc.principals.insert(
+        config.admin.remote.transport_profile = AdminTransportProfileId::new("grpc-v1");
+        config.admin.remote.transport_config =
+            Some(PathBuf::from("runtime").join("admin-transport-grpc.toml"));
+        config.admin.principals.insert(
             "ops".to_string(),
-            AdminGrpcPrincipalConfig {
-                token_file: PathBuf::from("runtime").join("ops.token"),
-                token: "ops-token".to_string(),
+            AdminPrincipalConfig {
                 permissions: vec![AdminPermission::Status],
             },
         );
@@ -1235,15 +1161,21 @@ mod tests {
     }
 
     #[test]
-    fn topology_reload_plan_rejects_admin_grpc_transport_diff() {
+    fn topology_reload_plan_ignores_admin_remote_diff() -> Result<(), ServerConfigError> {
         let active = configured_server_config();
         let mut candidate = active.clone();
-        candidate.admin.grpc.allow_non_loopback = true;
+        candidate.admin.remote.transport_config =
+            Some(PathBuf::from("runtime").join("other-admin-transport.toml"));
+        candidate.admin.principals.insert(
+            "backup".to_string(),
+            AdminPrincipalConfig {
+                permissions: vec![AdminPermission::Sessions],
+            },
+        );
 
-        let error = active
-            .plan_topology_reload(&candidate)
-            .expect_err("topology reload should reject admin transport diffs");
-        assert_config_error_contains(error, "admin.grpc transport changes require a restart");
+        let plan = active.plan_topology_reload(&candidate)?;
+        assert_eq!(plan.next_active_config.admin, active.admin);
+        Ok(())
     }
 
     #[test]
@@ -1308,17 +1240,20 @@ mod tests {
     }
 
     #[test]
-    fn core_reload_plan_rejects_admin_grpc_transport_diff() {
+    fn core_reload_plan_ignores_admin_remote_diff() -> Result<(), ServerConfigError> {
         let active = configured_server_config();
         let mut candidate = active.clone();
-        candidate.admin.grpc.bind_addr = "127.0.0.1:50052"
-            .parse()
-            .expect("loopback admin grpc addr should parse");
+        candidate.admin.remote.transport_profile = AdminTransportProfileId::new("grpc-v2");
+        candidate.admin.principals.insert(
+            "backup".to_string(),
+            AdminPrincipalConfig {
+                permissions: vec![AdminPermission::Sessions],
+            },
+        );
 
-        let error = active
-            .plan_core_reload(&candidate)
-            .expect_err("core reload should reject admin transport diffs");
-        assert_config_error_contains(error, "admin.grpc transport changes require a restart");
+        let plan = active.plan_core_reload(&candidate)?;
+        assert_eq!(plan.next_active_config.admin, active.admin);
+        Ok(())
     }
 
     #[test]

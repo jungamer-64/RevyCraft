@@ -1,6 +1,7 @@
 use super::*;
 use mc_core::{
-    AdminUiCapability, AuthCapability, GameplayCapability, ProtocolCapability, StorageCapability,
+    AdminTransportCapability, AdminUiCapability, AuthCapability, GameplayCapability,
+    ProtocolCapability, StorageCapability,
 };
 
 pub enum StaticPluginCapabilities {
@@ -8,6 +9,7 @@ pub enum StaticPluginCapabilities {
     Gameplay { profile_id: &'static str },
     Storage { profile_id: &'static str },
     Auth { profile_id: &'static str },
+    AdminTransport { profile_id: &'static str },
     AdminUi { profile_id: &'static str },
 }
 
@@ -87,6 +89,23 @@ impl StaticPluginManifest {
     }
 
     #[must_use]
+    pub const fn admin_transport(
+        plugin_id: &'static str,
+        display_name: &'static str,
+        profile_id: &'static str,
+    ) -> Self {
+        Self {
+            plugin_id,
+            display_name,
+            plugin_kind: PluginKind::AdminTransport,
+            plugin_abi: CURRENT_PLUGIN_ABI,
+            min_host_abi: CURRENT_PLUGIN_ABI,
+            max_host_abi: CURRENT_PLUGIN_ABI,
+            capabilities: StaticPluginCapabilities::AdminTransport { profile_id },
+        }
+    }
+
+    #[must_use]
     pub const fn admin_ui(
         plugin_id: &'static str,
         display_name: &'static str,
@@ -140,6 +159,10 @@ fn manifest_capability_strings(manifest: &StaticPluginManifest) -> Vec<String> {
         StaticPluginCapabilities::Auth { profile_id } => vec![
             format!("auth.profile:{profile_id}"),
             AuthCapability::RuntimeReload.as_str().to_string(),
+        ],
+        StaticPluginCapabilities::AdminTransport { profile_id } => vec![
+            format!("admin-transport.profile:{profile_id}"),
+            AdminTransportCapability::RuntimeReload.as_str().to_string(),
         ],
         StaticPluginCapabilities::AdminUi { profile_id } => vec![
             format!("admin-ui.profile:{profile_id}"),

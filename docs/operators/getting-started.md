@@ -93,7 +93,7 @@ cross target build に必要な Rust target component や linker 設定は事前
 
 - local console
   `live.admin.ui_profile` で有効な admin-ui profile が解決できた場合に、stdio 上の line-oriented operator loop が起動します。
-- built-in gRPC
-  `static.admin.grpc.enabled = true` の場合に、同じ process へ unary gRPC control plane が bind されます。
+- remote gRPC transport
+  `static.admin.remote.transport_profile = "grpc-v1"` の場合に、admin-transport plugin 経由で unary gRPC control plane が bind されます。
 
-console EOF の扱い、permission、reload command、gRPC principal 設定は [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。
+console EOF の扱い、permission、reload command、remote admin principal 設定は [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。

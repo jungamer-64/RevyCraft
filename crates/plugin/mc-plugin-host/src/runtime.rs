@@ -4,16 +4,18 @@ use crate::host::{PluginFailureAction, PluginHostStatusSnapshot};
 use crate::plugin_host::PreparedProtocolTopology;
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_core::{
-    AdminUiCapabilitySet, AdminUiProfileId, AuthCapabilitySet, ConnectionId, GameplayCapabilitySet,
-    GameplayCommand, GameplayJournal, GameplayJournalApplyResult, GameplayProfileId, PlayerId,
-    PluginGenerationId, ServerCore, SessionCapabilitySet, StorageCapabilitySet, TargetedEvent,
-    WorldSnapshot,
+    AdminTransportCapabilitySet, AdminTransportProfileId, AdminUiCapabilitySet, AdminUiProfileId,
+    AuthCapabilitySet, ConnectionId, GameplayCapabilitySet, GameplayCommand, GameplayJournal,
+    GameplayJournalApplyResult, GameplayProfileId, PlayerId, PluginGenerationId, ServerCore,
+    SessionCapabilitySet, StorageCapabilitySet, TargetedEvent, WorldSnapshot,
 };
 use mc_plugin_api::abi::PluginKind;
+use mc_plugin_api::codec::admin_transport::{AdminTransportPauseView, AdminTransportStatusView};
 use mc_plugin_api::codec::admin_ui::{AdminRequest, AdminResponse};
 use mc_plugin_api::codec::auth::{AuthMode, BedrockAuthResult};
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_api::host_api::AdminTransportHostApiV1;
 use mc_proto_common::StorageError;
 use std::any::Any;
 use std::path::Path;
@@ -236,6 +238,39 @@ pub trait AuthProfileHandle: Send + Sync {
         chain_jwts: &[String],
         client_data_jwt: &str,
     ) -> Result<BedrockAuthResult, PluginHostError>;
+}
+
+pub trait AdminTransportProfileHandle: Send + Sync {
+    fn profile_id(&self) -> &AdminTransportProfileId;
+
+    fn capability_set(&self) -> AdminTransportCapabilitySet;
+
+    fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
+
+    fn start(
+        &self,
+        transport_config_path: &Path,
+        host_api: AdminTransportHostApiV1,
+    ) -> Result<AdminTransportStatusView, PluginHostError>;
+
+    fn pause_for_upgrade(
+        &self,
+        host_api: AdminTransportHostApiV1,
+    ) -> Result<AdminTransportPauseView, PluginHostError>;
+
+    fn resume_from_upgrade(
+        &self,
+        transport_config_path: &Path,
+        resume_payload: &[u8],
+        host_api: AdminTransportHostApiV1,
+    ) -> Result<AdminTransportStatusView, PluginHostError>;
+
+    fn resume_after_upgrade_rollback(
+        &self,
+        host_api: AdminTransportHostApiV1,
+    ) -> Result<AdminTransportStatusView, PluginHostError>;
+
+    fn shutdown(&self, host_api: AdminTransportHostApiV1) -> Result<(), PluginHostError>;
 }
 
 pub trait AdminUiProfileHandle: Send + Sync {

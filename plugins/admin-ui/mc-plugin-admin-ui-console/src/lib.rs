@@ -175,11 +175,12 @@ fn render_status(status: &AdminStatusView) -> String {
     ];
     if let Some(plugin_host) = &status.plugin_host {
         lines.push(format!(
-            "plugins protocol={} gameplay={} storage={} auth={} admin-ui={} active-quarantines={} artifact-quarantines={} pending-fatal={}",
+            "plugins protocol={} gameplay={} storage={} auth={} admin-transport={} admin-ui={} active-quarantines={} artifact-quarantines={} pending-fatal={}",
             plugin_host.protocol_count,
             plugin_host.gameplay_count,
             plugin_host.storage_count,
             plugin_host.auth_count,
+            plugin_host.admin_transport_count,
             plugin_host.admin_ui_count,
             plugin_host.active_quarantine_count,
             plugin_host.artifact_quarantine_count,

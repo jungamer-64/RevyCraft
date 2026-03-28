@@ -85,6 +85,38 @@ pub type AdminUiPluginInvokeV1Fn = unsafe extern "C" fn(
     *mut OwnedBuffer,
     *mut OwnedBuffer,
 ) -> PluginErrorCode;
+pub type AdminTransportHostStatusFn = unsafe extern "C" fn(
+    *mut c_void,
+    Utf8Slice,
+    *mut OwnedBuffer,
+    *mut OwnedBuffer,
+) -> PluginErrorCode;
+pub type AdminTransportHostReloadRuntimeFn = unsafe extern "C" fn(
+    *mut c_void,
+    Utf8Slice,
+    u8,
+    *mut OwnedBuffer,
+    *mut OwnedBuffer,
+) -> PluginErrorCode;
+pub type AdminTransportHostUpgradeRuntimeFn = unsafe extern "C" fn(
+    *mut c_void,
+    Utf8Slice,
+    Utf8Slice,
+    *mut OwnedBuffer,
+    *mut OwnedBuffer,
+) -> PluginErrorCode;
+pub type AdminTransportHostShutdownFn =
+    unsafe extern "C" fn(*mut c_void, Utf8Slice, *mut OwnedBuffer) -> PluginErrorCode;
+pub type AdminTransportHostPublishTcpListenerForUpgradeFn =
+    unsafe extern "C" fn(*mut c_void, usize, *mut OwnedBuffer) -> PluginErrorCode;
+pub type AdminTransportHostTakeTcpListenerFromUpgradeFn =
+    unsafe extern "C" fn(*mut c_void, *mut bool, *mut usize, *mut OwnedBuffer) -> PluginErrorCode;
+pub type AdminTransportPluginInvokeV1Fn = unsafe extern "C" fn(
+    ByteSlice,
+    *const AdminTransportHostApiV1,
+    *mut OwnedBuffer,
+    *mut OwnedBuffer,
+) -> PluginErrorCode;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -118,5 +150,30 @@ pub struct GameplayPluginApiV3 {
 #[derive(Clone, Copy, Debug)]
 pub struct AdminUiPluginApiV1 {
     pub invoke: AdminUiPluginInvokeV1Fn,
+    pub free_buffer: PluginFreeBufferFn,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AdminTransportHostApiV1 {
+    pub abi: PluginAbiVersion,
+    pub context: *mut c_void,
+    pub log: Option<HostLogFn>,
+    pub get_status: Option<AdminTransportHostStatusFn>,
+    pub list_sessions: Option<AdminTransportHostStatusFn>,
+    pub reload_runtime: Option<AdminTransportHostReloadRuntimeFn>,
+    pub upgrade_runtime: Option<AdminTransportHostUpgradeRuntimeFn>,
+    pub shutdown: Option<AdminTransportHostShutdownFn>,
+    pub publish_tcp_listener_for_upgrade: Option<AdminTransportHostPublishTcpListenerForUpgradeFn>,
+    pub take_tcp_listener_from_upgrade: Option<AdminTransportHostTakeTcpListenerFromUpgradeFn>,
+}
+
+unsafe impl Send for AdminTransportHostApiV1 {}
+unsafe impl Sync for AdminTransportHostApiV1 {}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct AdminTransportPluginApiV1 {
+    pub invoke: AdminTransportPluginInvokeV1Fn,
     pub free_buffer: PluginFreeBufferFn,
 }

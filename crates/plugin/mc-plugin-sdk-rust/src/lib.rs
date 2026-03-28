@@ -16,6 +16,7 @@ use std::path::Path;
 
 #[doc(hidden)]
 pub mod __macro_support;
+pub mod admin_transport;
 pub mod admin_ui;
 pub mod auth;
 pub mod buffers;

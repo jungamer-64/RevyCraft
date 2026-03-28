@@ -2,9 +2,9 @@ use server_runtime::RuntimeError;
 use tokio::sync::oneshot;
 
 pub(crate) struct PausedProcessSurfaces {
-    pub(crate) admin_listener_for_child: Option<std::net::TcpListener>,
+    pub(crate) admin_transport_for_child: Option<crate::admin_transport::PausedAdminTransport>,
     pub(crate) console_was_paused: bool,
-    pub(crate) grpc_accept_was_paused: bool,
+    pub(crate) admin_transport_was_paused: bool,
 }
 
 pub(crate) enum ProcessSurfaceCommand {
@@ -16,6 +16,7 @@ pub(crate) enum ProcessSurfaceCommand {
         paused: PausedProcessSurfaces,
         ack_tx: oneshot::Sender<Result<(), RuntimeError>>,
     },
+    ReconcileAdminTransport,
 }
 
 pub(crate) enum ConsoleControl {

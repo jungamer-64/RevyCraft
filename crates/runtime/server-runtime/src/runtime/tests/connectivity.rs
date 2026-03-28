@@ -150,7 +150,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
 }
 
 #[tokio::test]
-async fn supervisor_boot_keeps_listener_and_admin_bind_snapshot_after_toml_changes()
+async fn supervisor_boot_keeps_listener_and_admin_transport_snapshot_after_toml_changes()
 -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
@@ -176,17 +176,36 @@ async fn supervisor_boot_keeps_listener_and_admin_bind_snapshot_after_toml_chang
     let server =
         crate::runtime::ServerSupervisor::boot(ServerConfigSource::Toml(config_path.clone()))
             .await?;
-    let expected_admin_grpc = server.admin_grpc_bind_addr();
+    let expected_admin_transport = server.current_admin_transport().await.map(|selection| {
+        (
+            selection.profile.profile_id().clone(),
+            selection.transport_config_path,
+        )
+    });
     let expected_listener_bindings = server.listener_bindings();
 
     let mut updated = initial;
     updated.network.server_port = 25565;
-    updated.admin.grpc.bind_addr = "127.0.0.1:50052"
-        .parse()
-        .expect("loopback admin grpc addr should parse");
+    let next_transport_config = temp_dir.path().join("next-admin-transport-grpc.toml");
+    fs::write(
+        &next_transport_config,
+        r#"bind_addr = "127.0.0.1:50052"
+allow_non_loopback = false
+
+[principals.ops]
+token_file = "ops.token"
+"#,
+    )?;
+    updated.admin.remote.transport_config = Some(next_transport_config);
     write_server_toml(&config_path, &updated)?;
 
-    assert_eq!(server.admin_grpc_bind_addr(), expected_admin_grpc);
+    assert_eq!(
+        server.current_admin_transport().await.map(|selection| (
+            selection.profile.profile_id().clone(),
+            selection.transport_config_path,
+        )),
+        expected_admin_transport
+    );
     assert_eq!(server.listener_bindings(), expected_listener_bindings);
 
     server.shutdown().await

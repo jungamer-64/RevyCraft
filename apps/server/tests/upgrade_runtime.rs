@@ -86,7 +86,7 @@ fn wait_for_tcp_closed(
     }
 }
 
-fn upgrade_enabled_options<'a>(grpc_port: u16, motd: &'a str) -> ServerTomlOptions<'a> {
+fn remote_admin_upgrade_options<'a>(grpc_port: u16, motd: &'a str) -> ServerTomlOptions<'a> {
     let mut options = ServerTomlOptions::new(true, 0, grpc_port, motd);
     options.local_console_permissions = UPGRADE_LOCAL_CONSOLE_PERMISSIONS;
     options.remote_permissions = UPGRADE_REMOTE_PERMISSIONS;
@@ -348,7 +348,7 @@ async fn grpc_upgrade_invalid_executable_path_rolls_back_and_keeps_grpc_availabl
     let grpc_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
-    let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-invalid-executable");
+    let options = remote_admin_upgrade_options(grpc_port, "grpc-upgrade-invalid-executable");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
     let (mut child, _logs) =
@@ -389,7 +389,7 @@ async fn grpc_upgrade_play_session_survives_cutover_and_accepts_new_connections(
     let grpc_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
-    let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-play-continuity");
+    let options = remote_admin_upgrade_options(grpc_port, "grpc-upgrade-play-continuity");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
     let (mut child, logs) = spawn_logged_server(temp_dir.path(), "grpc-upgrade-play-continuity")?;
@@ -473,7 +473,7 @@ async fn grpc_upgrade_freeze_blocks_mutating_admin_requests_and_preserves_buffer
     let grpc_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
-    let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-freeze-phase");
+    let options = remote_admin_upgrade_options(grpc_port, "grpc-upgrade-freeze-phase");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
     let (mut child, logs) = spawn_logged_server_with_envs(
@@ -589,7 +589,7 @@ async fn grpc_upgrade_status_session_survives_cutover() -> Result<(), Box<dyn st
     let grpc_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
-    let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-status-continuity");
+    let options = remote_admin_upgrade_options(grpc_port, "grpc-upgrade-status-continuity");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
     let (mut child, logs) = spawn_logged_server(temp_dir.path(), "grpc-upgrade-status-continuity")?;
@@ -656,7 +656,7 @@ async fn grpc_upgrade_online_login_session_survives_cutover()
     fs::create_dir_all(&world_dir)?;
     let runtime_plugins_dir =
         prepare_online_auth_runtime_plugins(temp_dir.path(), "grpc-upgrade-online-login")?;
-    let mut options = upgrade_enabled_options(grpc_port, "grpc-upgrade-online-login");
+    let mut options = remote_admin_upgrade_options(grpc_port, "grpc-upgrade-online-login");
     options.online_mode = true;
     options.auth_profile = "mojang-online-v1";
     options.extra_plugin_allowlist = &["auth-online-stub"];
@@ -743,7 +743,7 @@ async fn grpc_upgrade_after_full_reload_preserves_play_session()
     let grpc_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
-    let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-after-full-reload");
+    let options = remote_admin_upgrade_options(grpc_port, "grpc-upgrade-after-full-reload");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
     let (mut child, logs) = spawn_logged_server(temp_dir.path(), "grpc-upgrade-after-full-reload")?;
@@ -821,7 +821,7 @@ async fn grpc_upgrade_session_transfer_failure_rolls_back_and_keeps_grpc_availab
     let grpc_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
-    let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-session-transfer");
+    let options = remote_admin_upgrade_options(grpc_port, "grpc-upgrade-session-transfer");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
     let (mut child, _logs) = spawn_server_with_log_capture_and_envs(
@@ -1001,7 +1001,7 @@ async fn grpc_upgrade_ready_timeout_rolls_back_and_keeps_grpc_available()
     let grpc_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
-    let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-ready-timeout");
+    let options = remote_admin_upgrade_options(grpc_port, "grpc-upgrade-ready-timeout");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
     let (mut child, _logs) = spawn_logged_server_with_envs(
@@ -1092,7 +1092,7 @@ async fn grpc_upgrade_grpc_takeover_failure_rolls_back_and_keeps_grpc_available(
     let grpc_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
-    let options = upgrade_enabled_options(grpc_port, "grpc-upgrade-grpc-takeover");
+    let options = remote_admin_upgrade_options(grpc_port, "grpc-upgrade-grpc-takeover");
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 
     let (mut child, _logs) = spawn_logged_server_with_envs(
@@ -1131,7 +1131,7 @@ async fn grpc_upgrade_rejects_bedrock_enabled_runtime() -> Result<(), Box<dyn st
     let grpc_port = reserve_port()?;
     let world_dir = temp_dir.path().join("world");
     fs::create_dir_all(&world_dir)?;
-    let mut options = upgrade_enabled_options(grpc_port, "grpc-upgrade-bedrock-reject");
+    let mut options = remote_admin_upgrade_options(grpc_port, "grpc-upgrade-bedrock-reject");
     options.bedrock_enabled = true;
     write_server_toml(temp_dir.path(), &repo_root, &world_dir, &options)?;
 

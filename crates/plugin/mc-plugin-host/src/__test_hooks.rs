@@ -6,13 +6,13 @@ use crate::host::{
 };
 use crate::plugin_host::PluginCatalog;
 pub use crate::plugin_host::{
-    InProcessAdminUiPlugin, InProcessAuthPlugin, InProcessGameplayPlugin, InProcessProtocolPlugin,
-    InProcessStoragePlugin,
+    InProcessAdminTransportPlugin, InProcessAdminUiPlugin, InProcessAuthPlugin,
+    InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
 };
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use crate::runtime::{
-    AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
-    RuntimeReloadContext, StorageProfileHandle,
+    AdminTransportProfileHandle, AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle,
+    RuntimePluginHost, RuntimeReloadContext, StorageProfileHandle,
 };
 use mc_core::{PluginGenerationId, StorageProfileId};
 use std::sync::Arc;
@@ -28,6 +28,7 @@ pub struct InProcessHostBuildInput {
     pub gameplay_plugins: Vec<InProcessGameplayPlugin>,
     pub storage_plugins: Vec<InProcessStoragePlugin>,
     pub auth_plugins: Vec<InProcessAuthPlugin>,
+    pub admin_transport_plugins: Vec<InProcessAdminTransportPlugin>,
     pub admin_ui_plugins: Vec<InProcessAdminUiPlugin>,
     pub bootstrap_config: crate::config::BootstrapConfig,
     pub abi_range: PluginAbiRange,
@@ -55,6 +56,9 @@ pub fn build_in_process_host(input: InProcessHostBuildInput) -> BuiltTestHost {
     }
     for plugin in input.auth_plugins {
         catalog.register_in_process_auth_plugin(plugin);
+    }
+    for plugin in input.admin_transport_plugins {
+        catalog.register_in_process_admin_transport_plugin(plugin);
     }
     for plugin in input.admin_ui_plugins {
         catalog.register_in_process_admin_ui_plugin(plugin);
@@ -178,6 +182,16 @@ pub fn resolve_admin_ui_profile(
     host.inner
         .resolve_admin_ui_profile(profile_id)
         .map(|profile| profile as Arc<dyn AdminUiProfileHandle>)
+}
+
+#[must_use]
+pub fn resolve_admin_transport_profile(
+    host: &BuiltTestHost,
+    profile_id: &str,
+) -> Option<Arc<dyn AdminTransportProfileHandle>> {
+    host.inner
+        .resolve_admin_transport_profile(profile_id)
+        .map(|profile| profile as Arc<dyn AdminTransportProfileHandle>)
 }
 
 /// # Errors

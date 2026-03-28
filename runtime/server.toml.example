@@ -15,11 +15,6 @@ plugins_dir = "plugins"
 plugin_abi_min = "4.0"
 plugin_abi_max = "4.0"
 
-[static.admin.grpc]
-enabled = false
-bind_addr = "127.0.0.1:50051"
-allow_non_loopback = false
-
 [live.network]
 server_ip = ""
 server_port = 25565
@@ -46,6 +41,7 @@ allowlist = [
   "storage-je-anvil-1_7_10",
   "auth-offline",
   "auth-bedrock-offline",
+  "admin-transport-grpc",
   "admin-ui-console",
 ]
 reload_watch = false
@@ -64,6 +60,7 @@ protocol = "quarantine"
 gameplay = "quarantine"
 storage = "fail-fast"
 auth = "skip"
+admin_transport = "skip"
 admin_ui = "skip"
 
 [live.profiles]
@@ -83,20 +80,19 @@ local_console_permissions = [
 # To enable remote unary gRPC admin control:
 # 1. create a token file outside version control, for example `runtime/admin/ops.token`
 # 2. put a bearer token on its first line
-# 3. enable the transport and define at least one principal:
+# 3. copy `runtime/admin-transport-grpc.toml.example` to `runtime/admin-transport-grpc.toml`
+# 4. point server.toml at that transport config and define at least one principal:
 #
-# [static.admin.grpc]
-# enabled = true
-# bind_addr = "0.0.0.0:50051"
-# allow_non_loopback = true
+# [static.admin.remote]
+# transport_profile = "grpc-v1"
+# transport_config = "admin-transport-grpc.toml"
 #
-# [static.admin.grpc.principals.ops]
-# token_file = "admin/ops.token"
+# [static.admin.principals.ops]
 # permissions = ["status", "sessions", "reload-runtime", "shutdown"]
 #
-# The built-in gRPC server is plaintext h2 only. Non-loopback exposure is rejected
-# unless `allow_non_loopback = true` is set explicitly. Put TLS and public exposure
-# policy in a reverse proxy or ingress in front of this process.
+# The gRPC admin transport plugin is plaintext h2 only. Non-loopback exposure is rejected
+# unless `allow_non_loopback = true` is set in the transport config. Put TLS and
+# public exposure policy in a reverse proxy or ingress in front of this process.
 
 # For JE online mode, set:
 # [static.bootstrap]

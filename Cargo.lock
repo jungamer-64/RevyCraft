@@ -1669,6 +1669,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-admin-transport-grpc"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-proto-common",
+ "revy-admin-grpc",
+ "serde",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tonic",
+]
+
+[[package]]
 name = "mc-plugin-admin-ui-console"
 version = "0.1.0"
 dependencies = [
@@ -1885,6 +1901,8 @@ dependencies = [
  "mc-core",
  "mc-plugin-api",
  "mc-proto-common",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3218,6 +3236,8 @@ dependencies = [
  "aes",
  "bytes",
  "libc",
+ "mc-core",
+ "mc-plugin-api",
  "mc-plugin-host",
  "mc-plugin-test-support",
  "mc-proto-common",

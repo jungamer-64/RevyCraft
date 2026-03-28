@@ -1,7 +1,8 @@
 use super::{
-    AdminUiProfileId, Arc, AuthProfileId, GameplayProfileId, HotSwappableAdminUiProfile,
-    HotSwappableAuthProfile, HotSwappableGameplayProfile, HotSwappableProtocolAdapter,
-    HotSwappableStorageProfile, PluginPackage, StorageProfileId, SystemTime,
+    AdminTransportProfileId, AdminUiProfileId, Arc, AuthProfileId, GameplayProfileId,
+    HotSwappableAdminTransportProfile, HotSwappableAdminUiProfile, HotSwappableAuthProfile,
+    HotSwappableGameplayProfile, HotSwappableProtocolAdapter, HotSwappableStorageProfile,
+    PluginPackage, StorageProfileId, SystemTime,
 };
 
 #[derive(Clone)]
@@ -35,6 +36,15 @@ pub(crate) struct ManagedAuthPlugin {
     pub(crate) package: PluginPackage,
     pub(crate) profile_id: AuthProfileId,
     pub(crate) profile: Arc<HotSwappableAuthProfile>,
+    pub(crate) loaded_at: SystemTime,
+    pub(crate) active_loaded_at: SystemTime,
+}
+
+#[derive(Clone)]
+pub(crate) struct ManagedAdminTransportPlugin {
+    pub(crate) package: PluginPackage,
+    pub(crate) profile_id: AdminTransportProfileId,
+    pub(crate) profile: Arc<HotSwappableAdminTransportProfile>,
     pub(crate) loaded_at: SystemTime,
     pub(crate) active_loaded_at: SystemTime,
 }

@@ -18,6 +18,8 @@ bytes.workspace = true
 mc-core = { path = "../../core/mc-core" }
 mc-plugin-api = { path = "../mc-plugin-api" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

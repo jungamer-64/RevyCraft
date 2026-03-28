@@ -1,8 +1,12 @@
 use crate::PluginHostError as RuntimeError;
 use crate::runtime::{
-    AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
+    AdminTransportProfileHandle, AdminUiProfileHandle, AuthProfileHandle, GameplayProfileHandle,
+    StorageProfileHandle,
 };
-use mc_core::{AdapterId, AdminUiProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
+use mc_core::{
+    AdapterId, AdminTransportProfileId, AdminUiProfileId, AuthProfileId, GameplayProfileId,
+    StorageProfileId,
+};
 use mc_proto_common::{
     Edition, HandshakeIntent, HandshakeProbe, ProtocolAdapter, ProtocolError, TransportKind,
 };
@@ -153,6 +157,8 @@ pub struct LoadedPluginSet {
     gameplay_profiles: HashMap<GameplayProfileId, Arc<dyn GameplayProfileHandle>>,
     storage_profiles: HashMap<StorageProfileId, Arc<dyn StorageProfileHandle>>,
     auth_profiles: HashMap<AuthProfileId, Arc<dyn AuthProfileHandle>>,
+    admin_transport_profiles:
+        HashMap<AdminTransportProfileId, Arc<dyn AdminTransportProfileHandle>>,
     admin_ui_profiles: HashMap<AdminUiProfileId, Arc<dyn AdminUiProfileHandle>>,
 }
 
@@ -164,6 +170,7 @@ impl LoadedPluginSet {
             gameplay_profiles: HashMap::new(),
             storage_profiles: HashMap::new(),
             auth_profiles: HashMap::new(),
+            admin_transport_profiles: HashMap::new(),
             admin_ui_profiles: HashMap::new(),
         }
     }
@@ -192,6 +199,15 @@ impl LoadedPluginSet {
         profile: Arc<dyn AuthProfileHandle>,
     ) -> &mut Self {
         self.auth_profiles.insert(profile_id, profile);
+        self
+    }
+
+    pub(crate) fn register_admin_transport_profile(
+        &mut self,
+        profile_id: AdminTransportProfileId,
+        profile: Arc<dyn AdminTransportProfileHandle>,
+    ) -> &mut Self {
+        self.admin_transport_profiles.insert(profile_id, profile);
         self
     }
 
@@ -233,6 +249,14 @@ impl LoadedPluginSet {
     #[must_use]
     pub fn resolve_auth_profile(&self, profile_id: &str) -> Option<Arc<dyn AuthProfileHandle>> {
         self.auth_profiles.get(profile_id).cloned()
+    }
+
+    #[must_use]
+    pub fn resolve_admin_transport_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<Arc<dyn AdminTransportProfileHandle>> {
+        self.admin_transport_profiles.get(profile_id).cloned()
     }
 
     #[must_use]

@@ -10,7 +10,7 @@ use mc_plugin_api::codec::gameplay::host_blob::{
     decode_targeted_event_blob, encode_block_entity, encode_block_state, encode_player_snapshot,
     encode_world_meta,
 };
-use mc_plugin_api::host_api::{GameplayHostApiV2, HostApiTableV1};
+use mc_plugin_api::host_api::{AdminTransportHostApiV1, GameplayHostApiV2, HostApiTableV1};
 use std::cell::Cell;
 
 struct GameplayTxScope<'scope, 'core> {
@@ -446,6 +446,21 @@ pub(crate) fn admin_ui_host_api() -> HostApiTableV1 {
         read_block_state: None,
         read_block_entity: None,
         can_edit_block: None,
+    }
+}
+
+pub(crate) fn admin_transport_host_api() -> AdminTransportHostApiV1 {
+    AdminTransportHostApiV1 {
+        abi: CURRENT_PLUGIN_ABI,
+        context: std::ptr::null_mut(),
+        log: None,
+        get_status: None,
+        list_sessions: None,
+        reload_runtime: None,
+        upgrade_runtime: None,
+        shutdown: None,
+        publish_tcp_listener_for_upgrade: None,
+        take_tcp_listener_from_upgrade: None,
     }
 }
 

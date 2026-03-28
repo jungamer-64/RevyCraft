@@ -61,9 +61,9 @@ impl PersistedServerLogCapture {
 }
 
 pub struct ServerTomlOptions<'a> {
-    pub admin_grpc_enabled: bool,
+    pub remote_admin_enabled: bool,
     pub server_port: u16,
-    pub admin_grpc_port: u16,
+    pub remote_admin_port: u16,
     pub motd: &'a str,
     pub online_mode: bool,
     pub bedrock_enabled: bool,
@@ -77,15 +77,15 @@ pub struct ServerTomlOptions<'a> {
 impl<'a> ServerTomlOptions<'a> {
     #[must_use]
     pub fn new(
-        admin_grpc_enabled: bool,
+        remote_admin_enabled: bool,
         server_port: u16,
-        admin_grpc_port: u16,
+        remote_admin_port: u16,
         motd: &'a str,
     ) -> Self {
         Self {
-            admin_grpc_enabled,
+            remote_admin_enabled,
             server_port,
-            admin_grpc_port,
+            remote_admin_port,
             motd,
             online_mode: false,
             bedrock_enabled: false,
@@ -180,6 +180,9 @@ fn runtime_plugin_allowlist<'a>(options: &'a ServerTomlOptions<'a>) -> BTreeSet<
         "je-5",
         "storage-je-anvil-1_7_10",
     ]);
+    if options.remote_admin_enabled {
+        plugin_allowlist.insert("admin-transport-grpc");
+    }
     if options.bedrock_enabled {
         plugin_allowlist.insert("auth-bedrock-offline");
         plugin_allowlist.insert("be-924");
@@ -228,28 +231,45 @@ pub fn write_server_toml_at(
         None => seed_runtime_plugins(temp_root, &seeded_plugin_ids)?,
     };
     fs::create_dir_all(runtime_dir)?;
-    let (principal_block, admin_bind_addr) = if options.admin_grpc_enabled {
+    let remote_permissions = format!(
+        "[{}]",
+        options
+            .remote_permissions
+            .iter()
+            .map(|permission| toml_string(permission))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let remote_admin_block = if options.remote_admin_enabled {
         let token_path = temp_root.join("admin").join("ops.token");
         fs::create_dir_all(token_path.parent().expect("token parent should exist"))?;
         fs::write(&token_path, format!("{OPS_TOKEN}\n"))?;
-        (
+        let transport_config_path = runtime_dir.join("admin-transport-grpc.toml");
+        fs::write(
+            &transport_config_path,
             format!(
-                "\n[static.admin.grpc.principals.ops]\ntoken_file = {}\npermissions = {}\n",
+                concat!(
+                    "bind_addr = {}\n",
+                    "allow_non_loopback = false\n\n",
+                    "[principals.ops]\n",
+                    "token_file = {}\n",
+                ),
+                toml_string(&format!("127.0.0.1:{}", options.remote_admin_port)),
                 toml_string(&token_path.display().to_string()),
-                format!(
-                    "[{}]",
-                    options
-                        .remote_permissions
-                        .iter()
-                        .map(|permission| toml_string(permission))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
             ),
-            format!("127.0.0.1:{}", options.admin_grpc_port),
+        )?;
+        format!(
+            concat!(
+                "[static.admin.remote]\n",
+                "transport_profile = \"grpc-v1\"\n",
+                "transport_config = \"admin-transport-grpc.toml\"\n\n",
+                "[static.admin.principals.ops]\n",
+                "permissions = {}\n\n",
+            ),
+            remote_permissions,
         )
     } else {
-        (String::new(), "127.0.0.1:50051".to_string())
+        String::new()
     };
     let local_console_permissions = format!(
         "[{}]",
@@ -293,10 +313,6 @@ plugins_dir = {}
 plugin_abi_min = \"4.0\"
 plugin_abi_max = \"4.0\"
 
-[static.admin.grpc]
-enabled = {}
-bind_addr = {}
-allow_non_loopback = false
 {}\
 [live.network]
 server_ip = \"127.0.0.1\"
@@ -321,6 +337,7 @@ protocol = \"quarantine\"
 gameplay = \"quarantine\"
 storage = \"fail-fast\"
 auth = \"skip\"
+admin_transport = \"skip\"
 admin_ui = \"skip\"
 
 [live.profiles]
@@ -335,9 +352,7 @@ local_console_permissions = {}
             options.online_mode,
             toml_string(&world_dir.display().to_string()),
             toml_string(&plugins_dir.display().to_string()),
-            options.admin_grpc_enabled,
-            toml_string(&admin_bind_addr),
-            principal_block,
+            remote_admin_block,
             options.server_port,
             toml_string(options.motd),
             options.bedrock_enabled,
@@ -357,6 +372,7 @@ pub fn prepare_online_auth_runtime_plugins(
     let dist_dir = seed_runtime_plugins(
         temp_root,
         &[
+            "admin-transport-grpc",
             "je-5",
             "gameplay-canonical",
             "storage-je-anvil-1_7_10",
