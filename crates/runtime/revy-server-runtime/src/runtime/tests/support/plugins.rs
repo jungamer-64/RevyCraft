@@ -56,8 +56,8 @@ pub(crate) const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
 ];
 pub(crate) const TCP_ONLY_PROTOCOL_PLUGIN_IDS: &[&str] = &[JE_5_ADAPTER_ID];
 pub(crate) const GAMEPLAY_PLUGIN_IDS: &[&str] = &["gameplay-canonical", "gameplay-readonly"];
-pub(crate) const GRPC_ADMIN_SURFACE_PLUGIN_IDS: &[&str] = &["admin-transport-grpc"];
-pub(crate) const CONSOLE_ADMIN_SURFACE_PLUGIN_IDS: &[&str] = &["admin-ui-console"];
+pub(crate) const GRPC_ADMIN_SURFACE_PLUGIN_IDS: &[&str] = &["admin-grpc"];
+pub(crate) const CONSOLE_ADMIN_SURFACE_PLUGIN_IDS: &[&str] = &["admin-console"];
 pub(crate) const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &[
     "storage-je-anvil-1_7_10",
     "auth-offline",

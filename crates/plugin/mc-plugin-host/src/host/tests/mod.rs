@@ -11,7 +11,7 @@ use crate::test_support::{
     TestPluginHostBuilder,
 };
 use mc_core::{ConnectionId, CoreConfig, EntityId, PlayerId, ServerCore};
-use mc_plugin_admin_ui_console::in_process_plugin_entrypoints as console_admin_surface_entrypoints;
+use mc_plugin_admin_console::in_process_plugin_entrypoints as console_admin_surface_entrypoints;
 use mc_plugin_api::abi::{
     CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginAbiVersion, PluginKind, Utf8Slice,
 };

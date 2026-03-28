@@ -25,7 +25,7 @@ fn in_process_admin_surface_profile_declares_console_resources() -> Result<(), R
             api: offline_auth_entrypoints().api,
         })
         .admin_surface_raw(InProcessAdminSurfacePlugin {
-            plugin_id: "admin-ui-console".to_string(),
+            plugin_id: "admin-console".to_string(),
             manifest: console_admin_surface_entrypoints().manifest,
             api: console_admin_surface_entrypoints().api,
         })
@@ -70,7 +70,7 @@ fn packaged_admin_surface_reload_swaps_generation_and_keeps_last_good() -> Resul
     seed_packaged_plugins(
         &dist_dir,
         &[
-            "admin-ui-console",
+            "admin-console",
             "gameplay-canonical",
             "gameplay-readonly",
             "storage-je-anvil-1_7_10",
@@ -81,7 +81,7 @@ fn packaged_admin_surface_reload_swaps_generation_and_keeps_last_good() -> Resul
     let bootstrap = bootstrap_config_with_plugins_dir(dist_dir.clone());
     let runtime_selection = RuntimeSelectionConfig {
         plugin_allowlist: Some(vec![
-            "admin-ui-console".to_string(),
+            "admin-console".to_string(),
             "gameplay-canonical".to_string(),
             "gameplay-readonly".to_string(),
             "storage-je-anvil-1_7_10".to_string(),
@@ -116,8 +116,8 @@ fn packaged_admin_surface_reload_swaps_generation_and_keeps_last_good() -> Resul
 
     harness
         .install_admin_surface_plugin_for_reload(
-            "mc-plugin-admin-ui-console",
-            "admin-ui-console",
+            "mc-plugin-admin-console",
+            "admin-console",
             &dist_dir,
             &target_dir,
             "admin-surface-reload-v2",
@@ -125,7 +125,7 @@ fn packaged_admin_surface_reload_swaps_generation_and_keeps_last_good() -> Resul
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
 
     let reloaded = host.reload_modified_with_context(&protocol_reload_context(Vec::new()))?;
-    assert_eq!(reloaded, vec!["admin-ui-console".to_string()]);
+    assert_eq!(reloaded, vec!["admin-console".to_string()]);
     let second_generation = profile
         .plugin_generation_id()
         .expect("reloaded admin-surface should report plugin generation");
@@ -140,7 +140,7 @@ fn packaged_admin_surface_reload_swaps_generation_and_keeps_last_good() -> Resul
     harness
         .install_admin_surface_plugin_for_reload(
             "mc-plugin-proto-je-5",
-            "admin-ui-console",
+            "admin-console",
             &dist_dir,
             &target_dir,
             "admin-surface-broken",

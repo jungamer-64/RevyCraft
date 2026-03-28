@@ -110,7 +110,7 @@ pub(crate) fn seed_runtime_plugins_with_loopback_admin(
         fs::create_dir_all(parent)?;
     }
     fs::write(&token_path, format!("{token}\n"))?;
-    let grpc_surface_config_path = token_root.join("admin-transport-grpc.toml");
+    let grpc_surface_config_path = token_root.join("admin-grpc.toml");
     let grpc_surface_config_contents = format!(
         "bind_addr = {}\nallow_non_loopback = false\n\n[principals.{}]\ntoken_file = {}\n",
         toml_string(&bind_addr.to_string()),

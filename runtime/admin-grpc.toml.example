@@ -1,11 +1,11 @@
-# Plugin-owned config for the gRPC admin transport.
+# Plugin-owned config for the gRPC admin surface.
 #
-# This file is interpreted by `admin-transport-grpc`, not by the main server config loader.
+# This file is interpreted by `admin-grpc`, not by the main server config loader.
 # `server.toml` should point to this file with:
 #
 # [live.admin.surfaces.remote]
 # profile = "grpc-v1"
-# config = "admin-transport-grpc.toml"
+# config = "admin-grpc.toml"
 
 bind_addr = "127.0.0.1:50051"
 allow_non_loopback = false

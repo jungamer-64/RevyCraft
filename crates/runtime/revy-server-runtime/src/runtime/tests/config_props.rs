@@ -282,7 +282,7 @@ fn server_toml_parse_admin_section_and_failure_policy() -> Result<(), RuntimeErr
     let temp_dir = tempdir()?;
     let surface_config = write_dummy_grpc_admin_surface_config(
         temp_dir.path(),
-        "admin-transport-grpc.toml",
+        "admin-grpc.toml",
         "127.0.0.1:50052",
     )?;
     let path = temp_dir.path().join("server.toml");
@@ -440,7 +440,7 @@ fn server_toml_allows_remote_surface_without_principals() -> Result<(), RuntimeE
     let temp_dir = tempdir().expect("tempdir should be available");
     let surface_config = write_dummy_grpc_admin_surface_config(
         temp_dir.path(),
-        "admin-transport-grpc.toml",
+        "admin-grpc.toml",
         "127.0.0.1:50051",
     )
     .expect("surface config should write");

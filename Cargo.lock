@@ -1669,7 +1669,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-plugin-admin-transport-grpc"
+name = "mc-plugin-admin-console"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+]
+
+[[package]]
+name = "mc-plugin-admin-grpc"
 version = "0.1.0"
 dependencies = [
  "mc-core",
@@ -1685,16 +1695,6 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
-]
-
-[[package]]
-name = "mc-plugin-admin-ui-console"
-version = "0.1.0"
-dependencies = [
- "libc",
- "mc-core",
- "mc-plugin-api",
- "mc-plugin-sdk-rust",
 ]
 
 [[package]]
@@ -1793,7 +1793,7 @@ dependencies = [
  "bytes",
  "libloading",
  "mc-core",
- "mc-plugin-admin-ui-console",
+ "mc-plugin-admin-console",
  "mc-plugin-api",
  "mc-plugin-auth-offline",
  "mc-plugin-gameplay-canonical",
@@ -2924,7 +2924,7 @@ dependencies = [
  "bytes",
  "libc",
  "mc-core",
- "mc-plugin-admin-transport-grpc",
+ "mc-plugin-admin-grpc",
  "mc-plugin-api",
  "mc-plugin-host",
  "mc-plugin-test-support",

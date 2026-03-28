@@ -175,14 +175,14 @@ pub fn repo_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 fn runtime_plugin_allowlist<'a>(options: &'a ServerTomlOptions<'a>) -> BTreeSet<&'a str> {
     let mut plugin_allowlist = BTreeSet::from([
-        "admin-ui-console",
+        "admin-console",
         "auth-offline",
         "gameplay-canonical",
         "je-5",
         "storage-je-anvil-1_7_10",
     ]);
     if options.remote_admin_enabled {
-        plugin_allowlist.insert("admin-transport-grpc");
+        plugin_allowlist.insert("admin-grpc");
     }
     if options.bedrock_enabled {
         plugin_allowlist.insert("auth-bedrock-offline");
@@ -254,7 +254,7 @@ pub fn write_server_toml_at(
         let token_path = temp_root.join("admin").join("ops.token");
         fs::create_dir_all(token_path.parent().expect("token parent should exist"))?;
         fs::write(&token_path, format!("{OPS_TOKEN}\n"))?;
-        let grpc_surface_config_path = runtime_dir.join("admin-transport-grpc.toml");
+        let grpc_surface_config_path = runtime_dir.join("admin-grpc.toml");
         fs::write(
             &grpc_surface_config_path,
             format!(
@@ -272,7 +272,7 @@ pub fn write_server_toml_at(
             concat!(
                 "[live.admin.surfaces.remote]\n",
                 "profile = \"grpc-v1\"\n",
-                "config = \"admin-transport-grpc.toml\"\n\n",
+                "config = \"admin-grpc.toml\"\n\n",
                 "[static.admin.principals.ops]\n",
                 "permissions = {}\n\n",
             ),
@@ -374,8 +374,8 @@ pub fn prepare_online_auth_runtime_plugins(
     let dist_dir = seed_runtime_plugins(
         temp_root,
         &[
-            "admin-ui-console",
-            "admin-transport-grpc",
+            "admin-console",
+            "admin-grpc",
             "je-5",
             "gameplay-canonical",
             "storage-je-anvil-1_7_10",

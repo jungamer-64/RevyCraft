@@ -1086,7 +1086,7 @@ mod tests {
             "remote".to_string(),
             AdminSurfaceConfig {
                 profile: AdminSurfaceProfileId::new("grpc-v1"),
-                config: Some(PathBuf::from("runtime").join("admin-transport-grpc.toml")),
+                config: Some(PathBuf::from("runtime").join("admin-grpc.toml")),
             },
         );
         config.admin.principals.insert(
@@ -1251,7 +1251,7 @@ mod tests {
             "remote".to_string(),
             AdminSurfaceConfig {
                 profile: AdminSurfaceProfileId::new("grpc-v2"),
-                config: Some(PathBuf::from("runtime").join("admin-transport-grpc.toml")),
+                config: Some(PathBuf::from("runtime").join("admin-grpc.toml")),
             },
         );
         candidate.admin.principals.insert(

@@ -110,7 +110,7 @@ profile id を新しく増やす plugin は、manifest / descriptor / config の
   storage profile plugin の代表例
 - `plugins/auth/mc-plugin-auth-offline`
   Java offline auth plugin の例
-- `plugins/admin-ui/mc-plugin-admin-ui-console`
-  historical package 名のまま残っている `console-v1` admin surface plugin の例
+- `plugins/admin/mc-plugin-admin-console`
+  `console-v1` admin surface plugin の例
 
 Rust からの実装方法、`StaticPluginManifest`、macro、ABI `5.0` の詳細は [`rust-sdk-and-manifest.md`](rust-sdk-and-manifest.md) を参照してください。

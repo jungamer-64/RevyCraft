@@ -48,11 +48,8 @@ use std::os::fd::{FromRawFd, IntoRawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket, RawSocket};
 
-const MANIFEST: StaticPluginManifest = StaticPluginManifest::admin_surface(
-    "admin-transport-grpc",
-    "gRPC Admin Surface Plugin",
-    "grpc-v1",
-);
+const MANIFEST: StaticPluginManifest =
+    StaticPluginManifest::admin_surface("admin-grpc", "gRPC Admin Surface Plugin", "grpc-v1");
 
 #[derive(Default)]
 pub struct GrpcAdminSurfacePlugin {

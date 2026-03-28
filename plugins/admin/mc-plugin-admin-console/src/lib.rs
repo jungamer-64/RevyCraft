@@ -28,7 +28,7 @@ use std::thread;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 
 const MANIFEST: StaticPluginManifest = StaticPluginManifest::admin_surface(
-    "admin-ui-console",
+    "admin-console",
     "Console Admin Surface Plugin",
     "console-v1",
 );

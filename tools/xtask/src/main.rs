@@ -774,17 +774,17 @@ fn is_plugin_package(package: &CargoPackage, plugins_root: &Path) -> bool {
 }
 
 fn plugin_spec_from_package_name(package_name: &str) -> Result<PluginSpec, String> {
-    if package_name == "mc-plugin-admin-ui-console" {
+    if package_name == "mc-plugin-admin-console" {
         return Ok(PluginSpec {
             cargo_package: package_name.to_string(),
-            plugin_id: "admin-ui-console".to_string(),
+            plugin_id: "admin-console".to_string(),
             plugin_kind: "admin-surface".to_string(),
         });
     }
-    if package_name == "mc-plugin-admin-transport-grpc" {
+    if package_name == "mc-plugin-admin-grpc" {
         return Ok(PluginSpec {
             cargo_package: package_name.to_string(),
-            plugin_id: "admin-transport-grpc".to_string(),
+            plugin_id: "admin-grpc".to_string(),
             plugin_kind: "admin-surface".to_string(),
         });
     }
@@ -1064,20 +1064,20 @@ mod tests {
             "gameplay-canonical"
         );
         assert_eq!(
-            plugin_spec_from_package_name("mc-plugin-admin-ui-console")
+            plugin_spec_from_package_name("mc-plugin-admin-console")
                 .expect("valid admin-surface plugin"),
             PluginSpec {
-                cargo_package: "mc-plugin-admin-ui-console".to_string(),
-                plugin_id: "admin-ui-console".to_string(),
+                cargo_package: "mc-plugin-admin-console".to_string(),
+                plugin_id: "admin-console".to_string(),
                 plugin_kind: "admin-surface".to_string(),
             }
         );
         assert_eq!(
-            plugin_spec_from_package_name("mc-plugin-admin-transport-grpc")
+            plugin_spec_from_package_name("mc-plugin-admin-grpc")
                 .expect("valid admin-surface plugin"),
             PluginSpec {
-                cargo_package: "mc-plugin-admin-transport-grpc".to_string(),
-                plugin_id: "admin-transport-grpc".to_string(),
+                cargo_package: "mc-plugin-admin-grpc".to_string(),
+                plugin_id: "admin-grpc".to_string(),
                 plugin_kind: "admin-surface".to_string(),
             }
         );
