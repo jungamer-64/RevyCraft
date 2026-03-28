@@ -7,8 +7,8 @@
 1. [`../../README.md`](../../README.md)
 2. [`../README.md`](../README.md)
 3. [`../../runtime/server.toml.example`](../../runtime/server.toml.example)
-4. [`../../apps/server/src/main.rs`](../../apps/server/src/main.rs)
-5. [`../../crates/runtime/server-runtime/src/runtime/mod.rs`](../../crates/runtime/server-runtime/src/runtime/mod.rs)
+4. [`../../apps/revy-server/src/main.rs`](../../apps/revy-server/src/main.rs)
+5. [`../../crates/runtime/revy-server-runtime/src/runtime/mod.rs`](../../crates/runtime/revy-server-runtime/src/runtime/mod.rs)
 6. [`../../crates/plugin/mc-plugin-host/src/lib.rs`](../../crates/plugin/mc-plugin-host/src/lib.rs)
 
 この順で「どこが入口で、何が package 済み前提で、どこまでが公開 API か」を先に掴むと読みやすくなります。
@@ -17,9 +17,9 @@
 
 | パス | 役割 |
 | --- | --- |
-| `apps/server` | `server-bootstrap` binary。config 読み込み、runtime 起動、stdio / gRPC admin surface を束ねる |
-| `crates/config/server-config` | `runtime/server.toml` の load / normalize / validate を担う |
-| `crates/runtime/server-runtime` | listener、generation、session、status、reload、admin control plane を持つ orchestration 層 |
+| `apps/revy-server` | `server-bootstrap` binary を持つ `revy-server` package。config 読み込み、runtime 起動、stdio / gRPC admin surface を束ねる |
+| `crates/runtime/revy-server-config` | `runtime/server.toml` の load / normalize / validate を担う |
+| `crates/runtime/revy-server-runtime` | listener、generation、session、status、reload、admin control plane を持つ orchestration 層 |
 | `crates/core/mc-core` | protocol 非依存の semantic state machine |
 | `crates/plugin/mc-plugin-api` | plugin ABI `4.0`、manifest、host API、typed codec |
 | `crates/plugin/mc-plugin-host` | packaged plugin discovery、activation、selection、reload、quarantine |
@@ -35,7 +35,7 @@
 通常の開発フローは次の 2 段階です。
 
 1. `cargo run -p xtask -- package-plugins`
-2. `cargo run -p server-bootstrap`
+2. `cargo run -p revy-server`
 
 内部では概ね次の責務順で流れます。
 
@@ -43,7 +43,7 @@
 2. `ServerSupervisor::boot(ServerConfigSource)` が config を materialize する
 3. `mc_plugin_host::host::plugin_host_from_config(...)` が packaged plugin catalog を作る
 4. `PluginHost::load_plugin_set(...)` が runtime selection を解決し、`LoadedPluginSet` を返す
-5. `server-runtime` が storage profile から world snapshot を読み、listener / generation / session supervision を起動する
+5. `revy-server-runtime` が storage profile から world snapshot を読み、listener / generation / session supervision を起動する
 6. `ServerSupervisor` が外向けの status / reload / shutdown / admin handle を公開する
 
 重要なのは、runtime の実行条件が「build 済み」ではなく「package 済み」であることです。`server-bootstrap` は `target/` を直接見ず、`runtime/plugins/<plugin-id>/plugin.toml` を起点にします。
@@ -54,7 +54,7 @@
 
 - `ServerSupervisor`
   boot、status、session_status、reload、shutdown、admin control plane の公開入口です。
-- `server_config::*`
+- `revy_server_config::*`
   config schema と validation を扱う公開入口です。
 - `mc_plugin_api`
   host と plugin 間の ABI 契約です。

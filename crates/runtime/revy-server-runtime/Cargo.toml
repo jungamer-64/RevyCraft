@@ -1,5 +1,5 @@
 [package]
-name = "server-runtime"
+name = "revy-server-runtime"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -24,7 +24,7 @@ mc-plugin-api = { path = "../../plugin/mc-plugin-api" }
 mc-plugin-host = { path = "../../plugin/mc-plugin-host" }
 mc-proto-be-common = { path = "../../protocol/mc-proto-be-common" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
-server-config = { path = "../../config/server-config" }
+revy-server-config = { path = "../revy-server-config" }
 num-bigint.workspace = true
 rsa.workspace = true
 serde.workspace = true

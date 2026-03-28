@@ -10,11 +10,11 @@ use crate::runtime::{
 use mc_core::PluginGenerationId;
 use std::sync::Arc;
 
-pub use crate::host::{PluginAbiRange, PluginFailureMatrix};
-pub use crate::plugin_host::{
+pub use crate::host::{
     InProcessAdminTransportPlugin, InProcessAdminUiPlugin, InProcessAuthPlugin,
     InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
 };
+pub use crate::host::{PluginAbiRange, PluginFailureMatrix};
 
 #[derive(Clone)]
 pub struct TestPluginHost {

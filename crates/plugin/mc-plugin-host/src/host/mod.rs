@@ -66,27 +66,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
 
-#[path = "plugin_host/activation.rs"]
 mod activation;
-#[path = "plugin_host/callbacks.rs"]
 mod callbacks;
-#[path = "plugin_host/catalog.rs"]
 mod catalog;
-#[path = "plugin_host/failure.rs"]
 mod failure;
-#[path = "plugin_host/generation.rs"]
 mod generation;
-#[path = "plugin_host/loader.rs"]
 mod loader;
-#[path = "plugin_host/profiles/mod.rs"]
 mod profiles;
-#[path = "plugin_host/reload.rs"]
 mod reload;
-#[path = "plugin_host/status.rs"]
 mod status;
-#[path = "plugin_host/support/mod.rs"]
 mod support;
-#[path = "plugin_host/topology.rs"]
 mod topology;
 
 #[cfg(test)]
@@ -531,5 +520,4 @@ pub const fn plugin_reload_poll_interval_ms() -> u64 {
 }
 
 #[cfg(test)]
-#[path = "plugin_host/tests.rs"]
 mod tests;

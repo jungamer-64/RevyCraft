@@ -1,8 +1,8 @@
 use crate::process_surfaces::ProcessSurfaceCommand;
 use mc_plugin_api::abi::{OwnedBuffer, PluginErrorCode, Utf8Slice};
 use mc_plugin_api::host_api::AdminTransportHostApiV1;
-use server_runtime::RuntimeError;
-use server_runtime::runtime::{
+use revy_server_runtime::RuntimeError;
+use revy_server_runtime::runtime::{
     AdminCommandError, AdminControlPlaneHandle, AdminSubject, AdminTransportSelection,
     RuntimeReloadMode, ServerSupervisor,
 };

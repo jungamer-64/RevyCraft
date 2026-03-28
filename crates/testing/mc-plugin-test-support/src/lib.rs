@@ -538,7 +538,7 @@ fn packaged_plugin_test_workspace_root() -> PathBuf {
 fn packaged_plugin_test_cache_root() -> PathBuf {
     packaged_plugin_test_workspace_root()
         .join("target")
-        .join("server-runtime-plugin-test-cache")
+        .join("revy-server-runtime-plugin-test-cache")
 }
 
 fn packaged_plugin_test_cargo_target_root() -> PathBuf {

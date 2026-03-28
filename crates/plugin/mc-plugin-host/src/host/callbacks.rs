@@ -1,5 +1,4 @@
 use crate::config::PluginBufferLimits;
-use crate::plugin_host::write_owned_buffer;
 use mc_core::GameplayTransaction;
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode, Utf8Slice};
 use mc_plugin_api::codec::gameplay::host_blob::{
@@ -12,6 +11,8 @@ use mc_plugin_api::codec::gameplay::host_blob::{
 };
 use mc_plugin_api::host_api::{AdminTransportHostApiV1, GameplayHostApiV2, HostApiTableV1};
 use std::cell::Cell;
+
+use super::write_owned_buffer;
 
 struct GameplayTxScope<'scope, 'core> {
     tx: &'scope mut GameplayTransaction<'core>,

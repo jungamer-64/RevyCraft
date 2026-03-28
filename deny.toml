@@ -49,7 +49,7 @@ license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
-    { id = "RUSTSEC-2023-0071", reason = "server-runtime still relies on the Minecraft online-mode RSA login handshake and no safe upstream replacement is available yet" },
+    { id = "RUSTSEC-2023-0071", reason = "revy-server-runtime still relies on the Minecraft online-mode RSA login handshake and no safe upstream replacement is available yet" },
     { id = "RUSTSEC-2024-0436", reason = "bedrock-rs still pulls paste transitively and there is no maintained upgrade path available yet" },
 ]
 unmaintained = "all"

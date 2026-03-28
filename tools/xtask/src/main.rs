@@ -7,7 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const SERVER_BINARY_PACKAGE: &str = "server-bootstrap";
+const SERVER_BINARY_PACKAGE: &str = "revy-server";
+const SERVER_BINARY_NAME: &str = "server-bootstrap";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PluginSpec {
@@ -456,9 +457,9 @@ fn stage_release_bundle(
         )
     })?;
 
-    let bundled_server_binary = stage_dir.join(target.binary_filename(SERVER_BINARY_PACKAGE));
+    let bundled_server_binary = stage_dir.join(target.binary_filename(SERVER_BINARY_NAME));
     let server_binary_source =
-        compiled_binary_path(workspace_root, SERVER_BINARY_PACKAGE, true, Some(target));
+        compiled_binary_path(workspace_root, SERVER_BINARY_NAME, true, Some(target));
     copy_required_file(&server_binary_source, &bundled_server_binary)?;
 
     let bundled_config = runtime_dir.join("server.toml");
@@ -950,13 +951,13 @@ fn compiled_dynamic_library_path(
 
 fn compiled_binary_path(
     workspace_root: &Path,
-    package: &str,
+    binary_name: &str,
     release: bool,
     target: Option<&BuildTarget>,
 ) -> PathBuf {
     let file_name = target.map_or_else(
-        || binary_filename_for_os(env::consts::OS, package),
-        |target| target.binary_filename(package),
+        || binary_filename_for_os(env::consts::OS, binary_name),
+        |target| target.binary_filename(binary_name),
     );
     compiled_artifact_dir(workspace_root, release, target).join(file_name)
 }

@@ -48,4 +48,4 @@
 
 ## 読み方
 
-ドキュメントどうしの説明が食い違うときは、topic ごとの正本を優先してください。それでも実装と差がある場合は、`apps/server`、`tools/xtask`、`crates/config/server-config`、`crates/runtime/server-runtime` が source of truth です。
+ドキュメントどうしの説明が食い違うときは、topic ごとの正本を優先してください。それでも実装と差がある場合は、`apps/revy-server`、`tools/xtask`、`crates/runtime/revy-server-config`、`crates/runtime/revy-server-runtime` が source of truth です。

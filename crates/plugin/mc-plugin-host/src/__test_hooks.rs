@@ -1,13 +1,12 @@
 use crate::PluginHostError;
 use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
-use crate::host::{
-    PluginAbiRange, PluginFailureMatrix, PluginHost, PluginHostStatusSnapshot,
-    plugin_host_from_config,
-};
-use crate::plugin_host::PluginCatalog;
-pub use crate::plugin_host::{
+pub use crate::host::{
     InProcessAdminTransportPlugin, InProcessAdminUiPlugin, InProcessAuthPlugin,
     InProcessGameplayPlugin, InProcessProtocolPlugin, InProcessStoragePlugin,
+};
+use crate::host::{
+    PluginAbiRange, PluginCatalog, PluginFailureMatrix, PluginHost, PluginHostStatusSnapshot,
+    plugin_host_from_config,
 };
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use crate::runtime::{

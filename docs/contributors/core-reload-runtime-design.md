@@ -19,16 +19,16 @@ operator 向けの command surface と permission は [`../operators/configurati
 
 ## なぜ現行 `snapshot -> from_snapshot` では足りないか
 
-現行 runtime は [`../../crates/runtime/server-runtime/src/runtime/kernel.rs`](../../crates/runtime/server-runtime/src/runtime/kernel.rs) の `RuntimeKernel` が単一の `ServerCore` を保持し、reload context には `WorldSnapshot` を渡します。
+現行 runtime は [`../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs`](../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs) の `RuntimeKernel` が単一の `ServerCore` を保持し、reload context には `WorldSnapshot` を渡します。
 
 しかし `WorldSnapshot` は永続化向けの形であり、live session を完全移行するには不足しています。
 
-- [`../../crates/core/mc-core/src/core.rs`](../../crates/core/mc-core/src/core.rs) の `ServerCore::snapshot()` は online player を persisted player として保存する
+- [`../../crates/core/mc-core/src/core/mod.rs`](../../crates/core/mc-core/src/core/mod.rs) の `ServerCore::snapshot()` は online player を persisted player として保存する
 - [`../../crates/core/mc-core/src/core/inventory/lifecycle.rs`](../../crates/core/mc-core/src/core/inventory/lifecycle.rs) の `persisted_online_player_snapshot_state(...)` は `cursor` や active container の中身を inventory へ畳み込む
-- [`../../crates/core/mc-core/src/core.rs`](../../crates/core/mc-core/src/core.rs) の `ServerCore::from_snapshot(...)` は world / block_entities / saved_players だけを復元し、online player の entity、session、keepalive、window state は復元しない
+- [`../../crates/core/mc-core/src/core/mod.rs`](../../crates/core/mc-core/src/core/mod.rs) の `ServerCore::from_snapshot(...)` は world / block_entities / saved_players だけを復元し、online player の entity、session、keepalive、window state は復元しない
 - [`../../crates/core/mc-core/src/world.rs`](../../crates/core/mc-core/src/world.rs) の `WorldSnapshot` は `meta` / `chunks` / `block_entities` / `players` だけを持ち、dropped item や active mining を表現しない
 
-一方で protocol / gameplay reload は [`../../crates/plugin/mc-plugin-host/src/plugin_host/support/reload.rs`](../../crates/plugin/mc-plugin-host/src/plugin_host/support/reload.rs) の session transfer blob を export / import して live session を継続できます。`core` だけが同等の migration 口を持たないため、`snapshot -> from_snapshot` をそのまま使うと「接続は残るが core 側では player が offline 扱いになる」状態になります。
+一方で protocol / gameplay reload は [`../../crates/plugin/mc-plugin-host/src/host/support/reload.rs`](../../crates/plugin/mc-plugin-host/src/host/support/reload.rs) の session transfer blob を export / import して live session を継続できます。`core` だけが同等の migration 口を持たないため、`snapshot -> from_snapshot` をそのまま使うと「接続は残るが core 側では player が offline 扱いになる」状態になります。
 
 この設計では `WorldSnapshot` を保存用 schema として残しつつ、reload 専用の process-local state blob を別に導入します。
 
@@ -271,6 +271,6 @@ fail-fast は rollback 不可能な不整合に限ります。たとえば「旧
 
 1. [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)
 2. [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)
-3. [`../../crates/runtime/server-runtime/src/runtime/kernel.rs`](../../crates/runtime/server-runtime/src/runtime/kernel.rs)
-4. [`../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs)
-5. [`../../crates/plugin/mc-plugin-host/src/plugin_host/support/reload.rs`](../../crates/plugin/mc-plugin-host/src/plugin_host/support/reload.rs)
+3. [`../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs`](../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs)
+4. [`../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs)
+5. [`../../crates/plugin/mc-plugin-host/src/host/support/reload.rs`](../../crates/plugin/mc-plugin-host/src/host/support/reload.rs)

@@ -8,7 +8,7 @@
 
 ```bash
 cargo run -p xtask -- package-plugins
-cargo run -p server-bootstrap
+cargo run -p revy-server
 ```
 
 `package-plugins` は managed plugin を build して `runtime/plugins/` へ package します。`--config` を指定しない場合の config 解決順は次です。
@@ -28,7 +28,7 @@ cargo run -p server-bootstrap
 | コマンド | 既定の config source | path が無い場合 |
 | --- | --- | --- |
 | `cargo run -p xtask -- package-plugins` | `runtime/server.toml` を優先し、無ければ `runtime/server.toml.example` | error |
-| `cargo run -p server-bootstrap` | `REVY_SERVER_CONFIG` または `runtime/server.toml` | error |
+| `cargo run -p revy-server` | `REVY_SERVER_CONFIG` または `runtime/server.toml` | error |
 | `cargo run -p xtask -- build-release-bundles` | `runtime/server.toml.example` | error |
 
 この差は意図的です。開発 packaging は active config に寄せ、runtime boot と release bundle はどちらも選ばれた config の存在を必須にしています。

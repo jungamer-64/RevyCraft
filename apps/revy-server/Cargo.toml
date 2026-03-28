@@ -1,5 +1,5 @@
 [package]
-name = "server-bootstrap"
+name = "revy-server"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -9,14 +9,18 @@ keywords.workspace = true
 categories.workspace = true
 description = "Standalone server bootstrap that wires the plugin host for RevyCraft."
 
+[[bin]]
+name = "server-bootstrap"
+path = "src/main.rs"
+
 [dependencies]
 mc-core = { path = "../../crates/core/mc-core" }
 mc-plugin-api = { path = "../../crates/plugin/mc-plugin-api" }
 mc-plugin-host = { path = "../../crates/plugin/mc-plugin-host" }
 mc-proto-common = { path = "../../crates/protocol/mc-proto-common" }
-revy-admin-grpc = { path = "../../plugins/admin-transport/revy-admin-grpc" }
-server-config = { path = "../../crates/config/server-config" }
-server-runtime = { path = "../../crates/runtime/server-runtime" }
+revy-admin-grpc = { path = "../../crates/admin/revy-admin-grpc" }
+revy-server-config = { path = "../../crates/runtime/revy-server-config" }
+revy-server-runtime = { path = "../../crates/runtime/revy-server-runtime" }
 serde_json.workspace = true
 serde.workspace = true
 tokio.workspace = true

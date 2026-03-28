@@ -2924,6 +2924,101 @@ dependencies = [
 ]
 
 [[package]]
+name = "revy-server"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "bytes",
+ "libc",
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-host",
+ "mc-plugin-test-support",
+ "mc-proto-common",
+ "mc-proto-test-support",
+ "rand 0.9.2",
+ "revy-admin-grpc",
+ "revy-server-config",
+ "revy-server-runtime",
+ "rsa",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "revy-server-config"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-host",
+ "serde",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
+name = "revy-server-runtime"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "base64",
+ "bedrockrs_network",
+ "bedrockrs_proto",
+ "bedrockrs_proto_core",
+ "binary-util",
+ "bytes",
+ "libloading",
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-auth-bedrock-offline",
+ "mc-plugin-auth-bedrock-xbl",
+ "mc-plugin-auth-offline",
+ "mc-plugin-auth-online-stub",
+ "mc-plugin-gameplay-canonical",
+ "mc-plugin-gameplay-readonly",
+ "mc-plugin-host",
+ "mc-plugin-host-test-support",
+ "mc-plugin-proto-be-924",
+ "mc-plugin-proto-be-placeholder",
+ "mc-plugin-proto-je-340",
+ "mc-plugin-proto-je-47",
+ "mc-plugin-proto-je-5",
+ "mc-plugin-sdk-rust",
+ "mc-plugin-storage-je-anvil-1_7_10",
+ "mc-plugin-test-support",
+ "mc-proto-be-924",
+ "mc-proto-be-common",
+ "mc-proto-be-placeholder",
+ "mc-proto-common",
+ "mc-proto-je-340",
+ "mc-proto-je-47",
+ "mc-proto-je-5",
+ "mc-proto-je-common",
+ "mc-proto-test-support",
+ "num-bigint",
+ "rak-rs",
+ "revy-server-config",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "socket2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "uuid",
+ "vek",
+]
+
+[[package]]
 name = "rfc6979"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3227,101 +3322,6 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
-]
-
-[[package]]
-name = "server-bootstrap"
-version = "0.1.0"
-dependencies = [
- "aes",
- "bytes",
- "libc",
- "mc-core",
- "mc-plugin-api",
- "mc-plugin-host",
- "mc-plugin-test-support",
- "mc-proto-common",
- "mc-proto-test-support",
- "rand 0.9.2",
- "revy-admin-grpc",
- "rsa",
- "serde",
- "serde_json",
- "server-config",
- "server-runtime",
- "tempfile",
- "tokio",
- "tokio-stream",
- "tonic",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "server-config"
-version = "0.1.0"
-dependencies = [
- "mc-core",
- "mc-plugin-api",
- "mc-plugin-host",
- "serde",
- "thiserror 2.0.18",
- "toml",
-]
-
-[[package]]
-name = "server-runtime"
-version = "0.1.0"
-dependencies = [
- "aes",
- "base64",
- "bedrockrs_network",
- "bedrockrs_proto",
- "bedrockrs_proto_core",
- "binary-util",
- "bytes",
- "libloading",
- "mc-core",
- "mc-plugin-api",
- "mc-plugin-auth-bedrock-offline",
- "mc-plugin-auth-bedrock-xbl",
- "mc-plugin-auth-offline",
- "mc-plugin-auth-online-stub",
- "mc-plugin-gameplay-canonical",
- "mc-plugin-gameplay-readonly",
- "mc-plugin-host",
- "mc-plugin-host-test-support",
- "mc-plugin-proto-be-924",
- "mc-plugin-proto-be-placeholder",
- "mc-plugin-proto-je-340",
- "mc-plugin-proto-je-47",
- "mc-plugin-proto-je-5",
- "mc-plugin-sdk-rust",
- "mc-plugin-storage-je-anvil-1_7_10",
- "mc-plugin-test-support",
- "mc-proto-be-924",
- "mc-proto-be-common",
- "mc-proto-be-placeholder",
- "mc-proto-common",
- "mc-proto-je-340",
- "mc-proto-je-47",
- "mc-proto-je-5",
- "mc-proto-je-common",
- "mc-proto-test-support",
- "num-bigint",
- "rak-rs",
- "rsa",
- "serde",
- "serde_json",
- "server-config",
- "sha1",
- "sha2",
- "socket2",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "uuid",
- "vek",
 ]
 
 [[package]]

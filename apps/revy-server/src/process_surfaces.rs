@@ -1,4 +1,4 @@
-use server_runtime::RuntimeError;
+use revy_server_runtime::RuntimeError;
 use tokio::sync::oneshot;
 
 pub(crate) struct PausedProcessSurfaces {

@@ -7,9 +7,9 @@ mod upgrade;
 use crate::admin_transport::AdminTransportSupervisor;
 use crate::process_surfaces::{ConsoleControl, PausedProcessSurfaces, ProcessSurfaceCommand};
 use crate::upgrade::UpgradeCoordinator;
-use server_runtime::RuntimeError;
-use server_runtime::config::ServerConfigSource;
-use server_runtime::runtime::{
+use revy_server_runtime::RuntimeError;
+use revy_server_runtime::config::ServerConfigSource;
+use revy_server_runtime::runtime::{
     AdminControlPlaneHandle, AdminRequest, AdminResponse, AdminSubject, ServerSupervisor,
     format_runtime_status_summary,
 };

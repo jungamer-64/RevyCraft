@@ -38,7 +38,7 @@ fn tracked_runtime_config_path(file_name: &str) -> PathBuf {
         }
     }
     panic!(
-        "server-runtime tests should run under the workspace root: {}",
+        "revy-server-runtime tests should run under the workspace root: {}",
         manifest_dir.display()
     );
 }

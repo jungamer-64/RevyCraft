@@ -1,7 +1,7 @@
 use crate::process_surfaces::{PausedProcessSurfaces, ProcessSurfaceCommand};
 use rand::random;
-use server_runtime::RuntimeError;
-use server_runtime::runtime::{
+use revy_server_runtime::RuntimeError;
+use revy_server_runtime::runtime::{
     AdminSubject, AdminUpgradeRuntimeView, RuntimeUpgradeCommitHold, RuntimeUpgradeImport,
     RuntimeUpgradePayload, RuntimeUpgradeSessionHandle, ServerSupervisor,
 };
@@ -254,7 +254,7 @@ impl UpgradeCoordinator {
     #[cfg(any(unix, windows))]
     async fn run_upgrade_transaction(
         &self,
-        guard: &server_runtime::runtime::RuntimeUpgradeGuard,
+        guard: &revy_server_runtime::runtime::RuntimeUpgradeGuard,
         paused_surfaces: &PausedProcessSurfaces,
         transport: &mut ParentUpgradeTransport,
     ) -> Result<(), RuntimeError> {
@@ -575,11 +575,11 @@ pub(crate) async fn child_upgrade_ready_delay_if_needed() {
 }
 
 #[cfg(any(unix, windows))]
-fn resolve_server_config_source() -> server_runtime::config::ServerConfigSource {
+fn resolve_server_config_source() -> revy_server_runtime::config::ServerConfigSource {
     let config_path = std::env::var_os(crate::SERVER_CONFIG_ENV)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(crate::DEFAULT_SERVER_CONFIG_PATH));
-    server_runtime::config::ServerConfigSource::Toml(config_path)
+    revy_server_runtime::config::ServerConfigSource::Toml(config_path)
 }
 
 #[cfg(any(unix, windows))]

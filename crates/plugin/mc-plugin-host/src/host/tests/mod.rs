@@ -32,22 +32,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-#[path = "tests/admin_ui.rs"]
 mod admin_ui;
-#[path = "tests/discovery.rs"]
 mod discovery;
-#[path = "tests/failure_policy.rs"]
 mod failure_policy;
-#[path = "tests/gameplay_query.rs"]
 mod gameplay_query;
 #[cfg(target_os = "linux")]
-#[path = "tests/packaged_reload.rs"]
 mod packaged_reload;
-#[path = "tests/profiles.rs"]
 mod profiles;
-#[path = "tests/support.rs"]
 mod support;
-#[path = "tests/test_plugins.rs"]
 mod test_plugins;
 
 use self::support::*;

@@ -4,9 +4,9 @@
 
 ## レイヤー構成
 
-1. `apps/server`
-   `server-bootstrap` binary。config 読み込み、runtime boot、stdio / gRPC admin surface を起動します。
-2. `crates/runtime/server-runtime`
+1. `apps/revy-server`
+   `server-bootstrap` binary を持つ `revy-server` package。config 読み込み、runtime boot、stdio / gRPC admin surface を起動します。
+2. `crates/runtime/revy-server-runtime`
    listener、generation、session、status、reload、admin control plane を持つ orchestration 層です。
 3. `crates/core/mc-core`
    protocol 非依存の semantic state machine です。
@@ -160,7 +160,7 @@ play 中 session は `reload runtime core` と `reload runtime full` の primary
 
 ## admin control plane
 
-operator surface は `server-runtime` に集約されています。
+operator surface は `revy-server-runtime` に集約されています。
 
 - local principal
   `local-console`
@@ -178,7 +178,7 @@ admin reload surface は `reload runtime <mode>` に統一されています。p
 reload を深く追うときは次を順に読むと把握しやすいです。
 
 1. [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
-2. [`../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/server-runtime/src/runtime/core_loop/reload.rs)
-3. [`../../crates/runtime/server-runtime/src/runtime/topology_manager.rs`](../../crates/runtime/server-runtime/src/runtime/topology_manager.rs)
-4. [`../../crates/runtime/server-runtime/src/runtime/reload_coordinator.rs`](../../crates/runtime/server-runtime/src/runtime/reload_coordinator.rs)
+2. [`../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs)
+3. [`../../crates/runtime/revy-server-runtime/src/runtime/topology_manager.rs`](../../crates/runtime/revy-server-runtime/src/runtime/topology_manager.rs)
+4. [`../../crates/runtime/revy-server-runtime/src/runtime/reload_coordinator.rs`](../../crates/runtime/revy-server-runtime/src/runtime/reload_coordinator.rs)
 5. [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)

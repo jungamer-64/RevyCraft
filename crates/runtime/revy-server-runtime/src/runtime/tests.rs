@@ -71,10 +71,10 @@ impl From<TestJavaProtocolError> for RuntimeError {
 }
 
 fn tempdir() -> std::io::Result<tempfile::TempDir> {
-    let base_dir = workspace_test_temp_root().join("server-runtime");
+    let base_dir = workspace_test_temp_root().join("revy-server-runtime");
     fs::create_dir_all(&base_dir)?;
     tempfile::Builder::new()
-        .prefix("server-runtime-")
+        .prefix("revy-server-runtime-")
         .tempdir_in(base_dir)
 }
 
@@ -93,7 +93,7 @@ fn workspace_test_temp_root() -> PathBuf {
         }
     }
     panic!(
-        "server-runtime tests should run under the workspace root: {}",
+        "revy-server-runtime tests should run under the workspace root: {}",
         manifest_dir.display()
     );
 }

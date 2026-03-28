@@ -1,7 +1,7 @@
 use crate::PluginHostError;
 use crate::config::RuntimeSelectionConfig;
+use crate::host::PreparedProtocolTopology;
 use crate::host::{PluginFailureAction, PluginHostStatusSnapshot};
-use crate::plugin_host::PreparedProtocolTopology;
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_core::{
     AdminTransportCapabilitySet, AdminTransportProfileId, AdminUiCapabilitySet, AdminUiProfileId,
