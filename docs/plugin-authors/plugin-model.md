@@ -102,8 +102,8 @@ profile id を新しく増やす plugin は、manifest / descriptor / config の
 
 ## sample plugin の見方
 
-- `plugins/protocol/mc-plugin-proto-je-47`
-  `declare_protocol_plugin!` を使った protocol plugin の最小パターン
+- `plugins/protocol/je-47/mc-plugin-proto-je-47`
+  `declare_protocol_plugin!` を使った protocol bundle 内 wrapper の最小パターン
 - `plugins/gameplay/mc-plugin-gameplay-canonical`
   gameplay profile plugin の代表例
 - `plugins/storage/mc-plugin-storage-je-anvil-1_7_10`

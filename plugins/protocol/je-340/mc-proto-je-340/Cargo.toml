@@ -10,13 +10,13 @@ categories.workspace = true
 description = "Minecraft Java Edition 1.12.2 protocol codecs."
 
 [dependencies]
-mc-core = { path = "../../core/mc-core" }
-mc-proto-common = { path = "../mc-proto-common" }
-mc-proto-je-common = { path = "../mc-proto-je-common" }
+mc-core = { path = "../../../../crates/core/mc-core" }
+mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
+mc-proto-je-common = { path = "../../../../crates/protocol/mc-proto-je-common" }
 uuid.workspace = true
 
 [dev-dependencies]
-mc-proto-test-support = { path = "../../testing/mc-proto-test-support" }
+mc-proto-test-support = { path = "../../../../crates/testing/mc-proto-test-support" }
 uuid.workspace = true
 
 [lints]

@@ -15,8 +15,8 @@ mc-plugin-host = { path = "../../plugin/mc-plugin-host", features = ["in-process
 
 [dev-dependencies]
 mc-plugin-test-support = { path = "../mc-plugin-test-support" }
-mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/mc-plugin-proto-je-5", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-proto-je-5 = { path = "../../protocol/mc-proto-je-5" }
+mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-plugin-proto-je-5", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-proto-je-5" }
 tempfile.workspace = true
 
 [lints]

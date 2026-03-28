@@ -24,8 +24,9 @@
 | `crates/plugin/mc-plugin-api` | plugin ABI `5.0`、manifest、host API、typed codec |
 | `crates/plugin/mc-plugin-host` | packaged plugin discovery、activation、selection、reload、quarantine |
 | `crates/plugin/mc-plugin-sdk-rust` | Rust plugin authoring 向けの trait、manifest helper、macro |
-| `crates/protocol/mc-proto-*` | edition / version ごとの codec と adapter 実装 |
-| `plugins/*/*` | concrete plugin 実装 |
+| `crates/protocol/mc-proto-{common,je-common,be-common}` | shared protocol trait、wire codec、edition-family helper |
+| `plugins/protocol/<adapter-id>/{mc-proto-*,mc-plugin-proto-*}` | version ごとの protocol bundle。codec / adapter 実装と host plugin wrapper を同居させる |
+| `plugins/*/*` | gameplay / storage / auth / admin-surface の concrete plugin 実装 |
 | `crates/testing/*` | packaged harness、plugin-host fixture、protocol test support |
 | `tools/xtask` | package-plugins、package-all-plugins、build-release-bundles |
 | `runtime/` | active config、packaged plugin、world data |

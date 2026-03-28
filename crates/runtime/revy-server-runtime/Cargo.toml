@@ -44,20 +44,20 @@ mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gam
 mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-host-test-support = { path = "../../testing/mc-plugin-host-test-support" }
 mc-plugin-sdk-rust = { path = "../../plugin/mc-plugin-sdk-rust", features = ["in-process-testing"] }
-mc-plugin-proto-be-924 = { path = "../../../plugins/protocol/mc-plugin-proto-be-924", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-340 = { path = "../../../plugins/protocol/mc-plugin-proto-je-340", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/mc-plugin-proto-je-5", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-47 = { path = "../../../plugins/protocol/mc-plugin-proto-je-47", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-plugin-proto-be-924", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/be-placeholder/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-je-340 = { path = "../../../plugins/protocol/je-340/mc-plugin-proto-je-340", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-plugin-proto-je-5", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-plugin-proto-je-47", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-test-support = { path = "../../testing/mc-plugin-test-support" }
-mc-proto-be-924 = { path = "../../protocol/mc-proto-be-924" }
-mc-proto-be-placeholder = { path = "../../protocol/mc-proto-be-placeholder" }
+mc-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-proto-be-924" }
+mc-proto-be-placeholder = { path = "../../../plugins/protocol/be-placeholder/mc-proto-be-placeholder" }
 mc-proto-test-support = { path = "../../testing/mc-proto-test-support" }
 mc-proto-je-common = { path = "../../protocol/mc-proto-je-common" }
-mc-proto-je-340 = { path = "../../protocol/mc-proto-je-340" }
-mc-proto-je-5 = { path = "../../protocol/mc-proto-je-5" }
-mc-proto-je-47 = { path = "../../protocol/mc-proto-je-47" }
+mc-proto-je-340 = { path = "../../../plugins/protocol/je-340/mc-proto-je-340" }
+mc-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-proto-je-5" }
+mc-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-proto-je-47" }
 binary-util = "0.3.4"
 rak-rs = { version = "0.3.3", default-features = false, features = ["async_tokio", "mcpe"] }
 base64.workspace = true

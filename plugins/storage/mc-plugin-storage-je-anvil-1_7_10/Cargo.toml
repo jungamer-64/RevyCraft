@@ -21,7 +21,7 @@ mc-core = { path = "../../../crates/core/mc-core" }
 mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
 mc-proto-common = { path = "../../../crates/protocol/mc-proto-common" }
-mc-proto-je-5 = { path = "../../../crates/protocol/mc-proto-je-5" }
+mc-proto-je-5 = { path = "../../protocol/je-5/mc-proto-je-5" }
 
 [lints]
 workspace = true

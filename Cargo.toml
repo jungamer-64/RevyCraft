@@ -2,7 +2,11 @@
 members = [
     "apps/*",
     "crates/*/*",
-    "plugins/*/*",
+    "plugins/admin/*",
+    "plugins/auth/*",
+    "plugins/gameplay/*",
+    "plugins/storage/*",
+    "plugins/protocol/*/*",
     "tools/*",
 ]
 resolver = "3"

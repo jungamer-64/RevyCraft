@@ -17,11 +17,11 @@ disable-exported-symbols = []
 in-process-testing = ["mc-plugin-sdk-rust/in-process-testing"]
 
 [dependencies]
-mc-core = { path = "../../../crates/core/mc-core" }
-mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
-mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
-mc-proto-be-placeholder = { path = "../../../crates/protocol/mc-proto-be-placeholder" }
-mc-proto-common = { path = "../../../crates/protocol/mc-proto-common" }
+mc-core = { path = "../../../../crates/core/mc-core" }
+mc-plugin-api = { path = "../../../../crates/plugin/mc-plugin-api" }
+mc-plugin-sdk-rust = { path = "../../../../crates/plugin/mc-plugin-sdk-rust" }
+mc-proto-be-placeholder = { path = "../mc-proto-be-placeholder" }
+mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
 
 [lints]
 workspace = true

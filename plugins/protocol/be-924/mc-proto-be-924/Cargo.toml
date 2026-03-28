@@ -12,9 +12,9 @@ description = "Bedrock 26.3 baseline protocol adapter for the RevyCraft workspac
 [dependencies]
 bedrockrs_proto.workspace = true
 bedrockrs_proto_core.workspace = true
-mc-core = { path = "../../core/mc-core" }
-mc-proto-be-common = { path = "../mc-proto-be-common" }
-mc-proto-common = { path = "../mc-proto-common" }
+mc-core = { path = "../../../../crates/core/mc-core" }
+mc-proto-be-common = { path = "../../../../crates/protocol/mc-proto-be-common" }
+mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
 nbtx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
