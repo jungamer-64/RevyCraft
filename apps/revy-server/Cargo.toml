@@ -13,6 +13,10 @@ description = "Standalone server bootstrap that wires the plugin host for RevyCr
 name = "server-bootstrap"
 path = "src/main.rs"
 
+[[test]]
+name = "upgrade_runtime"
+path = "tests/upgrade_runtime_test.rs"
+
 [dependencies]
 mc-core = { path = "../../crates/core/mc-core" }
 mc-plugin-api = { path = "../../crates/plugin/mc-plugin-api" }
