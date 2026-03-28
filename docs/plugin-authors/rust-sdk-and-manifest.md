@@ -81,9 +81,9 @@ declare_protocol_plugin!(
 
 - adapter への委譲実装
 - embedded manifest の export
-- protocol API v2 の export
+- protocol API v3 の export
 
-現在の protocol export surface は `ProtocolPluginApiV2`、exported symbol は `mc_plugin_protocol_api_v2` です。通常は macro に任せれば十分です。
+現在の protocol export surface は `ProtocolPluginApiV3`、exported symbol は `mc_plugin_protocol_api_v3` です。通常は macro に任せれば十分です。
 
 ## non-protocol plugin の最小パターン
 

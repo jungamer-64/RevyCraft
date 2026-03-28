@@ -20,7 +20,7 @@ cargo run -p revy-server
 
 `package-plugins` は `--config` 指定が無い場合、`runtime/server.toml` を優先し、存在しないときだけ `runtime/server.toml.example` に fallback します。`live.plugins.allowlist` に含まれる managed plugin だけを package し、workspace 外から持ち込んだ third-party plugin directory は残します。
 
-`server-bootstrap` は `REVY_SERVER_CONFIG` があればその path、無ければ `runtime/server.toml` を読みます。選ばれた path が存在しない場合は warning を出し、built-in default config で起動します。この default では `runtime/plugins` と `runtime/world` を使います。
+`server-bootstrap` は `REVY_SERVER_CONFIG` があればその path、無ければ `runtime/server.toml` を読みます。選ばれた path が存在しない場合は fail-fast で起動失敗します。既定設定へ暗黙 fallback することはありません。
 
 release bundle、config/reload、admin console / gRPC の正本は [`docs/operators/getting-started.md`](docs/operators/getting-started.md) と [`docs/operators/configuration-and-reload.md`](docs/operators/configuration-and-reload.md) にあります。
 
