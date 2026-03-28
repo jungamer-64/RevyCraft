@@ -7,6 +7,7 @@ pub enum TestJavaProtocol {
     Je5,
     Je47,
     Je340,
+    Je404,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +42,12 @@ enum SlotNbtEncoding {
     RootTag,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlotEncoding {
+    Legacy(SlotNbtEncoding),
+    PresentVarInt(SlotNbtEncoding),
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TestJavaProtocolError {
     #[error("{0}")]
@@ -56,6 +63,7 @@ impl TestJavaProtocol {
             Self::Je5 => 5,
             Self::Je47 => 47,
             Self::Je340 => 340,
+            Self::Je404 => 404,
         }
     }
 
@@ -63,7 +71,7 @@ impl TestJavaProtocol {
     pub const fn login_ready_packet_id(self) -> i32 {
         match self {
             Self::Je5 | Self::Je47 => 0x30,
-            Self::Je340 => 0x14,
+            Self::Je340 | Self::Je404 => 0x14,
         }
     }
 
@@ -72,6 +80,7 @@ impl TestJavaProtocol {
         match self {
             Self::Je5 | Self::Je47 => 0x2f,
             Self::Je340 => 0x16,
+            Self::Je404 => 0x17,
         }
     }
 
@@ -80,6 +89,7 @@ impl TestJavaProtocol {
         match self {
             Self::Je5 | Self::Je47 => 0x30,
             Self::Je340 => 0x14,
+            Self::Je404 => 0x15,
         }
     }
 
@@ -88,6 +98,7 @@ impl TestJavaProtocol {
         match self {
             Self::Je5 | Self::Je47 => 0x32,
             Self::Je340 => 0x11,
+            Self::Je404 => 0x12,
         }
     }
 
@@ -100,54 +111,66 @@ impl TestJavaProtocol {
             (Self::Je5, TestJavaPacket::JoinGame) => Some(0x01),
             (Self::Je47, TestJavaPacket::JoinGame) => Some(0x01),
             (Self::Je340, TestJavaPacket::JoinGame) => Some(0x23),
+            (Self::Je404, TestJavaPacket::JoinGame) => Some(0x25),
             (Self::Je5, TestJavaPacket::SpawnPosition) => Some(0x05),
             (Self::Je47, TestJavaPacket::SpawnPosition) => Some(0x05),
             (Self::Je340, TestJavaPacket::SpawnPosition) => Some(0x46),
+            (Self::Je404, TestJavaPacket::SpawnPosition) => Some(0x49),
             (Self::Je5, TestJavaPacket::PositionAndLook) => Some(0x08),
             (Self::Je47, TestJavaPacket::PositionAndLook) => Some(0x08),
             (Self::Je340, TestJavaPacket::PositionAndLook) => Some(0x2f),
+            (Self::Je404, TestJavaPacket::PositionAndLook) => Some(0x32),
             (Self::Je5, TestJavaPacket::NamedEntitySpawn) => Some(0x0c),
             (Self::Je47, TestJavaPacket::NamedEntitySpawn) => Some(0x0c),
-            (Self::Je340, TestJavaPacket::NamedEntitySpawn) => Some(0x05),
+            (Self::Je340 | Self::Je404, TestJavaPacket::NamedEntitySpawn) => Some(0x05),
             (Self::Je5, TestJavaPacket::SpawnObject) => Some(0x0e),
             (Self::Je47, TestJavaPacket::SpawnObject) => Some(0x0e),
-            (Self::Je340, TestJavaPacket::SpawnObject) => Some(0x00),
+            (Self::Je340 | Self::Je404, TestJavaPacket::SpawnObject) => Some(0x00),
             (Self::Je5, TestJavaPacket::EntityMetadata) => Some(0x1c),
             (Self::Je47, TestJavaPacket::EntityMetadata) => Some(0x1c),
             (Self::Je340, TestJavaPacket::EntityMetadata) => Some(0x3c),
+            (Self::Je404, TestJavaPacket::EntityMetadata) => Some(0x3f),
             (Self::Je5, TestJavaPacket::PlayerInfoAdd) => None,
             (Self::Je47, TestJavaPacket::PlayerInfoAdd) => Some(0x38),
             (Self::Je340, TestJavaPacket::PlayerInfoAdd) => Some(0x2d),
+            (Self::Je404, TestJavaPacket::PlayerInfoAdd) => Some(0x30),
             (Self::Je5, TestJavaPacket::EntityTeleport) => Some(0x18),
             (Self::Je47, TestJavaPacket::EntityTeleport) => Some(0x18),
             (Self::Je340, TestJavaPacket::EntityTeleport) => Some(0x4c),
+            (Self::Je404, TestJavaPacket::EntityTeleport) => Some(0x50),
             (Self::Je5, TestJavaPacket::BlockBreakAnimation) => Some(0x25),
             (Self::Je47, TestJavaPacket::BlockBreakAnimation) => Some(0x25),
-            (Self::Je340, TestJavaPacket::BlockBreakAnimation) => Some(0x08),
+            (Self::Je340 | Self::Je404, TestJavaPacket::BlockBreakAnimation) => Some(0x08),
             (Self::Je5, TestJavaPacket::BlockChange) => Some(0x23),
             (Self::Je47, TestJavaPacket::BlockChange) => Some(0x23),
-            (Self::Je340, TestJavaPacket::BlockChange) => Some(0x0b),
+            (Self::Je340 | Self::Je404, TestJavaPacket::BlockChange) => Some(0x0b),
             (Self::Je5, TestJavaPacket::OpenWindow) => Some(0x2d),
             (Self::Je47, TestJavaPacket::OpenWindow) => Some(0x2d),
             (Self::Je340, TestJavaPacket::OpenWindow) => Some(0x13),
+            (Self::Je404, TestJavaPacket::OpenWindow) => Some(0x14),
             (Self::Je5, TestJavaPacket::CloseWindow) => Some(0x2e),
             (Self::Je47, TestJavaPacket::CloseWindow) => Some(0x2e),
             (Self::Je340, TestJavaPacket::CloseWindow) => Some(0x12),
+            (Self::Je404, TestJavaPacket::CloseWindow) => Some(0x13),
             (_, TestJavaPacket::SetSlot) => Some(self.set_slot_packet_id()),
             (_, TestJavaPacket::WindowItems) => Some(self.window_items_packet_id()),
             (Self::Je5, TestJavaPacket::WindowProperty) => Some(0x31),
             (Self::Je47, TestJavaPacket::WindowProperty) => Some(0x31),
             (Self::Je340, TestJavaPacket::WindowProperty) => Some(0x15),
+            (Self::Je404, TestJavaPacket::WindowProperty) => Some(0x16),
             (_, TestJavaPacket::ConfirmTransaction) => Some(self.confirm_transaction_packet_id()),
             (Self::Je5, TestJavaPacket::HeldItemChange) => Some(0x09),
             (Self::Je47, TestJavaPacket::HeldItemChange) => Some(0x09),
             (Self::Je340, TestJavaPacket::HeldItemChange) => Some(0x3a),
+            (Self::Je404, TestJavaPacket::HeldItemChange) => Some(0x3d),
             (Self::Je5, TestJavaPacket::PlayerAbilities) => Some(0x39),
             (Self::Je47, TestJavaPacket::PlayerAbilities) => Some(0x39),
             (Self::Je340, TestJavaPacket::PlayerAbilities) => Some(0x2c),
+            (Self::Je404, TestJavaPacket::PlayerAbilities) => Some(0x2e),
             (Self::Je5, TestJavaPacket::ChunkData) => Some(0x26),
             (Self::Je47, TestJavaPacket::ChunkData) => Some(0x21),
             (Self::Je340, TestJavaPacket::ChunkData) => Some(0x20),
+            (Self::Je404, TestJavaPacket::ChunkData) => Some(0x22),
         }
     }
 
@@ -163,12 +186,13 @@ impl TestJavaProtocol {
         writer.write_varint(match self {
             Self::Je5 | Self::Je47 => 0x10,
             Self::Je340 => 0x1b,
+            Self::Je404 => 0x24,
         });
         writer.write_i16(slot);
         write_slot(
             &mut writer,
             Some((item_id, count, damage)),
-            self.slot_nbt_encoding(),
+            self.slot_encoding(),
         );
         writer.into_inner()
     }
@@ -197,16 +221,21 @@ impl TestJavaProtocol {
         writer.write_varint(match self {
             Self::Je5 | Self::Je47 => 0x0e,
             Self::Je340 => 0x07,
+            Self::Je404 => 0x08,
         });
-        writer.write_i8(window_id);
+        if matches!(self, Self::Je404) {
+            writer.write_u8(u8::from_be_bytes(window_id.to_be_bytes()));
+        } else {
+            writer.write_i8(window_id);
+        }
         writer.write_i16(slot);
         writer.write_i8(button);
         writer.write_i16(action_number);
         match self {
             Self::Je5 | Self::Je47 => writer.write_i8(0),
-            Self::Je340 => writer.write_varint(0),
+            Self::Je340 | Self::Je404 => writer.write_varint(0),
         }
-        write_slot(&mut writer, clicked_item, self.slot_nbt_encoding());
+        write_slot(&mut writer, clicked_item, self.slot_encoding());
         writer.into_inner()
     }
 
@@ -221,6 +250,7 @@ impl TestJavaProtocol {
         writer.write_varint(match self {
             Self::Je5 | Self::Je47 => 0x0f,
             Self::Je340 => 0x05,
+            Self::Je404 => 0x06,
         });
         writer.write_u8(window_id);
         writer.write_i16(action_number);
@@ -234,6 +264,7 @@ impl TestJavaProtocol {
         writer.write_varint(match self {
             Self::Je5 | Self::Je47 => 0x0d,
             Self::Je340 => 0x08,
+            Self::Je404 => 0x09,
         });
         writer.write_u8(window_id);
         writer.into_inner()
@@ -249,7 +280,7 @@ impl TestJavaProtocol {
         }
         let window_id = reader.read_i8()?;
         let slot = reader.read_i16()?;
-        let stack = read_slot(&mut reader, self.slot_nbt_encoding())?;
+        let stack = read_slot(&mut reader, self.slot_encoding())?;
         Ok((window_id, slot, stack))
     }
 
@@ -290,7 +321,7 @@ impl TestJavaProtocol {
         let slot_count = reader.read_u8()?;
         let use_title = match self {
             Self::Je5 | Self::Je47 => Some(reader.read_bool()?),
-            Self::Je340 => None,
+            Self::Je340 | Self::Je404 => None,
         };
         Ok((window_id, window_type, title, slot_count, use_title))
     }
@@ -346,7 +377,7 @@ impl TestJavaProtocol {
             return Err(TestJavaProtocolError::Message("wanted slot out of bounds"));
         }
         for slot in 0..count {
-            let item = read_slot(&mut reader, self.slot_nbt_encoding())?;
+            let item = read_slot(&mut reader, self.slot_encoding())?;
             if slot == wanted_slot {
                 return Ok(item);
             }
@@ -377,7 +408,7 @@ impl TestJavaProtocol {
                 reader.read_i32()?,
                 reader.read_i8()?,
             )),
-            Self::Je47 | Self::Je340 => {
+            Self::Je47 | Self::Je340 | Self::Je404 => {
                 let entity_id = reader.read_varint()?;
                 let packed = reader.read_i64()?;
                 let stage = reader.read_i8()?;
@@ -387,22 +418,41 @@ impl TestJavaProtocol {
         }
     }
 
-    fn slot_nbt_encoding(self) -> SlotNbtEncoding {
+    fn slot_encoding(self) -> SlotEncoding {
         match self {
-            Self::Je5 => SlotNbtEncoding::LengthPrefixedBlob,
-            Self::Je47 | Self::Je340 => SlotNbtEncoding::RootTag,
+            Self::Je5 => SlotEncoding::Legacy(SlotNbtEncoding::LengthPrefixedBlob),
+            Self::Je47 | Self::Je340 => SlotEncoding::Legacy(SlotNbtEncoding::RootTag),
+            Self::Je404 => SlotEncoding::PresentVarInt(SlotNbtEncoding::RootTag),
         }
     }
 }
 
-fn write_slot(writer: &mut PacketWriter, stack: Option<TestItemStack>, slot_nbt: SlotNbtEncoding) {
-    let Some((item_id, count, damage)) = stack else {
-        writer.write_i16(-1);
-        return;
-    };
-    writer.write_i16(item_id);
-    writer.write_u8(count);
-    writer.write_i16(damage);
+fn write_slot(writer: &mut PacketWriter, stack: Option<TestItemStack>, slot: SlotEncoding) {
+    match slot {
+        SlotEncoding::Legacy(slot_nbt) => {
+            let Some((item_id, count, damage)) = stack else {
+                writer.write_i16(-1);
+                return;
+            };
+            writer.write_i16(item_id);
+            writer.write_u8(count);
+            writer.write_i16(damage);
+            write_empty_slot_nbt(writer, slot_nbt);
+        }
+        SlotEncoding::PresentVarInt(slot_nbt) => {
+            let Some((item_id, count, _damage)) = stack else {
+                writer.write_bool(false);
+                return;
+            };
+            writer.write_bool(true);
+            writer.write_varint(i32::from(item_id));
+            writer.write_u8(count);
+            write_empty_slot_nbt(writer, slot_nbt);
+        }
+    }
+}
+
+fn write_empty_slot_nbt(writer: &mut PacketWriter, slot_nbt: SlotNbtEncoding) {
     match slot_nbt {
         SlotNbtEncoding::LengthPrefixedBlob => writer.write_i16(-1),
         SlotNbtEncoding::RootTag => writer.write_u8(0),
@@ -427,16 +477,30 @@ fn unpack_block_position(packed: i64) -> (i32, i32, i32) {
 
 fn read_slot(
     reader: &mut PacketReader<'_>,
-    slot_nbt: SlotNbtEncoding,
+    slot: SlotEncoding,
 ) -> Result<Option<TestItemStack>, TestJavaProtocolError> {
-    let item_id = reader.read_i16()?;
-    if item_id < 0 {
-        return Ok(None);
+    match slot {
+        SlotEncoding::Legacy(slot_nbt) => {
+            let item_id = reader.read_i16()?;
+            if item_id < 0 {
+                return Ok(None);
+            }
+            let count = reader.read_u8()?;
+            let damage = reader.read_i16()?;
+            skip_slot_nbt(reader, slot_nbt)?;
+            Ok(Some((item_id, count, damage)))
+        }
+        SlotEncoding::PresentVarInt(slot_nbt) => {
+            if !reader.read_bool()? {
+                return Ok(None);
+            }
+            let item_id = i16::try_from(reader.read_varint()?)
+                .map_err(|_| TestJavaProtocolError::Message("flattened item id out of range"))?;
+            let count = reader.read_u8()?;
+            skip_slot_nbt(reader, slot_nbt)?;
+            Ok(Some((item_id, count, 0)))
+        }
     }
-    let count = reader.read_u8()?;
-    let damage = reader.read_i16()?;
-    skip_slot_nbt(reader, slot_nbt)?;
-    Ok(Some((item_id, count, damage)))
 }
 
 fn skip_slot_nbt(
@@ -544,8 +608,10 @@ mod tests {
         assert_eq!(TestJavaProtocol::Je5.protocol_version(), 5);
         assert_eq!(TestJavaProtocol::Je47.protocol_version(), 47);
         assert_eq!(TestJavaProtocol::Je340.protocol_version(), 340);
+        assert_eq!(TestJavaProtocol::Je404.protocol_version(), 404);
         assert_eq!(TestJavaProtocol::Je5.login_ready_packet_id(), 0x30);
         assert_eq!(TestJavaProtocol::Je340.login_ready_packet_id(), 0x14);
+        assert_eq!(TestJavaProtocol::Je404.login_ready_packet_id(), 0x14);
         assert_eq!(
             TestJavaProtocol::Je47.clientbound_packet_id(TestJavaPacket::PlayerInfoAdd),
             Some(0x38)
@@ -566,7 +632,7 @@ mod tests {
         write_slot(
             &mut writer,
             Some((17, 1, 0)),
-            SlotNbtEncoding::LengthPrefixedBlob,
+            SlotEncoding::Legacy(SlotNbtEncoding::LengthPrefixedBlob),
         );
 
         assert_eq!(
@@ -585,15 +651,43 @@ mod tests {
         writer.write_u8(0);
         writer.write_i16(46);
         for _ in 0..45 {
-            write_slot(&mut writer, None, SlotNbtEncoding::RootTag);
+            write_slot(
+                &mut writer,
+                None,
+                SlotEncoding::Legacy(SlotNbtEncoding::RootTag),
+            );
         }
-        write_slot(&mut writer, Some((20, 64, 0)), SlotNbtEncoding::RootTag);
+        write_slot(
+            &mut writer,
+            Some((20, 64, 0)),
+            SlotEncoding::Legacy(SlotNbtEncoding::RootTag),
+        );
 
         assert_eq!(
             protocol
                 .window_items_slot(&writer.into_inner(), 45)
                 .expect("modern offhand slot should decode"),
             Some((20, 64, 0))
+        );
+    }
+
+    #[test]
+    fn flattened_window_items_decode_uses_present_varint_slots() {
+        let protocol = TestJavaProtocol::Je404;
+        let mut writer = PacketWriter::default();
+        writer.write_varint(protocol.window_items_packet_id());
+        writer.write_u8(0);
+        writer.write_i16(46);
+        for _ in 0..45 {
+            write_slot(&mut writer, None, protocol.slot_encoding());
+        }
+        write_slot(&mut writer, Some((64, 64, 0)), protocol.slot_encoding());
+
+        assert_eq!(
+            protocol
+                .window_items_slot(&writer.into_inner(), 45)
+                .expect("flattened offhand slot should decode"),
+            Some((64, 64, 0))
         );
     }
 
@@ -626,5 +720,30 @@ mod tests {
         assert_eq!(modern_reader.read_i8().expect("button should decode"), 0);
         assert_eq!(modern_reader.read_i16().expect("action should decode"), 1);
         assert_eq!(modern_reader.read_varint().expect("mode should decode"), 0);
+
+        let flattened = TestJavaProtocol::Je404.encode_click_window(36, 0, 1, None);
+        let mut flattened_reader = PacketReader::new(&flattened);
+        assert_eq!(
+            flattened_reader
+                .read_varint()
+                .expect("flattened id should decode"),
+            0x08
+        );
+        assert_eq!(flattened_reader.read_u8().expect("window should decode"), 0);
+        assert_eq!(flattened_reader.read_i16().expect("slot should decode"), 36);
+        assert_eq!(flattened_reader.read_i8().expect("button should decode"), 0);
+        assert_eq!(
+            flattened_reader.read_i16().expect("action should decode"),
+            1
+        );
+        assert_eq!(
+            flattened_reader.read_varint().expect("mode should decode"),
+            0
+        );
+        assert!(
+            !flattened_reader
+                .read_bool()
+                .expect("present flag should decode")
+        );
     }
 }

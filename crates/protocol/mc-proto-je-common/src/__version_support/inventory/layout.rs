@@ -1,4 +1,4 @@
-use super::slot_codec::SlotNbtEncoding;
+use super::slot_codec::{SlotEncoding, SlotNbtEncoding};
 use mc_core::{InventoryContainer, InventorySlot};
 
 pub const PLAYER_WINDOW_CRAFTING_RESULT_SLOT: i16 = 0;
@@ -20,7 +20,7 @@ pub enum PlayerInventoryLayout {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InventoryProtocolSpec {
-    pub slot_nbt: SlotNbtEncoding,
+    pub slot: SlotEncoding,
     pub layout: PlayerInventoryLayout,
 }
 
@@ -34,17 +34,30 @@ pub(super) struct ContainerDescriptor {
 }
 
 pub const JE_1_7_10_INVENTORY_SPEC: InventoryProtocolSpec = InventoryProtocolSpec {
-    slot_nbt: SlotNbtEncoding::LengthPrefixedBlob,
+    slot: SlotEncoding::Legacy {
+        nbt: SlotNbtEncoding::LengthPrefixedBlob,
+    },
     layout: PlayerInventoryLayout::Legacy,
 };
 
 pub const JE_1_8_X_INVENTORY_SPEC: InventoryProtocolSpec = InventoryProtocolSpec {
-    slot_nbt: SlotNbtEncoding::RootTag,
+    slot: SlotEncoding::Legacy {
+        nbt: SlotNbtEncoding::RootTag,
+    },
     layout: PlayerInventoryLayout::Legacy,
 };
 
 pub const JE_1_12_2_INVENTORY_SPEC: InventoryProtocolSpec = InventoryProtocolSpec {
-    slot_nbt: SlotNbtEncoding::RootTag,
+    slot: SlotEncoding::Legacy {
+        nbt: SlotNbtEncoding::RootTag,
+    },
+    layout: PlayerInventoryLayout::ModernWithOffhand,
+};
+
+pub const JE_1_13_2_INVENTORY_SPEC: InventoryProtocolSpec = InventoryProtocolSpec {
+    slot: SlotEncoding::PresentVarInt {
+        nbt: SlotNbtEncoding::RootTag,
+    },
     layout: PlayerInventoryLayout::ModernWithOffhand,
 };
 

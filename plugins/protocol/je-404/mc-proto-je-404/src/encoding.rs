@@ -14,10 +14,10 @@ use mc_core::{
 };
 use mc_proto_common::{PacketWriter, ProtocolError};
 use mc_proto_je_common::__version_support::{
-    blocks::legacy_block_state_id,
-    chunks::build_chunk_data_1_12,
+    blocks::flattened_block_state_id_1_13_2,
+    chunks::build_chunk_data_1_13_2,
     inventory::{unique_slot_count, window_items, window_type, write_slot},
-    metadata::{write_empty_metadata_1_12, write_item_stack_metadata_1_12},
+    metadata::{write_empty_metadata_1_12, write_item_stack_metadata_1_13},
     players::encode_player_info_add as encode_shared_player_info_add,
     positions::{pack_block_position, to_angle_byte},
 };
@@ -165,7 +165,7 @@ pub fn encode_dropped_item_metadata(
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_ENTITY_METADATA);
     writer.write_varint(entity_id.0);
-    write_item_stack_metadata_1_12(&mut writer, 6, &item.item, crate::INVENTORY_SPEC.slot)?;
+    write_item_stack_metadata_1_13(&mut writer, 6, &item.item, crate::INVENTORY_SPEC.slot)?;
     Ok(writer.into_inner())
 }
 
@@ -187,7 +187,7 @@ pub fn encode_block_change(position: BlockPos, block: &mc_core::BlockState) -> V
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_BLOCK_CHANGE);
     writer.write_i64(pack_block_position(position));
-    writer.write_varint(legacy_block_state_id(block));
+    writer.write_varint(flattened_block_state_id_1_13_2(block));
     writer.into_inner()
 }
 
@@ -276,7 +276,7 @@ pub fn encode_window_items(
 }
 
 pub fn encode_chunk(chunk: &ChunkColumn) -> Result<Vec<u8>, ProtocolError> {
-    let (bit_map, chunk_data) = build_chunk_data_1_12(chunk, true);
+    let (bit_map, chunk_data) = build_chunk_data_1_13_2(chunk, true);
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_MAP_CHUNK);
     writer.write_i32(chunk.pos.x);

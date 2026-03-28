@@ -25,6 +25,7 @@ use mc_plugin_proto_be_placeholder::in_process_plugin_entrypoints as be_placehol
 use mc_plugin_proto_je_5::in_process_plugin_entrypoints as je_1_7_10_entrypoints;
 use mc_plugin_proto_je_47::in_process_plugin_entrypoints as je_1_8_x_entrypoints;
 use mc_plugin_proto_je_340::in_process_plugin_entrypoints as je_1_12_2_entrypoints;
+use mc_plugin_proto_je_404::in_process_plugin_entrypoints as je_1_13_2_entrypoints;
 use mc_plugin_storage_je_anvil_1_7_10::in_process_plugin_entrypoints as storage_entrypoints;
 use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_be_924::BE_924_ADAPTER_ID;
@@ -36,6 +37,7 @@ use mc_proto_common::{
 use mc_proto_je_5::{JE_1_7_10_STORAGE_PROFILE_ID, JE_5_ADAPTER_ID};
 use mc_proto_je_47::JE_47_ADAPTER_ID;
 use mc_proto_je_340::JE_340_ADAPTER_ID;
+use mc_proto_je_404::JE_404_ADAPTER_ID;
 use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol, TestJavaProtocolError};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};

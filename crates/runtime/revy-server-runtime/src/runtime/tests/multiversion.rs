@@ -7,6 +7,7 @@ fn multi_version_survival_server_config(world_dir: PathBuf) -> ServerConfig {
         JE_5_ADAPTER_ID.into(),
         JE_47_ADAPTER_ID.into(),
         JE_340_ADAPTER_ID.into(),
+        JE_404_ADAPTER_ID.into(),
     ]);
     config
 }
@@ -20,6 +21,7 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         JE_5_ADAPTER_ID.into(),
         JE_47_ADAPTER_ID.into(),
         JE_340_ADAPTER_ID.into(),
+        JE_404_ADAPTER_ID.into(),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
     let addr = listener_addr(&server);
@@ -103,6 +105,27 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
     .await?;
     assert_eq!(packet_id(&modern_18_spawn), 0x0c);
 
+    let (mut modern_113, mut modern_113_buffer) =
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je404, "flattened").await?;
+    let modern_113_player_info = read_until_java_packet(
+        &mut modern_113,
+        &codec,
+        &mut modern_113_buffer,
+        TestJavaProtocol::Je404,
+        TestJavaPacket::PlayerInfoAdd,
+    )
+    .await?;
+    assert_eq!(packet_id(&modern_113_player_info), 0x30);
+    let modern_113_spawn = read_until_java_packet(
+        &mut modern_113,
+        &codec,
+        &mut modern_113_buffer,
+        TestJavaProtocol::Je404,
+        TestJavaPacket::NamedEntitySpawn,
+    )
+    .await?;
+    assert_eq!(packet_id(&modern_113_spawn), 0x05);
+
     write_packet(
         &mut modern_18,
         &codec,
@@ -125,8 +148,17 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         TestJavaPacket::EntityTeleport,
     )
     .await?;
+    let modern_113_teleport = read_until_java_packet(
+        &mut modern_113,
+        &codec,
+        &mut modern_113_buffer,
+        TestJavaProtocol::Je404,
+        TestJavaPacket::EntityTeleport,
+    )
+    .await?;
     assert_eq!(packet_id(&legacy_teleport), 0x18);
     assert_eq!(packet_id(&modern_112_teleport), 0x4c);
+    assert_eq!(packet_id(&modern_113_teleport), 0x50);
 
     write_packet(
         &mut modern_112,
@@ -150,6 +182,14 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
         TestJavaPacket::BlockChange,
     )
     .await?;
+    let modern_113_block_change = read_until_java_packet(
+        &mut modern_113,
+        &codec,
+        &mut modern_113_buffer,
+        TestJavaProtocol::Je404,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
     assert_eq!(
         block_change_from_packet(&legacy_block_change)?,
         (2, 4, 0, 1, 0)
@@ -157,6 +197,10 @@ async fn mixed_java_versions_share_login_movement_and_block_sync() -> Result<(),
     assert_eq!(
         block_change_from_packet_1_8(&modern_18_block_change)?,
         (2, 4, 0, 16)
+    );
+    assert_eq!(
+        block_change_from_packet_1_12(&modern_113_block_change)?,
+        (2, 4, 0, 1)
     );
 
     server.shutdown().await
@@ -176,6 +220,8 @@ async fn mixed_java_versions_share_survival_block_sync() -> Result<(), RuntimeEr
         connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je47, "middle").await?;
     let (mut modern_112, mut modern_112_buffer) =
         connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je340, "latest").await?;
+    let (mut modern_113, mut modern_113_buffer) =
+        connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je404, "flattened").await?;
 
     write_packet(
         &mut modern_112,
@@ -210,6 +256,14 @@ async fn mixed_java_versions_share_survival_block_sync() -> Result<(), RuntimeEr
         16,
     )
     .await?;
+    let modern_113_place = read_until_java_packet(
+        &mut modern_113,
+        &codec,
+        &mut modern_113_buffer,
+        TestJavaProtocol::Je404,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
 
     assert_eq!(block_change_from_packet(&legacy_place)?, (2, 4, 0, 1, 0));
     assert_eq!(
@@ -219,6 +273,10 @@ async fn mixed_java_versions_share_survival_block_sync() -> Result<(), RuntimeEr
     assert_eq!(
         decode_set_slot(TestJavaProtocol::Je340, &modern_112_slot)?,
         (0, 36, Some((1, 63, 0)))
+    );
+    assert_eq!(
+        block_change_from_packet_1_12(&modern_113_place)?,
+        (2, 4, 0, 1)
     );
 
     write_packet(&mut modern_112, &codec, &player_digging_1_12(0, 2, 2, 0, 1)).await?;
@@ -248,10 +306,22 @@ async fn mixed_java_versions_share_survival_block_sync() -> Result<(), RuntimeEr
         TestJavaPacket::BlockChange,
     )
     .await?;
+    let modern_113_break = read_until_java_packet(
+        &mut modern_113,
+        &codec,
+        &mut modern_113_buffer,
+        TestJavaProtocol::Je404,
+        TestJavaPacket::BlockChange,
+    )
+    .await?;
 
     assert_eq!(block_change_from_packet(&legacy_break)?, (2, 2, 0, 0, 0));
     assert_eq!(
         block_change_from_packet_1_8(&modern_18_break)?,
+        (2, 2, 0, 0)
+    );
+    assert_eq!(
+        block_change_from_packet_1_12(&modern_113_break)?,
         (2, 2, 0, 0)
     );
 

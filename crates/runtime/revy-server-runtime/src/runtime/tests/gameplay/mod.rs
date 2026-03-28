@@ -25,6 +25,7 @@ fn multi_version_creative_server_config(world_dir: PathBuf) -> ServerConfig {
         JE_5_ADAPTER_ID.into(),
         JE_47_ADAPTER_ID.into(),
         JE_340_ADAPTER_ID.into(),
+        JE_404_ADAPTER_ID.into(),
     ]);
     config
 }
@@ -35,6 +36,7 @@ fn multi_version_survival_server_config(world_dir: PathBuf) -> ServerConfig {
         JE_5_ADAPTER_ID.into(),
         JE_47_ADAPTER_ID.into(),
         JE_340_ADAPTER_ID.into(),
+        JE_404_ADAPTER_ID.into(),
     ]);
     config
 }

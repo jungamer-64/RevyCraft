@@ -24,7 +24,7 @@ max_players = 20
 [live.topology]
 be_enabled = true
 default_adapter = "je-5"
-enabled_adapters = ["je-5", "je-47", "je-340"]
+enabled_adapters = ["je-5", "je-47", "je-340", "je-404"]
 default_bedrock_adapter = "be-924"
 enabled_bedrock_adapters = ["be-924"]
 reload_watch = false
@@ -35,6 +35,7 @@ allowlist = [
   "je-5",
   "je-47",
   "je-340",
+  "je-404",
   "be-924",
   "gameplay-canonical",
   "gameplay-readonly",
@@ -109,4 +110,5 @@ profile = "console-v1"
 "je-5" = "readonly"
 "je-47" = "canonical"
 "je-340" = "canonical"
+"je-404" = "canonical"
 "be-924" = "canonical"

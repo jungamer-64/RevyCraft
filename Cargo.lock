@@ -1801,6 +1801,7 @@ dependencies = [
  "mc-plugin-proto-be-924",
  "mc-plugin-proto-be-placeholder",
  "mc-plugin-proto-je-340",
+ "mc-plugin-proto-je-404",
  "mc-plugin-proto-je-47",
  "mc-plugin-proto-je-5",
  "mc-plugin-sdk-rust",
@@ -1810,6 +1811,7 @@ dependencies = [
  "mc-proto-be-placeholder",
  "mc-proto-common",
  "mc-proto-je-340",
+ "mc-proto-je-404",
  "mc-proto-je-47",
  "mc-proto-je-5",
  "serde",
@@ -1862,6 +1864,17 @@ dependencies = [
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-340",
+]
+
+[[package]]
+name = "mc-plugin-proto-je-404"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-proto-common",
+ "mc-proto-je-404",
 ]
 
 [[package]]
@@ -1981,6 +1994,17 @@ dependencies = [
 
 [[package]]
 name = "mc-proto-je-340"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-proto-common",
+ "mc-proto-je-common",
+ "mc-proto-test-support",
+ "uuid",
+]
+
+[[package]]
+name = "mc-proto-je-404"
 version = "0.1.0"
 dependencies = [
  "mc-core",
@@ -2980,6 +3004,7 @@ dependencies = [
  "mc-plugin-proto-be-924",
  "mc-plugin-proto-be-placeholder",
  "mc-plugin-proto-je-340",
+ "mc-plugin-proto-je-404",
  "mc-plugin-proto-je-47",
  "mc-plugin-proto-je-5",
  "mc-plugin-sdk-rust",
@@ -2990,6 +3015,7 @@ dependencies = [
  "mc-proto-be-placeholder",
  "mc-proto-common",
  "mc-proto-je-340",
+ "mc-proto-je-404",
  "mc-proto-je-47",
  "mc-proto-je-5",
  "mc-proto-je-common",

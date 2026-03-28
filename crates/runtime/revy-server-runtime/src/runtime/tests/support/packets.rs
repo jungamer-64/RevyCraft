@@ -93,6 +93,7 @@ pub(crate) fn held_item_change_for_protocol(protocol: TestJavaProtocol, slot: i1
     writer.write_varint(match protocol {
         TestJavaProtocol::Je5 | TestJavaProtocol::Je47 => 0x09,
         TestJavaProtocol::Je340 => 0x1a,
+        TestJavaProtocol::Je404 => 0x21,
     });
     writer.write_i16(slot);
     writer.into_inner()

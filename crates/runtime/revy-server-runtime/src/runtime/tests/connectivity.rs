@@ -120,7 +120,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
         .plugin_host
         .as_ref()
         .expect("runtime status should expose the plugin host snapshot");
-    assert_eq!(plugin_host.protocol_count, 5);
+    assert_eq!(plugin_host.protocol_count, 6);
     assert_eq!(plugin_host.gameplay_count, 1);
     assert_eq!(plugin_host.storage_count, 1);
     assert_eq!(plugin_host.auth_count, 1);
@@ -137,7 +137,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
             "runtime active-generation=1 draining-generations=0 listeners=1 sessions=0 dirty=false\n",
             "generation tcp-default=je-5 tcp-enabled=je-5 udp-default=- udp-enabled=- max-players=20 motd=\"Multi-version Rust server\"\n",
             "session-summary transport=tcp:0,udp:0 phase=handshaking:0,status:0,login:0,play:0\n",
-            "plugins protocol=5 gameplay=1 storage=1 auth=1 admin-surface=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
+            "plugins protocol=6 gameplay=1 storage=1 auth=1 admin-surface=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
         )
     );
     let serialized = toml::to_string(&status).expect("runtime status snapshot should serialize");
@@ -868,6 +868,7 @@ async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), Runt
         JE_5_ADAPTER_ID.into(),
         JE_47_ADAPTER_ID.into(),
         JE_340_ADAPTER_ID.into(),
+        JE_404_ADAPTER_ID.into(),
     ]);
     let server = build_test_server(config, plugin_test_registries_all()?).await?;
 
@@ -876,7 +877,7 @@ async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), Runt
         .iter()
         .find(|binding| binding.transport == TransportKind::Tcp)
         .expect("tcp listener binding should exist");
-    assert_eq!(binding.adapter_ids.len(), 3);
+    assert_eq!(binding.adapter_ids.len(), 4);
     assert!(
         binding
             .adapter_ids
@@ -894,6 +895,12 @@ async fn tcp_listener_binding_reports_enabled_java_versions() -> Result<(), Runt
             .adapter_ids
             .iter()
             .any(|adapter_id| adapter_id == JE_340_ADAPTER_ID)
+    );
+    assert!(
+        binding
+            .adapter_ids
+            .iter()
+            .any(|adapter_id| adapter_id == JE_404_ADAPTER_ID)
     );
 
     server.shutdown().await

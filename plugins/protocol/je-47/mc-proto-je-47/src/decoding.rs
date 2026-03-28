@@ -78,7 +78,7 @@ pub(crate) fn decode_play_packet(
         }
         PACKET_SB_CREATIVE_INVENTORY_ACTION => {
             let slot = reader.read_i16()?;
-            let stack = read_slot(&mut reader, crate::INVENTORY_SPEC.slot_nbt)?;
+            let stack = read_slot(&mut reader, crate::INVENTORY_SPEC.slot)?;
             Ok(inventory_slot(
                 mc_core::InventoryContainer::Player,
                 crate::INVENTORY_SPEC.layout,
@@ -162,7 +162,7 @@ fn decode_place_block_packet(
 ) -> Result<Option<RuntimeCommand>, ProtocolError> {
     let position = unpack_block_position(reader.read_i64()?);
     let direction = reader.read_i8()?;
-    let held_item = read_slot(reader, crate::INVENTORY_SPEC.slot_nbt)?;
+    let held_item = read_slot(reader, crate::INVENTORY_SPEC.slot)?;
     let _cursor_x = reader.read_i8()?;
     let _cursor_y = reader.read_i8()?;
     let _cursor_z = reader.read_i8()?;
@@ -214,7 +214,7 @@ fn decode_click_window_packet(
     let raw_button = reader.read_i8()?;
     let action_number = reader.read_i16()?;
     let mode = reader.read_i8()?;
-    let clicked_item = read_slot(reader, crate::INVENTORY_SPEC.slot_nbt)?;
+    let clicked_item = read_slot(reader, crate::INVENTORY_SPEC.slot)?;
 
     let button = match raw_button {
         1 => InventoryClickButton::Right,

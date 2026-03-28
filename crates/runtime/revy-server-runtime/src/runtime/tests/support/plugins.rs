@@ -51,6 +51,7 @@ pub(crate) const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
     JE_5_ADAPTER_ID,
     JE_47_ADAPTER_ID,
     JE_340_ADAPTER_ID,
+    JE_404_ADAPTER_ID,
     BE_924_ADAPTER_ID,
     BE_PLACEHOLDER_ADAPTER_ID,
 ];
@@ -202,6 +203,11 @@ pub(crate) fn register_in_process_protocol_adapter(
             plugin_id: JE_340_ADAPTER_ID.to_string(),
             manifest: je_1_12_2_entrypoints().manifest,
             api: je_1_12_2_entrypoints().api,
+        },
+        JE_404_ADAPTER_ID => InProcessProtocolPlugin {
+            plugin_id: JE_404_ADAPTER_ID.to_string(),
+            manifest: je_1_13_2_entrypoints().manifest,
+            api: je_1_13_2_entrypoints().api,
         },
         BE_924_ADAPTER_ID => InProcessProtocolPlugin {
             plugin_id: BE_924_ADAPTER_ID.to_string(),

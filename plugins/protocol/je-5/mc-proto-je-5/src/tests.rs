@@ -735,8 +735,7 @@ fn encodes_dropped_item_spawn_and_metadata() {
         (5 << 5) | 10
     );
     assert_eq!(
-        read_slot(&mut metadata, crate::INVENTORY_SPEC.slot_nbt)
-            .expect("metadata slot should decode"),
+        read_slot(&mut metadata, crate::INVENTORY_SPEC.slot).expect("metadata slot should decode"),
         Some(ItemStack::new("minecraft:cobblestone", 1, 0))
     );
     assert_eq!(metadata.read_u8().expect("terminator should decode"), 0x7f);

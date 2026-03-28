@@ -395,7 +395,12 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
     let target_dir = harness.scoped_target_dir("auth-online-packaged");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID, JE_340_ADAPTER_ID],
+        &[
+            JE_5_ADAPTER_ID,
+            JE_47_ADAPTER_ID,
+            JE_340_ADAPTER_ID,
+            JE_404_ADAPTER_ID,
+        ],
         &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
     )?;
     harness
@@ -414,13 +419,19 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
         JE_5_ADAPTER_ID.into(),
         JE_47_ADAPTER_ID.into(),
         JE_340_ADAPTER_ID.into(),
+        JE_404_ADAPTER_ID.into(),
     ]);
     config.bootstrap.plugins_dir = dist_dir.clone();
     let server = build_reloadable_test_server(
         config,
         plugin_test_registries_from_dist_with_supporting_plugins(
             dist_dir,
-            &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID, JE_340_ADAPTER_ID],
+            &[
+                JE_5_ADAPTER_ID,
+                JE_47_ADAPTER_ID,
+                JE_340_ADAPTER_ID,
+                JE_404_ADAPTER_ID,
+            ],
             &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
         )?,
     )
@@ -432,6 +443,7 @@ async fn packaged_online_auth_stub_boot_supports_mixed_versions() -> Result<(), 
         (TestJavaProtocol::Je5, "packaged-legacy"),
         (TestJavaProtocol::Je47, "packaged-middle"),
         (TestJavaProtocol::Je340, "packaged-latest"),
+        (TestJavaProtocol::Je404, "packaged13"),
     ] {
         let mut stream = connect_tcp(addr).await?;
         let (mut encryption, mut buffer) =

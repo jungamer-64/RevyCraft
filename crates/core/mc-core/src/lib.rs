@@ -324,6 +324,7 @@ closed_capability_enum!(ProtocolCapability, "protocol", {
     Je5 => "protocol.je.5",
     Je47 => "protocol.je.47",
     Je340 => "protocol.je.340",
+    Je404 => "protocol.je.404",
     Bedrock => "protocol.bedrock",
     Bedrock924 => "protocol.bedrock.924",
 });

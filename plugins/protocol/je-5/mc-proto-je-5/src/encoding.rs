@@ -167,7 +167,7 @@ pub(crate) fn encode_dropped_item_metadata(
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_ENTITY_METADATA);
     writer.write_i32(entity_id.0);
-    write_item_stack_metadata_1_8(&mut writer, 10, &item.item, crate::INVENTORY_SPEC.slot_nbt)?;
+    write_item_stack_metadata_1_8(&mut writer, 10, &item.item, crate::INVENTORY_SPEC.slot)?;
     Ok(writer.into_inner())
 }
 
@@ -219,7 +219,7 @@ pub(crate) fn encode_set_slot(
     writer.write_varint(PACKET_CB_SET_SLOT);
     writer.write_i8(window_id);
     writer.write_i16(slot);
-    write_slot(&mut writer, stack, crate::INVENTORY_SPEC.slot_nbt)?;
+    write_slot(&mut writer, stack, crate::INVENTORY_SPEC.slot)?;
     Ok(writer.into_inner())
 }
 
@@ -280,7 +280,7 @@ pub(crate) fn encode_window_items(
     writer.write_i8(signed_window_id(window_id));
     writer.write_i16(slot_count);
     for slot in &items {
-        write_slot(&mut writer, slot.as_ref(), crate::INVENTORY_SPEC.slot_nbt)?;
+        write_slot(&mut writer, slot.as_ref(), crate::INVENTORY_SPEC.slot)?;
     }
     Ok(writer.into_inner())
 }

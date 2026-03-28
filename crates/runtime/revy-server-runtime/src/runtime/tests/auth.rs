@@ -57,7 +57,12 @@ async fn offline_mode_rejects_online_auth_profile() -> Result<(), RuntimeError> 
 #[tokio::test]
 async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let enabled_adapters = [JE_5_ADAPTER_ID, JE_47_ADAPTER_ID, JE_340_ADAPTER_ID];
+    let enabled_adapters = [
+        JE_5_ADAPTER_ID,
+        JE_47_ADAPTER_ID,
+        JE_340_ADAPTER_ID,
+        JE_404_ADAPTER_ID,
+    ];
     let server = build_test_server(
         online_auth_server_config(temp_dir.path().join("world"), &enabled_adapters),
         in_process_online_auth_registries(&enabled_adapters)?,
@@ -70,6 +75,7 @@ async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(
         (TestJavaProtocol::Je5, "legacy-online"),
         (TestJavaProtocol::Je47, "middle-online"),
         (TestJavaProtocol::Je340, "latest-online"),
+        (TestJavaProtocol::Je404, "flattened-online"),
     ] {
         let mut stream = connect_tcp(addr).await?;
         let (mut encryption, mut buffer) =

@@ -200,6 +200,7 @@ fn server_toml_parse_enabled_adapters() -> Result<(), RuntimeError> {
         JE_5_ADAPTER_ID.into(),
         JE_47_ADAPTER_ID.into(),
         JE_340_ADAPTER_ID.into(),
+        JE_404_ADAPTER_ID.into(),
     ]);
     let path = temp_dir.path().join("server.toml");
     write_server_toml(&path, &config)?;
@@ -248,6 +249,7 @@ fn server_toml_parse_gameplay_profile_configuration() -> Result<(), RuntimeError
     config.profiles.gameplay_map = gameplay_profile_map(&[
         (JE_5_ADAPTER_ID, "readonly"),
         (JE_340_ADAPTER_ID, "canonical"),
+        (JE_404_ADAPTER_ID, "canonical"),
     ]);
     let path = temp_dir.path().join("server.toml");
     write_server_toml(&path, &config)?;
@@ -259,6 +261,7 @@ fn server_toml_parse_gameplay_profile_configuration() -> Result<(), RuntimeError
         gameplay_profile_map(&[
             (JE_5_ADAPTER_ID, "readonly"),
             (JE_340_ADAPTER_ID, "canonical"),
+            (JE_404_ADAPTER_ID, "canonical"),
         ])
     );
     Ok(())

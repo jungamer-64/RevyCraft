@@ -1,4 +1,6 @@
-use crate::__version_support::blocks::{legacy_item, semantic_item};
+use crate::__version_support::blocks::{
+    flattened_item_id_1_13_2, legacy_item, semantic_flattened_item_1_13_2, semantic_item,
+};
 use mc_core::ItemStack;
 use mc_proto_common::{PacketReader, PacketWriter, ProtocolError};
 
@@ -8,40 +10,80 @@ pub enum SlotNbtEncoding {
     RootTag,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotEncoding {
+    Legacy { nbt: SlotNbtEncoding },
+    PresentVarInt { nbt: SlotNbtEncoding },
+}
+
 pub fn read_slot(
     reader: &mut PacketReader<'_>,
-    slot_nbt: SlotNbtEncoding,
+    slot: SlotEncoding,
 ) -> Result<Option<ItemStack>, ProtocolError> {
-    let item_id = reader.read_i16()?;
-    if item_id < 0 {
-        return Ok(None);
+    match slot {
+        SlotEncoding::Legacy { nbt } => {
+            let item_id = reader.read_i16()?;
+            if item_id < 0 {
+                return Ok(None);
+            }
+            let count = reader.read_u8()?;
+            let damage = u16::from_be_bytes(reader.read_i16()?.to_be_bytes());
+            skip_slot_nbt(reader, nbt)?;
+            Ok(Some(semantic_item(item_id, damage, count)))
+        }
+        SlotEncoding::PresentVarInt { nbt } => {
+            if !reader.read_bool()? {
+                return Ok(None);
+            }
+            let item_id = reader.read_varint()?;
+            let count = reader.read_u8()?;
+            skip_slot_nbt(reader, nbt)?;
+            Ok(Some(semantic_flattened_item_1_13_2(item_id, count)))
+        }
     }
-    let count = reader.read_u8()?;
-    let damage = u16::from_be_bytes(reader.read_i16()?.to_be_bytes());
-    skip_slot_nbt(reader, slot_nbt)?;
-    Ok(Some(semantic_item(item_id, damage, count)))
 }
 
 pub fn write_slot(
     writer: &mut PacketWriter,
     stack: Option<&ItemStack>,
-    slot_nbt: SlotNbtEncoding,
+    slot: SlotEncoding,
 ) -> Result<(), ProtocolError> {
-    let Some(stack) = stack else {
-        writer.write_i16(-1);
-        return Ok(());
-    };
-    let Some((item_id, damage)) = legacy_item(stack) else {
-        return Err(ProtocolError::InvalidPacket("unsupported inventory item"));
-    };
-    writer.write_i16(item_id);
-    writer.write_u8(stack.count);
-    writer.write_i16(i16::from_be_bytes(damage.to_be_bytes()));
+    match slot {
+        SlotEncoding::Legacy { nbt } => {
+            let Some(stack) = stack else {
+                writer.write_i16(-1);
+                return Ok(());
+            };
+            let Some((item_id, damage)) = legacy_item(stack) else {
+                return Err(ProtocolError::InvalidPacket("unsupported inventory item"));
+            };
+            writer.write_i16(item_id);
+            writer.write_u8(stack.count);
+            writer.write_i16(i16::from_be_bytes(damage.to_be_bytes()));
+            write_empty_slot_nbt(writer, nbt);
+        }
+        SlotEncoding::PresentVarInt { nbt } => {
+            let Some(stack) = stack else {
+                writer.write_bool(false);
+                return Ok(());
+            };
+            let Some(item_id) = flattened_item_id_1_13_2(stack) else {
+                return Err(ProtocolError::InvalidPacket("unsupported inventory item"));
+            };
+            writer.write_bool(true);
+            writer.write_varint(item_id);
+            writer.write_u8(stack.count);
+            write_empty_slot_nbt(writer, nbt);
+        }
+    }
+    Ok(())
+}
+
+fn write_empty_slot_nbt(writer: &mut PacketWriter, slot_nbt: SlotNbtEncoding) {
     match slot_nbt {
         SlotNbtEncoding::LengthPrefixedBlob => writer.write_i16(-1),
         SlotNbtEncoding::RootTag => writer.write_u8(0),
     }
-    Ok(())
 }
 
 fn skip_slot_nbt(

@@ -5,11 +5,11 @@ mod window_items;
 pub use self::layout::{
     CHEST_WINDOW_TYPE, CRAFTING_TABLE_WINDOW_TYPE, CURSOR_SLOT_ID, CURSOR_WINDOW_ID,
     FURNACE_WINDOW_TYPE, InventoryProtocolSpec, JE_1_7_10_INVENTORY_SPEC, JE_1_8_X_INVENTORY_SPEC,
-    JE_1_12_2_INVENTORY_SPEC, PLAYER_WINDOW_CRAFTING_INPUT_SLOTS,
+    JE_1_12_2_INVENTORY_SPEC, JE_1_13_2_INVENTORY_SPEC, PLAYER_WINDOW_CRAFTING_INPUT_SLOTS,
     PLAYER_WINDOW_CRAFTING_RESULT_SLOT, PlayerInventoryLayout, inventory_slot, player_window_id,
     protocol_slot, signed_window_id, unique_slot_count, window_type,
 };
-pub use self::slot_codec::{SlotNbtEncoding, read_slot, write_slot};
+pub use self::slot_codec::{SlotEncoding, SlotNbtEncoding, read_slot, write_slot};
 pub use self::window_items::window_items;
 
 #[cfg(test)]
@@ -30,7 +30,7 @@ mod tests {
         write_slot(
             &mut writer,
             Some(&stone_stack()),
-            JE_1_7_10_INVENTORY_SPEC.slot_nbt,
+            JE_1_7_10_INVENTORY_SPEC.slot,
         )
         .expect("legacy slot should encode");
 
@@ -43,7 +43,7 @@ mod tests {
 
         let mut reader = PacketReader::new(&encoded);
         assert_eq!(
-            read_slot(&mut reader, JE_1_7_10_INVENTORY_SPEC.slot_nbt)
+            read_slot(&mut reader, JE_1_7_10_INVENTORY_SPEC.slot)
                 .expect("legacy slot should decode"),
             Some(stone_stack())
         );
@@ -55,7 +55,7 @@ mod tests {
         write_slot(
             &mut writer,
             Some(&stone_stack()),
-            JE_1_8_X_INVENTORY_SPEC.slot_nbt,
+            JE_1_8_X_INVENTORY_SPEC.slot,
         )
         .expect("root-tag slot should encode");
 
@@ -68,8 +68,33 @@ mod tests {
 
         let mut reader = PacketReader::new(&encoded);
         assert_eq!(
-            read_slot(&mut reader, JE_1_8_X_INVENTORY_SPEC.slot_nbt)
+            read_slot(&mut reader, JE_1_8_X_INVENTORY_SPEC.slot)
                 .expect("root-tag slot should decode"),
+            Some(stone_stack())
+        );
+    }
+
+    #[test]
+    fn present_varint_slot_round_trips_with_root_tag_marker() {
+        let mut writer = PacketWriter::default();
+        write_slot(
+            &mut writer,
+            Some(&stone_stack()),
+            JE_1_13_2_INVENTORY_SPEC.slot,
+        )
+        .expect("1.13.2 slot should encode");
+
+        let encoded = writer.into_inner();
+        let mut reader = PacketReader::new(&encoded);
+        assert!(reader.read_bool().expect("present flag should decode"));
+        assert_eq!(reader.read_varint().expect("item id should decode"), 1);
+        assert_eq!(reader.read_u8().expect("count should decode"), 32);
+        assert_eq!(reader.read_u8().expect("nbt tag should decode"), 0);
+
+        let mut reader = PacketReader::new(&encoded);
+        assert_eq!(
+            read_slot(&mut reader, JE_1_13_2_INVENTORY_SPEC.slot)
+                .expect("1.13.2 slot should decode"),
             Some(stone_stack())
         );
     }

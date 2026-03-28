@@ -25,6 +25,7 @@ use mc_plugin_proto_be_placeholder::in_process_plugin_entrypoints as be_placehol
 use mc_plugin_proto_je_5::in_process_plugin_entrypoints as in_process_protocol_entrypoints;
 use mc_plugin_proto_je_47::in_process_plugin_entrypoints as je_1_8_x_entrypoints;
 use mc_plugin_proto_je_340::in_process_plugin_entrypoints as je_1_12_2_entrypoints;
+use mc_plugin_proto_je_404::in_process_plugin_entrypoints as je_1_13_2_entrypoints;
 use mc_plugin_storage_je_anvil_1_7_10::in_process_plugin_entrypoints as storage_entrypoints;
 use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_common::{ConnectionPhase, Edition, PacketWriter, TransportKind, WireFormatKind};

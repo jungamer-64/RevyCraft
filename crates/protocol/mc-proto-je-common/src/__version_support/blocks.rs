@@ -31,6 +31,26 @@ pub fn legacy_block_state_id(state: &BlockState) -> i32 {
 }
 
 #[must_use]
+pub fn flattened_block_state_id_1_13_2(state: &BlockState) -> i32 {
+    match state.key.as_str() {
+        STONE => 1,
+        GRASS_BLOCK => 8,
+        DIRT => 10,
+        COBBLESTONE => 14,
+        OAK_PLANKS => 15,
+        BEDROCK => 33,
+        SAND => 66,
+        GLASS => 230,
+        SANDSTONE => 245,
+        BRICKS => 1125,
+        CHEST => 1729,
+        CRAFTING_TABLE => 3051,
+        FURNACE => 3068,
+        _ => 0,
+    }
+}
+
+#[must_use]
 pub fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
     match block_id {
         1 => BlockState::stone(),
@@ -46,6 +66,26 @@ pub fn semantic_block(block_id: u16, metadata: u8) -> BlockState {
         58 => BlockState::crafting_table(),
         54 => BlockState::chest(),
         61 => BlockState::furnace(),
+        _ => BlockState::air(),
+    }
+}
+
+#[must_use]
+pub fn semantic_flattened_block_1_13_2(state_id: i32) -> BlockState {
+    match state_id {
+        1 => BlockState::stone(),
+        8 | 9 => BlockState::grass_block(),
+        10 => BlockState::dirt(),
+        14 => BlockState::cobblestone(),
+        15 => BlockState::oak_planks(),
+        33 => BlockState::bedrock(),
+        66 => BlockState::sand(),
+        230 => BlockState::glass(),
+        245 => BlockState::sandstone(),
+        1125 => BlockState::bricks(),
+        1729..=1752 => BlockState::chest(),
+        3051 => BlockState::crafting_table(),
+        3068..=3075 => BlockState::furnace(),
         _ => BlockState::air(),
     }
 }
@@ -73,6 +113,28 @@ pub fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
 }
 
 #[must_use]
+pub fn flattened_item_id_1_13_2(stack: &ItemStack) -> Option<i32> {
+    match stack.key.as_str() {
+        STONE => Some(1),
+        GRASS_BLOCK => Some(8),
+        DIRT => Some(9),
+        COBBLESTONE => Some(12),
+        OAK_PLANKS => Some(13),
+        OAK_LOG => Some(32),
+        BEDROCK => Some(25),
+        SAND => Some(26),
+        GLASS => Some(64),
+        SANDSTONE => Some(68),
+        BRICKS => Some(135),
+        CHEST => Some(149),
+        CRAFTING_TABLE => Some(152),
+        FURNACE => Some(154),
+        STICK => Some(497),
+        _ => None,
+    }
+}
+
+#[must_use]
 pub fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
     let key = match item_id {
         1 => STONE,
@@ -92,6 +154,31 @@ pub fn semantic_item(item_id: i16, damage: u16, count: u8) -> ItemStack {
         _ => return ItemStack::unsupported(count, damage),
     };
     ItemStack::new(key, count, damage)
+}
+
+#[must_use]
+pub fn semantic_flattened_item_1_13_2(item_id: i32, count: u8) -> ItemStack {
+    let key = match item_id {
+        1 => STONE,
+        8 => GRASS_BLOCK,
+        9 => DIRT,
+        12 => COBBLESTONE,
+        13 => OAK_PLANKS,
+        32 => OAK_LOG,
+        25 => BEDROCK,
+        26 => SAND,
+        64 => GLASS,
+        68 => SANDSTONE,
+        135 => BRICKS,
+        149 => CHEST,
+        152 => CRAFTING_TABLE,
+        154 => FURNACE,
+        497 => STICK,
+        _ => {
+            return ItemStack::unsupported(count, u16::try_from(item_id).unwrap_or(u16::MAX));
+        }
+    };
+    ItemStack::new(key, count, 0)
 }
 
 #[cfg(test)]
@@ -126,5 +213,15 @@ mod tests {
         let crafting_table_stack = ItemStack::new(CRAFTING_TABLE, 1, 0);
         assert_eq!(legacy_item(&crafting_table_stack), Some((58, 0)));
         assert_eq!(semantic_item(58, 0, 1), crafting_table_stack);
+    }
+
+    #[test]
+    fn chest_round_trips_through_flattened_ids() {
+        assert_eq!(flattened_block_state_id_1_13_2(&BlockState::chest()), 1729);
+        assert_eq!(semantic_flattened_block_1_13_2(1752), BlockState::chest());
+
+        let chest_stack = ItemStack::new(CHEST, 3, 0);
+        assert_eq!(flattened_item_id_1_13_2(&chest_stack), Some(149));
+        assert_eq!(semantic_flattened_item_1_13_2(149, 3), chest_stack);
     }
 }

@@ -3,11 +3,16 @@ use super::*;
 fn gameplay_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerConfig {
     let mut config = loopback_server_config(world_dir);
     config.bootstrap.game_mode = 1;
-    config.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into(), JE_340_ADAPTER_ID.into()]);
+    config.topology.enabled_adapters = Some(vec![
+        JE_5_ADAPTER_ID.into(),
+        JE_340_ADAPTER_ID.into(),
+        JE_404_ADAPTER_ID.into(),
+    ]);
     config.profiles.default_gameplay = "canonical".into();
     config.profiles.gameplay_map = gameplay_profile_map(&[
         (JE_5_ADAPTER_ID, "readonly"),
         (JE_340_ADAPTER_ID, "canonical"),
+        (JE_404_ADAPTER_ID, "canonical"),
     ]);
     config.bootstrap.plugins_dir = dist_dir;
     config
@@ -29,11 +34,13 @@ async fn gameplay_reload_updates_target_profile_generation_only() -> Result<(), 
     let target_dir = harness.scoped_target_dir("gameplay-reload-success");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID, JE_404_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    let registries =
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID])?;
+    let registries = plugin_test_registries_from_dist(
+        dist_dir.clone(),
+        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID, JE_404_ADAPTER_ID],
+    )?;
     let server = build_reloadable_test_server(
         gameplay_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
         registries,
@@ -143,11 +150,13 @@ async fn gameplay_reload_failure_keeps_existing_generation() -> Result<(), Runti
     let target_dir = harness.scoped_target_dir("gameplay-reload-failure");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID, JE_404_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
-    let registries =
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID])?;
+    let registries = plugin_test_registries_from_dist(
+        dist_dir.clone(),
+        &[JE_5_ADAPTER_ID, JE_340_ADAPTER_ID, JE_404_ADAPTER_ID],
+    )?;
     let server = build_reloadable_test_server(
         gameplay_reload_server_config(temp_dir.path().join("world"), dist_dir.clone()),
         registries,

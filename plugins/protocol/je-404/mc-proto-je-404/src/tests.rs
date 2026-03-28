@@ -1,4 +1,4 @@
-use super::{JE_340_ADAPTER_ID, Je340Adapter, PROTOCOL_VERSION_1_12_2, VERSION_NAME_1_12_2};
+use super::{JE_404_ADAPTER_ID, Je404Adapter, PROTOCOL_VERSION_1_13_2, VERSION_NAME_1_13_2};
 use mc_core::{
     BlockPos, CoreCommand, CoreEvent, DimensionId, DroppedItemSnapshot, EntityId, InteractionHand,
     InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventoryContainer,
@@ -10,7 +10,9 @@ use mc_proto_common::{
     PlayEncodingContext, PlaySyncAdapter, ProtocolDescriptor, ProtocolSessionSnapshot,
     ServerListStatus, SessionAdapter, StatusRequest, TransportKind, WireFormatKind,
 };
-use mc_proto_je_common::__version_support::{blocks::legacy_block_state_id, inventory::read_slot};
+use mc_proto_je_common::__version_support::{
+    blocks::flattened_block_state_id_1_13_2, inventory::read_slot,
+};
 use uuid::Uuid;
 
 fn player_snapshot(name: &str) -> PlayerSnapshot {
@@ -75,17 +77,17 @@ impl<T: PlaySyncAdapter + ?Sized> TestPlaySyncAdapterExt for T {}
 
 #[test]
 fn decodes_handshake_status_and_login_packets() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
 
     let handshake = [
-        0x00, 0xd4, 0x02, 0x09, b'l', b'o', b'c', b'a', b'l', b'h', b'o', b's', b't', 0x63, 0xdd,
+        0x00, 0x94, 0x03, 0x09, b'l', b'o', b'c', b'a', b'l', b'h', b'o', b's', b't', 0x63, 0xdd,
         0x02,
     ];
     let intent = adapter
         .try_route(&handshake)
         .expect("handshake should decode")
         .expect("handshake should match JE");
-    assert_eq!(intent.protocol_number, PROTOCOL_VERSION_1_12_2);
+    assert_eq!(intent.protocol_number, PROTOCOL_VERSION_1_13_2);
     assert_eq!(intent.edition, Edition::Je);
 
     let status = adapter
@@ -117,16 +119,16 @@ fn decodes_handshake_status_and_login_packets() {
 
 #[test]
 fn encodes_status_and_offhand_inventory_events() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
     let status_packet = adapter
         .encode_status_response(&ServerListStatus {
             version: ProtocolDescriptor {
-                adapter_id: JE_340_ADAPTER_ID.to_string(),
+                adapter_id: JE_404_ADAPTER_ID.to_string(),
                 transport: TransportKind::Tcp,
                 wire_format: WireFormatKind::MinecraftFramed,
                 edition: Edition::Je,
-                version_name: VERSION_NAME_1_12_2.to_string(),
-                protocol_number: PROTOCOL_VERSION_1_12_2,
+                version_name: VERSION_NAME_1_13_2.to_string(),
+                protocol_number: PROTOCOL_VERSION_1_13_2,
             },
             players_online: 1,
             max_players: 20,
@@ -156,23 +158,24 @@ fn encodes_status_and_offhand_inventory_events() {
         )
         .expect("offhand update should encode");
     let mut reader = PacketReader::new(&packets[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x16);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x17);
     assert_eq!(reader.read_i8().expect("window id should decode"), 0);
     assert_eq!(reader.read_i16().expect("slot should decode"), 45);
 }
 
 #[test]
 fn decodes_offhand_block_place() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"offhand-1122"));
     let mut writer = PacketWriter::default();
-    writer.write_varint(0x1f);
+    writer.write_varint(0x29);
     writer.write_i64(pack_block_position(mc_core::BlockPos::new(2, 3, 4)));
     writer.write_varint(1);
     writer.write_varint(1);
     writer.write_f32(0.5);
     writer.write_f32(0.5);
     writer.write_f32(0.5);
+    writer.write_bool(false);
     let command = adapter
         .decode_play_for(player_id, &writer.into_inner())
         .expect("block place should decode")
@@ -188,7 +191,7 @@ fn decodes_offhand_block_place() {
 
 #[test]
 fn encodes_player_spawn_with_player_info() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
     let player = player_snapshot("alpha");
     let packets = adapter
         .encode_play_event_for(
@@ -205,7 +208,7 @@ fn encodes_player_spawn_with_player_info() {
     assert_eq!(packets.len(), 3);
 
     let mut reader = PacketReader::new(&packets[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x2d);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x30);
     assert_eq!(reader.read_varint().expect("action should decode"), 0);
     assert_eq!(reader.read_varint().expect("count should decode"), 1);
     assert_eq!(
@@ -233,24 +236,24 @@ fn encodes_player_spawn_with_player_info() {
         head_reader
             .read_varint()
             .expect("head rotation id should decode"),
-        0x36
+        0x39
     );
 }
 
 #[test]
 fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"window-click-1122"));
     let mut writer = PacketWriter::default();
-    writer.write_varint(0x07);
-    writer.write_i8(0);
+    writer.write_varint(0x08);
+    writer.write_u8(0);
     writer.write_i16(45);
     writer.write_i8(0);
     writer.write_i16(11);
     writer.write_varint(0);
-    writer.write_i16(20);
+    writer.write_bool(true);
+    writer.write_varint(64);
     writer.write_u8(1);
-    writer.write_i16(0);
     writer.write_u8(0);
     let command = adapter
         .decode_play_for(player_id, &writer.into_inner())
@@ -273,7 +276,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
     ));
 
     let mut writer = PacketWriter::default();
-    writer.write_varint(0x05);
+    writer.write_varint(0x06);
     writer.write_u8(0);
     writer.write_i16(11);
     writer.write_bool(false);
@@ -309,7 +312,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
         )
         .expect("confirm transaction should encode");
     let mut reader = PacketReader::new(&packet[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x11);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x12);
     assert_eq!(reader.read_u8().expect("window id should decode"), 0);
     assert_eq!(reader.read_i16().expect("action number should decode"), 11);
     assert!(reader.read_bool().expect("accepted should decode"));
@@ -326,7 +329,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
         )
         .expect("cursor update should encode");
     let mut reader = PacketReader::new(&packet[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x16);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x17);
     assert_eq!(reader.read_i8().expect("window id should decode"), -1);
     assert_eq!(reader.read_i16().expect("slot should decode"), -1);
 }
@@ -340,7 +343,7 @@ fn pack_block_position(position: mc_core::BlockPos) -> i64 {
 
 #[test]
 fn encodes_block_change_packets() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
     let packet = adapter
         .encode_play_event_for(
             &CoreEvent::BlockChanged {
@@ -362,13 +365,13 @@ fn encodes_block_change_packets() {
     );
     assert_eq!(
         reader.read_varint().expect("state id should decode"),
-        legacy_block_state_id(&mc_core::BlockState::glass())
+        flattened_block_state_id_1_13_2(&mc_core::BlockState::glass())
     );
 }
 
 #[test]
 fn encodes_and_decodes_container_window_packets() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"window-open-1122"));
 
     let packets = adapter
@@ -385,7 +388,7 @@ fn encodes_and_decodes_container_window_packets() {
         )
         .expect("open window should encode");
     let mut reader = PacketReader::new(&packets[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x13);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x14);
     assert_eq!(reader.read_u8().expect("window id should decode"), 2);
     assert_eq!(
         reader.read_string(32).expect("window type should decode"),
@@ -407,11 +410,11 @@ fn encodes_and_decodes_container_window_packets() {
         )
         .expect("close window should encode");
     let mut reader = PacketReader::new(&packets[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x12);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x13);
     assert_eq!(reader.read_u8().expect("window id should decode"), 2);
 
     let mut close = PacketWriter::default();
-    close.write_varint(0x08);
+    close.write_varint(0x09);
     close.write_u8(2);
     let command = adapter
         .decode_play_for(player_id, &close.into_inner())
@@ -428,7 +431,7 @@ fn encodes_and_decodes_container_window_packets() {
 
 #[test]
 fn chest_packets_use_expected_window_type_and_slot_mapping() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"chest-1122"));
     let context = PlayEncodingContext {
         player_id,
@@ -446,7 +449,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
         )
         .expect("chest window should encode");
     let mut reader = PacketReader::new(&packets[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x13);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x14);
     assert_eq!(reader.read_u8().expect("window id should decode"), 4);
     assert_eq!(
         reader.read_string(32).expect("window type should decode"),
@@ -470,7 +473,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
         )
         .expect("main inventory remap should encode");
     let mut reader = PacketReader::new(&packets[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x16);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x17);
     assert_eq!(reader.read_i8().expect("window id should decode"), 4);
     assert_eq!(reader.read_i16().expect("slot should decode"), 27);
 
@@ -486,14 +489,14 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
         )
         .expect("hotbar remap should encode");
     let mut reader = PacketReader::new(&packets[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x16);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x17);
     assert_eq!(reader.read_i8().expect("window id should decode"), 4);
     assert_eq!(reader.read_i16().expect("slot should decode"), 54);
 }
 
 #[test]
 fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"furnace-1122"));
     let context = PlayEncodingContext {
         player_id,
@@ -511,7 +514,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
         )
         .expect("furnace window should encode");
     let mut reader = PacketReader::new(&packets[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x13);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x14);
     assert_eq!(reader.read_u8().expect("window id should decode"), 3);
     assert_eq!(
         reader.read_string(32).expect("window type should decode"),
@@ -541,7 +544,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
         )
         .expect("furnace contents should encode");
     let mut reader = PacketReader::new(&packets[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x14);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x15);
     assert_eq!(reader.read_u8().expect("window id should decode"), 3);
     assert_eq!(reader.read_i16().expect("slot count should decode"), 39);
 
@@ -562,7 +565,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
             )
             .expect("furnace slot update should encode");
         let mut reader = PacketReader::new(&packets[0]);
-        assert_eq!(reader.read_varint().expect("packet id should decode"), 0x16);
+        assert_eq!(reader.read_varint().expect("packet id should decode"), 0x17);
         assert_eq!(reader.read_i8().expect("window id should decode"), 3);
         let raw_slot = reader.read_i16().expect("slot should decode");
         let expected_raw_slot = match expected_slot {
@@ -585,7 +588,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
         )
         .expect("furnace property update should encode");
     let mut reader = PacketReader::new(&packets[0]);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x15);
+    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x16);
     assert_eq!(reader.read_u8().expect("window id should decode"), 3);
     assert_eq!(reader.read_i16().expect("property id should decode"), 2);
     assert_eq!(
@@ -596,7 +599,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
 
 #[test]
 fn encodes_dropped_item_spawn_and_metadata() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
     let packets = adapter
         .encode_play_event_for(
             &CoreEvent::DroppedItemSpawned {
@@ -624,14 +627,11 @@ fn encodes_dropped_item_spawn_and_metadata() {
     let mut metadata = PacketReader::new(&packets[1]);
     assert_eq!(
         metadata.read_varint().expect("packet id should decode"),
-        0x3c
+        0x3f
     );
     assert_eq!(metadata.read_varint().expect("entity id should decode"), 11);
     assert_eq!(metadata.read_u8().expect("metadata index should decode"), 6);
-    assert_eq!(
-        metadata.read_varint().expect("metadata type should decode"),
-        5
-    );
+    assert_eq!(metadata.read_u8().expect("metadata type should decode"), 6);
     assert_eq!(
         read_slot(&mut metadata, crate::INVENTORY_SPEC.slot).expect("metadata slot should decode"),
         Some(ItemStack::new("minecraft:cobblestone", 1, 0))
@@ -641,7 +641,7 @@ fn encodes_dropped_item_spawn_and_metadata() {
 
 #[test]
 fn encodes_block_break_animation_stage_and_clear() {
-    let adapter = Je340Adapter::new();
+    let adapter = Je404Adapter::new();
     let context = PlayEncodingContext {
         player_id: player_snapshot("break-1122").id,
         entity_id: EntityId(1),
@@ -662,7 +662,7 @@ fn encodes_block_break_animation_stage_and_clear() {
     assert_eq!(reader.read_varint().expect("packet id should decode"), 0x08);
     assert_eq!(reader.read_varint().expect("entity id should decode"), 11);
     assert_eq!(
-        mc_proto_test_support::TestJavaProtocol::Je340
+        mc_proto_test_support::TestJavaProtocol::Je404
             .decode_block_break_animation(&stage_packet[0])
             .expect("animation packet should decode"),
         (11, 2, 4, 0, 4)
@@ -680,7 +680,7 @@ fn encodes_block_break_animation_stage_and_clear() {
         )
         .expect("break clear should encode");
     assert_eq!(
-        mc_proto_test_support::TestJavaProtocol::Je340
+        mc_proto_test_support::TestJavaProtocol::Je404
             .decode_block_break_animation(&clear_packet[0])
             .expect("clear packet should decode"),
         (11, 2, 4, 0, -1)

@@ -1,4 +1,4 @@
-use crate::__version_support::inventory::{SlotNbtEncoding, write_slot};
+use crate::__version_support::inventory::{SlotEncoding, write_slot};
 use mc_core::ItemStack;
 use mc_proto_common::{PacketWriter, ProtocolError};
 
@@ -14,10 +14,10 @@ pub fn write_item_stack_metadata_1_8(
     writer: &mut PacketWriter,
     index: u8,
     stack: &ItemStack,
-    slot_nbt: SlotNbtEncoding,
+    slot: SlotEncoding,
 ) -> Result<(), ProtocolError> {
     writer.write_u8((5_u8 << 5) | (index & 0x1f));
-    write_slot(writer, Some(stack), slot_nbt)?;
+    write_slot(writer, Some(stack), slot)?;
     write_empty_metadata_1_8(writer);
     Ok(())
 }
@@ -26,11 +26,24 @@ pub fn write_item_stack_metadata_1_12(
     writer: &mut PacketWriter,
     index: u8,
     stack: &ItemStack,
-    slot_nbt: SlotNbtEncoding,
+    slot: SlotEncoding,
 ) -> Result<(), ProtocolError> {
     writer.write_u8(index);
     writer.write_varint(5);
-    write_slot(writer, Some(stack), slot_nbt)?;
+    write_slot(writer, Some(stack), slot)?;
+    write_empty_metadata_1_12(writer);
+    Ok(())
+}
+
+pub fn write_item_stack_metadata_1_13(
+    writer: &mut PacketWriter,
+    index: u8,
+    stack: &ItemStack,
+    slot: SlotEncoding,
+) -> Result<(), ProtocolError> {
+    writer.write_u8(index);
+    writer.write_u8(6);
+    write_slot(writer, Some(stack), slot)?;
     write_empty_metadata_1_12(writer);
     Ok(())
 }
