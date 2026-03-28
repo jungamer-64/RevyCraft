@@ -1,5 +1,14 @@
 #![allow(clippy::multiple_crate_versions)]
 
+pub mod admin {
+    tonic::include_proto!("revy.admin.v1");
+}
+
+use crate::admin::{
+    self as proto, GetStatusResponse, ListSessionsResponse, ReloadRuntimeResponse,
+    ShutdownResponse, UpgradeRuntimeResponse,
+    admin_control_plane_server::{AdminControlPlane, AdminControlPlaneServer},
+};
 use mc_core::{AdminSurfaceCapability, AdminSurfaceCapabilitySet};
 use mc_plugin_api::codec::admin::{
     self as surface_admin, AdminArtifactsReloadView, AdminFullReloadView, AdminNamedCountView,
@@ -17,11 +26,6 @@ use mc_plugin_sdk_rust::admin_surface::{
 use mc_plugin_sdk_rust::capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
-use revy_admin_grpc::admin::{
-    self as proto, GetStatusResponse, ListSessionsResponse, ReloadRuntimeResponse,
-    ShutdownResponse, UpgradeRuntimeResponse,
-    admin_control_plane_server::{AdminControlPlane, AdminControlPlaneServer},
-};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;

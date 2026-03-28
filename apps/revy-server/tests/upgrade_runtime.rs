@@ -1,9 +1,9 @@
 mod support;
 
 use bytes::BytesMut;
+use mc_plugin_admin_transport_grpc::admin as proto;
 use mc_proto_common::MinecraftWireCodec;
 use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol};
-use revy_admin_grpc::admin as proto;
 use std::fs;
 #[cfg(unix)]
 use std::fs::File;

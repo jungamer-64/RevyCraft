@@ -21,12 +21,17 @@ mc-core = { path = "../../../crates/core/mc-core" }
 mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
 mc-proto-common = { path = "../../../crates/protocol/mc-proto-common" }
-revy-admin-grpc = { path = "../../../crates/admin/revy-admin-grpc" }
+prost.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 toml.workspace = true
 tonic.workspace = true
+tonic-prost.workspace = true
+
+[build-dependencies]
+protoc-bin-vendored.workspace = true
+tonic-prost-build.workspace = true
 
 [lints]
 workspace = true

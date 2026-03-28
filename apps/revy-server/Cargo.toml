@@ -18,7 +18,6 @@ mc-core = { path = "../../crates/core/mc-core" }
 mc-plugin-api = { path = "../../crates/plugin/mc-plugin-api" }
 mc-plugin-host = { path = "../../crates/plugin/mc-plugin-host" }
 mc-proto-common = { path = "../../crates/protocol/mc-proto-common" }
-revy-admin-grpc = { path = "../../crates/admin/revy-admin-grpc" }
 revy-server-config = { path = "../../crates/runtime/revy-server-config" }
 revy-server-runtime = { path = "../../crates/runtime/revy-server-runtime" }
 serde_json.workspace = true
@@ -35,6 +34,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Network
 [dev-dependencies]
 aes.workspace = true
 bytes.workspace = true
+mc-plugin-admin-transport-grpc = { path = "../../plugins/admin-transport/mc-plugin-admin-transport-grpc" }
 mc-plugin-test-support = { path = "../../crates/testing/mc-plugin-test-support" }
 mc-proto-test-support = { path = "../../crates/testing/mc-proto-test-support" }
 rsa.workspace = true

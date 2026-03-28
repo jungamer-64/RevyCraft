@@ -1676,12 +1676,15 @@ dependencies = [
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
- "revy-admin-grpc",
+ "prost",
+ "protoc-bin-vendored",
  "serde",
  "tokio",
  "tokio-stream",
  "toml",
  "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
 ]
 
 [[package]]
@@ -2914,17 +2917,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "revy-admin-grpc"
-version = "0.1.0"
-dependencies = [
- "prost",
- "protoc-bin-vendored",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
-]
-
-[[package]]
 name = "revy-server"
 version = "0.1.0"
 dependencies = [
@@ -2932,13 +2924,13 @@ dependencies = [
  "bytes",
  "libc",
  "mc-core",
+ "mc-plugin-admin-transport-grpc",
  "mc-plugin-api",
  "mc-plugin-host",
  "mc-plugin-test-support",
  "mc-proto-common",
  "mc-proto-test-support",
  "rand 0.9.2",
- "revy-admin-grpc",
  "revy-server-config",
  "revy-server-runtime",
  "rsa",
