@@ -385,7 +385,9 @@ async fn world_backed_crafting_table_opens_and_crafts_chest_via_protocol()
         TestJavaPacket::WindowItems,
     )
     .await
-    .map_err(|error| RuntimeError::Config(format!("world crafting table open contents: {error}")))?;
+    .map_err(|error| {
+        RuntimeError::Config(format!("world crafting table open contents: {error}"))
+    })?;
     assert_eq!(
         window_items_slot(TestJavaProtocol::Je340, &open_contents, 38)?,
         Some((5, 8, 0))
@@ -724,7 +726,9 @@ async fn world_backed_chest_moves_items_and_resyncs_player_inventory_on_close()
         TestJavaPacket::WindowItems,
     )
     .await
-    .map_err(|error| RuntimeError::Config(format!("world crafting table close contents: {error}")))?;
+    .map_err(|error| {
+        RuntimeError::Config(format!("world crafting table close contents: {error}"))
+    })?;
     assert_eq!(
         window_items_slot(TestJavaProtocol::Je340, &player_contents, 36)?,
         Some((54, 1, 0))

@@ -2,9 +2,8 @@ use crate::{JE_47_ADAPTER_ID, Je47Adapter, PROTOCOL_VERSION_1_8_X, VERSION_NAME_
 use mc_proto_common::{
     ConnectionId, ConnectionPhase, CoreCommand, CoreEvent, Edition, EntityId, HandshakeProbe,
     LoginRequest, PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter, PlayerId,
-    PlayerSnapshot, ProtocolDescriptor, ProtocolSessionSnapshot, RuntimeCommand,
-    ServerListStatus, SessionAdapter, SessionCommand, StatusRequest, TransportKind,
-    WireFormatKind,
+    PlayerSnapshot, ProtocolDescriptor, ProtocolSessionSnapshot, RuntimeCommand, ServerListStatus,
+    SessionAdapter, SessionCommand, StatusRequest, TransportKind, WireFormatKind,
 };
 use mc_proto_je_common::__version_support::positions::pack_block_position;
 use mc_proto_je_common::__version_support::{blocks::legacy_block_state_id, inventory::read_slot};

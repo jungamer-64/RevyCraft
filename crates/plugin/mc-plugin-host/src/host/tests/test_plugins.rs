@@ -559,11 +559,9 @@ pub(super) mod fresh_instance_auth_plugin {
                         capabilities,
                     )))
                 }
-                AuthRequest::AuthenticateOffline { .. } => Ok(
-                    AuthResponse::AuthenticatedPlayer(PlayerId(Uuid::from_u128(
-                        self.instance_id as u128,
-                    ))),
-                ),
+                AuthRequest::AuthenticateOffline { .. } => Ok(AuthResponse::AuthenticatedPlayer(
+                    PlayerId(Uuid::from_u128(self.instance_id as u128)),
+                )),
                 other => Err(format!(
                     "unsupported auth request in fresh-instance test plugin: {other:?}"
                 )),

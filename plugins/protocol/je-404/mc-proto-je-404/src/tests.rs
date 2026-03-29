@@ -2,9 +2,8 @@ use super::{JE_404_ADAPTER_ID, Je404Adapter, PROTOCOL_VERSION_1_13_2, VERSION_NA
 use mc_proto_common::{
     ConnectionId, ConnectionPhase, CoreCommand, CoreEvent, Edition, EntityId, HandshakeProbe,
     LoginRequest, PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter, PlayerId,
-    PlayerSnapshot, ProtocolDescriptor, ProtocolSessionSnapshot, RuntimeCommand,
-    ServerListStatus, SessionAdapter, SessionCommand, StatusRequest, TransportKind,
-    WireFormatKind,
+    PlayerSnapshot, ProtocolDescriptor, ProtocolSessionSnapshot, RuntimeCommand, ServerListStatus,
+    SessionAdapter, SessionCommand, StatusRequest, TransportKind, WireFormatKind,
 };
 use mc_proto_je_common::__version_support::{
     blocks::flattened_block_state_id_1_13_2, inventory::read_slot,

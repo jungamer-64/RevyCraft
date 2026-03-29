@@ -1,18 +1,17 @@
 use crate::{JE_5_ADAPTER_ID, Je5Adapter, PROTOCOL_VERSION_1_7_10, VERSION_NAME_1_7_10};
 use mc_proto_common::{
     ConnectionId, ConnectionPhase, CoreCommand, CoreEvent, Edition, EntityId, HandshakeProbe,
-    LoginRequest, PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter,
-    PlayerId, PlayerSnapshot, ProtocolAdapter, ProtocolDescriptor, ProtocolSessionSnapshot,
-    RuntimeCommand, ServerListStatus, SessionAdapter, SessionCommand, StatusRequest,
-    TransportKind, WireFormatKind,
+    LoginRequest, PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter, PlayerId,
+    PlayerSnapshot, ProtocolAdapter, ProtocolDescriptor, ProtocolSessionSnapshot, RuntimeCommand,
+    ServerListStatus, SessionAdapter, SessionCommand, StatusRequest, TransportKind, WireFormatKind,
 };
 use mc_proto_je_common::__version_support::{
     blocks::legacy_block, chunks::get_nibble, inventory::read_slot,
 };
 use revy_voxel_model::{
     BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot,
-    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot, ItemStack,
-    InventoryTransactionContext, InventoryWindowContents, Vec3, WorldMeta,
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, Vec3, WorldMeta,
 };
 use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 use uuid::Uuid;

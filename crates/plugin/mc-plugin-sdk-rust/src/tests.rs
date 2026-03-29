@@ -747,22 +747,30 @@ mod doc_style_protocol_plugin {
         }
 
         fn decode_status(&self, _frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused doc-style protocol method",
+            ))
         }
 
         fn decode_login(&self, _frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused doc-style protocol method",
+            ))
         }
 
         fn encode_status_response(
             &self,
             _status: &ServerListStatus,
         ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused doc-style protocol method",
+            ))
         }
 
         fn encode_status_pong(&self, _payload: i64) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused doc-style protocol method",
+            ))
         }
 
         fn encode_disconnect(
@@ -770,7 +778,9 @@ mod doc_style_protocol_plugin {
             _phase: ConnectionPhase,
             _reason: &str,
         ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused doc-style protocol method",
+            ))
         }
 
         fn encode_encryption_request(
@@ -779,21 +789,27 @@ mod doc_style_protocol_plugin {
             _public_key_der: &[u8],
             _verify_token: &[u8],
         ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused doc-style protocol method",
+            ))
         }
 
         fn encode_network_settings(
             &self,
             _compression_threshold: u16,
         ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused doc-style protocol method",
+            ))
         }
 
         fn encode_login_success(
             &self,
             _player: &crate::PlayerSnapshot,
         ) -> Result<Vec<u8>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused doc-style protocol method",
+            ))
         }
     }
 
@@ -803,7 +819,9 @@ mod doc_style_protocol_plugin {
             _session: &ProtocolSessionSnapshot,
             _frame: &[u8],
         ) -> Result<Option<RuntimeCommand>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused doc-style protocol method",
+            ))
         }
 
         fn encode_play_event(
@@ -812,7 +830,9 @@ mod doc_style_protocol_plugin {
             _session: &ProtocolSessionSnapshot,
             _context: &PlayEncodingContext,
         ) -> Result<Vec<Vec<u8>>, ProtocolError> {
-            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+            Err(ProtocolError::InvalidPacket(
+                "unused doc-style protocol method",
+            ))
         }
     }
 
@@ -834,20 +854,17 @@ mod doc_style_protocol_plugin {
         DocStyleProtocolAdapter,
         "doc-style-probe",
         "Doc Style Protocol Plugin",
-        &[
-            ProtocolCapability::RuntimeReload,
-            ProtocolCapability::Je,
-        ],
+        &[ProtocolCapability::RuntimeReload, ProtocolCapability::Je,],
     );
 }
 
 #[allow(unexpected_cfgs)]
 mod doc_style_gameplay_plugin {
-    use crate::{GameplayCapability, GameplayCapabilitySet};
     use crate::capabilities::gameplay_capabilities;
     use crate::export_plugin;
     use crate::gameplay::{RustGameplayPlugin, gameplay_descriptor};
     use crate::manifest::StaticPluginManifest;
+    use crate::{GameplayCapability, GameplayCapabilitySet};
     use mc_plugin_api::codec::gameplay::GameplayDescriptor;
 
     #[derive(Default)]
@@ -863,8 +880,11 @@ mod doc_style_gameplay_plugin {
         }
     }
 
-    const MANIFEST: StaticPluginManifest =
-        StaticPluginManifest::gameplay("doc-style-gameplay", "Doc Style Gameplay Plugin", "doc-style");
+    const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
+        "doc-style-gameplay",
+        "Doc Style Gameplay Plugin",
+        "doc-style",
+    );
 
     export_plugin!(gameplay, DocStyleGameplayPlugin, MANIFEST);
 }
@@ -1161,12 +1181,7 @@ fn sdk_root_reexports_cover_authoring_semantic_surface() {
 fn doc_style_protocol_plugin_snippet_compiles_with_sdk_root_imports() {
     let entrypoints = doc_style_protocol_plugin::in_process_plugin_entrypoints();
     let capabilities = manifest_capability_names(entrypoints.manifest);
-    assert_eq!(
-        capabilities,
-        vec![
-            "runtime.reload.protocol".to_string(),
-        ]
-    );
+    assert_eq!(capabilities, vec!["runtime.reload.protocol".to_string(),]);
 }
 
 #[test]

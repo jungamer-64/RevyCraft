@@ -1202,10 +1202,7 @@ mod tests {
         writer.into_inner()
     }
 
-    fn encode_je340_window_items(
-        window_id: u8,
-        slots: &[Option<(i16, u8, i16)>],
-    ) -> Vec<u8> {
+    fn encode_je340_window_items(window_id: u8, slots: &[Option<(i16, u8, i16)>]) -> Vec<u8> {
         let mut writer = PacketWriter::default();
         writer.write_varint(
             TestJavaProtocol::Je340

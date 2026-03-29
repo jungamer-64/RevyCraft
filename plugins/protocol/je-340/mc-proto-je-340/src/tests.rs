@@ -2,9 +2,8 @@ use super::{JE_340_ADAPTER_ID, Je340Adapter, PROTOCOL_VERSION_1_12_2, VERSION_NA
 use mc_proto_common::{
     ConnectionId, ConnectionPhase, CoreCommand, CoreEvent, Edition, EntityId, HandshakeProbe,
     LoginRequest, PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter, PlayerId,
-    PlayerSnapshot, ProtocolDescriptor, ProtocolSessionSnapshot, RuntimeCommand,
-    ServerListStatus, SessionAdapter, SessionCommand, StatusRequest, TransportKind,
-    WireFormatKind,
+    PlayerSnapshot, ProtocolDescriptor, ProtocolSessionSnapshot, RuntimeCommand, ServerListStatus,
+    SessionAdapter, SessionCommand, StatusRequest, TransportKind, WireFormatKind,
 };
 use mc_proto_je_common::__version_support::{blocks::legacy_block_state_id, inventory::read_slot};
 use revy_voxel_model::{

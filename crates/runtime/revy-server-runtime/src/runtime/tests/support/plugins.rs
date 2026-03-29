@@ -198,7 +198,7 @@ pub(crate) fn register_in_process_protocol_adapter(
         JE_5_ADAPTER_ID => {
             let entrypoints = je_1_7_10_entrypoints();
             InProcessProtocolPlugin {
-            plugin_id: JE_5_ADAPTER_ID.to_string(),
+                plugin_id: JE_5_ADAPTER_ID.to_string(),
                 manifest: entrypoints.manifest,
                 factory: entrypoints.factory,
             }
@@ -206,7 +206,7 @@ pub(crate) fn register_in_process_protocol_adapter(
         JE_47_ADAPTER_ID => {
             let entrypoints = je_1_8_x_entrypoints();
             InProcessProtocolPlugin {
-            plugin_id: JE_47_ADAPTER_ID.to_string(),
+                plugin_id: JE_47_ADAPTER_ID.to_string(),
                 manifest: entrypoints.manifest,
                 factory: entrypoints.factory,
             }
@@ -214,7 +214,7 @@ pub(crate) fn register_in_process_protocol_adapter(
         JE_340_ADAPTER_ID => {
             let entrypoints = je_1_12_2_entrypoints();
             InProcessProtocolPlugin {
-            plugin_id: JE_340_ADAPTER_ID.to_string(),
+                plugin_id: JE_340_ADAPTER_ID.to_string(),
                 manifest: entrypoints.manifest,
                 factory: entrypoints.factory,
             }
@@ -222,7 +222,7 @@ pub(crate) fn register_in_process_protocol_adapter(
         JE_404_ADAPTER_ID => {
             let entrypoints = je_1_13_2_entrypoints();
             InProcessProtocolPlugin {
-            plugin_id: JE_404_ADAPTER_ID.to_string(),
+                plugin_id: JE_404_ADAPTER_ID.to_string(),
                 manifest: entrypoints.manifest,
                 factory: entrypoints.factory,
             }
@@ -230,7 +230,7 @@ pub(crate) fn register_in_process_protocol_adapter(
         BE_924_ADAPTER_ID => {
             let entrypoints = be_26_3_entrypoints();
             InProcessProtocolPlugin {
-            plugin_id: BE_924_ADAPTER_ID.to_string(),
+                plugin_id: BE_924_ADAPTER_ID.to_string(),
                 manifest: entrypoints.manifest,
                 factory: entrypoints.factory,
             }
@@ -238,7 +238,7 @@ pub(crate) fn register_in_process_protocol_adapter(
         BE_PLACEHOLDER_ADAPTER_ID => {
             let entrypoints = be_placeholder_entrypoints();
             InProcessProtocolPlugin {
-            plugin_id: BE_PLACEHOLDER_ADAPTER_ID.to_string(),
+                plugin_id: BE_PLACEHOLDER_ADAPTER_ID.to_string(),
                 manifest: entrypoints.manifest,
                 factory: entrypoints.factory,
             }

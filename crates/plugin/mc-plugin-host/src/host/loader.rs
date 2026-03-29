@@ -1,19 +1,20 @@
 use super::{
-    AdminSurfaceCapability, AdminSurfaceGeneration, AdminSurfacePluginApiV1, AdminSurfaceRequest,
-    AdminSurfaceInvocationBackend, Arc, AuthCapability, AuthGeneration, AuthInvocationBackend,
-    AuthPluginApiV1, AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest, GameplayCapability,
-    GameplayGeneration, GameplayInvocationBackend, GameplayPluginApiV3, GameplayRequest, Library,
-    ManifestCapabilities, Mutex, PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1,
-    PLUGIN_GAMEPLAY_API_SYMBOL_V3, PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V3,
-    PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginGenerationId, PluginManifestV1, PluginPackage,
-    PluginSource, ProtocolCapability, ProtocolGeneration, ProtocolInvocationBackend,
-    ProtocolPluginApiV3, ProtocolRequest, RuntimeError, StorageCapability, StorageGeneration,
-    StorageInvocationBackend, StoragePluginApiV1, StorageRequest, admin_surface_host_api,
-    decode_manifest, expect_admin_surface_capabilities, expect_admin_surface_descriptor,
-    expect_auth_capabilities, expect_auth_descriptor, expect_gameplay_capabilities,
-    expect_gameplay_descriptor, expect_protocol_bedrock_listener_descriptor,
-    expect_protocol_capabilities, expect_protocol_descriptor, expect_storage_capabilities,
-    expect_storage_descriptor, gameplay_host_api,
+    AdminSurfaceCapability, AdminSurfaceGeneration, AdminSurfaceInvocationBackend,
+    AdminSurfacePluginApiV1, AdminSurfaceRequest, Arc, AuthCapability, AuthGeneration,
+    AuthInvocationBackend, AuthPluginApiV1, AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest,
+    GameplayCapability, GameplayGeneration, GameplayInvocationBackend, GameplayPluginApiV3,
+    GameplayRequest, Library, ManifestCapabilities, Mutex, PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1,
+    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V3, PLUGIN_MANIFEST_SYMBOL_V1,
+    PLUGIN_PROTOCOL_API_SYMBOL_V3, PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginGenerationId,
+    PluginManifestV1, PluginPackage, PluginSource, ProtocolCapability, ProtocolGeneration,
+    ProtocolInvocationBackend, ProtocolPluginApiV3, ProtocolRequest, RuntimeError,
+    StorageCapability, StorageGeneration, StorageInvocationBackend, StoragePluginApiV1,
+    StorageRequest, admin_surface_host_api, decode_manifest, expect_admin_surface_capabilities,
+    expect_admin_surface_descriptor, expect_auth_capabilities, expect_auth_descriptor,
+    expect_gameplay_capabilities, expect_gameplay_descriptor,
+    expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
+    expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
+    gameplay_host_api,
 };
 use crate::config::PluginBufferLimits;
 
@@ -227,7 +228,11 @@ impl PluginLoader {
         let descriptor = expect_protocol_descriptor(
             &package.plugin_id,
             backend
-                .invoke(&package.plugin_id, &ProtocolRequest::Describe, buffer_limits)
+                .invoke(
+                    &package.plugin_id,
+                    &ProtocolRequest::Describe,
+                    buffer_limits,
+                )
                 .map_err(RuntimeError::Config)?,
         )?;
         if descriptor.adapter_id != package.plugin_id {
@@ -249,7 +254,11 @@ impl PluginLoader {
         let capabilities = expect_protocol_capabilities(
             &package.plugin_id,
             backend
-                .invoke(&package.plugin_id, &ProtocolRequest::CapabilitySet, buffer_limits)
+                .invoke(
+                    &package.plugin_id,
+                    &ProtocolRequest::CapabilitySet,
+                    buffer_limits,
+                )
                 .map_err(RuntimeError::Config)?,
         )?;
         if !capabilities.contains(ProtocolCapability::RuntimeReload) {
@@ -364,7 +373,11 @@ impl PluginLoader {
         let capabilities = expect_storage_capabilities(
             &package.plugin_id,
             backend
-                .invoke(&package.plugin_id, &StorageRequest::CapabilitySet, buffer_limits)
+                .invoke(
+                    &package.plugin_id,
+                    &StorageRequest::CapabilitySet,
+                    buffer_limits,
+                )
                 .map_err(RuntimeError::Config)?,
         )?;
         if !capabilities.contains(StorageCapability::RuntimeReload) {
@@ -415,7 +428,11 @@ impl PluginLoader {
         let capabilities = expect_auth_capabilities(
             &package.plugin_id,
             backend
-                .invoke(&package.plugin_id, &AuthRequest::CapabilitySet, buffer_limits)
+                .invoke(
+                    &package.plugin_id,
+                    &AuthRequest::CapabilitySet,
+                    buffer_limits,
+                )
                 .map_err(RuntimeError::Config)?,
         )?;
         if !capabilities.contains(AuthCapability::RuntimeReload) {

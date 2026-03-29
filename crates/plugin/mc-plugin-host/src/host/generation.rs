@@ -14,16 +14,16 @@ use super::{
     encode_protocol_request, encode_storage_request, take_owned_buffer,
 };
 use crate::config::PluginBufferLimits;
-#[cfg(any(test, feature = "in-process-testing"))]
-use mc_plugin_sdk_rust::test_support::{
-    AdminSurfacePluginHandler, AuthPluginHandler, GameplayPluginHandler, ProtocolPluginHandler,
-    StoragePluginHandler,
-};
 use mc_plugin_api::codec::admin_surface::encode_admin_surface_response;
 use mc_plugin_api::codec::auth::encode_auth_response;
 use mc_plugin_api::codec::gameplay::encode_gameplay_response;
 use mc_plugin_api::codec::protocol::encode_protocol_response;
 use mc_plugin_api::codec::storage::encode_storage_response;
+#[cfg(any(test, feature = "in-process-testing"))]
+use mc_plugin_sdk_rust::test_support::{
+    AdminSurfacePluginHandler, AuthPluginHandler, GameplayPluginHandler, ProtocolPluginHandler,
+    StoragePluginHandler,
+};
 
 #[derive(Default)]
 pub(crate) struct GenerationManager {
@@ -89,9 +89,7 @@ pub(crate) enum AuthInvocationBackend {
         _library_guard: Option<Arc<Mutex<Library>>>,
     },
     #[cfg(any(test, feature = "in-process-testing"))]
-    InProcess {
-        handler: Arc<dyn AuthPluginHandler>,
-    },
+    InProcess { handler: Arc<dyn AuthPluginHandler> },
 }
 
 #[derive(Clone)]
@@ -210,13 +208,14 @@ impl ProtocolInvocationBackend {
                     buffer_limits.protocol_response_bytes,
                     "protocol response buffer",
                 )?;
-                decode_protocol_response(request, &response_bytes).map_err(|error| error.to_string())
+                decode_protocol_response(request, &response_bytes)
+                    .map_err(|error| error.to_string())
             }
             #[cfg(any(test, feature = "in-process-testing"))]
             Self::InProcess { handler } => {
                 let response = handler.handle(request.clone())?;
-                let bytes =
-                    encode_protocol_response(request, &response).map_err(|error| error.to_string())?;
+                let bytes = encode_protocol_response(request, &response)
+                    .map_err(|error| error.to_string())?;
                 ensure_direct_response_fits(
                     bytes.len(),
                     buffer_limits.protocol_response_bytes,
@@ -300,8 +299,8 @@ impl GameplayInvocationBackend {
             #[cfg(any(test, feature = "in-process-testing"))]
             Self::InProcess { handler } => {
                 let response = handler.handle(request.clone(), Some(host_api))?;
-                let bytes =
-                    encode_gameplay_response(request, &response).map_err(|error| error.to_string())?;
+                let bytes = encode_gameplay_response(request, &response)
+                    .map_err(|error| error.to_string())?;
                 ensure_direct_response_fits(
                     bytes.len(),
                     buffer_limits.gameplay_response_bytes,
@@ -377,14 +376,13 @@ impl StorageInvocationBackend {
                     buffer_limits.storage_response_bytes,
                     "storage response buffer",
                 )?;
-                decode_storage_response(request, &response_bytes)
-                    .map_err(|error| error.to_string())
+                decode_storage_response(request, &response_bytes).map_err(|error| error.to_string())
             }
             #[cfg(any(test, feature = "in-process-testing"))]
             Self::InProcess { handler } => {
                 let response = handler.handle(request.clone())?;
-                let bytes =
-                    encode_storage_response(request, &response).map_err(|error| error.to_string())?;
+                let bytes = encode_storage_response(request, &response)
+                    .map_err(|error| error.to_string())?;
                 ensure_direct_response_fits(
                     bytes.len(),
                     buffer_limits.storage_response_bytes,
@@ -554,7 +552,8 @@ impl AdminSurfaceInvocationBackend {
 
 impl AuthGeneration {
     fn invoke(&self, request: &AuthRequest) -> Result<AuthResponse, String> {
-        self.backend.invoke(&self.plugin_id, request, self.buffer_limits)
+        self.backend
+            .invoke(&self.plugin_id, request, self.buffer_limits)
     }
 
     pub(crate) const fn mode(&self) -> AuthMode {

@@ -32,10 +32,10 @@ mod tests;
 
 pub use mc_plugin_api::{
     AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,
-    AuthCapability, AuthCapabilitySet, AuthProfileId, CapabilityAnnouncement,
-    ClosedCapabilitySet, ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, EventTarget,
-    GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
-    PlayerSnapshot, PluginBuildTag, PluginGenerationId, ProtocolCapability,
-    ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet, SessionCommand,
-    StorageCapability, StorageCapabilitySet, StorageProfileId, TargetedEvent, WorldSnapshot,
+    AuthCapability, AuthCapabilitySet, AuthProfileId, CapabilityAnnouncement, ClosedCapabilitySet,
+    ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, EventTarget, GameplayCapability,
+    GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId, PlayerSnapshot,
+    PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
+    SessionCapabilitySet, SessionCommand, StorageCapability, StorageCapabilitySet,
+    StorageProfileId, TargetedEvent, WorldSnapshot,
 };
