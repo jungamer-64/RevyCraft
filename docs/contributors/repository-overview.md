@@ -84,6 +84,8 @@
 
 ## 主要な読みどころ
 
+- 全体の境界設計の短い要約
+  [`boundary-design-overview.md`](boundary-design-overview.md)
 - runtime / plugin host の責務境界
   [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)
 - `CoreCommand` / `GameplayCommand` / `GameplayTransaction` / `CoreEvent` の流れ

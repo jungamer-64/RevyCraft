@@ -18,6 +18,8 @@
   [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md)
 - workspace の責務分割、boot path、公開 surface と内部 surface
   [`contributors/repository-overview.md`](contributors/repository-overview.md)
+- 全体の境界設計の要約
+  [`contributors/boundary-design-overview.md`](contributors/boundary-design-overview.md)
 - runtime / plugin host / session lifecycle の責務境界
   [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md)
 - `reload runtime`、`core` migration、reloadable boundary の最終設計
