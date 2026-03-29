@@ -1,6 +1,6 @@
 # RevyCraft
 
-RevyCraft は、Rust で実装された server-only の Minecraft workspace です。runtime は protocol / gameplay / storage / auth / admin-ui plugin を packaged artifact から読み込み、`ServerSupervisor` を公開入口として boot / status / reload / shutdown を扱います。
+RevyCraft は、Rust で実装された server-only の Minecraft workspace です。runtime は protocol / gameplay / storage / auth / admin-surface plugin を packaged artifact から読み込み、`ServerSupervisor` を公開入口として boot / status / reload / shutdown を扱います。
 
 Java Edition の TCP adapter と Bedrock の UDP adapter を同一 process で扱う構成を前提にしていますが、何が active になるかは `runtime/server.toml` の allowlist と profile selection に依存します。runtime は `target/` の build artifact を直接読まず、`runtime/plugins/<plugin-id>/plugin.toml` を起点に packaged plugin を解決します。
 
@@ -33,6 +33,6 @@ release bundle、config/reload、admin console / gRPC の正本は [`docs/operat
 - `crates/plugin`
   `mc-plugin-api`、`mc-plugin-host`、`mc-plugin-sdk-rust` をまとめた plugin 基盤です。
 - `plugins/*/*`
-  protocol / gameplay / storage / auth / admin-ui の concrete plugin 実装です。
+  protocol / gameplay / storage / auth / admin-surface の concrete plugin 実装です。
 - `runtime/`
   実行時 config、packaged plugin、world データの配置先です。
