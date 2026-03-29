@@ -3,8 +3,8 @@ use super::{
     decode_utf8_slice_with_limit, read_checked_slice,
 };
 use crate::config::PluginBufferLimits;
-use mc_core::{AdminSurfaceProfileId, AuthProfileId, StorageProfileId};
 use mc_plugin_api::abi::CapabilityDescriptorV1;
+use revy_voxel_core::{AdminSurfaceProfileId, AuthProfileId, StorageProfileId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProtocolManifestCapabilities {

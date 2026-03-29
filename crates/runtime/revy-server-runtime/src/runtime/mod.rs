@@ -30,14 +30,14 @@ pub use crate::{
     PluginHostStatusSnapshot, RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole,
     RuntimeUpgradeStateView,
 };
-use mc_core::{
-    CoreEvent, EntityId, GameplayProfileId, PlayerId, PluginGenerationId, SessionCapabilitySet,
-};
 use mc_plugin_host::registry::ProtocolRegistry;
 use mc_plugin_host::runtime::{
     AdminSurfaceProfileHandle, AuthGenerationHandle, GameplayProfileHandle, RuntimeReloadContext,
 };
 use mc_proto_common::{ConnectionPhase, ProtocolAdapter, TransportKind};
+use revy_voxel_core::{
+    CoreEvent, EntityId, GameplayProfileId, PlayerId, PluginGenerationId, SessionCapabilitySet,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -540,7 +540,7 @@ pub(crate) enum SessionControl {
 
 #[derive(Clone)]
 pub(crate) struct SessionReattachRecord {
-    pub(crate) connection_id: mc_core::ConnectionId,
+    pub(crate) connection_id: revy_voxel_core::ConnectionId,
     pub(crate) control_tx: mpsc::Sender<SessionControl>,
     pub(crate) transport: TransportKind,
     pub(crate) phase: ConnectionPhase,

@@ -4,7 +4,6 @@ use bedrockrs_proto::ProtoVersion;
 use bedrockrs_proto::V924;
 use bedrockrs_proto::compression::Compression as BedrockCompression;
 use binary_util::interfaces::{Reader, Writer};
-use mc_model::BlockPos;
 use rak_rs::client::DEFAULT_MTU;
 use rak_rs::connection::queue::{RecvQueue, SendQueue};
 use rak_rs::protocol::Magic;
@@ -19,6 +18,7 @@ use rak_rs::protocol::packet::online::{
     NewConnection, OnlinePacket,
 };
 use rak_rs::protocol::reliability::Reliability as RakReliability;
+use revy_voxel_model::BlockPos;
 use rsa::rand_core::{OsRng, RngCore};
 use std::sync::Arc;
 

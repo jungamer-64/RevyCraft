@@ -1,5 +1,4 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::{StorageCapability, StorageCapabilitySet};
 use mc_plugin_api::codec::storage::StorageDescriptor;
 use mc_plugin_sdk_rust::capabilities::{build_tag_contains, storage_capabilities};
 use mc_plugin_sdk_rust::export_plugin;
@@ -7,6 +6,7 @@ use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::storage::RustStoragePlugin;
 use mc_proto_common::{StorageAdapter, StorageError};
 use mc_proto_je_5::{JE_1_7_10_STORAGE_PROFILE_ID, Je1710StorageAdapter};
+use revy_voxel_core::{StorageCapability, StorageCapabilitySet};
 use std::path::Path;
 
 pub const JE_1_7_10_STORAGE_PLUGIN_ID: &str = "storage-je-anvil-1_7_10";
@@ -30,14 +30,14 @@ impl RustStoragePlugin for Je1710StoragePlugin {
     fn load_snapshot(
         &self,
         world_dir: &Path,
-    ) -> Result<Option<mc_core::WorldSnapshot>, StorageError> {
+    ) -> Result<Option<revy_voxel_core::WorldSnapshot>, StorageError> {
         self.adapter.load_snapshot(world_dir)
     }
 
     fn save_snapshot(
         &self,
         world_dir: &Path,
-        snapshot: &mc_core::WorldSnapshot,
+        snapshot: &revy_voxel_core::WorldSnapshot,
     ) -> Result<(), StorageError> {
         self.adapter.save_snapshot(world_dir, snapshot)
     }
@@ -45,7 +45,7 @@ impl RustStoragePlugin for Je1710StoragePlugin {
     fn import_runtime_state(
         &self,
         world_dir: &Path,
-        snapshot: &mc_core::WorldSnapshot,
+        snapshot: &revy_voxel_core::WorldSnapshot,
     ) -> Result<(), StorageError> {
         if build_tag_contains("reload-fail") {
             return Err(StorageError::Plugin(

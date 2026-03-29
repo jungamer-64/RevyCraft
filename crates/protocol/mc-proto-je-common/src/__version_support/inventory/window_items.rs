@@ -1,6 +1,6 @@
 use super::layout::{PlayerInventoryLayout, container_descriptor, is_player_container};
-use mc_content_api::ContainerKindId;
-use mc_model::{InventorySlot, InventoryWindowContents, ItemStack};
+use revy_voxel_model::{InventorySlot, InventoryWindowContents, ItemStack};
+use revy_voxel_rules::ContainerKindId;
 
 #[must_use]
 pub fn window_items(

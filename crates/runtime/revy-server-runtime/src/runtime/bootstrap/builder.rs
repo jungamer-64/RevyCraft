@@ -14,11 +14,11 @@ use crate::runtime::{
     ACCEPT_QUEUE_CAPACITY, ActiveGeneration, GenerationId, RunningServer, RuntimeServer,
     RuntimeUpgradeImport, RuntimeUpgradePhase, RuntimeUpgradeRole,
 };
-use mc_core::ServerCore;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_host::registry::LoadedPluginSet;
 use mc_plugin_host::runtime::RuntimePluginHost;
 use mc_proto_common::TransportKind;
+use revy_voxel_core::ServerCore;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 pub(crate) async fn boot_server(

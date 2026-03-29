@@ -10,17 +10,17 @@ mod runtime_ids;
 mod tests;
 
 use bedrockrs_proto::ProtoVersion;
-use mc_content_api::{ContainerKindId, ContainerPropertyKey};
-use mc_core::{CoreEvent, EntityId, PlayerSnapshot};
-use mc_model::{
-    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
-    ItemStack, WorldMeta,
-};
 use mc_proto_be_common::{BedrockAdapter, BedrockProfile};
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, LoginRequest, ProtocolDescriptor,
     ProtocolError, ProtocolSessionSnapshot, TransportKind, WireFormatKind,
 };
+use revy_voxel_core::{CoreEvent, EntityId, PlayerSnapshot};
+use revy_voxel_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
+    ItemStack, WorldMeta,
+};
+use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -42,7 +42,7 @@ struct BedrockProtocolSessionState {
 
 #[derive(Default)]
 struct BedrockProtocolSessionStore {
-    sessions: Mutex<HashMap<mc_core::ConnectionId, BedrockProtocolSessionState>>,
+    sessions: Mutex<HashMap<revy_voxel_core::ConnectionId, BedrockProtocolSessionState>>,
 }
 
 impl BedrockProtocolSessionStore {
@@ -181,7 +181,7 @@ impl BedrockProfile for Bedrock924Profile {
         &self,
         session: &ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<mc_core::RuntimeCommand>, ProtocolError> {
+    ) -> Result<Option<revy_voxel_core::RuntimeCommand>, ProtocolError> {
         decoding::decode_play_packet(session, &self.sessions, frame)
     }
 

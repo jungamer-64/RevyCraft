@@ -12,10 +12,10 @@ description = "Shared Bedrock/RakNet helpers for the RevyCraft protocol plugins.
 [dependencies]
 base64.workspace = true
 bedrockrs_proto.workspace = true
-mc-content-api = { path = "../../content/mc-content-api" }
+revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
 mc-content-canonical = { path = "../../content/mc-content-canonical" }
-mc-core = { path = "../../core/mc-core" }
-mc-model = { path = "../../model/mc-model" }
+revy-voxel-core = { path = "../../core/revy-voxel-core" }
+revy-voxel-model = { path = "../../model/revy-voxel-model" }
 mc-proto-common = { path = "../mc-proto-common" }
 num-traits.workspace = true
 serde.workspace = true

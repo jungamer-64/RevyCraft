@@ -15,13 +15,15 @@ use bedrockrs_proto::v662::packets::{
 use bedrockrs_proto::v712::enums::ItemStackRequestActionType;
 use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecVAR};
-use mc_core::{CoreCommand, PlayerId, RuntimeCommand};
-use mc_model::{InteractionHand, InventoryClickValidation, InventoryTransactionContext, Vec3};
 use mc_proto_be_common::__version_support::{
     login::parse_bedrock_login_payload,
     world::{block_face_from_i32, block_pos_from_network, protocol_error},
 };
 use mc_proto_common::{LoginRequest, ProtocolError, ProtocolSessionSnapshot};
+use revy_voxel_core::{CoreCommand, PlayerId, RuntimeCommand};
+use revy_voxel_model::{
+    InteractionHand, InventoryClickValidation, InventoryTransactionContext, Vec3,
+};
 use std::io::Cursor;
 
 use crate::BedrockProtocolSessionStore;

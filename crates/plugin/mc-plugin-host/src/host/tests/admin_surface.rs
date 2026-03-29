@@ -1,5 +1,5 @@
 use super::*;
-use mc_core::AdminSurfaceCapability;
+use revy_voxel_core::AdminSurfaceCapability;
 
 #[test]
 fn in_process_admin_surface_profile_declares_console_resources() -> Result<(), RuntimeError> {

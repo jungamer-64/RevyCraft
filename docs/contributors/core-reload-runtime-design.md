@@ -25,10 +25,10 @@ operator 向けの command surface と permission は [`../operators/configurati
 
 しかし `WorldSnapshot` は永続化向けの形であり、live session を完全移行するには不足しています。
 
-- [`../../crates/core/mc-core/src/core/mod.rs`](../../crates/core/mc-core/src/core/mod.rs) の `ServerCore::snapshot()` は online player を persisted player として保存する
-- [`../../crates/core/mc-core/src/core/inventory/lifecycle.rs`](../../crates/core/mc-core/src/core/inventory/lifecycle.rs) の `persisted_online_player_snapshot_state(...)` は `cursor` や active container の中身を inventory へ畳み込む
-- [`../../crates/core/mc-core/src/core/mod.rs`](../../crates/core/mc-core/src/core/mod.rs) の `ServerCore::from_snapshot(...)` は world / block_entities / saved_players だけを復元し、online player の entity、session、keepalive、window state は復元しない
-- [`../../crates/core/mc-core/src/world.rs`](../../crates/core/mc-core/src/world.rs) の `WorldSnapshot` は `meta` / `chunks` / `block_entities` / `players` だけを持ち、dropped item や active mining を表現しない
+- [`../../crates/core/revy-voxel-core/src/core/mod.rs`](../../crates/core/revy-voxel-core/src/core/mod.rs) の `ServerCore::snapshot()` は online player を persisted player として保存する
+- [`../../crates/core/revy-voxel-core/src/core/inventory/lifecycle.rs`](../../crates/core/revy-voxel-core/src/core/inventory/lifecycle.rs) の `persisted_online_player_snapshot_state(...)` は `cursor` や active container の中身を inventory へ畳み込む
+- [`../../crates/core/revy-voxel-core/src/core/mod.rs`](../../crates/core/revy-voxel-core/src/core/mod.rs) の `ServerCore::from_snapshot(...)` は world / block_entities / saved_players だけを復元し、online player の entity、session、keepalive、window state は復元しない
+- [`../../crates/core/revy-voxel-core/src/world.rs`](../../crates/core/revy-voxel-core/src/world.rs) の `WorldSnapshot` は `meta` / `chunks` / `block_entities` / `players` だけを持ち、dropped item や active mining を表現しない
 
 一方で protocol / gameplay reload は [`../../crates/plugin/mc-plugin-host/src/host/support/reload.rs`](../../crates/plugin/mc-plugin-host/src/host/support/reload.rs) の session transfer blob を export / import して live session を継続できます。`core` だけが同等の migration 口を持たないため、`snapshot -> from_snapshot` をそのまま使うと「接続は残るが core 側では player が offline 扱いになる」状態になります。
 

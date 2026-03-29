@@ -8,13 +8,15 @@
    `server-bootstrap` binary を持つ `revy-server` package。config 読み込み、runtime boot、process-scope resource broker、admin surface supervisor を持ちます。
 2. `crates/runtime/revy-server-runtime`
    listener、generation、session、status、reload、admin control plane を持つ orchestration 層です。
-3. `crates/core/mc-core`
-   protocol 非依存の semantic state machine です。
-4. `crates/plugin/mc-plugin-host`
+3. `crates/core/revy-core`
+   id、capability、event targeting、revision control、session routing primitive を持つ internal kernel です。runtime や plugin ABI から直接見せる層ではありません。
+4. `crates/core/revy-voxel-core`
+   voxel/Minecraft 系の semantic state machine です。`revy-core` を内部 primitive として使います。
+5. `crates/plugin/mc-plugin-host`
    packaged plugin discovery、activation、selection、reload、quarantine を担います。
-5. `crates/plugin/mc-plugin-api` / `mc-plugin-sdk-rust`
+6. `crates/plugin/mc-plugin-api` / `mc-plugin-sdk-rust`
    ABI 契約と Rust authoring helper です。
-6. `plugins/*`
+7. `plugins/*`
    protocol / gameplay / storage / auth / admin-surface の concrete plugin 実装です。
 
 ## runtime の state owner
@@ -26,9 +28,9 @@
 - `TopologyManager`
   active / draining generation、listener worker、generation swap を持ちます。
 - `RuntimeKernel`
-  単なる `ServerCore` owner ではなく、reloadable `core runtime` owner として `ServerCore`、kernel revision、snapshot-isolated gameplay journal commit、tick / save、dirty flag、world_dir、`core` migration の export / materialize / reattach / swap / rollback を持ちます。
+  単なる `ServerCore` owner ではなく、reloadable `core runtime` owner として `ServerCore`、`revy-core` の revision primitive で包んだ kernel state、snapshot-isolated gameplay journal commit、tick / save、dirty flag、world_dir、`core` migration の export / materialize / reattach / swap / rollback を持ちます。
 - `SessionRegistry`
-  live session handle、accepted queue、connection id、session task、routing-only の pending login route を持ちます。
+  live session handle、accepted queue、`revy-core` の connection-id source、session task、routing-only の pending login route を持ちます。
 - `ReloadCoordinator`
   config source、static reload boundary、reload host、consistency gate、shutdown request を持ちます。
 
@@ -75,12 +77,19 @@ plugin には 2 種類の manifest があります。
 
 Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host は `plugin.toml` で package を見つけ、library を load したあとに embedded manifest を検証します。
 
-## `mc-core` と plugin の責務境界
+## `revy-voxel-core` と plugin の責務境界
+
+`revy-core` と `revy-voxel-core` の境界もここで固定します。
+
+- `revy-core`
+  `ConnectionId` / `PlayerId` / capability set、`EventTarget` / routed event、revision control、session routing primitive を持ちます。
+- `revy-voxel-core`
+  `GameplayTransaction`、world state、inventory/container lifecycle、mining、login/bootstrap、canonical `CoreEvent` generation を持ちます。
 
 - protocol plugin
   handshake routing、status / login / play packet の decode / encode、transport/version 固有の session state を持ちます。
 - gameplay plugin
-  semantic な `GameplayCommand` を評価し、invocation-scoped `GameplayTransaction` を通じて snapshot を読みつつ op journal を積みます。live core への validate/apply は runtime / `mc-core` 側が担当します。
+  semantic な `GameplayCommand` を評価し、invocation-scoped `GameplayTransaction` を通じて snapshot を読みつつ op journal を積みます。live core への validate/apply は runtime / `revy-voxel-core` 側が担当します。
 - storage plugin
   world snapshot の load / save / import / export を担います。`core` migration blob は process-local であり、persistent storage schema とは共有しません。
 - auth plugin
@@ -88,7 +97,7 @@ Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host 
 - admin-surface plugin
   console / gRPC などの operator surface、identity mapping、surface-owned config、process / handoff resource を担います。
 
-`mc-core` 自体は semantic command / event / inventory state machine に徹します。raw slot layout、JE の echo / reject、Bedrock の active window rewrite のような version / wire 差分は protocol plugin 側に残します。一方で reloadable boundary の観点では、`mc-core` は world snapshot だけではなく keepalive、dropped item、active mining、open window のような live-only state も含む `core runtime` として扱います。
+`revy-voxel-core` 自体は semantic command / event / inventory state machine に徹します。raw slot layout、JE の echo / reject、Bedrock の active window rewrite のような version / wire 差分は protocol plugin 側に残します。一方で reloadable boundary の観点では、`revy-voxel-core` は world snapshot だけではなく keepalive、dropped item、active mining、open window のような live-only state も含む `core runtime` として扱います。`revy-core` には block/chunk/container/mining のような voxel 語彙を持ち込みません。
 
 ## bootstrap 時の selection
 
@@ -129,7 +138,7 @@ play phase では次の流れになります。
 2. runtime が command を direct-core と gameplay-owned に分岐する
 3. gameplay-owned command は `GameplayCommand` として detached gameplay callback へ渡される
 4. gameplay plugin は snapshot-isolated な `GameplayTransaction` 上で read / write し、journal を返す
-5. runtime / `mc-core` が live core に対して journal を validate/apply し、成功した commit だけ canonical `CoreEvent` を生成する
+5. runtime / `revy-voxel-core` が live core に対して journal を validate/apply し、成功した commit だけ canonical `CoreEvent` を生成する
 6. protocol plugin が `CoreEvent` を wire packet 群へ encode
 
 `CoreEvent::LoginAccepted` は core 側の accept pointですが、shared session state の authoritative

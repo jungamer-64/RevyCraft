@@ -7,6 +7,15 @@ mod general;
 mod player_window;
 mod world_chest;
 
+fn window_transaction_test_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+async fn lock_window_transaction_tests() -> tokio::sync::MutexGuard<'static, ()> {
+    window_transaction_test_lock().lock().await
+}
+
 fn creative_server_config(world_dir: PathBuf) -> ServerConfig {
     let mut config = loopback_server_config(world_dir);
     config.bootstrap.game_mode = 1;

@@ -1,10 +1,10 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::{AuthCapability, AuthCapabilitySet};
 use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode, BedrockAuthResult};
 use mc_plugin_sdk_rust::auth::RustAuthPlugin;
 use mc_plugin_sdk_rust::capabilities::auth_capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+use revy_voxel_core::{AuthCapability, AuthCapabilitySet};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -26,7 +26,7 @@ impl RustAuthPlugin for BedrockOfflineAuthPlugin {
         auth_capabilities(&[AuthCapability::RuntimeReload])
     }
 
-    fn authenticate_offline(&self, _username: &str) -> Result<mc_core::PlayerId, String> {
+    fn authenticate_offline(&self, _username: &str) -> Result<revy_voxel_core::PlayerId, String> {
         Err("bedrock offline auth plugin only handles bedrock auth requests".to_string())
     }
 
@@ -42,7 +42,7 @@ impl RustAuthPlugin for BedrockOfflineAuthPlugin {
         bytes[6] = (bytes[6] & 0x0f) | 0x30;
         bytes[8] = (bytes[8] & 0x3f) | 0x80;
         Ok(BedrockAuthResult {
-            player_id: mc_core::PlayerId(Uuid::from_bytes(bytes)),
+            player_id: revy_voxel_core::PlayerId(Uuid::from_bytes(bytes)),
             display_name: display_name.to_string(),
             xuid: None,
             identity_uuid: None,

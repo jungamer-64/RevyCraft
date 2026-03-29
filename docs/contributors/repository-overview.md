@@ -20,7 +20,8 @@
 | `apps/revy-server` | `server-bootstrap` binary を持つ `revy-server` package。config 読み込み、runtime 起動、stdio / gRPC admin surface を束ねる |
 | `crates/runtime/revy-server-config` | `runtime/server.toml` の load / normalize / validate を担う |
 | `crates/runtime/revy-server-runtime` | listener、generation、session、status、reload、admin control plane を持つ orchestration 層 |
-| `crates/core/mc-core` | protocol 非依存の semantic state machine |
+| `crates/core/revy-core` | id、capability、event targeting、revision、routing を持つ internal kernel primitive |
+| `crates/core/revy-voxel-core` | protocol 非依存の semantic state machine |
 | `crates/plugin/mc-plugin-api` | plugin ABI `5.0`、manifest、host API、typed codec |
 | `crates/plugin/mc-plugin-host` | packaged plugin discovery、activation、selection、reload、quarantine |
 | `crates/plugin/mc-plugin-sdk-rust` | Rust plugin authoring 向けの trait、manifest helper、macro |
@@ -68,6 +69,8 @@
 
 - `RunningServer`、`RuntimeServer`
   runtime 実装を読むときの lower-level detail です。
+- `revy-core`
+  `revy-voxel-core` の下で使う internal kernel です。plugin ABI や protocol/storage plugin から直接参照しない前提で扱います。
 - `mc_plugin_sdk_rust::__macro_support`
   macro の内部実装です。
 - `mc_plugin_host::__test_hooks`

@@ -2,14 +2,14 @@ use super::chunk_nbt;
 use super::level;
 use super::nbt::{NbtTag, read_gzip_nbt, write_gzip_nbt, zlib_compress_nbt};
 use super::{JE_1_18_2_DATA_VERSION, Je1182StoragePlugin};
-use mc_content_api::{BlockEntityState, ContainerPropertyKey};
-use mc_core::{PlayerId, PlayerSnapshot, WorldSnapshot};
-use mc_model::{
+use mc_plugin_sdk_rust::storage::RustStoragePlugin;
+use mc_proto_common::StorageError;
+use revy_voxel_core::{PlayerId, PlayerSnapshot, WorldSnapshot};
+use revy_voxel_model::{
     BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, InventorySlot, ItemStack,
     PlayerInventory, Vec3, WorldMeta,
 };
-use mc_plugin_sdk_rust::storage::RustStoragePlugin;
-use mc_proto_common::StorageError;
+use revy_voxel_rules::{BlockEntityState, ContainerPropertyKey};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

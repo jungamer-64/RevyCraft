@@ -30,7 +30,7 @@ struct PreparedSelectionReload {
 }
 
 struct CoreReloadRollbackState {
-    rollback_core: mc_core::ServerCore,
+    rollback_core: revy_voxel_core::ServerCore,
     records: Vec<SessionReattachRecord>,
 }
 
@@ -354,18 +354,19 @@ impl RuntimeServer {
     async fn reload_core_with_plan(
         &self,
         _consistency_guard: &RwLockWriteGuard<'_, ()>,
-        rollback_core_config: mc_core::CoreConfig,
-        candidate_core_config: mc_core::CoreConfig,
+        rollback_core_config: revy_voxel_core::CoreConfig,
+        candidate_core_config: revy_voxel_core::CoreConfig,
         candidate_generation: Arc<crate::runtime::ActiveGeneration>,
         candidate_selection: &ResolvedRuntimeSelection,
-    ) -> Result<(mc_core::ServerCore, bool, CoreReloadRollbackState), CoreReloadPlanFailure> {
+    ) -> Result<(revy_voxel_core::ServerCore, bool, CoreReloadRollbackState), CoreReloadPlanFailure>
+    {
         let exported = self.kernel.export_core_runtime_state().await;
-        let rollback_core = mc_core::ServerCore::from_runtime_state(
+        let rollback_core = revy_voxel_core::ServerCore::from_runtime_state(
             rollback_core_config,
             exported.blob.clone(),
             SelectionResolver::content_behavior(),
         );
-        let candidate_core = mc_core::ServerCore::from_runtime_state(
+        let candidate_core = revy_voxel_core::ServerCore::from_runtime_state(
             candidate_core_config,
             exported.blob,
             SelectionResolver::content_behavior(),
@@ -401,7 +402,7 @@ impl RuntimeServer {
         record: &SessionReattachRecord,
         candidate_generation: &Arc<crate::runtime::ActiveGeneration>,
         candidate_selection: &ResolvedRuntimeSelection,
-        candidate_core: &mc_core::ServerCore,
+        candidate_core: &revy_voxel_core::ServerCore,
     ) -> Result<SessionReattachInstruction, RuntimeError> {
         let _previous_protocol_generation = record.protocol_generation;
         let _previous_gameplay_generation = record.gameplay_generation;
@@ -466,7 +467,7 @@ impl RuntimeServer {
         record: &SessionReattachRecord,
         rollback_generation: &Arc<crate::runtime::ActiveGeneration>,
         rollback_selection: &ResolvedRuntimeSelection,
-        rollback_core: &mc_core::ServerCore,
+        rollback_core: &revy_voxel_core::ServerCore,
     ) -> Result<SessionReattachInstruction, RuntimeError> {
         let adapter_id = record.adapter_id.as_deref().ok_or_else(|| {
             RuntimeError::Config(format!(

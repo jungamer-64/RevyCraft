@@ -1,6 +1,6 @@
 use super::*;
 use crate::runtime::RunningServer;
-use mc_core::PlayerId;
+use revy_voxel_core::PlayerId;
 
 #[derive(Clone)]
 pub(crate) struct LoadedPluginTestEnvironment {

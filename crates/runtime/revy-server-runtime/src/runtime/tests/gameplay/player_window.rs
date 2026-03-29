@@ -2,6 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let world_dir = temp_dir.path().join("world");
     let codec = MinecraftWireCodec;
@@ -56,6 +57,7 @@ async fn modern_offhand_persists_without_leaking_legacy_slots() -> Result<(), Ru
 #[tokio::test]
 async fn legacy_window_zero_crafting_round_trips_authoritative_slot_updates()
 -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let server = build_test_server(
         creative_server_config(temp_dir.path().join("world")),
@@ -74,6 +76,7 @@ async fn legacy_window_zero_crafting_round_trips_authoritative_slot_updates()
 #[tokio::test]
 async fn modern_1_8_window_zero_crafting_round_trips_authoritative_slot_updates()
 -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
@@ -92,6 +95,7 @@ async fn modern_1_8_window_zero_crafting_round_trips_authoritative_slot_updates(
 #[tokio::test]
 async fn modern_1_12_window_zero_crafting_round_trips_authoritative_slot_updates()
 -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
@@ -110,6 +114,7 @@ async fn modern_1_12_window_zero_crafting_round_trips_authoritative_slot_updates
 #[tokio::test]
 async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
 -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let server = build_test_server(
         creative_server_config(temp_dir.path().join("world")),

@@ -2,14 +2,14 @@ use super::nbt::{
     NbtTag, as_compound, byte_array_field, byte_field, compound_field, int_field, list_field,
     short_field, string_field,
 };
-use mc_content_api::{
-    BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
-};
-use mc_model::{BlockPos, ChunkColumn, ChunkPos, ItemStack, expand_block_index};
 use mc_proto_common::StorageError;
 use mc_proto_je_common::__version_support::{
     blocks::{legacy_block, legacy_item, semantic_block, semantic_item},
     chunks::get_nibble,
+};
+use revy_voxel_model::{BlockPos, ChunkColumn, ChunkPos, ItemStack, expand_block_index};
+use revy_voxel_rules::{
+    BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
 };
 use std::collections::BTreeMap;
 
@@ -54,32 +54,36 @@ pub(super) fn chunk_to_nbt(
     let sections = chunk
         .sections
         .iter()
-        .filter(|(section_y, section): &(&i32, &mc_model::ChunkSection)| {
-            **section_y >= 0 && **section_y < 16 && !section.is_empty()
-        })
-        .map(|(section_y, section): (&i32, &mc_model::ChunkSection)| {
-            let mut blocks = vec![0_u8; 4096];
-            let mut data = vec![0_u8; 2048];
-            let block_light = vec![0_u8; 2048];
-            let sky_light = vec![0xff_u8; 2048];
-            for (index, state) in section.iter_blocks() {
-                let (block_id, metadata) = legacy_block(state);
-                let index = usize::from(index);
-                blocks[index] =
-                    u8::try_from(block_id).expect("legacy block id should fit into byte");
-                set_nibble(&mut data, index, metadata);
-            }
-            let mut section_compound = BTreeMap::new();
-            section_compound.insert(
-                "Y".to_string(),
-                NbtTag::Byte(i8::try_from(*section_y).expect("section y should fit into i8")),
-            );
-            section_compound.insert("Blocks".to_string(), NbtTag::ByteArray(blocks));
-            section_compound.insert("Data".to_string(), NbtTag::ByteArray(data));
-            section_compound.insert("BlockLight".to_string(), NbtTag::ByteArray(block_light));
-            section_compound.insert("SkyLight".to_string(), NbtTag::ByteArray(sky_light));
-            NbtTag::Compound(section_compound)
-        })
+        .filter(
+            |(section_y, section): &(&i32, &revy_voxel_model::ChunkSection)| {
+                **section_y >= 0 && **section_y < 16 && !section.is_empty()
+            },
+        )
+        .map(
+            |(section_y, section): (&i32, &revy_voxel_model::ChunkSection)| {
+                let mut blocks = vec![0_u8; 4096];
+                let mut data = vec![0_u8; 2048];
+                let block_light = vec![0_u8; 2048];
+                let sky_light = vec![0xff_u8; 2048];
+                for (index, state) in section.iter_blocks() {
+                    let (block_id, metadata) = legacy_block(state);
+                    let index = usize::from(index);
+                    blocks[index] =
+                        u8::try_from(block_id).expect("legacy block id should fit into byte");
+                    set_nibble(&mut data, index, metadata);
+                }
+                let mut section_compound = BTreeMap::new();
+                section_compound.insert(
+                    "Y".to_string(),
+                    NbtTag::Byte(i8::try_from(*section_y).expect("section y should fit into i8")),
+                );
+                section_compound.insert("Blocks".to_string(), NbtTag::ByteArray(blocks));
+                section_compound.insert("Data".to_string(), NbtTag::ByteArray(data));
+                section_compound.insert("BlockLight".to_string(), NbtTag::ByteArray(block_light));
+                section_compound.insert("SkyLight".to_string(), NbtTag::ByteArray(sky_light));
+                NbtTag::Compound(section_compound)
+            },
+        )
         .collect::<Vec<_>>();
     level.insert("Sections".to_string(), NbtTag::List(10, sections));
 

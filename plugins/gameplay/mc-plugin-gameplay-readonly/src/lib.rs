@@ -1,11 +1,11 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::{
-    CoreEvent, EventTarget, GameplayCapability, GameplayCommand, PlayerId, TargetedEvent,
-};
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::gameplay::{self, GameplayHost, RustGameplayPlugin};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+use revy_voxel_core::{
+    CoreEvent, EventTarget, GameplayCapability, GameplayCommand, PlayerId, TargetedEvent,
+};
 
 #[derive(Default)]
 pub struct ReadonlyGameplayPlugin;
@@ -17,7 +17,7 @@ impl RustGameplayPlugin for ReadonlyGameplayPlugin {
         gameplay::gameplay_descriptor("readonly")
     }
 
-    fn capability_set(&self) -> mc_core::GameplayCapabilitySet {
+    fn capability_set(&self) -> revy_voxel_core::GameplayCapabilitySet {
         mc_plugin_sdk_rust::capabilities::gameplay_capabilities(&[
             GameplayCapability::RuntimeReload,
         ])

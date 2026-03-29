@@ -15,12 +15,6 @@ use encoding::{
     encode_set_slot, encode_spawn_position, encode_time_update, encode_update_health,
     encode_window_items, encode_window_property,
 };
-use mc_content_api::{ContainerKindId, ContainerPropertyKey};
-use mc_core::{EntityId, PlayerSnapshot, RuntimeCommand};
-use mc_model::{
-    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
-};
 use mc_proto_common::{
     ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot, TransportKind, WireFormatKind,
 };
@@ -31,6 +25,12 @@ use mc_proto_je_common::{
     },
     JavaEditionAdapter, JavaEditionProfile, JavaProtocolSessionStore, format_text_component,
 };
+use revy_voxel_core::{EntityId, PlayerSnapshot, RuntimeCommand};
+use revy_voxel_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
+};
+use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 
 const PROTOCOL_VERSION_1_13_2: i32 = 404;
 const VERSION_NAME_1_13_2: &str = "1.13.2";
@@ -285,7 +285,7 @@ impl JavaEditionProfile for Je404Profile {
     fn observe_event(
         &self,
         session: &ProtocolSessionSnapshot,
-        event: &mc_core::CoreEvent,
+        event: &revy_voxel_core::CoreEvent,
     ) -> Result<(), ProtocolError> {
         self.sessions.observe_event(session, event);
         Ok(())

@@ -60,7 +60,7 @@ embedded manifest と runtime capability set は別です。
 ## protocol plugin の最小パターン
 
 ```rust
-use mc_core::ProtocolCapability;
+use revy_voxel_core::ProtocolCapability;
 use mc_plugin_sdk_rust::protocol::declare_protocol_plugin;
 use mc_proto_je_47::Je47Adapter;
 
@@ -88,7 +88,7 @@ declare_protocol_plugin!(
 ## non-protocol plugin の最小パターン
 
 ```rust
-use mc_core::{GameplayCapability, GameplayCapabilitySet};
+use revy_voxel_core::{GameplayCapability, GameplayCapabilitySet};
 use mc_plugin_api::codec::gameplay::GameplayDescriptor;
 use mc_plugin_sdk_rust::capabilities::gameplay_capabilities;
 use mc_plugin_sdk_rust::export_plugin;

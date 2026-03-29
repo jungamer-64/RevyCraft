@@ -1,6 +1,6 @@
 use super::*;
-use mc_core::{CoreEvent, EventTarget, PlayerId, TargetedEvent};
 use mc_proto_common::ConnectionPhase;
+use revy_voxel_core::{CoreEvent, EventTarget, PlayerId, TargetedEvent};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use uuid::Uuid;
 

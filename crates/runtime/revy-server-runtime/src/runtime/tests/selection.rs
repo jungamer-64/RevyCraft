@@ -1,9 +1,9 @@
 use super::*;
 use crate::runtime::selection::SelectionResolver;
-use mc_core::{PlayerId, ProtocolCapabilitySet};
 use mc_plugin_api::codec::auth::AuthMode;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_proto_common::ConnectionPhase;
+use revy_voxel_core::{PlayerId, ProtocolCapabilitySet};
 use uuid::Uuid;
 
 #[test]

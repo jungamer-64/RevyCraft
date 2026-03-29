@@ -1,5 +1,5 @@
-use mc_core::PlayerSnapshot;
 use mc_proto_common::{PacketReader, PacketWriter, ProtocolError};
+use revy_voxel_core::PlayerSnapshot;
 
 pub(crate) fn write_login_byte_array(
     writer: &mut PacketWriter,

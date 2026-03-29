@@ -15,9 +15,9 @@ pub use self::window_items::window_items;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_content_api::ContainerKindId;
-    use mc_model::{InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory};
     use mc_proto_common::{PacketReader, PacketWriter};
+    use revy_voxel_model::{InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory};
+    use revy_voxel_rules::ContainerKindId;
 
     fn player_container() -> ContainerKindId {
         ContainerKindId::new("canonical:player")

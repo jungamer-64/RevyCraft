@@ -69,7 +69,7 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
 #[test]
 fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
 -> Result<(), RuntimeError> {
-    use mc_core::{
+    use revy_voxel_core::{
         EntityId, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
         ProtocolCapabilitySet, SessionCapabilitySet,
     };

@@ -59,7 +59,7 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
 
 #[test]
 fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
-    use mc_core::{
+    use revy_voxel_core::{
         EntityId, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
         ProtocolCapabilitySet, SessionCapabilitySet,
     };

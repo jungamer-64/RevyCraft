@@ -1,8 +1,8 @@
 use crate::RuntimeError;
 use crate::runtime::{RuntimeServer, SharedSessionState};
 use crate::transport::{TransportSessionIo, write_payload};
-use mc_core::ConnectionId;
 use mc_proto_common::{ConnectionPhase, HandshakeNextState, ServerListStatus, StatusRequest};
+use revy_voxel_core::ConnectionId;
 use std::sync::Arc;
 
 impl RuntimeServer {

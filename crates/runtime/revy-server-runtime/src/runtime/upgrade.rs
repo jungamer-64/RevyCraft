@@ -8,9 +8,9 @@ use crate::config::{ServerConfig, ServerConfigSource};
 use crate::runtime::bootstrap::boot_server_from_upgrade;
 use crate::transport::{AcceptedTransportSession, TransportEncryptionSnapshot, TransportSessionIo};
 use bytes::BytesMut;
-use mc_core::{ConnectionId, CoreEvent, CoreRuntimeStateBlob, EntityId, PlayerId};
 use mc_plugin_host::host::plugin_host_from_config;
 use mc_proto_common::{ConnectionPhase, TransportKind};
+use revy_voxel_core::{ConnectionId, CoreEvent, CoreRuntimeStateBlob, EntityId, PlayerId};
 use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -48,9 +48,9 @@ pub struct RuntimeUpgradeSessionState {
     pub adapter_id: Option<String>,
     pub player_id: Option<PlayerId>,
     pub entity_id: Option<EntityId>,
-    pub gameplay_profile: Option<mc_core::GameplayProfileId>,
-    pub protocol_generation: Option<mc_core::PluginGenerationId>,
-    pub gameplay_generation: Option<mc_core::PluginGenerationId>,
+    pub gameplay_profile: Option<revy_voxel_core::GameplayProfileId>,
+    pub protocol_generation: Option<revy_voxel_core::PluginGenerationId>,
+    pub gameplay_generation: Option<revy_voxel_core::PluginGenerationId>,
     pub login_challenge: Option<RuntimeUpgradeLoginChallenge>,
     pub read_buffer: Vec<u8>,
     pub queued_messages: Vec<RuntimeUpgradeQueuedMessage>,

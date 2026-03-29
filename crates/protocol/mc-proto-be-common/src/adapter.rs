@@ -1,17 +1,17 @@
 use crate::probe::{bedrock_probe_intent, detects_bedrock_datagram};
-use mc_content_api::{ContainerKindId, ContainerPropertyKey};
 use mc_content_canonical::catalog;
-use mc_core::{CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
-use mc_model::{
-    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
-    ItemStack, WorldMeta,
-};
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest,
     PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
     ProtocolSessionSnapshot, RawPacketStreamWireCodec, ServerListStatus, SessionAdapter,
     StatusRequest, TransportKind, WireCodec,
 };
+use revy_voxel_core::{CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
+use revy_voxel_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
+    ItemStack, WorldMeta,
+};
+use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 
 pub trait BedrockProfile: Default + Send + Sync {
     fn adapter_id(&self) -> &'static str;

@@ -1,6 +1,6 @@
 use crate::__version_support::inventory::{SlotEncoding, write_slot};
-use mc_model::ItemStack;
 use mc_proto_common::{PacketWriter, ProtocolError};
+use revy_voxel_model::ItemStack;
 
 pub fn write_empty_metadata_1_8(writer: &mut PacketWriter) {
     writer.write_u8(0x7f);

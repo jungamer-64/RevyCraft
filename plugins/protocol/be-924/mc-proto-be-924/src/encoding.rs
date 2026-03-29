@@ -32,16 +32,16 @@ use bedrockrs_proto::v818::types::SyncedPlayerMovementSettings;
 use bedrockrs_proto::v898::packets::ResourcePackStackPacket;
 use bedrockrs_proto::v924::packets::StartGamePacket;
 use bedrockrs_proto::v924::types::LevelSettings;
-use mc_content_api::{ContainerKindId, ContainerPropertyKey};
-use mc_core::{EntityId, PlayerSnapshot};
-use mc_model::{
-    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
-    ItemStack, WorldMeta,
-};
 use mc_proto_be_common::__version_support::world::{
     bedrock_actor_id, block_pos_to_network, vec3_to_bedrock,
 };
 use mc_proto_common::{ConnectionPhase, ProtocolError};
+use revy_voxel_core::{EntityId, PlayerSnapshot};
+use revy_voxel_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
+    ItemStack, WorldMeta,
+};
+use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 use std::collections::HashMap;
 use vek::Vec2;
 

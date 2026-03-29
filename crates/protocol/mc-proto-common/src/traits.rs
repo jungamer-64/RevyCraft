@@ -4,7 +4,7 @@ use crate::types::{
     ProtocolDescriptor, ProtocolSessionSnapshot, ServerListStatus, StatusRequest, TransportKind,
 };
 use bytes::BytesMut;
-use mc_core::{
+use revy_voxel_core::{
     CoreEvent, PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet, RuntimeCommand,
     WorldSnapshot,
 };

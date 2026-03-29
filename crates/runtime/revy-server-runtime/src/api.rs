@@ -1,5 +1,5 @@
-use mc_core::{AdapterId, ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use mc_proto_common::{ConnectionPhase, TransportKind};
+use revy_voxel_core::{AdapterId, ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 

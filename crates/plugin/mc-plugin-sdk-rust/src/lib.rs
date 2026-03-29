@@ -1,7 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
 
-use mc_core::{PlayerId, PlayerSnapshot, WorldSnapshot};
-use mc_model::WorldMeta;
 use mc_plugin_api::abi::{
     CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginAbiVersion, PluginKind,
     Utf8Slice,
@@ -12,6 +10,8 @@ use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_api::codec::storage::StorageDescriptor;
 use mc_plugin_api::manifest::PluginManifestV1;
 use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError, StorageError};
+use revy_voxel_core::{PlayerId, PlayerSnapshot, WorldSnapshot};
+use revy_voxel_model::WorldMeta;
 use std::path::Path;
 
 #[doc(hidden)]

@@ -2,9 +2,9 @@ use super::crypto::{decrypt_login_blob, minecraft_server_hash, random_verify_tok
 use crate::RuntimeError;
 use crate::runtime::{LOGIN_SERVER_ID, LoginChallengeState, RuntimeServer, SharedSessionState};
 use crate::transport::{TransportSessionIo, write_payload};
-use mc_core::{ConnectionId, CoreCommand};
 use mc_plugin_api::codec::auth::{AuthMode, BedrockAuthResult};
 use mc_proto_common::{Edition, LoginRequest, TransportKind};
+use revy_voxel_core::{ConnectionId, CoreCommand};
 use std::sync::Arc;
 
 impl RuntimeServer {

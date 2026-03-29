@@ -7,7 +7,6 @@ use std::process::Stdio;
 use std::thread;
 use std::time::Duration;
 use support::*;
-use tempfile::tempdir;
 
 #[test]
 fn stdin_null_with_grpc_admin_surface_keeps_server_running()

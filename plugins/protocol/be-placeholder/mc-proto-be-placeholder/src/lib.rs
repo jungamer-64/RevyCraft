@@ -1,11 +1,11 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::{CoreEvent, PlayerSnapshot, RuntimeCommand};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState, HandshakeProbe, LoginRequest,
     PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
     ProtocolSessionSnapshot, RawPacketStreamWireCodec, ServerListStatus, SessionAdapter,
     StatusRequest, TransportKind, WireCodec, WireFormatKind,
 };
+use revy_voxel_core::{CoreEvent, PlayerSnapshot, RuntimeCommand};
 
 const VERSION_NAME_PLACEHOLDER: &str = "bedrock-placeholder";
 pub const BE_PLACEHOLDER_ADAPTER_ID: &str = "be-placeholder";

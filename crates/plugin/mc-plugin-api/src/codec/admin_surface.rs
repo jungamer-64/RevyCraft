@@ -3,7 +3,7 @@ use crate::codec::__internal::binary::{
     EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope, encode_envelope,
 };
 use crate::codec::admin::{AdminPermission, RuntimeReloadMode};
-use mc_core::{AdminSurfaceCapability, AdminSurfaceProfileId, CapabilityAnnouncement};
+use revy_voxel_core::{AdminSurfaceCapability, AdminSurfaceProfileId, CapabilityAnnouncement};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

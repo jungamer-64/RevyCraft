@@ -10,7 +10,7 @@ categories.workspace = true
 description = "Bedrock placeholder protocol probe for shared-port UDP listener support."
 
 [dependencies]
-mc-core = { path = "../../../../crates/core/mc-core" }
+revy-voxel-core = { path = "../../../../crates/core/revy-voxel-core" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
 
 [lints]

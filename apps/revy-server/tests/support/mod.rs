@@ -173,6 +173,17 @@ pub fn repo_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .canonicalize()?)
 }
 
+pub fn tempdir() -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
+    let base_dir = repo_root()?
+        .join("target")
+        .join("test-tmp")
+        .join("revy-server");
+    fs::create_dir_all(&base_dir)?;
+    Ok(tempfile::Builder::new()
+        .prefix("revy-server-")
+        .tempdir_in(base_dir)?)
+}
+
 fn runtime_plugin_allowlist<'a>(options: &'a ServerTomlOptions<'a>) -> BTreeSet<&'a str> {
     let mut plugin_allowlist = BTreeSet::from([
         "admin-console",

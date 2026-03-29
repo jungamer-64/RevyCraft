@@ -7,7 +7,7 @@ use crate::codec::__internal::storage_semantic::{
     decode_storage_request_payload, decode_storage_response_payload,
     encode_storage_request_payload, encode_storage_response_payload,
 };
-use mc_core::{CapabilityAnnouncement, StorageCapability, StorageProfileId, WorldSnapshot};
+use revy_voxel_core::{CapabilityAnnouncement, StorageCapability, StorageProfileId, WorldSnapshot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -195,18 +195,18 @@ mod tests {
         StorageDescriptor, StorageRequest, StorageResponse, decode_storage_request,
         decode_storage_response, encode_storage_request, encode_storage_response,
     };
-    use mc_core::{CoreCommand, CoreConfig, PlayerId, ServerCore};
-    use mc_model::BlockPos;
+    use revy_voxel_core::{CoreCommand, CoreConfig, PlayerId, ServerCore};
+    use revy_voxel_model::BlockPos;
     use uuid::Uuid;
 
-    fn sample_snapshot() -> mc_core::WorldSnapshot {
+    fn sample_snapshot() -> revy_voxel_core::WorldSnapshot {
         let mut core = ServerCore::new(
             CoreConfig::default(),
             mc_content_canonical::canonical_content(),
         );
         let _ = core.apply_command(
             CoreCommand::LoginStart {
-                connection_id: mc_core::ConnectionId(1),
+                connection_id: revy_voxel_core::ConnectionId(1),
                 username: "alice".to_string(),
                 player_id: PlayerId(Uuid::from_u128(7)),
             },

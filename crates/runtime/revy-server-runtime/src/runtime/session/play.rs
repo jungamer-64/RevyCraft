@@ -4,7 +4,7 @@ use crate::runtime::{RuntimeServer, SharedSessionState};
 impl RuntimeServer {
     pub(in crate::runtime::session) async fn handle_play_frame(
         &self,
-        connection_id: mc_core::ConnectionId,
+        connection_id: revy_voxel_core::ConnectionId,
         shared_state: &SharedSessionState,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {

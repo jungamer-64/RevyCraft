@@ -1,10 +1,5 @@
 use super::{__macro_support, admin_surface, capabilities, gameplay, manifest, protocol};
 use bytes::BytesMut;
-use mc_core::{
-    CapabilityAnnouncement, CoreEvent, GameplayCapability, GameplayProfileId, PlayerId,
-    PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
-};
-use mc_model::{BlockPos, DimensionId, WorldMeta};
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
 use mc_plugin_api::codec::admin::AdminPermission;
 use mc_plugin_api::codec::admin_surface::{
@@ -25,6 +20,11 @@ use mc_proto_common::{
     ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
     StatusRequest, TransportKind, WireCodec, WireFormatKind,
 };
+use revy_voxel_core::{
+    CapabilityAnnouncement, CoreEvent, GameplayCapability, GameplayProfileId, PlayerId,
+    PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
+};
+use revy_voxel_model::{BlockPos, DimensionId, WorldMeta};
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
@@ -376,7 +376,7 @@ fn capability_helpers_add_build_tags_without_changing_base_names() {
         announcement
             .build_tag
             .as_ref()
-            .map(mc_core::PluginBuildTag::as_str),
+            .map(revy_voxel_core::PluginBuildTag::as_str),
         Some("protocol-reload-v2")
     );
 }
@@ -419,7 +419,7 @@ mod plugin_a {
             gameplay::gameplay_descriptor("plugin-a")
         }
 
-        fn capability_set(&self) -> mc_core::GameplayCapabilitySet {
+        fn capability_set(&self) -> revy_voxel_core::GameplayCapabilitySet {
             capabilities::gameplay_capabilities(&[GameplayCapability::RuntimeReload])
         }
 
@@ -468,7 +468,7 @@ mod plugin_b {
             gameplay::gameplay_descriptor("plugin-b")
         }
 
-        fn capability_set(&self) -> mc_core::GameplayCapabilitySet {
+        fn capability_set(&self) -> revy_voxel_core::GameplayCapabilitySet {
             capabilities::gameplay_capabilities(&[GameplayCapability::RuntimeReload])
         }
 

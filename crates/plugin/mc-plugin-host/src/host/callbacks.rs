@@ -1,5 +1,4 @@
 use crate::config::PluginBufferLimits;
-use mc_core::GameplayTransaction;
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode, Utf8Slice};
 use mc_plugin_api::codec::gameplay::host_blob::{
     decode_begin_mining, decode_block_pos, decode_can_edit_block_key, decode_clear_mining,
@@ -9,6 +8,7 @@ use mc_plugin_api::codec::gameplay::host_blob::{
     encode_block_state, encode_player_snapshot, encode_world_meta,
 };
 use mc_plugin_api::host_api::{AdminSurfaceHostApiV1, GameplayHostApiV2};
+use revy_voxel_core::GameplayTransaction;
 use std::cell::Cell;
 
 use super::write_owned_buffer;

@@ -3,13 +3,13 @@ use crate::runtime::{
     RuntimeServer, SessionMessage, SessionReattachInstruction, SharedSessionState,
 };
 use crate::transport::{TransportSessionIo, write_payload};
-use mc_core::CoreEvent;
 use mc_proto_common::{ConnectionPhase, PlayEncodingContext};
+use revy_voxel_core::CoreEvent;
 
 impl RuntimeServer {
     pub(in crate::runtime::session) async fn handle_session_reattach(
         &self,
-        connection_id: mc_core::ConnectionId,
+        connection_id: revy_voxel_core::ConnectionId,
         transport_io: &mut TransportSessionIo,
         shared_state: &SharedSessionState,
         instruction: SessionReattachInstruction,
@@ -44,7 +44,7 @@ impl RuntimeServer {
 
     pub(in crate::runtime::session) async fn handle_outgoing_message(
         &self,
-        connection_id: mc_core::ConnectionId,
+        connection_id: revy_voxel_core::ConnectionId,
         transport_io: &mut TransportSessionIo,
         shared_state: &SharedSessionState,
         message: SessionMessage,

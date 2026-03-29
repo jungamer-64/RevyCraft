@@ -9,14 +9,14 @@ mod region;
 #[cfg(test)]
 mod tests;
 
-use mc_core::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
-use mc_model::{ChunkColumn, ChunkPos};
 use mc_plugin_api::codec::storage::StorageDescriptor;
 use mc_plugin_sdk_rust::capabilities::{build_tag_contains, storage_capabilities};
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::storage::RustStoragePlugin;
 use mc_proto_common::StorageError;
+use revy_voxel_core::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
+use revy_voxel_model::{ChunkColumn, ChunkPos};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

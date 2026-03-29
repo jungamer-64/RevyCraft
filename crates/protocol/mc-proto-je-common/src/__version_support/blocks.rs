@@ -1,5 +1,5 @@
 use mc_content_canonical::catalog;
-use mc_model::{BlockState, ItemStack};
+use revy_voxel_model::{BlockState, ItemStack};
 
 fn block(key: &str) -> BlockState {
     BlockState::new(key)

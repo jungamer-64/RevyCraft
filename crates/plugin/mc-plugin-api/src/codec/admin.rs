@@ -1,5 +1,5 @@
-use mc_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use mc_proto_common::{ConnectionPhase, TransportKind};
+use revy_voxel_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

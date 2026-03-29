@@ -12,13 +12,13 @@ use crate::codec::__internal::shared::{
     decode_player_snapshot, decode_world_meta, encode_block_pos, encode_option,
     encode_optional_block_state, encode_player_id, encode_player_snapshot, encode_world_meta,
 };
-use mc_content_api::{BlockEntityState, ContainerKindId};
-use mc_core::{
+use mc_proto_common::ConnectionPhase;
+use revy_voxel_core::{
     CapabilityAnnouncement, GameplayCapability, GameplayCommand, GameplayProfileId, PlayerId,
     PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet,
 };
-use mc_model::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};
-use mc_proto_common::ConnectionPhase;
+use revy_voxel_model::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};
+use revy_voxel_rules::{BlockEntityState, ContainerKindId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -60,7 +60,7 @@ pub struct GameplayDescriptor {
 pub struct GameplaySessionSnapshot {
     pub phase: ConnectionPhase,
     pub player_id: Option<PlayerId>,
-    pub entity_id: Option<mc_core::EntityId>,
+    pub entity_id: Option<revy_voxel_core::EntityId>,
     pub protocol: ProtocolCapabilitySet,
     pub gameplay_profile: GameplayProfileId,
     pub protocol_generation: Option<PluginGenerationId>,
@@ -595,7 +595,7 @@ pub mod host_blob {
     }
 
     pub fn encode_targeted_event_blob(
-        event: &mc_core::TargetedEvent,
+        event: &revy_voxel_core::TargetedEvent,
     ) -> Result<Vec<u8>, ProtocolCodecError> {
         let mut encoder = Encoder::default();
         encode_targeted_event(&mut encoder, event)?;
@@ -604,7 +604,7 @@ pub mod host_blob {
 
     pub fn decode_targeted_event_blob(
         bytes: &[u8],
-    ) -> Result<mc_core::TargetedEvent, ProtocolCodecError> {
+    ) -> Result<revy_voxel_core::TargetedEvent, ProtocolCodecError> {
         let mut decoder = Decoder::new(bytes);
         let event = decode_targeted_event(&mut decoder)?;
         decoder.finish()?;
@@ -625,18 +625,18 @@ mod tests {
             encode_player_snapshot, encode_world_meta,
         },
     };
-    use mc_content_api::{
-        BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
-    };
-    use mc_core::{
+    use mc_proto_common::ConnectionPhase;
+    use revy_voxel_core::{
         CapabilityAnnouncement, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
         GameplayProfileId, PlayerId, PlayerSnapshot, ProtocolCapabilitySet,
     };
-    use mc_model::{
+    use revy_voxel_model::{
         BlockFace, BlockPos, BlockState, DimensionId, InteractionHand, ItemStack, PlayerInventory,
         Vec3, WorldMeta,
     };
-    use mc_proto_common::ConnectionPhase;
+    use revy_voxel_rules::{
+        BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
+    };
     use uuid::Uuid;
 
     fn sample_player_id() -> PlayerId {
@@ -666,7 +666,7 @@ mod tests {
         GameplaySessionSnapshot {
             phase: ConnectionPhase::Play,
             player_id: Some(sample_player_id()),
-            entity_id: Some(mc_core::EntityId(3)),
+            entity_id: Some(revy_voxel_core::EntityId(3)),
             protocol: ProtocolCapabilitySet::new(),
             gameplay_profile: GameplayProfileId::new("canonical"),
             protocol_generation: None,

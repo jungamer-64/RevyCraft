@@ -9,13 +9,13 @@ use crate::codec::__internal::protocol_semantic::{
     decode_protocol_request_payload, decode_protocol_response_payload,
     encode_protocol_request_payload, encode_protocol_response_payload,
 };
-use mc_core::{
-    CapabilityAnnouncement, CoreEvent, PlayerSnapshot, ProtocolCapability, RuntimeCommand,
-};
 pub use mc_proto_common::ProtocolSessionSnapshot;
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, LoginRequest, PlayEncodingContext,
     ProtocolDescriptor, ServerListStatus, StatusRequest,
+};
+use revy_voxel_core::{
+    CapabilityAnnouncement, CoreEvent, PlayerSnapshot, ProtocolCapability, RuntimeCommand,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -296,21 +296,21 @@ mod tests {
         ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_protocol_request,
         decode_protocol_response, encode_protocol_request, encode_protocol_response,
     };
-    use mc_content_api::ContainerKindId;
-    use mc_core::{
-        CapabilityAnnouncement, ConnectionId, CoreCommand, CoreEvent, EntityId,
-        GameplayCapabilitySet, GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId,
-        ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet,
-    };
-    use mc_model::{
-        BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, InventorySlot, ItemStack,
-        PlayerInventory, Vec3, WorldMeta,
-    };
     use mc_proto_common::{
         BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState,
         LoginRequest, PlayEncodingContext, ProtocolDescriptor, ServerListStatus, StatusRequest,
         TransportKind, WireFormatKind,
     };
+    use revy_voxel_core::{
+        CapabilityAnnouncement, ConnectionId, CoreCommand, CoreEvent, EntityId,
+        GameplayCapabilitySet, GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId,
+        ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet,
+    };
+    use revy_voxel_model::{
+        BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, InventorySlot, ItemStack,
+        PlayerInventory, Vec3, WorldMeta,
+    };
+    use revy_voxel_rules::ContainerKindId;
     use uuid::Uuid;
 
     fn sample_player_id() -> PlayerId {

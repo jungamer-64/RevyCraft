@@ -1,5 +1,5 @@
 use super::*;
-use mc_core::{
+use revy_voxel_core::{
     AdminSurfaceCapability, AuthCapability, GameplayCapability, ProtocolCapability,
     StorageCapability,
 };

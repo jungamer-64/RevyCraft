@@ -18,7 +18,7 @@ in-process-testing = ["mc-plugin-sdk-rust/in-process-testing"]
 
 [dependencies]
 libc = "0.2"
-mc-core = { path = "../../../crates/core/mc-core" }
+revy-voxel-core = { path = "../../../crates/core/revy-voxel-core" }
 mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
 

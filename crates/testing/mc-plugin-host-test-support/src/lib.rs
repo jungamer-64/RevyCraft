@@ -4,7 +4,6 @@
 //! fixtures outside the host crate itself. Packaged-plugin harness helpers live
 //! in `mc-plugin-test-support`.
 
-use mc_core::PluginGenerationId;
 use mc_plugin_host::__test_hooks::{
     BuiltTestHost, InProcessHostBuildInput, activate_auth_profile, activate_gameplay_profiles,
     activate_storage_profile, build_in_process_host, discover, load_plugin_set,
@@ -25,6 +24,7 @@ use mc_plugin_host::runtime::{
     AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
     RuntimeReloadContext, StorageProfileHandle,
 };
+use revy_voxel_core::PluginGenerationId;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -257,12 +257,12 @@ pub mod raw {
 mod tests {
     use super::{PluginAbiRange, TestPluginHost, TestPluginHostBuilder};
     use crate::raw::InProcessProtocolPlugin;
-    use mc_core::{CoreConfig, ServerCore};
     use mc_plugin_host::config::{BootstrapConfig, RuntimeSelectionConfig};
     use mc_plugin_host::runtime::RuntimeReloadContext;
     use mc_plugin_proto_je_5::in_process_plugin_entrypoints as je_1_7_10_entrypoints;
     use mc_plugin_test_support::PackagedPluginHarness;
     use mc_proto_je_5::JE_5_ADAPTER_ID;
+    use revy_voxel_core::{CoreConfig, ServerCore};
     use std::fs;
     use std::path::PathBuf;
 

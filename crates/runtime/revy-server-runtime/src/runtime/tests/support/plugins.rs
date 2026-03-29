@@ -1,12 +1,12 @@
 use super::*;
 
 pub(crate) mod failing_storage_plugin {
-    use mc_core::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
     use mc_plugin_api::codec::storage::StorageDescriptor;
     use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
     use mc_plugin_sdk_rust::storage::RustStoragePlugin;
     use mc_proto_common::StorageError;
+    use revy_voxel_core::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
     use std::path::Path;
 
     pub const PLUGIN_ID: &str = "storage-failing-runtime";
@@ -327,7 +327,7 @@ pub(crate) fn in_process_failing_storage_registries(
 
 pub(crate) fn gameplay_profile_map(
     entries: &[(&str, &str)],
-) -> HashMap<mc_core::AdapterId, mc_core::GameplayProfileId> {
+) -> HashMap<revy_voxel_core::AdapterId, revy_voxel_core::GameplayProfileId> {
     entries
         .iter()
         .map(|(adapter_id, profile_id)| ((*adapter_id).into(), (*profile_id).into()))

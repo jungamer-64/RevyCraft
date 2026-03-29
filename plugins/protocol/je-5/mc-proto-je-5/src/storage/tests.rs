@@ -1,8 +1,8 @@
 use super::Je1710StorageAdapter;
-use mc_content_api::{BlockEntityState, ContainerPropertyKey};
-use mc_core::{CoreConfig, PlayerId, ServerCore};
-use mc_model::{BlockPos, BlockState, ChunkColumn, ChunkPos, InventorySlot, ItemStack};
 use mc_proto_common::StorageAdapter;
+use revy_voxel_core::{CoreConfig, PlayerId, ServerCore};
+use revy_voxel_model::{BlockPos, BlockState, ChunkColumn, ChunkPos, InventorySlot, ItemStack};
+use revy_voxel_rules::{BlockEntityState, ContainerPropertyKey};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
@@ -17,8 +17,8 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
     );
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"storage-roundtrip"));
     let _ = core.apply_command(
-        mc_core::CoreCommand::LoginStart {
-            connection_id: mc_core::ConnectionId(1),
+        revy_voxel_core::CoreCommand::LoginStart {
+            connection_id: revy_voxel_core::ConnectionId(1),
             username: "alpha".to_string(),
             player_id,
         },

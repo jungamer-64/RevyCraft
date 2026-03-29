@@ -16,12 +16,6 @@ use encoding::{
     encode_position_and_look, encode_set_slot, encode_spawn_position, encode_time_update,
     encode_update_health, encode_window_items, encode_window_property,
 };
-use mc_content_api::{ContainerKindId, ContainerPropertyKey};
-use mc_core::{EntityId, PlayerSnapshot, RuntimeCommand};
-use mc_model::{
-    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
-};
 use mc_proto_common::{
     Edition, ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot, TransportKind,
     WireFormatKind,
@@ -33,6 +27,12 @@ use mc_proto_je_common::{
     },
     JavaEditionAdapter, JavaEditionProfile, JavaProtocolSessionStore,
 };
+use revy_voxel_core::{EntityId, PlayerSnapshot, RuntimeCommand};
+use revy_voxel_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
+};
+use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 
 pub use self::storage::Je1710StorageAdapter;
 
@@ -292,7 +292,7 @@ impl JavaEditionProfile for Je5Profile {
     fn observe_event(
         &self,
         session: &ProtocolSessionSnapshot,
-        event: &mc_core::CoreEvent,
+        event: &revy_voxel_core::CoreEvent,
     ) -> Result<(), ProtocolError> {
         self.sessions.observe_event(session, event);
         Ok(())

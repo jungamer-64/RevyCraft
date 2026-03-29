@@ -5,17 +5,17 @@ use crate::{
     PACKET_SB_PLAYER_BLOCK_PLACEMENT, PACKET_SB_PLAYER_DIGGING, PACKET_SB_POSITION,
     PACKET_SB_POSITION_LOOK, PACKET_SB_SETTINGS,
 };
-use mc_content_api::ContainerKindId;
-use mc_core::{CoreCommand, PlayerId, RuntimeCommand, SessionCommand};
-use mc_model::{
-    BlockFace, BlockPos, InteractionHand, InventoryClickButton, InventoryClickTarget,
-    InventoryClickValidation, InventoryTransactionContext, Vec3,
-};
 use mc_proto_common::{PacketReader, ProtocolError, ProtocolSessionSnapshot};
 use mc_proto_je_common::{
     __version_support::inventory::{inventory_slot, read_slot},
     JavaProtocolSessionStore,
 };
+use revy_voxel_core::{CoreCommand, PlayerId, RuntimeCommand, SessionCommand};
+use revy_voxel_model::{
+    BlockFace, BlockPos, InteractionHand, InventoryClickButton, InventoryClickTarget,
+    InventoryClickValidation, InventoryTransactionContext, Vec3,
+};
+use revy_voxel_rules::ContainerKindId;
 
 pub(crate) fn decode_play_packet(
     session: &ProtocolSessionSnapshot,

@@ -1,6 +1,6 @@
 use super::*;
 use bedrockrs_proto::V924;
-use mc_model::BlockPos;
+use revy_voxel_model::BlockPos;
 
 const BEDROCK_STONE_RUNTIME_ID: u32 = 2_532;
 const BEDROCK_AIR_RUNTIME_ID: u32 = 12_530;

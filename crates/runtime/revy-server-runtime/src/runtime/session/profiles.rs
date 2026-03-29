@@ -2,9 +2,9 @@ use crate::RuntimeError;
 use crate::runtime::{
     RuntimeServer, SessionRuntimeContext, SessionState, SessionView, SharedSessionState,
 };
-use mc_core::{ConnectionId, SessionCapabilitySet};
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_proto_common::ProtocolSessionSnapshot;
+use revy_voxel_core::{ConnectionId, SessionCapabilitySet};
 
 impl RuntimeServer {
     pub(in crate::runtime) fn refresh_session_capabilities(session: &mut SessionState) {

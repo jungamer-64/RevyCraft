@@ -38,15 +38,15 @@ login/auth flow
 ## 型の役割
 
 - `CoreCommand`
-  runtime / protocol 境界で使う semantic input です。定義は [`../../crates/core/mc-core/src/events.rs`](../../crates/core/mc-core/src/events.rs) にあります。
+  runtime / protocol 境界で使う semantic input です。定義は [`../../crates/core/revy-voxel-core/src/events.rs`](../../crates/core/revy-voxel-core/src/events.rs) にあります。
 - `GameplayCommand`
-  gameplay plugin に見せる gameplay-owned command だけを抜き出した入力です。`CoreCommand` から分離されます。定義は [`../../crates/core/mc-core/src/events.rs`](../../crates/core/mc-core/src/events.rs) にあります。
+  gameplay plugin に見せる gameplay-owned command だけを抜き出した入力です。`CoreCommand` から分離されます。定義は [`../../crates/core/revy-voxel-core/src/events.rs`](../../crates/core/revy-voxel-core/src/events.rs) にあります。
 - `GameplayTransaction`
-  gameplay callback 単位で host が開始する invocation-scoped transaction です。plugin はここを通じて world / player / inventory / block を読み書きします。runtime は live core を直接触らず、snapshot を読みながら `read-set + op journal` を積み、最後に live core へ validate/apply します。定義は [`../../crates/core/mc-core/src/core/transaction.rs`](../../crates/core/mc-core/src/core/transaction.rs) にあります。
+  gameplay callback 単位で host が開始する invocation-scoped transaction です。plugin はここを通じて world / player / inventory / block を読み書きします。runtime は live core を直接触らず、snapshot を読みながら `read-set + op journal` を積み、最後に live core へ validate/apply します。定義は [`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) にあります。
 - `CoreEvent`
-  core から外へ出る出力です。最終的に protocol plugin が encode します。定義は [`../../crates/core/mc-core/src/events.rs`](../../crates/core/mc-core/src/events.rs) にあります。
+  core から外へ出る出力です。最終的に protocol plugin が encode します。定義は [`../../crates/core/revy-voxel-core/src/events.rs`](../../crates/core/revy-voxel-core/src/events.rs) にあります。
 - `TargetedEvent`
-  `CoreEvent` に配送先を付けた wrapper です。runtime はこれを session / connection / broadcast へ dispatch します。
+  `CoreEvent` に配送先を付けた wrapper です。routing primitive 自体は `revy-core` にあり、`revy-voxel-core` は `TargetedEvent = RoutedEvent<CoreEvent>` として re-export します。runtime はこれを session / connection / broadcast へ dispatch します。
 
 ## command の分岐点
 
@@ -54,7 +54,7 @@ runtime 側の本体は [`../../crates/runtime/revy-server-runtime/src/runtime/k
 
 ### login special-case
 
-`CoreCommand::LoginStart` は gameplay profile があれば `prepare_player_join(...)` へ入り、transaction の `begin_login(...)` / `finalize_login(...)` を経由して detached journal を作ります。runtime はその journal を live core へ validate/apply します。実装は [`../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs`](../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs) と [`../../crates/core/mc-core/src/core/transaction.rs`](../../crates/core/mc-core/src/core/transaction.rs) にあります。
+`CoreCommand::LoginStart` は gameplay profile があれば `prepare_player_join(...)` へ入り、transaction の `begin_login(...)` / `finalize_login(...)` を経由して detached journal を作ります。runtime はその journal を live core へ validate/apply します。実装は [`../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs`](../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs) と [`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) にあります。
 
 ### direct-core command
 
@@ -68,7 +68,7 @@ runtime 側の本体は [`../../crates/runtime/revy-server-runtime/src/runtime/k
 - `KeepAliveResponse`
 - `Disconnect`
 
-特に `InventoryClick` は [`../../crates/core/mc-core/src/core/inventory/click.rs`](../../crates/core/mc-core/src/core/inventory/click.rs) で直接処理されます。gameplay plugin transaction は経由しません。
+特に `InventoryClick` は [`../../crates/core/revy-voxel-core/src/core/inventory/click.rs`](../../crates/core/revy-voxel-core/src/core/inventory/click.rs) で直接処理されます。gameplay plugin transaction は経由しません。
 
 ### gameplay-owned command
 
@@ -94,7 +94,7 @@ runtime 側の本体は [`../../crates/runtime/revy-server-runtime/src/runtime/k
 - `SelectedHotbarSlotChanged`
 - 既存 player の spawn event
 
-この順番を追いたいときは [`../../crates/core/mc-core/src/core/transaction.rs`](../../crates/core/mc-core/src/core/transaction.rs) を読むのが最短です。
+この順番を追いたいときは [`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) を読むのが最短です。
 
 ただし `LoginAccepted` は core の accept pointであって、その場で shared session state を `Play`
 へ進めるわけではありません。runtime は `LoginAccepted` をまず connection-targeted event として

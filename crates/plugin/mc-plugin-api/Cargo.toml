@@ -10,9 +10,9 @@ categories.workspace = true
 description = "Stable C ABI and binary envelope contract for RevyCraft runtime plugins."
 
 [dependencies]
-mc-content-api = { path = "../../content/mc-content-api" }
-mc-core = { path = "../../core/mc-core" }
-mc-model = { path = "../../model/mc-model" }
+revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
+revy-voxel-core = { path = "../../core/revy-voxel-core" }
+revy-voxel-model = { path = "../../model/revy-voxel-model" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
 serde.workspace = true
 serde_json.workspace = true

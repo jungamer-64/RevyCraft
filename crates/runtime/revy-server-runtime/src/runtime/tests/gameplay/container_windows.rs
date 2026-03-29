@@ -2,6 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
@@ -256,6 +257,7 @@ async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<
 #[tokio::test]
 async fn world_backed_crafting_table_opens_and_crafts_chest_via_protocol()
 -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
@@ -494,6 +496,7 @@ async fn world_backed_crafting_table_opens_and_crafts_chest_via_protocol()
 #[tokio::test]
 async fn world_backed_chest_moves_items_and_resyncs_player_inventory_on_close()
 -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),

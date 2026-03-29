@@ -1,14 +1,4 @@
 use crate::{JE_5_ADAPTER_ID, Je5Adapter, PROTOCOL_VERSION_1_7_10, VERSION_NAME_1_7_10};
-use mc_content_api::{ContainerKindId, ContainerPropertyKey};
-use mc_core::{
-    ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, PlayerId, PlayerSnapshot,
-    RuntimeCommand, ServerCore, SessionCommand,
-};
-use mc_model::{
-    BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot,
-    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, Vec3,
-};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter,
     PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor,
@@ -18,6 +8,16 @@ use mc_proto_common::{
 use mc_proto_je_common::__version_support::{
     blocks::legacy_block, chunks::get_nibble, inventory::read_slot,
 };
+use revy_voxel_core::{
+    ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, PlayerId, PlayerSnapshot,
+    RuntimeCommand, ServerCore, SessionCommand,
+};
+use revy_voxel_model::{
+    BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot,
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, Vec3,
+};
+use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 use uuid::Uuid;
 
 fn player_container() -> ContainerKindId {
@@ -370,7 +370,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
             },
             &PlayEncodingContext {
                 player_id,
-                entity_id: mc_core::EntityId(1),
+                entity_id: revy_voxel_core::EntityId(1),
             },
         )
         .expect("confirm transaction should encode");
@@ -387,7 +387,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
             },
             &PlayEncodingContext {
                 player_id,
-                entity_id: mc_core::EntityId(1),
+                entity_id: revy_voxel_core::EntityId(1),
             },
         )
         .expect("cursor update should encode");
@@ -470,7 +470,7 @@ fn play_bootstrap_and_chunk_batch_emit_join_game_and_chunks() {
 
     let context = PlayEncodingContext {
         player_id,
-        entity_id: mc_core::EntityId(1),
+        entity_id: revy_voxel_core::EntityId(1),
     };
     let bootstrap_packets = adapter
         .encode_play_event_for(&play_bootstrap, &context)
@@ -489,7 +489,7 @@ fn encodes_inventory_and_block_events() {
     let adapter = Je5Adapter::new();
     let context = PlayEncodingContext {
         player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"encode-play-events")),
-        entity_id: mc_core::EntityId(1),
+        entity_id: revy_voxel_core::EntityId(1),
     };
     let inventory = mc_content_canonical::creative_starter_inventory();
     let packets = adapter
@@ -535,7 +535,7 @@ fn encodes_and_decodes_container_window_packets() {
             },
             &PlayEncodingContext {
                 player_id,
-                entity_id: mc_core::EntityId(1),
+                entity_id: revy_voxel_core::EntityId(1),
             },
         )
         .expect("open window should encode");
@@ -558,7 +558,7 @@ fn encodes_and_decodes_container_window_packets() {
             &CoreEvent::ContainerClosed { window_id: 2 },
             &PlayEncodingContext {
                 player_id,
-                entity_id: mc_core::EntityId(1),
+                entity_id: revy_voxel_core::EntityId(1),
             },
         )
         .expect("close window should encode");
@@ -588,7 +588,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"chest-1710"));
     let context = PlayEncodingContext {
         player_id,
-        entity_id: mc_core::EntityId(1),
+        entity_id: revy_voxel_core::EntityId(1),
     };
 
     let packets = adapter
@@ -654,7 +654,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"furnace-1710"));
     let context = PlayEncodingContext {
         player_id,
-        entity_id: mc_core::EntityId(1),
+        entity_id: revy_voxel_core::EntityId(1),
     };
 
     let packets = adapter

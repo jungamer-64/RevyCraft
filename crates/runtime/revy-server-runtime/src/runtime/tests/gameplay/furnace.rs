@@ -2,6 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
@@ -345,6 +346,7 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
 
 #[tokio::test]
 async fn world_backed_furnace_output_persists_across_restart() -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let world_dir = temp_dir.path().join("world");
     let server = build_test_server(

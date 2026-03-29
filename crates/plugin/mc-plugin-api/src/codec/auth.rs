@@ -7,7 +7,7 @@ use crate::codec::__internal::binary::{
     Decoder, Encoder, EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope,
     encode_envelope,
 };
-use mc_core::{AuthCapability, AuthProfileId, CapabilityAnnouncement, PlayerId};
+use revy_voxel_core::{AuthCapability, AuthProfileId, CapabilityAnnouncement, PlayerId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -213,7 +213,7 @@ mod tests {
         AuthDescriptor, AuthMode, AuthRequest, AuthResponse, BedrockAuthResult,
         decode_auth_request, decode_auth_response, encode_auth_request, encode_auth_response,
     };
-    use mc_core::{AuthCapability, AuthCapabilitySet, CapabilityAnnouncement, PlayerId};
+    use revy_voxel_core::{AuthCapability, AuthCapabilitySet, CapabilityAnnouncement, PlayerId};
     use uuid::Uuid;
 
     #[test]

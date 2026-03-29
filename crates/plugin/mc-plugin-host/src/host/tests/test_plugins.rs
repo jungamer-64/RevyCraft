@@ -1,11 +1,11 @@
 pub(super) mod entity_id_probe_gameplay_plugin {
-    use mc_core::{
-        GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
-    };
     use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
     use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin};
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+    use revy_voxel_core::{
+        GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
+    };
     use std::sync::{Mutex, OnceLock};
 
     #[derive(Default)]
@@ -69,13 +69,13 @@ pub(super) mod entity_id_probe_gameplay_plugin {
 }
 
 pub(super) mod counting_gameplay_plugin {
-    use mc_core::{
-        GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
-    };
     use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
     use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin};
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+    use revy_voxel_core::{
+        GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -159,7 +159,6 @@ pub(super) mod counting_gameplay_plugin {
 }
 
 pub(super) mod custom_wire_codec_protocol_plugin {
-    use mc_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use mc_plugin_api::abi::{
         ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
         PluginKind, Utf8Slice,
@@ -172,6 +171,7 @@ pub(super) mod custom_wire_codec_protocol_plugin {
     use mc_plugin_api::manifest::PluginManifestV1;
     use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use revy_voxel_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use std::sync::OnceLock;
 
     const PLUGIN_ID: &str = "protocol-custom-wire";
@@ -322,7 +322,6 @@ pub(super) mod custom_wire_codec_protocol_plugin {
 }
 
 pub(super) mod failing_protocol_plugin {
-    use mc_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use mc_plugin_api::abi::{
         ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
         PluginKind, Utf8Slice,
@@ -334,6 +333,7 @@ pub(super) mod failing_protocol_plugin {
     use mc_plugin_api::manifest::PluginManifestV1;
     use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use revy_voxel_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use std::sync::OnceLock;
 
     pub const PLUGIN_ID: &str = "protocol-failing-runtime";
@@ -459,13 +459,13 @@ pub(super) mod failing_protocol_plugin {
 }
 
 pub(super) mod failing_gameplay_plugin {
-    use mc_core::{
-        GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
-    };
     use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
     use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::gameplay::{GameplayHost, RustGameplayPlugin};
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+    use revy_voxel_core::{
+        GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
+    };
 
     #[derive(Default)]
     pub struct FailingGameplayPlugin;
@@ -509,11 +509,11 @@ pub(super) mod failing_gameplay_plugin {
 }
 
 pub(super) mod failing_auth_plugin {
-    use mc_core::{AuthCapability, AuthCapabilitySet, PlayerId};
     use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode};
     use mc_plugin_sdk_rust::auth::RustAuthPlugin;
     use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+    use revy_voxel_core::{AuthCapability, AuthCapabilitySet, PlayerId};
 
     pub const PROFILE_ID: &str = "failing-auth";
 
@@ -546,7 +546,6 @@ pub(super) mod failing_auth_plugin {
 }
 
 pub(super) mod route_collision_protocol_plugin {
-    use mc_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use mc_plugin_api::abi::{
         ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
         PluginKind, Utf8Slice,
@@ -558,6 +557,7 @@ pub(super) mod route_collision_protocol_plugin {
     use mc_plugin_api::manifest::PluginManifestV1;
     use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use revy_voxel_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use std::sync::OnceLock;
 
     const PLUGIN_ID: &str = "je-5-collision";
@@ -682,7 +682,6 @@ pub(super) mod route_collision_protocol_plugin {
 }
 
 pub(super) mod oversized_protocol_response_plugin {
-    use mc_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use mc_plugin_api::abi::{
         ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
         PluginKind, Utf8Slice,
@@ -694,6 +693,7 @@ pub(super) mod oversized_protocol_response_plugin {
     use mc_plugin_api::manifest::PluginManifestV1;
     use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use revy_voxel_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use std::sync::OnceLock;
 
     const PLUGIN_ID: &str = "protocol-oversized-response";

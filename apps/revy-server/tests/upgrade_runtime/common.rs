@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::{Child, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
-use tempfile::{TempDir, tempdir};
+use tempfile::TempDir;
 use tonic::metadata::MetadataValue;
 use tonic::{Code, Request};
 

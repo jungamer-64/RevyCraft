@@ -3,7 +3,7 @@ use crate::runtime::{
     KernelCommandOutcome, RuntimeServer, SessionControl, SessionMessage, SessionRuntimeContext,
     SharedSessionState, now_ms,
 };
-use mc_core::{
+use revy_voxel_core::{
     CoreCommand, CoreEvent, EventTarget, PlayerSummary, RuntimeCommand, SessionCommand,
     TargetedEvent,
 };
@@ -110,7 +110,7 @@ impl RuntimeServer {
     #[cfg(test)]
     pub(crate) async fn open_test_crafting_table(
         &self,
-        player_id: mc_core::PlayerId,
+        player_id: revy_voxel_core::PlayerId,
         window_id: u8,
         title: &str,
     ) -> Result<(), RuntimeError> {
@@ -188,7 +188,7 @@ impl RuntimeServer {
 
     pub(in crate::runtime) async fn unregister_session(
         &self,
-        connection_id: mc_core::ConnectionId,
+        connection_id: revy_voxel_core::ConnectionId,
         shared_state: &SharedSessionState,
     ) -> Result<(), RuntimeError> {
         let _consistency_guard = self.reload.read_consistency().await;
@@ -198,7 +198,7 @@ impl RuntimeServer {
 
     async fn unregister_session_guarded(
         &self,
-        connection_id: mc_core::ConnectionId,
+        connection_id: revy_voxel_core::ConnectionId,
         shared_state: &SharedSessionState,
     ) -> Result<(), RuntimeError> {
         let (view, context, adapter) = {

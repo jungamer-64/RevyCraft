@@ -4,22 +4,22 @@ use super::{
     SessionHandle, SessionMessage, SessionReattachRecord, SessionRecipient, SharedSessionState,
 };
 use crate::RuntimeError;
-use mc_core::{ConnectionId, EventTarget, PlayerId, SessionCapabilitySet};
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_host::runtime::{GameplayProfileHandle, ProtocolReloadSession};
 use mc_proto_common::ConnectionPhase;
+use revy_voxel_core::{
+    ConnectionId, ConnectionIdSource, EventTarget, PlayerId, SessionCapabilitySet, SessionRoutes,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
 
-static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
-
 pub(crate) struct SessionRegistry {
+    connection_ids: ConnectionIdSource,
     sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
-    pending_login_routes: Mutex<HashMap<ConnectionId, PlayerId>>,
+    pending_login_routes: Mutex<SessionRoutes<ConnectionId, PlayerId>>,
     session_tasks: Mutex<JoinSet<(ConnectionId, Result<(), RuntimeError>)>>,
     queued_accepts: QueuedAcceptTracker,
     accepted_tx: mpsc::Sender<AcceptedGenerationSession>,
@@ -28,8 +28,9 @@ pub(crate) struct SessionRegistry {
 impl SessionRegistry {
     pub(crate) fn new(accepted_tx: mpsc::Sender<AcceptedGenerationSession>) -> Self {
         Self {
+            connection_ids: ConnectionIdSource::default(),
             sessions: Mutex::new(HashMap::new()),
-            pending_login_routes: Mutex::new(HashMap::new()),
+            pending_login_routes: Mutex::new(SessionRoutes::default()),
             session_tasks: Mutex::new(JoinSet::new()),
             queued_accepts: QueuedAcceptTracker::default(),
             accepted_tx,
@@ -45,23 +46,11 @@ impl SessionRegistry {
     }
 
     pub(crate) async fn next_connection_id(&self) -> ConnectionId {
-        ConnectionId(NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed))
+        self.connection_ids.next_connection_id()
     }
 
     pub(crate) fn observe_connection_id(&self, connection_id: ConnectionId) {
-        let target = connection_id.0.saturating_add(1);
-        let mut next = NEXT_CONNECTION_ID.load(Ordering::Relaxed);
-        while next < target {
-            match NEXT_CONNECTION_ID.compare_exchange_weak(
-                next,
-                target,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => break,
-                Err(observed) => next = observed,
-            }
-        }
+        self.connection_ids.observe_connection_id(connection_id);
     }
 
     pub(crate) async fn insert(
@@ -86,12 +75,12 @@ impl SessionRegistry {
         connection_id: ConnectionId,
         player_id: PlayerId,
     ) {
-        let sessions = self.sessions.lock().await;
-        if sessions.contains_key(&connection_id) {
+        let session_exists = self.sessions.lock().await.contains_key(&connection_id);
+        if session_exists {
             self.pending_login_routes
                 .lock()
                 .await
-                .insert(connection_id, player_id);
+                .insert_pending_login_route(connection_id, player_id);
         }
     }
 
@@ -99,7 +88,7 @@ impl SessionRegistry {
         self.pending_login_routes
             .lock()
             .await
-            .remove(&connection_id);
+            .clear_pending_login_route(connection_id);
     }
 
     pub(crate) async fn remove(&self, connection_id: ConnectionId) {
@@ -116,8 +105,13 @@ impl SessionRegistry {
             .collect()
     }
 
-    async fn pending_login_routes_snapshot(&self) -> HashMap<ConnectionId, PlayerId> {
-        self.pending_login_routes.lock().await.clone()
+    async fn pending_login_routes_snapshot(
+        &self,
+    ) -> std::collections::BTreeMap<ConnectionId, PlayerId> {
+        self.pending_login_routes
+            .lock()
+            .await
+            .snapshot_pending_login_routes()
     }
 
     pub(crate) async fn recipients_for_target(&self, target: EventTarget) -> Vec<SessionRecipient> {
@@ -365,5 +359,32 @@ impl SessionRegistry {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn next_connection_id_respects_observed_ids() {
+        let (accepted_tx, _accepted_rx) = mpsc::channel(1);
+        let registry = SessionRegistry::new(accepted_tx);
+
+        assert_eq!(registry.next_connection_id().await, ConnectionId(1));
+        registry.observe_connection_id(ConnectionId(7));
+        assert_eq!(registry.next_connection_id().await, ConnectionId(8));
+    }
+
+    #[tokio::test]
+    async fn pending_login_routes_require_live_sessions() {
+        let (accepted_tx, _accepted_rx) = mpsc::channel(1);
+        let registry = SessionRegistry::new(accepted_tx);
+
+        registry
+            .record_pending_login_route(ConnectionId(11), PlayerId(uuid::Uuid::nil()))
+            .await;
+
+        assert_eq!(registry.pending_login_route_count_for_test().await, 0);
     }
 }

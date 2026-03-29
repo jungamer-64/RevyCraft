@@ -2,6 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn world_backed_chest_place_open_and_persist_across_restart() -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let world_dir = temp_dir.path().join("world");
     let codec = MinecraftWireCodec;
@@ -200,6 +201,7 @@ async fn world_backed_chest_place_open_and_persist_across_restart() -> Result<()
 
 #[tokio::test]
 async fn world_backed_chest_syncs_slot_updates_to_other_viewers() -> Result<(), RuntimeError> {
+    let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),

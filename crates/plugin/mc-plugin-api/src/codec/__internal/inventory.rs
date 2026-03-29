@@ -1,10 +1,10 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::shared::{decode_option, encode_option};
-use mc_content_api::ContainerKindId;
-use mc_model::{
+use revy_voxel_model::{
     InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerInventory,
 };
+use revy_voxel_rules::ContainerKindId;
 
 pub(crate) fn encode_inventory_container(
     encoder: &mut Encoder,

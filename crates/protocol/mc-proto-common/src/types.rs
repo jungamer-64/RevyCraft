@@ -1,4 +1,4 @@
-use mc_core::{ConnectionId, EntityId, PlayerId};
+use revy_voxel_core::{ConnectionId, EntityId, PlayerId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -120,7 +120,7 @@ fn load_plugin_set_activates_runtime_profiles() {
 
 #[test]
 fn gameplay_command_snapshot_preserves_entity_id() {
-    use mc_core::{
+    use revy_voxel_core::{
         CoreConfig, EntityId, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
         ProtocolCapabilitySet, SessionCapabilitySet,
     };
@@ -173,7 +173,7 @@ fn gameplay_command_snapshot_preserves_entity_id() {
 
 #[test]
 fn gameplay_prepare_command_journal_replays_host_mutations() {
-    use mc_core::{
+    use revy_voxel_core::{
         ConnectionId, CoreCommand, CoreEvent, EventTarget, GameplayCapabilitySet, GameplayCommand,
         GameplayJournalApplyResult, GameplayProfileId, ProtocolCapabilitySet, SessionCapabilitySet,
     };
@@ -259,7 +259,7 @@ fn gameplay_prepare_command_journal_replays_host_mutations() {
 
 #[test]
 fn gameplay_prepare_command_conflict_does_not_reinvoke_callback() {
-    use mc_core::{
+    use revy_voxel_core::{
         ConnectionId, CoreCommand, GameplayCapabilitySet, GameplayCommand,
         GameplayJournalApplyResult, GameplayProfileId, ProtocolCapabilitySet, SessionCapabilitySet,
     };

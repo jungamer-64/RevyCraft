@@ -8,8 +8,8 @@ use crate::runtime::{
 };
 use crate::transport::{AcceptedTransportSession, TransportSessionIo, default_wire_codec};
 use bytes::BytesMut;
-use mc_core::ConnectionId;
 use mc_proto_common::{ConnectionPhase, TransportKind, WireCodec};
+use revy_voxel_core::ConnectionId;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;

@@ -4,7 +4,7 @@ use crate::codec::__internal::shared::{
     encode_capability_announcement, encode_option, encode_world_snapshot,
 };
 use crate::codec::storage::{StorageDescriptor, StorageOpCode, StorageRequest, StorageResponse};
-use mc_core::StorageProfileId;
+use revy_voxel_core::StorageProfileId;
 
 pub(crate) fn encode_storage_request_payload(
     encoder: &mut Encoder,

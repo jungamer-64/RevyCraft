@@ -2,9 +2,9 @@ use bedrockrs_proto::V924;
 use bedrockrs_proto::v662::packets::LevelChunkPacket;
 use bedrockrs_proto::v662::types::ChunkPos as BedrockChunkPos;
 use mc_content_canonical::catalog;
-use mc_model::{BlockState, ChunkColumn, ChunkSection};
 use mc_proto_common::ProtocolError;
 use nbtx::Value;
+use revy_voxel_model::{BlockState, ChunkColumn, ChunkSection};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 

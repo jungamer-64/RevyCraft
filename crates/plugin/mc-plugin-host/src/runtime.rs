@@ -3,12 +3,6 @@ use crate::config::RuntimeSelectionConfig;
 use crate::host::PreparedProtocolTopology;
 use crate::host::{PluginFailureAction, PluginHostStatusSnapshot};
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
-use mc_core::{
-    AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapabilitySet, ConnectionId,
-    GameplayCapabilitySet, GameplayCommand, GameplayJournal, GameplayJournalApplyResult,
-    GameplayProfileId, PlayerId, PluginGenerationId, ServerCore, SessionCapabilitySet,
-    StorageCapabilitySet, TargetedEvent, WorldSnapshot,
-};
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_api::codec::admin_surface::{
     AdminSurfaceInstanceDeclaration, AdminSurfacePauseView, AdminSurfaceStatusView,
@@ -18,6 +12,12 @@ use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_api::host_api::AdminSurfaceHostApiV1;
 use mc_proto_common::StorageError;
+use revy_voxel_core::{
+    AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapabilitySet, ConnectionId,
+    GameplayCapabilitySet, GameplayCommand, GameplayJournal, GameplayJournalApplyResult,
+    GameplayProfileId, PlayerId, PluginGenerationId, ServerCore, SessionCapabilitySet,
+    StorageCapabilitySet, TargetedEvent, WorldSnapshot,
+};
 use std::any::Any;
 use std::path::Path;
 use std::path::PathBuf;

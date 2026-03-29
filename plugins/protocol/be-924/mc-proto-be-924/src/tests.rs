@@ -30,18 +30,18 @@ use bedrockrs_proto::v766::packets::ClientPlayMode;
 use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
 use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
-use mc_content_api::{ContainerKindId, ContainerPropertyKey};
-use mc_core::{CoreCommand, CoreEvent, EntityId, PlayerId, RuntimeCommand};
-use mc_model::{
-    BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DroppedItemSnapshot,
-    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerInventory,
-};
 use mc_proto_be_common::__version_support::world::bedrock_actor_id;
 use mc_proto_common::{
     ConnectionPhase, HandshakeProbe, LoginRequest, PlayEncodingContext, PlaySyncAdapter,
     ProtocolError, ProtocolSessionSnapshot, SessionAdapter,
 };
+use revy_voxel_core::{CoreCommand, CoreEvent, EntityId, PlayerId, RuntimeCommand};
+use revy_voxel_model::{
+    BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DroppedItemSnapshot,
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerInventory,
+};
+use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 use serde_json::json;
 use std::io::Cursor;
 use uuid::Uuid;
@@ -56,7 +56,7 @@ fn test_jwt(payload: &serde_json::Value) -> String {
 
 fn decode_session(player_id: PlayerId) -> ProtocolSessionSnapshot {
     ProtocolSessionSnapshot {
-        connection_id: mc_core::ConnectionId(1),
+        connection_id: revy_voxel_core::ConnectionId(1),
         phase: ConnectionPhase::Play,
         player_id: Some(player_id),
         entity_id: None,
@@ -65,7 +65,7 @@ fn decode_session(player_id: PlayerId) -> ProtocolSessionSnapshot {
 
 fn encode_session(context: &PlayEncodingContext) -> ProtocolSessionSnapshot {
     ProtocolSessionSnapshot {
-        connection_id: mc_core::ConnectionId(1),
+        connection_id: revy_voxel_core::ConnectionId(1),
         phase: ConnectionPhase::Play,
         player_id: Some(context.player_id),
         entity_id: Some(context.entity_id),
@@ -614,8 +614,8 @@ fn encodes_dropped_item_spawn_and_despawn_packets() {
                 entity_id: EntityId(77),
                 item: DroppedItemSnapshot {
                     item: item("minecraft:cobblestone", 1),
-                    position: mc_model::Vec3::new(1.5, 4.5, 0.5),
-                    velocity: mc_model::Vec3::new(0.0, 0.0, 0.0),
+                    position: revy_voxel_model::Vec3::new(1.5, 4.5, 0.5),
+                    velocity: revy_voxel_model::Vec3::new(0.0, 0.0, 0.0),
                 },
             },
             &play_context(),

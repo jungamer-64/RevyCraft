@@ -15,12 +15,6 @@ use encoding::{
     encode_set_slot, encode_spawn_position, encode_time_update, encode_update_health,
     encode_window_items, encode_window_property,
 };
-use mc_content_api::{ContainerKindId, ContainerPropertyKey};
-use mc_core::{EntityId, PlayerSnapshot, RuntimeCommand};
-use mc_model::{
-    BlockPos, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryTransactionContext,
-    InventoryWindowContents, ItemStack, WorldMeta,
-};
 use mc_proto_common::{
     Edition, ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot, TransportKind,
     WireFormatKind,
@@ -32,6 +26,12 @@ use mc_proto_je_common::{
     },
     JavaEditionAdapter, JavaEditionProfile, JavaProtocolSessionStore, format_text_component,
 };
+use revy_voxel_core::{EntityId, PlayerSnapshot, RuntimeCommand};
+use revy_voxel_model::{
+    BlockPos, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryTransactionContext,
+    InventoryWindowContents, ItemStack, WorldMeta,
+};
+use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 
 const PROTOCOL_VERSION_1_8_X: i32 = 47;
 const VERSION_NAME_1_8_X: &str = "1.8.x";
@@ -252,7 +252,7 @@ impl JavaEditionProfile for Je47Profile {
     fn encode_block_changed(
         &self,
         position: BlockPos,
-        block: &mc_model::BlockState,
+        block: &revy_voxel_model::BlockState,
     ) -> Result<Vec<u8>, ProtocolError> {
         Ok(encode_block_change(position, block))
     }
@@ -285,7 +285,7 @@ impl JavaEditionProfile for Je47Profile {
     fn observe_event(
         &self,
         session: &ProtocolSessionSnapshot,
-        event: &mc_core::CoreEvent,
+        event: &revy_voxel_core::CoreEvent,
     ) -> Result<(), ProtocolError> {
         self.sessions.observe_event(session, event);
         Ok(())

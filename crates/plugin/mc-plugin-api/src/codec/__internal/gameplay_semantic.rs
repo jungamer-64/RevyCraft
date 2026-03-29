@@ -8,7 +8,7 @@ use crate::codec::__internal::shared::{
 use crate::codec::gameplay::{
     GameplayDescriptor, GameplayOpCode, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
 };
-use mc_core::{
+use revy_voxel_core::{
     CapabilityAnnouncement, EventTarget, GameplayProfileId, ProtocolCapability, TargetedEvent,
 };
 
@@ -195,10 +195,10 @@ pub(crate) fn decode_gameplay_session_snapshot(
         protocol: decode_capability_announcement::<ProtocolCapability>(decoder)?.capabilities,
         gameplay_profile: GameplayProfileId::new(decoder.read_string()?),
         protocol_generation: decode_option(decoder, |decoder| {
-            Ok(mc_core::PluginGenerationId(decoder.read_u64()?))
+            Ok(revy_voxel_core::PluginGenerationId(decoder.read_u64()?))
         })?,
         gameplay_generation: decode_option(decoder, |decoder| {
-            Ok(mc_core::PluginGenerationId(decoder.read_u64()?))
+            Ok(revy_voxel_core::PluginGenerationId(decoder.read_u64()?))
         })?,
     })
 }
@@ -258,7 +258,7 @@ pub(crate) fn decode_targeted_event(
     decoder: &mut Decoder<'_>,
 ) -> Result<TargetedEvent, ProtocolCodecError> {
     let target = match decoder.read_u8()? {
-        1 => EventTarget::Connection(mc_core::ConnectionId(decoder.read_u64()?)),
+        1 => EventTarget::Connection(revy_voxel_core::ConnectionId(decoder.read_u64()?)),
         2 => EventTarget::Player(decode_player_id(decoder)?),
         3 => EventTarget::EveryoneExcept(decode_player_id(decoder)?),
         _ => {

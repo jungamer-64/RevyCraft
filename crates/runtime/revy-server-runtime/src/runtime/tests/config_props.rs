@@ -321,7 +321,7 @@ permissions = ["status", "reload-runtime", "status"]
     );
     assert_eq!(
         console_surface(&parsed).map(|surface| surface.profile.clone()),
-        Some(mc_core::AdminSurfaceProfileId::new("console-v2"))
+        Some(revy_voxel_core::AdminSurfaceProfileId::new("console-v2"))
     );
     assert_eq!(
         console_permissions(&parsed).cloned().unwrap_or_default(),
@@ -333,7 +333,7 @@ permissions = ["status", "reload-runtime", "status"]
     assert_eq!(
         remote_surface(&parsed).cloned(),
         Some(crate::config::AdminSurfaceConfig {
-            profile: mc_core::AdminSurfaceProfileId::new("grpc-v1"),
+            profile: revy_voxel_core::AdminSurfaceProfileId::new("grpc-v1"),
             config: Some(surface_config),
         })
     );
@@ -465,7 +465,7 @@ config = {}
     assert_eq!(
         remote_surface(&parsed).cloned(),
         Some(crate::config::AdminSurfaceConfig {
-            profile: mc_core::AdminSurfaceProfileId::new("grpc-v1"),
+            profile: revy_voxel_core::AdminSurfaceProfileId::new("grpc-v1"),
             config: Some(surface_config),
         })
     );
@@ -537,7 +537,7 @@ permissions = ["status"]
     assert_eq!(
         remote_surface(&parsed).cloned(),
         Some(crate::config::AdminSurfaceConfig {
-            profile: mc_core::AdminSurfaceProfileId::new("grpc-v1"),
+            profile: revy_voxel_core::AdminSurfaceProfileId::new("grpc-v1"),
             config: Some(surface_config),
         })
     );

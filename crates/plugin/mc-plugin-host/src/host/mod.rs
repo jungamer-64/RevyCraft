@@ -8,13 +8,6 @@ use crate::runtime::{
 };
 use bytes::BytesMut;
 use libloading::Library;
-use mc_core::{
-    AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapability,
-    AuthCapabilitySet, AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
-    GameplayProfileId, PlayerId, PluginBuildTag, PluginGenerationId, ProtocolCapability,
-    ProtocolCapabilitySet, ServerCore, SessionCapabilitySet, StorageCapability,
-    StorageCapabilitySet, StorageProfileId, WorldSnapshot,
-};
 use mc_plugin_api::abi::{
     ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind,
 };
@@ -53,6 +46,13 @@ use mc_proto_common::{
     LoginRequest, PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
     ServerListStatus, StatusRequest, StorageAdapter, StorageError, TransportKind, WireCodec,
     WireFormatKind,
+};
+use revy_voxel_core::{
+    AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapability,
+    AuthCapabilitySet, AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
+    GameplayProfileId, PlayerId, PluginBuildTag, PluginGenerationId, ProtocolCapability,
+    ProtocolCapabilitySet, ServerCore, SessionCapabilitySet, StorageCapability,
+    StorageCapabilitySet, StorageProfileId, WorldSnapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

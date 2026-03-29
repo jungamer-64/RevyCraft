@@ -1659,40 +1659,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-content-api"
-version = "0.1.0"
-dependencies = [
- "mc-model",
- "serde",
-]
-
-[[package]]
 name = "mc-content-canonical"
 version = "0.1.0"
 dependencies = [
- "mc-content-api",
- "mc-model",
- "serde",
-]
-
-[[package]]
-name = "mc-core"
-version = "0.1.0"
-dependencies = [
- "mc-content-api",
- "mc-content-canonical",
- "mc-model",
- "num-traits",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "mc-model"
-version = "0.1.0"
-dependencies = [
- "num-traits",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "serde",
 ]
 
@@ -1701,21 +1672,21 @@ name = "mc-plugin-admin-console"
 version = "0.1.0"
 dependencies = [
  "libc",
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
+ "revy-voxel-core",
 ]
 
 [[package]]
 name = "mc-plugin-admin-grpc"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "prost",
  "protoc-bin-vendored",
+ "revy-voxel-core",
  "serde",
  "tokio",
  "tokio-stream",
@@ -1729,11 +1700,11 @@ dependencies = [
 name = "mc-plugin-api"
 version = "0.1.0"
 dependencies = [
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-proto-common",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1744,9 +1715,9 @@ dependencies = [
 name = "mc-plugin-auth-bedrock-offline"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
+ "revy-voxel-core",
  "sha2",
  "uuid",
 ]
@@ -1758,10 +1729,10 @@ dependencies = [
  "base64",
  "bedrock-jwt",
  "bedrockrs_proto",
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "p384",
+ "revy-voxel-core",
  "serde_json",
  "uuid",
 ]
@@ -1770,10 +1741,10 @@ dependencies = [
 name = "mc-plugin-auth-mojang-online"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "reqwest",
+ "revy-voxel-core",
  "serde",
  "uuid",
 ]
@@ -1782,10 +1753,10 @@ dependencies = [
 name = "mc-plugin-auth-offline"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "md-5",
+ "revy-voxel-core",
  "uuid",
 ]
 
@@ -1793,9 +1764,9 @@ dependencies = [
 name = "mc-plugin-auth-online-stub"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
+ "revy-voxel-core",
  "uuid",
 ]
 
@@ -1803,21 +1774,21 @@ dependencies = [
 name = "mc-plugin-gameplay-canonical"
 version = "0.1.0"
 dependencies = [
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
 ]
 
 [[package]]
 name = "mc-plugin-gameplay-readonly"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
+ "revy-voxel-core",
 ]
 
 [[package]]
@@ -1827,7 +1798,6 @@ dependencies = [
  "bytes",
  "libloading",
  "mc-content-canonical",
- "mc-core",
  "mc-plugin-admin-console",
  "mc-plugin-api",
  "mc-plugin-auth-offline",
@@ -1850,6 +1820,7 @@ dependencies = [
  "mc-proto-je-404",
  "mc-proto-je-47",
  "mc-proto-je-5",
+ "revy-voxel-core",
  "serde",
  "tempfile",
  "thiserror 2.0.18",
@@ -1862,11 +1833,11 @@ name = "mc-plugin-host-test-support"
 version = "0.1.0"
 dependencies = [
  "mc-content-canonical",
- "mc-core",
  "mc-plugin-host",
  "mc-plugin-proto-je-5",
  "mc-plugin-test-support",
  "mc-proto-je-5",
+ "revy-voxel-core",
  "tempfile",
 ]
 
@@ -1874,77 +1845,77 @@ dependencies = [
 name = "mc-plugin-proto-be-924"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-be-924",
  "mc-proto-common",
+ "revy-voxel-core",
 ]
 
 [[package]]
 name = "mc-plugin-proto-be-placeholder"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-be-placeholder",
  "mc-proto-common",
+ "revy-voxel-core",
 ]
 
 [[package]]
 name = "mc-plugin-proto-je-340"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-340",
+ "revy-voxel-core",
 ]
 
 [[package]]
 name = "mc-plugin-proto-je-404"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-404",
+ "revy-voxel-core",
 ]
 
 [[package]]
 name = "mc-plugin-proto-je-47"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-47",
+ "revy-voxel-core",
 ]
 
 [[package]]
 name = "mc-plugin-proto-je-5"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-5",
+ "revy-voxel-core",
 ]
 
 [[package]]
 name = "mc-plugin-proto-je-5-reload-test"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-5",
+ "revy-voxel-core",
 ]
 
 [[package]]
@@ -1952,11 +1923,11 @@ name = "mc-plugin-sdk-rust"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "mc-content-api",
- "mc-core",
- "mc-model",
  "mc-plugin-api",
  "mc-proto-common",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "serde",
  "serde_json",
 ]
@@ -1966,13 +1937,13 @@ name = "mc-plugin-storage-je-anvil-1_18_2"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "tempfile",
  "uuid",
 ]
@@ -1981,11 +1952,11 @@ dependencies = [
 name = "mc-plugin-storage-je-anvil-1_7_10"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-5",
+ "revy-voxel-core",
 ]
 
 [[package]]
@@ -2004,13 +1975,13 @@ dependencies = [
  "base64",
  "bedrockrs_proto",
  "bedrockrs_proto_core",
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-proto-be-common",
  "mc-proto-common",
  "nbtx",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "serde",
  "serde_json",
  "uuid",
@@ -2023,12 +1994,12 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "bedrockrs_proto",
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-proto-common",
  "num-traits",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2039,8 +2010,8 @@ dependencies = [
 name = "mc-proto-be-placeholder"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-proto-common",
+ "revy-voxel-core",
 ]
 
 [[package]]
@@ -2048,7 +2019,7 @@ name = "mc-proto-common"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "mc-core",
+ "revy-voxel-core",
  "serde",
  "thiserror 2.0.18",
 ]
@@ -2057,13 +2028,13 @@ dependencies = [
 name = "mc-proto-je-340"
 version = "0.1.0"
 dependencies = [
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "uuid",
 ]
 
@@ -2071,13 +2042,13 @@ dependencies = [
 name = "mc-proto-je-404"
 version = "0.1.0"
 dependencies = [
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "uuid",
 ]
 
@@ -2085,13 +2056,13 @@ dependencies = [
 name = "mc-proto-je-47"
 version = "0.1.0"
 dependencies = [
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "uuid",
 ]
 
@@ -2100,13 +2071,13 @@ name = "mc-proto-je-5"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "tempfile",
  "uuid",
 ]
@@ -2116,12 +2087,12 @@ name = "mc-proto-je-common"
 version = "0.1.0"
 dependencies = [
  "flate2",
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-proto-common",
  "num-traits",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "serde",
  "serde_json",
 ]
@@ -3017,13 +2988,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "revy-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "revy-server"
 version = "0.1.0"
 dependencies = [
  "aes",
  "bytes",
  "libc",
- "mc-core",
  "mc-plugin-admin-grpc",
  "mc-plugin-api",
  "mc-plugin-host",
@@ -3033,6 +3012,7 @@ dependencies = [
  "rand 0.9.2",
  "revy-server-config",
  "revy-server-runtime",
+ "revy-voxel-core",
  "rsa",
  "serde",
  "serde_json",
@@ -3047,9 +3027,9 @@ dependencies = [
 name = "revy-server-config"
 version = "0.1.0"
 dependencies = [
- "mc-core",
  "mc-plugin-api",
  "mc-plugin-host",
+ "revy-voxel-core",
  "serde",
  "thiserror 2.0.18",
  "toml",
@@ -3067,10 +3047,7 @@ dependencies = [
  "binary-util",
  "bytes",
  "libloading",
- "mc-content-api",
  "mc-content-canonical",
- "mc-core",
- "mc-model",
  "mc-plugin-api",
  "mc-plugin-auth-bedrock-offline",
  "mc-plugin-auth-bedrock-xbl",
@@ -3103,6 +3080,9 @@ dependencies = [
  "num-bigint",
  "rak-rs",
  "revy-server-config",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "rsa",
  "serde",
  "serde_json",
@@ -3115,6 +3095,36 @@ dependencies = [
  "toml",
  "uuid",
  "vek",
+]
+
+[[package]]
+name = "revy-voxel-core"
+version = "0.1.0"
+dependencies = [
+ "mc-content-canonical",
+ "num-traits",
+ "revy-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "revy-voxel-model"
+version = "0.1.0"
+dependencies = [
+ "num-traits",
+ "serde",
+]
+
+[[package]]
+name = "revy-voxel-rules"
+version = "0.1.0"
+dependencies = [
+ "revy-voxel-model",
+ "serde",
 ]
 
 [[package]]

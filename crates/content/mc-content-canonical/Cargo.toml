@@ -10,8 +10,8 @@ categories.workspace = true
 description = "Canonical Minecraft-like content behavior for RevyCraft."
 
 [dependencies]
-mc-content-api = { path = "../mc-content-api" }
-mc-model = { path = "../../model/mc-model" }
+revy-voxel-rules = { path = "../revy-voxel-rules" }
+revy-voxel-model = { path = "../../model/revy-voxel-model" }
 serde.workspace = true
 
 [lints]

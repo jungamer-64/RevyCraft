@@ -1,17 +1,17 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_content_api::ContainerKindId;
 use mc_content_canonical::{
     canonical_content, item_supported_for_inventory, placeable_block_state_from_item_key,
 };
-use mc_core::{
-    CoreEvent, EventTarget, GameplayCapability, GameplayCommand, PlayerId, PlayerSnapshot,
-    TargetedEvent,
-};
-use mc_model::{BlockFace, BlockPos, InteractionHand, InventorySlot, ItemStack};
 use mc_plugin_sdk_rust::capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::gameplay::{self, GameplayHost, RustGameplayPlugin};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
+use revy_voxel_core::{
+    CoreEvent, EventTarget, GameplayCapability, GameplayCommand, PlayerId, PlayerSnapshot,
+    TargetedEvent,
+};
+use revy_voxel_model::{BlockFace, BlockPos, InteractionHand, InventorySlot, ItemStack};
+use revy_voxel_rules::ContainerKindId;
 
 #[derive(Default)]
 pub struct CanonicalGameplayPlugin;
@@ -27,7 +27,7 @@ impl RustGameplayPlugin for CanonicalGameplayPlugin {
         gameplay::gameplay_descriptor("canonical")
     }
 
-    fn capability_set(&self) -> mc_core::GameplayCapabilitySet {
+    fn capability_set(&self) -> revy_voxel_core::GameplayCapabilitySet {
         capabilities::gameplay_capabilities(&[GameplayCapability::RuntimeReload])
     }
 

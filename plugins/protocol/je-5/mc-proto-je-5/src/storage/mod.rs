@@ -7,8 +7,8 @@ mod region;
 #[cfg(test)]
 mod tests;
 
-use mc_core::WorldSnapshot;
 use mc_proto_common::{StorageAdapter, StorageError};
+use revy_voxel_core::WorldSnapshot;
 use std::fs;
 use std::path::Path;
 

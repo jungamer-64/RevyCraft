@@ -2,9 +2,9 @@ use super::nbt::{
     NbtTag, as_compound, byte_field, double_from_tag, float_field, float_from_tag, int_field,
     list_field, read_gzip_nbt, string_field, write_gzip_nbt,
 };
-use mc_core::{PlayerId, PlayerSnapshot};
-use mc_model::{DimensionId, InventorySlot, ItemStack, PlayerInventory, Vec3};
 use mc_proto_common::StorageError;
+use revy_voxel_core::{PlayerId, PlayerSnapshot};
+use revy_voxel_model::{DimensionId, InventorySlot, ItemStack, PlayerInventory, Vec3};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

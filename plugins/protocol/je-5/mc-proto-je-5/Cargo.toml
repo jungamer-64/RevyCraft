@@ -11,10 +11,10 @@ description = "Minecraft Java Edition 1.7.10 protocol codecs and persistence ada
 
 [dependencies]
 flate2.workspace = true
-mc-content-api = { path = "../../../../crates/content/mc-content-api" }
+revy-voxel-rules = { path = "../../../../crates/content/revy-voxel-rules" }
 mc-content-canonical = { path = "../../../../crates/content/mc-content-canonical" }
-mc-core = { path = "../../../../crates/core/mc-core" }
-mc-model = { path = "../../../../crates/model/mc-model" }
+revy-voxel-core = { path = "../../../../crates/core/revy-voxel-core" }
+revy-voxel-model = { path = "../../../../crates/model/revy-voxel-model" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
 mc-proto-je-common = { path = "../../../../crates/protocol/mc-proto-je-common" }
 uuid.workspace = true

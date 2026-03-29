@@ -4,14 +4,14 @@ use super::JE_1_18_2_MIN_SECTION_Y;
 use super::nbt::{
     NbtTag, as_compound, byte_field, int_field, list_field, short_field, string_field,
 };
-use mc_content_api::{
-    BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
-};
 use mc_content_canonical::catalog;
-use mc_model::{
+use mc_proto_common::StorageError;
+use revy_voxel_model::{
     BlockPos, BlockState, ChunkColumn, ChunkPos, ChunkSection, ItemStack, expand_block_index,
 };
-use mc_proto_common::StorageError;
+use revy_voxel_rules::{
+    BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 const CHEST_BLOCK_ENTITY_KIND: &str = "canonical:chest";

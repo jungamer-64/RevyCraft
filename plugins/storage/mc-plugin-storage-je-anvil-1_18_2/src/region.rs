@@ -1,8 +1,8 @@
 use super::chunk_nbt::{chunk_from_nbt, chunk_to_nbt};
 use super::nbt::{NbtTag, decompress_zlib, read_nbt, zlib_compress_nbt};
-use mc_content_api::BlockEntityState;
-use mc_model::{BlockPos, ChunkColumn, ChunkPos};
 use mc_proto_common::StorageError;
+use revy_voxel_model::{BlockPos, ChunkColumn, ChunkPos};
+use revy_voxel_rules::BlockEntityState;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

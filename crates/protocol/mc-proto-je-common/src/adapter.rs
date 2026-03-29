@@ -1,19 +1,19 @@
 use crate::handshake::decode_handshake_frame;
 use crate::login::{encode_login_success_packet, read_login_byte_array, write_login_byte_array};
 use crate::status::{encode_status_pong_packet, encode_status_response_packet};
-use mc_content_api::{ContainerKindId, ContainerPropertyKey};
 use mc_content_canonical::catalog;
-use mc_core::{CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
-use mc_model::{
-    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
-};
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
     PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
     ProtocolSessionSnapshot, ServerListStatus, SessionAdapter, StatusRequest, TransportKind,
     WireCodec,
 };
+use revy_voxel_core::{CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
+use revy_voxel_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
+};
+use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -32,7 +32,7 @@ struct JavaProtocolSessionState {
 
 #[derive(Default)]
 pub struct JavaProtocolSessionStore {
-    sessions: Mutex<HashMap<mc_core::ConnectionId, JavaProtocolSessionState>>,
+    sessions: Mutex<HashMap<revy_voxel_core::ConnectionId, JavaProtocolSessionState>>,
 }
 
 fn player_container_kind() -> ContainerKindId {
@@ -49,7 +49,7 @@ fn protocol_block<'a>(block: &'a Option<BlockState>) -> std::borrow::Cow<'a, Blo
 impl JavaProtocolSessionStore {
     fn with_session<R>(
         &self,
-        connection_id: mc_core::ConnectionId,
+        connection_id: revy_voxel_core::ConnectionId,
         f: impl FnOnce(&mut JavaProtocolSessionState) -> R,
     ) -> R {
         let mut sessions = self

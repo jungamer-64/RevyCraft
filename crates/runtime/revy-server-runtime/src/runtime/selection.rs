@@ -2,13 +2,13 @@ use super::{AdminPermission, OnlineAuthKeys};
 use crate::RuntimeError;
 use crate::config::ServerConfig;
 use mc_content_canonical::canonical_content;
-use mc_core::{AdapterId, GameplayProfileId, ServerCore};
 use mc_plugin_api::codec::auth::AuthMode;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_host::registry::LoadedPluginSet;
 use mc_plugin_host::runtime::{
     AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
 };
+use revy_voxel_core::{AdapterId, GameplayProfileId, ServerCore};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -132,7 +132,7 @@ impl SelectionManager {
 pub(crate) struct SelectionResolver;
 
 impl SelectionResolver {
-    pub(crate) fn content_behavior() -> std::sync::Arc<dyn mc_content_api::ContentBehavior> {
+    pub(crate) fn content_behavior() -> std::sync::Arc<dyn revy_voxel_rules::ContentBehavior> {
         canonical_content()
     }
 
@@ -148,15 +148,15 @@ impl SelectionResolver {
             .unwrap_or_else(|| config.profiles.default_gameplay.clone())
     }
 
-    pub(crate) fn core_config(config: &ServerConfig) -> mc_core::CoreConfig {
-        mc_core::CoreConfig {
+    pub(crate) fn core_config(config: &ServerConfig) -> revy_voxel_core::CoreConfig {
+        revy_voxel_core::CoreConfig {
             level_name: config.bootstrap.level_name.clone(),
             seed: 0,
             max_players: config.network.max_players,
             view_distance: config.bootstrap.view_distance,
             game_mode: config.bootstrap.game_mode,
             difficulty: config.bootstrap.difficulty,
-            ..mc_core::CoreConfig::default()
+            ..revy_voxel_core::CoreConfig::default()
         }
     }
 

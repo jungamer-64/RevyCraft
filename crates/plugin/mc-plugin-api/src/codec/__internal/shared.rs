@@ -8,19 +8,19 @@ use crate::codec::__internal::inventory::{
     encode_inventory_transaction_context, encode_inventory_window_contents, encode_item_stack,
     encode_player_inventory,
 };
-use mc_content_api::{
-    BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
-};
-use mc_core::{
+use mc_proto_common::ConnectionPhase;
+use revy_voxel_core::{
     CapabilityAnnouncement, ClosedCapability, ClosedCapabilitySet, ConnectionId, CoreCommand,
     CoreEvent, EntityId, GameplayCommand, PlayerId, PlayerSnapshot, PluginBuildTag, RuntimeCommand,
     SessionCommand, WorldSnapshot,
 };
-use mc_model::{
+use revy_voxel_model::{
     BlockFace, BlockKey, BlockPos, BlockState, ChunkColumn, ChunkPos, ChunkSection, DimensionId,
     DroppedItemSnapshot, InteractionHand, Vec3, WorldMeta, expand_block_index,
 };
-use mc_proto_common::ConnectionPhase;
+use revy_voxel_rules::{
+    BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
+};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 

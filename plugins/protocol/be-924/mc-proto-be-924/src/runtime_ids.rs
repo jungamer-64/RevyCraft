@@ -1,5 +1,5 @@
 use mc_content_canonical::catalog;
-use mc_model::BlockState;
+use revy_voxel_model::BlockState;
 
 pub(crate) const BEDROCK_26_3_RUNTIME_ID_STONE: u32 = 2_532;
 pub(crate) const BEDROCK_26_3_RUNTIME_ID_COBBLESTONE: u32 = 5_088;

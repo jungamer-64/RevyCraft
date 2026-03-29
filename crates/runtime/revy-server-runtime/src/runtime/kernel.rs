@@ -1,21 +1,20 @@
 use crate::RuntimeError;
-use mc_core::{
-    ConnectionId, CoreCommand, CoreEvent, CoreRuntimeStateBlob, GameplayJournalApplyResult,
-    PlayerId, PlayerSummary, ServerCore, SessionCapabilitySet, TargetedEvent,
-};
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_host::host::PluginFailureAction;
 use mc_plugin_host::runtime::{GameplayProfileHandle, RuntimePluginHost, StorageProfileHandle};
+use revy_voxel_core::{
+    ConnectionId, CoreCommand, CoreEvent, CoreRuntimeStateBlob, GameplayJournalApplyResult,
+    PlayerId, PlayerSummary, Revisioned, ServerCore, SessionCapabilitySet, TargetedEvent,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 #[cfg(test)]
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
-struct KernelState {
+struct KernelStateData {
     core: ServerCore,
     dirty: bool,
-    revision: u64,
 }
 
 pub(crate) struct ExportedCoreRuntimeState {
@@ -32,7 +31,7 @@ pub(crate) enum KernelCommandOutcome {
 pub(crate) struct RuntimeKernel {
     storage_profile: Arc<dyn StorageProfileHandle>,
     world_dir: PathBuf,
-    state: Mutex<KernelState>,
+    state: Mutex<Revisioned<KernelStateData>>,
     #[cfg(test)]
     detached_gameplay_pause_hook: AsyncMutex<Option<DetachedGameplayPauseHook>>,
 }
@@ -46,11 +45,7 @@ impl RuntimeKernel {
         Self {
             storage_profile,
             world_dir,
-            state: Mutex::new(KernelState {
-                core,
-                dirty: false,
-                revision: 0,
-            }),
+            state: Mutex::new(Revisioned::new(KernelStateData { core, dirty: false })),
             #[cfg(test)]
             detached_gameplay_pause_hook: AsyncMutex::new(None),
         }
@@ -170,37 +165,51 @@ impl RuntimeKernel {
         _title: &str,
     ) -> Vec<TargetedEvent> {
         let mut state = self.state.lock().await;
-        let crafting_table_kind =
-            mc_content_api::ContainerKindId::new(mc_content_canonical::ids::CRAFTING_TABLE);
-        for _ in 1..window_id {
-            let hidden_open_events = {
-                let mut tx = state.core.begin_gameplay_transaction(0);
-                tx.open_virtual_container(player_id, crafting_table_kind.clone());
-                tx.commit()
-            };
-            let hidden_window_id = hidden_open_events
-                .iter()
-                .find_map(|event| match event.event {
-                    CoreEvent::ContainerOpened { window_id, .. } => Some(window_id),
-                    _ => None,
-                })
-                .expect("hidden crafting table open should emit a window id");
-            let hidden_close_events = state.core.apply_command(
-                CoreCommand::CloseContainer {
-                    player_id,
-                    window_id: hidden_window_id,
+        let current_revision = state.revision();
+        let (_, (events, _)) = state
+            .try_apply_if(
+                current_revision,
+                |state| {
+                    let crafting_table_kind = revy_voxel_rules::ContainerKindId::new(
+                        mc_content_canonical::ids::CRAFTING_TABLE,
+                    );
+                    let mut should_increment = false;
+                    for _ in 1..window_id {
+                        let hidden_open_events = {
+                            let mut tx = state.core.begin_gameplay_transaction(0);
+                            tx.open_virtual_container(player_id, crafting_table_kind.clone());
+                            tx.commit()
+                        };
+                        let hidden_window_id = hidden_open_events
+                            .iter()
+                            .find_map(|event| match event.event {
+                                CoreEvent::ContainerOpened { window_id, .. } => Some(window_id),
+                                _ => None,
+                            })
+                            .expect("hidden crafting table open should emit a window id");
+                        let hidden_close_events = state.core.apply_command(
+                            CoreCommand::CloseContainer {
+                                player_id,
+                                window_id: hidden_window_id,
+                            },
+                            0,
+                        );
+                        should_increment |=
+                            Self::record_commit_side_effects(state, &hidden_open_events, false);
+                        should_increment |=
+                            Self::record_commit_side_effects(state, &hidden_close_events, false);
+                    }
+                    let events = {
+                        let mut tx = state.core.begin_gameplay_transaction(0);
+                        tx.open_virtual_container(player_id, crafting_table_kind);
+                        tx.commit()
+                    };
+                    should_increment |= Self::record_commit_side_effects(state, &events, false);
+                    (events, should_increment)
                 },
-                0,
-            );
-            self.record_commit_side_effects(&mut state, &hidden_open_events, None);
-            self.record_commit_side_effects(&mut state, &hidden_close_events, None);
-        }
-        let events = {
-            let mut tx = state.core.begin_gameplay_transaction(0);
-            tx.open_virtual_container(player_id, crafting_table_kind);
-            tx.commit()
-        };
-        self.record_commit_side_effects(&mut state, &events, None);
+                |(_, should_increment)| *should_increment,
+            )
+            .expect("kernel test helper should apply against the current revision");
         events
     }
 
@@ -209,8 +218,18 @@ impl RuntimeKernel {
         now_ms: u64,
     ) -> Result<Vec<TargetedEvent>, RuntimeError> {
         let mut state = self.state.lock().await;
-        let events = state.core.tick(now_ms);
-        self.record_commit_side_effects(&mut state, &events, None);
+        let current_revision = state.revision();
+        let (_, (events, _)) = state
+            .try_apply_if(
+                current_revision,
+                |state| {
+                    let events = state.core.tick(now_ms);
+                    let should_increment = Self::record_commit_side_effects(state, &events, false);
+                    (events, should_increment)
+                },
+                |(_, should_increment)| *should_increment,
+            )
+            .expect("kernel tick should apply against the current revision");
         Ok(events)
     }
 
@@ -229,61 +248,87 @@ impl RuntimeKernel {
         self.maybe_pause_before_detached_gameplay_commit_for_test()
             .await;
         let mut state = self.state.lock().await;
-        let apply_result = if revision == state.revision {
-            state.core.validate_and_apply_gameplay_journal(journal)
+        let expected_revision = if revision == state.revision() {
+            revision
         } else {
-            state.core.validate_and_apply_gameplay_journal(journal)
+            state.revision()
         };
+        let (_, (apply_result, _)) = state
+            .try_apply_if(
+                expected_revision,
+                |state| {
+                    let apply_result = state.core.validate_and_apply_gameplay_journal(journal);
+                    let should_increment = match &apply_result {
+                        GameplayJournalApplyResult::Applied(events) => {
+                            Self::record_commit_side_effects(state, events, false)
+                        }
+                        GameplayJournalApplyResult::Conflict => false,
+                    };
+                    (apply_result, should_increment)
+                },
+                |(_, should_increment)| *should_increment,
+            )
+            .expect("detached gameplay tick should apply against the current revision");
         match apply_result {
-            GameplayJournalApplyResult::Applied(events) => {
-                self.record_commit_side_effects(&mut state, &events, None);
-                Ok(Some(events))
-            }
+            GameplayJournalApplyResult::Applied(events) => Ok(Some(events)),
             GameplayJournalApplyResult::Conflict => Ok(None),
         }
     }
 
-    pub(crate) async fn snapshot(&self) -> mc_core::WorldSnapshot {
-        self.state.lock().await.core.snapshot()
+    pub(crate) async fn snapshot(&self) -> revy_voxel_core::WorldSnapshot {
+        self.state.lock().await.state().core.snapshot()
     }
 
     pub(crate) async fn export_core_runtime_state(&self) -> ExportedCoreRuntimeState {
         let state = self.state.lock().await;
         ExportedCoreRuntimeState {
-            blob: state.core.export_runtime_state(),
-            dirty: state.dirty,
+            blob: state.state().core.export_runtime_state(),
+            dirty: state.state().dirty,
         }
     }
 
     pub(crate) async fn swap_core(&self, candidate: ServerCore, dirty: bool) {
         let mut state = self.state.lock().await;
-        state.core = candidate;
-        state.dirty = dirty;
-        state.revision = state.revision.saturating_add(1);
+        let current_revision = state.revision();
+        state
+            .try_apply(current_revision, |state| {
+                state.core = candidate;
+                state.dirty = dirty;
+            })
+            .expect("core swap should apply against the current revision");
     }
 
     pub(crate) async fn player_summary(&self) -> PlayerSummary {
-        self.state.lock().await.core.player_summary()
+        self.state.lock().await.state().core.player_summary()
     }
 
     pub(crate) async fn dirty(&self) -> bool {
-        self.state.lock().await.dirty
+        self.state.lock().await.state().dirty
     }
 
     pub(crate) async fn set_dirty(&self, dirty: bool) {
-        self.state.lock().await.dirty = dirty;
+        let mut state = self.state.lock().await;
+        let current_revision = state.revision();
+        let _ = state
+            .try_apply_if(current_revision, |state| state.dirty = dirty, |_| false)
+            .expect("dirty flag update should apply against the current revision");
     }
 
     pub(crate) async fn set_max_players(&self, max_players: u8) {
         let mut state = self.state.lock().await;
-        state.core.set_max_players(max_players);
-        state.revision = state.revision.saturating_add(1);
+        let current_revision = state.revision();
+        state
+            .try_apply(current_revision, |state| {
+                state.core.set_max_players(max_players);
+            })
+            .expect("max-player update should apply against the current revision");
     }
 
     pub(crate) async fn session_resync_events(&self, player_id: PlayerId) -> Vec<TargetedEvent> {
         self.state
             .lock()
             .await
+            .state()
             .core
             .session_resync_events(player_id)
     }
@@ -312,18 +357,17 @@ impl RuntimeKernel {
     ) -> Result<(), RuntimeError> {
         let snapshot = {
             let state = self.state.lock().await;
-            if !state.dirty {
+            if !state.state().dirty {
                 return Ok(());
             }
-            state.core.snapshot()
+            state.state().core.snapshot()
         };
         match self
             .storage_profile
             .save_snapshot(&self.world_dir, &snapshot)
         {
             Ok(()) => {
-                let mut state = self.state.lock().await;
-                state.dirty = false;
+                self.set_dirty(false).await;
                 Ok(())
             }
             Err(mc_proto_common::StorageError::Plugin(message)) => {
@@ -334,8 +378,7 @@ impl RuntimeKernel {
                         &message,
                     )
                 });
-                let mut state = self.state.lock().await;
-                state.dirty = true;
+                self.set_dirty(true).await;
                 match action {
                     PluginFailureAction::Skip => {
                         eprintln!(
@@ -359,7 +402,7 @@ impl RuntimeKernel {
 
     async fn snapshot_for_detached_gameplay(&self) -> (ServerCore, u64) {
         let state = self.state.lock().await;
-        (state.core.clone(), state.revision)
+        (state.state().core.clone(), state.revision())
     }
 
     async fn apply_direct_command(
@@ -369,27 +412,49 @@ impl RuntimeKernel {
         should_persist: bool,
     ) -> Vec<TargetedEvent> {
         let mut state = self.state.lock().await;
-        let events = state.core.apply_command(command, now_ms);
-        self.record_commit_side_effects(&mut state, &events, should_persist.then_some(()));
+        let current_revision = state.revision();
+        let (_, (events, _)) = state
+            .try_apply_if(
+                current_revision,
+                |state| {
+                    let events = state.core.apply_command(command, now_ms);
+                    let should_increment =
+                        Self::record_commit_side_effects(state, &events, should_persist);
+                    (events, should_increment)
+                },
+                |(_, should_increment)| *should_increment,
+            )
+            .expect("direct command should apply against the current revision");
         events
     }
 
     async fn apply_builtin_gameplay_command(
         &self,
-        command: mc_core::GameplayCommand,
+        command: revy_voxel_core::GameplayCommand,
         now_ms: u64,
         should_persist: bool,
     ) -> Vec<TargetedEvent> {
         let mut state = self.state.lock().await;
-        let events = state.core.apply_builtin_gameplay_command(command, now_ms);
-        self.record_commit_side_effects(&mut state, &events, should_persist.then_some(()));
+        let current_revision = state.revision();
+        let (_, (events, _)) = state
+            .try_apply_if(
+                current_revision,
+                |state| {
+                    let events = state.core.apply_builtin_gameplay_command(command, now_ms);
+                    let should_increment =
+                        Self::record_commit_side_effects(state, &events, should_persist);
+                    (events, should_increment)
+                },
+                |(_, should_increment)| *should_increment,
+            )
+            .expect("builtin gameplay command should apply against the current revision");
         events
     }
 
     async fn commit_detached_gameplay_journal(
         &self,
         snapshot_revision: u64,
-        journal: mc_core::GameplayJournal,
+        journal: revy_voxel_core::GameplayJournal,
         should_persist: bool,
         stale_outcome: KernelCommandOutcome,
     ) -> Result<KernelCommandOutcome, RuntimeError> {
@@ -397,36 +462,46 @@ impl RuntimeKernel {
         self.maybe_pause_before_detached_gameplay_commit_for_test()
             .await;
         let mut state = self.state.lock().await;
-        let apply_result = if snapshot_revision == state.revision {
-            state.core.validate_and_apply_gameplay_journal(journal)
+        let expected_revision = if snapshot_revision == state.revision() {
+            snapshot_revision
         } else {
-            state.core.validate_and_apply_gameplay_journal(journal)
+            state.revision()
         };
+        let (_, (apply_result, _)) = state
+            .try_apply_if(
+                expected_revision,
+                |state| {
+                    let apply_result = state.core.validate_and_apply_gameplay_journal(journal);
+                    let should_increment = match &apply_result {
+                        GameplayJournalApplyResult::Applied(events) => {
+                            Self::record_commit_side_effects(state, events, should_persist)
+                        }
+                        GameplayJournalApplyResult::Conflict => false,
+                    };
+                    (apply_result, should_increment)
+                },
+                |(_, should_increment)| *should_increment,
+            )
+            .expect("detached gameplay journal should apply against the current revision");
         Ok(match apply_result {
-            GameplayJournalApplyResult::Applied(events) => {
-                self.record_commit_side_effects(&mut state, &events, should_persist.then_some(()));
-                KernelCommandOutcome::Events(events)
-            }
+            GameplayJournalApplyResult::Applied(events) => KernelCommandOutcome::Events(events),
             GameplayJournalApplyResult::Conflict => stale_outcome,
         })
     }
 
     fn record_commit_side_effects(
-        &self,
-        state: &mut KernelState,
+        state: &mut KernelStateData,
         events: &[TargetedEvent],
-        force_dirty: Option<()>,
-    ) {
-        if force_dirty.is_some()
+        force_dirty: bool,
+    ) -> bool {
+        if force_dirty
             || events
                 .iter()
                 .any(|event| !matches!(event.event, CoreEvent::KeepAliveRequested { .. }))
         {
             state.dirty = true;
         }
-        if force_dirty.is_some() || !events.is_empty() {
-            state.revision = state.revision.saturating_add(1);
-        }
+        force_dirty || !events.is_empty()
     }
 
     #[cfg(test)]
@@ -470,14 +545,14 @@ impl DetachedGameplayPauseHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_core::{
+    use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+    use mc_plugin_host::PluginHostError;
+    use mc_proto_common::StorageError;
+    use revy_voxel_core::{
         ConnectionId, CoreConfig, EntityId, EventTarget, GameplayCapabilitySet, GameplayCommand,
         GameplayJournal, GameplayProfileId, GameplayTransaction, PlayerId, ProtocolCapabilitySet,
         SessionCapabilitySet, StorageCapabilitySet,
     };
-    use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
-    use mc_plugin_host::PluginHostError;
-    use mc_proto_common::StorageError;
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
@@ -494,21 +569,21 @@ mod tests {
             StorageCapabilitySet::new()
         }
 
-        fn plugin_generation_id(&self) -> Option<mc_core::PluginGenerationId> {
+        fn plugin_generation_id(&self) -> Option<revy_voxel_core::PluginGenerationId> {
             None
         }
 
         fn load_snapshot(
             &self,
             _world_dir: &Path,
-        ) -> Result<Option<mc_core::WorldSnapshot>, StorageError> {
+        ) -> Result<Option<revy_voxel_core::WorldSnapshot>, StorageError> {
             Ok(None)
         }
 
         fn save_snapshot(
             &self,
             _world_dir: &Path,
-            _snapshot: &mc_core::WorldSnapshot,
+            _snapshot: &revy_voxel_core::WorldSnapshot,
         ) -> Result<(), StorageError> {
             Ok(())
         }
@@ -530,7 +605,7 @@ mod tests {
             GameplayCapabilitySet::new()
         }
 
-        fn plugin_generation_id(&self) -> Option<mc_core::PluginGenerationId> {
+        fn plugin_generation_id(&self) -> Option<revy_voxel_core::PluginGenerationId> {
             None
         }
 

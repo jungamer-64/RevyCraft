@@ -10,7 +10,6 @@ use crate::test_support::{
     InProcessProtocolPlugin, InProcessStoragePlugin, PluginFailureMatrix, TestPluginHost,
     TestPluginHostBuilder,
 };
-use mc_core::{ConnectionId, CoreConfig, EntityId, PlayerId, ServerCore};
 use mc_plugin_admin_console::in_process_plugin_entrypoints as console_admin_surface_entrypoints;
 use mc_plugin_api::abi::{
     CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginAbiVersion, PluginKind, Utf8Slice,
@@ -33,6 +32,7 @@ use mc_plugin_storage_je_anvil_1_18_2::{
 };
 use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_common::{ConnectionPhase, Edition, PacketWriter, TransportKind, WireFormatKind};
+use revy_voxel_core::{ConnectionId, CoreConfig, EntityId, PlayerId, ServerCore};
 use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
