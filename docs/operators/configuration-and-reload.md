@@ -3,9 +3,9 @@
 - 対象読者: `runtime/server.toml` を編集し、手動 `reload` や admin surface を運用する人
 - この文書で扱う範囲: 設定ファイルの選ばれ方、relative path、`reload` mode、watch `reload`、`failure policy`、admin surface の運用ルール
 - この文書で扱わないこと: package / release bundle 手順、runtime 内部の manager 分割、`core` migration の実装詳細
-- 次に読む文書: [`../contributors/core-reload-runtime-design.md`](../contributors/core-reload-runtime-design.md)
+- 関連文書: [`operational-playbook.md`](operational-playbook.md)、[`../contributors/core-reload-runtime-design.md`](../contributors/core-reload-runtime-design.md)
 
-この文書は、`runtime/server.toml` の解釈、relative path 解決、`reload runtime <mode>`、admin surface の正本です。ここで扱う reload は現在の operator surface である `reload runtime artifacts / topology / core / full` であり、旧 `reload plugins` / `reload generation` / `reload config` は扱いません。package / 起動 / release bundle の入口は [`getting-started.md`](getting-started.md) を参照してください。
+この文書は、`runtime/server.toml` の解釈、relative path 解決、`reload runtime <mode>`、admin surface の正本です。ここで扱う reload は現在の operator surface である `reload runtime artifacts / topology / core / full` であり、旧 `reload plugins` / `reload generation` / `reload config` は扱いません。package / 起動 / release bundle の入口は [`getting-started.md`](getting-started.md)、日常運用のチェックリストは [`operational-playbook.md`](operational-playbook.md) を参照してください。
 
 ## `config` file の選ばれ方
 
@@ -77,6 +77,103 @@ JE online auth や Bedrock XBL を有効化したいときは allowlist と prof
 - Bedrock XBL
   `live.profiles.bedrock_auth = "bedrock-xbl-v1"`
   allowlist に `auth-bedrock-xbl` を追加
+
+## 典型シナリオ別の設定例
+
+### オフライン既定
+
+repo 同梱の sample は、JE offline auth と Bedrock offline auth を前提にした最小構成です。
+
+```toml
+[static.bootstrap]
+online_mode = false
+storage_profile = "je-anvil-1_7_10"
+
+[live.profiles]
+auth = "offline-v1"
+bedrock_auth = "bedrock-offline-v1"
+default_gameplay = "canonical"
+```
+
+`runtime/server.toml.example` はこの前提で書かれています。まずローカルで起動したいときは、この形を起点に必要な allowlist や gameplay map を調整するのが安全です。
+
+### JE online mode
+
+変更点だけ抜粋します。
+
+```toml
+[static.bootstrap]
+online_mode = true
+
+[live.profiles]
+auth = "mojang-online-v1"
+```
+
+さらに次を揃えます。
+
+- `live.plugins.allowlist` に `auth-mojang-online` を追加する
+- packaged plugin を作り直すために `cargo run -p xtask -- package-plugins` を再実行する
+
+### Bedrock XBL
+
+変更点だけ抜粋します。
+
+```toml
+[live.profiles]
+bedrock_auth = "bedrock-xbl-v1"
+```
+
+さらに次を揃えます。
+
+- `live.plugins.allowlist` に `auth-bedrock-xbl` を追加する
+- `live.topology.be_enabled = true` と `enabled_bedrock_adapters` が想定どおり残っていることを確認する
+
+### gRPC admin surface を有効にする
+
+server 側の config では surface selection と principal permission を定義し、plugin-owned config 側で bind address と token file を定義します。
+
+`runtime/server.toml` の例:
+
+```toml
+[static.admin.principals.ops]
+permissions = [
+  "status",
+  "sessions",
+  "reload-runtime",
+  "shutdown",
+]
+
+[live.admin.surfaces.grpc]
+profile = "grpc-v1"
+config = "admin-grpc.toml"
+```
+
+`runtime/admin-grpc.toml` の例:
+
+```toml
+bind_addr = "127.0.0.1:50051"
+allow_non_loopback = false
+
+[principals.ops]
+token_file = "admin/ops.token"
+```
+
+さらに次を揃えます。
+
+- `live.plugins.allowlist` に `admin-grpc` が入っていることを確認し、無ければ追加する
+- `config = "admin-grpc.toml"` は `runtime/server.toml` 基準で relative 解決されることを前提に置く
+- `token_file = "admin/ops.token"` は `runtime/admin-grpc.toml` 基準で relative 解決されることを前提に置く
+- `upgrade runtime executable <path>` も使いたい principal には `"upgrade-runtime"` permission を追加する
+
+## `reload` mode 選択早見表
+
+| 変更内容 | 選ぶ操作 | 理由 |
+| --- | --- | --- |
+| 同じ selection のまま shared library だけ差し替えたい | `reload runtime artifacts` | active selection を固定したまま artifact だけを再読込するため |
+| port、bind address、MOTD、adapter 有効化、drain を変えたい | `reload runtime topology` | listener / routing generation の切り替え対象だから |
+| `level_name`、`game_mode`、`difficulty`、`view_distance`、`max_players` を反映したい | `reload runtime core` | core へ投影される config と live state migration の対象だから |
+| allowlist、profile selection、admin surface、buffer limits、failure policy を変えたい | `reload runtime full` | selection / topology / core をまとめて再評価する必要があるから |
+| `online_mode`、`level_type`、`world_dir`、`storage_profile`、`static.plugins.*` を変えたい | process restart | restart-required のため reload では反映しないから |
 
 ## 手動 `reload` の使い分け
 
@@ -242,6 +339,8 @@ sample の `console-v1` surface で使える command は次です。
 
 permission は `static.admin.principals."console:<instance>"` で制御します。`console` instance なら principal id は `console:console` です。
 
+`upgrade runtime executable <path>` を実行するには、その principal に `upgrade-runtime` permission が必要です。sample の `console:console` permission は既定では `status` / `sessions` / `reload-runtime` / `shutdown` だけなので、実行したい場合は明示的に追加してください。
+
 ### gRPC surface
 
 `[live.admin.surfaces.<instance>]` で `profile = "grpc-v1"` を指定すると、gRPC admin surface plugin が unary gRPC control plane を起動します。host が理解するのは surface profile と opaque config path だけで、token file や bind policy は plugin-owned surface config に閉じます。
@@ -256,6 +355,29 @@ permission は `static.admin.principals."console:<instance>"` で制御します
 
 `reload runtime full` 後は admin surface selection、surface config path、principal permission が次の request から新設定へ切り替わります。
 
+## `upgrade runtime executable <path>`
+
+この command は reload ではなく、`server-bootstrap` process 自体を別の executable へ切り替えるための operator surface です。new binary を child process として起動し、listener と live session を引き継いで cutover します。
+
+前提:
+
+- 実行 principal に `upgrade-runtime` permission がある
+- `<path>` が実行可能な `server-bootstrap` binary を指している
+- child process から見ても active config と packaged plugin が解決できる
+- `live.topology.be_enabled = true` ではない
+
+使いどころ:
+
+- binary 自体を差し替えたい
+- plugin artifact だけではなく process image も更新したい
+- `reload runtime ...` では扱えない executable 更新を止めずに反映したい
+
+挙動の目安:
+
+- child が ready 前に失敗した場合は rollback され、現在の process が継続します。
+- command が成功すると、以後の listener と admin surface は child 側へ切り替わります。
+- platform が非対応な場合や Bedrock listener/session transfer が有効な場合は error になります。
+
 ## stdin EOF と終了条件
 
 console surface の stdin EOF は、その console surface の入力 loop を閉じるだけです。server process 自体は継続し、surface 0 件の headless 状態も許可されます。
@@ -264,3 +386,13 @@ console surface の stdin EOF は、その console surface の入力 loop を閉
   console surface の入力 loop だけが終了します。
 - `Ctrl-C`
   常に shutdown を要求します。
+
+## 失敗時の確認項目
+
+- `cargo run -p revy-server` が `runtime/server.toml` 不在で失敗していないか
+- allowlist と `live.profiles.*` が同じ plugin/profile を指しているか
+- `runtime/plugins/<plugin-id>/plugin.toml` が package 後に存在するか
+- gRPC surface の `config` path と `token_file` path がそれぞれ別の基準 directory で解決されることを見落としていないか
+- restart-required な差分を `reload runtime ...` で反映しようとしていないか
+
+日常運用のチェックリストと具体的な切り分け手順は [`operational-playbook.md`](operational-playbook.md) を参照してください。

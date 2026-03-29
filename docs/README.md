@@ -4,18 +4,26 @@
 
 ## 読者別入口
 
-| 読者 | 最初に読む文書 | 続けて読む文書 |
-| --- | --- | --- |
-| 運用者 | [`operators/getting-started.md`](operators/getting-started.md) | [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md) |
-| 実装 contributors | [`contributors/repository-overview.md`](contributors/repository-overview.md) | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md)、[`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md) |
-| plugin 作者 | [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md) | 同じ文書の Rust 実装・packaging 節 |
+| 読者 | 最初に読む文書 | 続けて読む文書 | 詳細仕様 |
+| --- | --- | --- | --- |
+| 運用者 | [`operators/getting-started.md`](operators/getting-started.md) | [`operators/operational-playbook.md`](operators/operational-playbook.md) | [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md) |
+| 実装 contributors | [`contributors/repository-overview.md`](contributors/repository-overview.md) | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md) | [`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md) |
+| plugin 作者 | [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md) | 同じ文書の Rust 実装・packaging 節 | 同じ文書の manifest / descriptor 節 |
 
 ## やりたいこと別入口
 
 - 開発環境で server を起動したい
   [`operators/getting-started.md`](operators/getting-started.md)
+- 起動後の確認項目や日常運用のチェックリストを見たい
+  [`operators/operational-playbook.md`](operators/operational-playbook.md)
+- gRPC admin surface を有効化したい
+  [`operators/operational-playbook.md`](operators/operational-playbook.md)
 - `runtime/server.toml` の key と reload 反映境界を確認したい
   [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md)
+- `reload runtime artifacts / topology / core / full` の使い分けを知りたい
+  [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md)
+- 起動失敗や config path の食い違いを切り分けたい
+  [`operators/operational-playbook.md`](operators/operational-playbook.md)
 - plugin の kind、manifest、Rust SDK の使い分けを知りたい
   [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md)
 - workspace の入口、公開 surface、boot path を掴みたい
@@ -31,8 +39,9 @@
 
 | 分類 | 正本 |
 | --- | --- |
-| operator | [`operators/getting-started.md`](operators/getting-started.md) |
-| operator | [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md) |
+| operator quickstart | [`operators/getting-started.md`](operators/getting-started.md) |
+| operator playbook | [`operators/operational-playbook.md`](operators/operational-playbook.md) |
+| operator spec | [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md) |
 | plugin author | [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md) |
 | contributor | [`contributors/repository-overview.md`](contributors/repository-overview.md) |
 | contributor | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md) |
