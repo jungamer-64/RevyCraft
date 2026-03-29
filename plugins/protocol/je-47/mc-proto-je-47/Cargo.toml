@@ -11,7 +11,6 @@ description = "Minecraft Java Edition 1.8.x protocol codecs."
 
 [dependencies]
 revy-voxel-rules = { path = "../../../../crates/content/revy-voxel-rules" }
-revy-voxel-core = { path = "../../../../crates/core/revy-voxel-core" }
 revy-voxel-model = { path = "../../../../crates/model/revy-voxel-model" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
 mc-proto-je-common = { path = "../../../../crates/protocol/mc-proto-je-common" }
@@ -19,6 +18,7 @@ mc-proto-je-common = { path = "../../../../crates/protocol/mc-proto-je-common" }
 [dev-dependencies]
 mc-content-canonical = { path = "../../../../crates/content/mc-content-canonical" }
 mc-proto-test-support = { path = "../../../../crates/testing/mc-proto-test-support" }
+revy-voxel-core = { path = "../../../../crates/core/revy-voxel-core" }
 uuid.workspace = true
 
 [lints]

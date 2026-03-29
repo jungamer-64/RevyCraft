@@ -1,14 +1,14 @@
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use mc_plugin_api::{
+    AdapterId, AdminSurfaceProfileId, AuthProfileId, CoreConfig, GameplayProfileId,
+    StorageProfileId,
+};
 use mc_plugin_host::config::{
     AdminSurfaceSelectionConfig as PluginHostAdminSurfaceSelectionConfig,
     BootstrapConfig as PluginHostBootstrapConfig, PluginBufferLimits as PluginHostBufferLimits,
     RuntimeSelectionConfig as PluginHostRuntimeSelectionConfig,
 };
 use mc_plugin_host::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
-use revy_voxel_core::{
-    AdapterId, AdminSurfaceProfileId, AuthProfileId, CoreConfig, GameplayProfileId,
-    StorageProfileId,
-};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};

@@ -8,7 +8,7 @@ use crate::{
     PACKET_CB_SPAWN_POSITION, PACKET_CB_TIME_UPDATE, PACKET_CB_TRANSACTION,
     PACKET_CB_UPDATE_HEALTH, PACKET_CB_WINDOW_ITEMS, PACKET_CB_WINDOW_PROPERTY,
 };
-use mc_proto_common::{PacketWriter, ProtocolError};
+use mc_proto_common::{EntityId, PacketWriter, PlayerSnapshot, ProtocolError};
 use mc_proto_je_common::__version_support::{
     blocks::legacy_block,
     chunks::{build_chunk_data_1_7, zlib_compress},
@@ -16,7 +16,6 @@ use mc_proto_je_common::__version_support::{
     metadata::{write_empty_metadata_1_8, write_item_stack_metadata_1_8},
     positions::{to_angle_byte, to_fixed_point},
 };
-use revy_voxel_core::{EntityId, PlayerSnapshot};
 use revy_voxel_model::{
     BlockPos, BlockState, ChunkColumn, DimensionId, DroppedItemSnapshot, InventoryWindowContents,
     ItemStack, WorldMeta,

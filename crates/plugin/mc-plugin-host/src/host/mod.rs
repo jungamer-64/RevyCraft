@@ -41,18 +41,18 @@ use mc_plugin_api::manifest::{
     PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V3, PLUGIN_STORAGE_API_SYMBOL_V1,
     PluginManifestV1,
 };
-use mc_proto_common::{
-    BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
-    LoginRequest, PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
-    ServerListStatus, StatusRequest, StorageAdapter, StorageError, TransportKind, WireCodec,
-    WireFormatKind,
-};
-use revy_voxel_core::{
+use mc_plugin_api::{
     AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapability,
     AuthCapabilitySet, AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
     GameplayProfileId, PlayerId, PluginBuildTag, PluginGenerationId, ProtocolCapability,
     ProtocolCapabilitySet, ServerCore, SessionCapabilitySet, StorageCapability,
     StorageCapabilitySet, StorageProfileId, WorldSnapshot,
+};
+use mc_proto_common::{
+    BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
+    LoginRequest, PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
+    ServerListStatus, StatusRequest, StorageAdapter, StorageError, TransportKind, WireCodec,
+    WireFormatKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

@@ -8,7 +8,7 @@ use crate::{
     PACKET_CB_TRANSACTION, PACKET_CB_UPDATE_HEALTH, PACKET_CB_WINDOW_ITEMS,
     PACKET_CB_WINDOW_PROPERTY,
 };
-use mc_proto_common::{PacketWriter, ProtocolError};
+use mc_proto_common::{EntityId, PacketWriter, PlayerSnapshot, ProtocolError};
 use mc_proto_je_common::__version_support::{
     blocks::flattened_block_state_id_1_13_2,
     chunks::build_chunk_data_1_13_2,
@@ -17,7 +17,6 @@ use mc_proto_je_common::__version_support::{
     players::encode_player_info_add as encode_shared_player_info_add,
     positions::{pack_block_position, to_angle_byte},
 };
-use revy_voxel_core::{EntityId, PlayerSnapshot};
 use revy_voxel_model::{
     BlockPos, BlockState, ChunkColumn, DimensionId, DroppedItemSnapshot, InventoryWindowContents,
     ItemStack, WorldMeta,

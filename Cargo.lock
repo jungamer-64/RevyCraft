@@ -1992,7 +1992,6 @@ name = "mc-proto-be-placeholder"
 version = "0.1.0"
 dependencies = [
  "mc-proto-common",
- "revy-voxel-core",
 ]
 
 [[package]]
@@ -3009,7 +3008,6 @@ version = "0.1.0"
 dependencies = [
  "mc-plugin-api",
  "mc-plugin-host",
- "revy-voxel-core",
  "serde",
  "thiserror 2.0.18",
  "toml",

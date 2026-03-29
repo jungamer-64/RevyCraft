@@ -6,22 +6,24 @@ pub mod manifest;
 
 pub mod semantic {
     pub use revy_voxel_core::{
-        AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,
+        AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,
         AuthCapability, AuthCapabilitySet, AuthProfileId, CapabilityAnnouncement,
         ClosedCapabilitySet, ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId,
-        EventTarget, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
-        GameplayProfileId, PlayerId, PlayerSnapshot, PluginBuildTag, PluginGenerationId,
-        ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, ServerCore, SessionCommand,
+        EventTarget, GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayJournal,
+        GameplayJournalApplyResult, GameplayProfileId, GameplayTransaction, PlayerId,
+        PlayerSnapshot, PluginBuildTag, PluginGenerationId, ProtocolCapability,
+        ProtocolCapabilitySet, RuntimeCommand, ServerCore, SessionCapabilitySet, SessionCommand,
         StorageCapability, StorageCapabilitySet, StorageProfileId, TargetedEvent, WorldSnapshot,
     };
 }
 
 pub use self::semantic::{
-    AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapability,
-    AuthCapabilitySet, AuthProfileId, CapabilityAnnouncement, ClosedCapabilitySet, ConnectionId,
-    CoreCommand, CoreConfig, CoreEvent, EntityId, EventTarget, GameplayCapability,
-    GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId, PlayerSnapshot,
-    PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
-    ServerCore, SessionCommand, StorageCapability, StorageCapabilitySet, StorageProfileId,
-    TargetedEvent, WorldSnapshot,
+    AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,
+    AuthCapability, AuthCapabilitySet, AuthProfileId, CapabilityAnnouncement, ClosedCapabilitySet,
+    ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, EventTarget, GameplayCapability,
+    GameplayCapabilitySet, GameplayCommand, GameplayJournal, GameplayJournalApplyResult,
+    GameplayProfileId, GameplayTransaction, PlayerId, PlayerSnapshot, PluginBuildTag,
+    PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, ServerCore,
+    SessionCapabilitySet, SessionCommand, StorageCapability, StorageCapabilitySet,
+    StorageProfileId, TargetedEvent, WorldSnapshot,
 };

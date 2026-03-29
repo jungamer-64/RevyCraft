@@ -13,7 +13,6 @@ description = "Minecraft Java Edition 1.7.10 protocol codecs and persistence ada
 flate2.workspace = true
 revy-voxel-rules = { path = "../../../../crates/content/revy-voxel-rules" }
 mc-content-canonical = { path = "../../../../crates/content/mc-content-canonical" }
-revy-voxel-core = { path = "../../../../crates/core/revy-voxel-core" }
 revy-voxel-model = { path = "../../../../crates/model/revy-voxel-model" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
 mc-proto-je-common = { path = "../../../../crates/protocol/mc-proto-je-common" }
@@ -21,6 +20,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 mc-proto-test-support = { path = "../../../../crates/testing/mc-proto-test-support" }
+revy-voxel-core = { path = "../../../../crates/core/revy-voxel-core" }
 tempfile.workspace = true
 
 [lints]

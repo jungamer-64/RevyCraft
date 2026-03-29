@@ -16,7 +16,6 @@ in-process-testing = []
 [dependencies]
 bytes.workspace = true
 libloading.workspace = true
-revy-voxel-core = { path = "../../core/revy-voxel-core" }
 mc-plugin-api = { path = "../mc-plugin-api" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
 serde.workspace = true
@@ -46,6 +45,7 @@ mc-proto-je-340 = { path = "../../../plugins/protocol/je-340/mc-proto-je-340" }
 mc-proto-je-404 = { path = "../../../plugins/protocol/je-404/mc-proto-je-404" }
 mc-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-proto-je-5" }
 mc-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-proto-je-47" }
+revy-voxel-core = { path = "../../core/revy-voxel-core" }
 tempfile.workspace = true
 
 [lints]

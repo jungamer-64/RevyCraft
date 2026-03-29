@@ -14,7 +14,6 @@ bedrockrs_proto.workspace = true
 bedrockrs_proto_core.workspace = true
 revy-voxel-rules = { path = "../../../../crates/content/revy-voxel-rules" }
 mc-content-canonical = { path = "../../../../crates/content/mc-content-canonical" }
-revy-voxel-core = { path = "../../../../crates/core/revy-voxel-core" }
 revy-voxel-model = { path = "../../../../crates/model/revy-voxel-model" }
 mc-proto-be-common = { path = "../../../../crates/protocol/mc-proto-be-common" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
@@ -26,6 +25,7 @@ vek.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
+revy-voxel-core = { path = "../../../../crates/core/revy-voxel-core" }
 
 [lints]
 workspace = true

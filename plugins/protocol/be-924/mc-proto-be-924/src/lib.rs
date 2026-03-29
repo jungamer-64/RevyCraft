@@ -12,10 +12,10 @@ mod tests;
 use bedrockrs_proto::ProtoVersion;
 use mc_proto_be_common::{BedrockAdapter, BedrockProfile};
 use mc_proto_common::{
-    BedrockListenerDescriptor, ConnectionPhase, Edition, LoginRequest, ProtocolDescriptor,
-    ProtocolError, ProtocolSessionSnapshot, TransportKind, WireFormatKind,
+    BedrockListenerDescriptor, ConnectionId, ConnectionPhase, CoreEvent, Edition, EntityId,
+    LoginRequest, PlayerSnapshot, ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot,
+    RuntimeCommand, TransportKind, WireFormatKind,
 };
-use revy_voxel_core::{CoreEvent, EntityId, PlayerSnapshot};
 use revy_voxel_model::{
     BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
     ItemStack, WorldMeta,
@@ -42,7 +42,7 @@ struct BedrockProtocolSessionState {
 
 #[derive(Default)]
 struct BedrockProtocolSessionStore {
-    sessions: Mutex<HashMap<revy_voxel_core::ConnectionId, BedrockProtocolSessionState>>,
+    sessions: Mutex<HashMap<ConnectionId, BedrockProtocolSessionState>>,
 }
 
 impl BedrockProtocolSessionStore {
@@ -181,7 +181,7 @@ impl BedrockProfile for Bedrock924Profile {
         &self,
         session: &ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<revy_voxel_core::RuntimeCommand>, ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, ProtocolError> {
         decoding::decode_play_packet(session, &self.sessions, frame)
     }
 

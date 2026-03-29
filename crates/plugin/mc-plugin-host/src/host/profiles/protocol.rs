@@ -5,6 +5,7 @@ use super::{
     ProtocolGeneration, ProtocolRequest, ProtocolResponse, RwLock, ServerListStatus, StatusRequest,
     TransportKind, WireCodec, WireFormatKind, WireFrameDecodeResult,
 };
+use mc_proto_common::{CoreEvent, PlayerSnapshot, RuntimeCommand};
 
 pub(crate) struct HotSwappableProtocolAdapter {
     plugin_id: String,
@@ -255,10 +256,7 @@ impl mc_proto_common::SessionAdapter for HotSwappableProtocolAdapter {
         })
     }
 
-    fn encode_login_success(
-        &self,
-        player: &revy_voxel_core::PlayerSnapshot,
-    ) -> Result<Vec<u8>, ProtocolError> {
+    fn encode_login_success(&self, player: &PlayerSnapshot) -> Result<Vec<u8>, ProtocolError> {
         self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::EncodeLoginSuccess {
                 player: player.clone(),
@@ -277,7 +275,7 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
         &self,
         session: &mc_proto_common::ProtocolSessionSnapshot,
         frame: &[u8],
-    ) -> Result<Option<revy_voxel_core::RuntimeCommand>, ProtocolError> {
+    ) -> Result<Option<RuntimeCommand>, ProtocolError> {
         self.with_generation(|generation| {
             match generation.invoke(&ProtocolRequest::DecodePlay {
                 session: session.clone(),
@@ -293,7 +291,7 @@ impl mc_proto_common::PlaySyncAdapter for HotSwappableProtocolAdapter {
 
     fn encode_play_event(
         &self,
-        event: &revy_voxel_core::CoreEvent,
+        event: &CoreEvent,
         session: &mc_proto_common::ProtocolSessionSnapshot,
         context: &PlayEncodingContext,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {

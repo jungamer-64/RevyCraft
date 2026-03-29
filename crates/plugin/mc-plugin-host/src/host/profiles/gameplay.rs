@@ -6,7 +6,7 @@ use super::{
     with_gameplay_transaction_and_limits,
 };
 use crate::PluginHostError;
-use revy_voxel_core::{ConnectionId, GameplayJournal, GameplayTransaction};
+use mc_plugin_api::{ConnectionId, GameplayJournal, GameplayTransaction};
 
 pub(crate) struct HotSwappableGameplayProfile {
     plugin_id: String,

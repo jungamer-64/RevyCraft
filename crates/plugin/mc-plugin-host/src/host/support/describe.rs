@@ -4,7 +4,7 @@ use super::{
     GameplayDescriptor, GameplayResponse, ProtocolCapability, ProtocolDescriptor, ProtocolResponse,
     RuntimeError, StorageCapability, StorageDescriptor, StorageResponse,
 };
-use revy_voxel_core::CapabilityAnnouncement;
+use mc_plugin_api::CapabilityAnnouncement;
 
 pub(crate) fn expect_protocol_descriptor(
     plugin_id: &str,

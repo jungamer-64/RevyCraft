@@ -2,11 +2,11 @@ use crate::PluginHostError as RuntimeError;
 use crate::runtime::{
     AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
 };
+use mc_plugin_api::{
+    AdapterId, AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
+};
 use mc_proto_common::{
     Edition, HandshakeIntent, HandshakeProbe, ProtocolAdapter, ProtocolError, TransportKind,
-};
-use revy_voxel_core::{
-    AdapterId, AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

@@ -10,15 +10,16 @@ use crate::runtime::ProtocolReloadSession;
 use crate::runtime::{
     PreparedRuntimeSelection, RuntimeProtocolTopologyCandidate, StagedRuntimeSelection,
 };
+use mc_plugin_api::{AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
 use std::collections::HashMap;
 
 struct PreparedFreshRuntimeSelection {
     candidate_config: RuntimeSelectionConfig,
     protocols: PreparedProtocolTopology,
-    gameplay: HashMap<revy_voxel_core::GameplayProfileId, ManagedGameplayPlugin>,
-    storage: HashMap<revy_voxel_core::StorageProfileId, ManagedStoragePlugin>,
-    auth: HashMap<revy_voxel_core::AuthProfileId, ManagedAuthPlugin>,
-    admin_surface: HashMap<revy_voxel_core::AdminSurfaceProfileId, ManagedAdminSurfacePlugin>,
+    gameplay: HashMap<GameplayProfileId, ManagedGameplayPlugin>,
+    storage: HashMap<StorageProfileId, ManagedStoragePlugin>,
+    auth: HashMap<AuthProfileId, ManagedAuthPlugin>,
+    admin_surface: HashMap<AdminSurfaceProfileId, ManagedAdminSurfacePlugin>,
 }
 
 struct PreparedProtocolArtifactUpdate {
@@ -30,7 +31,7 @@ struct PreparedProtocolArtifactUpdate {
 
 struct PreparedGameplayArtifactUpdate {
     plugin_id: String,
-    profile_id: revy_voxel_core::GameplayProfileId,
+    profile_id: GameplayProfileId,
     identity: ArtifactIdentity,
     loaded_at: SystemTime,
     generation: Arc<GameplayGeneration>,
@@ -38,7 +39,7 @@ struct PreparedGameplayArtifactUpdate {
 
 struct PreparedStorageArtifactUpdate {
     plugin_id: String,
-    profile_id: revy_voxel_core::StorageProfileId,
+    profile_id: StorageProfileId,
     identity: ArtifactIdentity,
     loaded_at: SystemTime,
     generation: Arc<StorageGeneration>,
@@ -46,14 +47,14 @@ struct PreparedStorageArtifactUpdate {
 
 struct PreparedAuthArtifactUpdate {
     plugin_id: String,
-    profile_id: revy_voxel_core::AuthProfileId,
+    profile_id: AuthProfileId,
     loaded_at: SystemTime,
     generation: Arc<AuthGeneration>,
 }
 
 struct PreparedAdminSurfaceArtifactUpdate {
     plugin_id: String,
-    profile_id: revy_voxel_core::AdminSurfaceProfileId,
+    profile_id: AdminSurfaceProfileId,
     loaded_at: SystemTime,
     generation: Arc<AdminSurfaceGeneration>,
 }
@@ -136,10 +137,10 @@ impl PluginHost {
     fn collect_fresh_reloaded_plugin_ids(
         &self,
         protocols: &PreparedProtocolTopology,
-        gameplay: &HashMap<revy_voxel_core::GameplayProfileId, ManagedGameplayPlugin>,
-        storage: &HashMap<revy_voxel_core::StorageProfileId, ManagedStoragePlugin>,
-        auth: &HashMap<revy_voxel_core::AuthProfileId, ManagedAuthPlugin>,
-        admin_surface: &HashMap<revy_voxel_core::AdminSurfaceProfileId, ManagedAdminSurfacePlugin>,
+        gameplay: &HashMap<GameplayProfileId, ManagedGameplayPlugin>,
+        storage: &HashMap<StorageProfileId, ManagedStoragePlugin>,
+        auth: &HashMap<AuthProfileId, ManagedAuthPlugin>,
+        admin_surface: &HashMap<AdminSurfaceProfileId, ManagedAdminSurfacePlugin>,
     ) -> Vec<String> {
         let active_protocols = self
             .protocols
@@ -249,7 +250,7 @@ impl PluginHost {
 
     fn validate_fresh_gameplay_sessions(
         &self,
-        candidate: &HashMap<revy_voxel_core::GameplayProfileId, ManagedGameplayPlugin>,
+        candidate: &HashMap<GameplayProfileId, ManagedGameplayPlugin>,
         runtime: &RuntimeReloadContext,
     ) -> Result<(), RuntimeError> {
         let active_gameplay = self
@@ -273,7 +274,7 @@ impl PluginHost {
 
     fn validate_fresh_storage_runtime(
         &self,
-        candidate: &HashMap<revy_voxel_core::StorageProfileId, ManagedStoragePlugin>,
+        candidate: &HashMap<StorageProfileId, ManagedStoragePlugin>,
         runtime: &RuntimeReloadContext,
     ) -> Result<(), RuntimeError> {
         if let Some(managed) = candidate.get(&self.bootstrap_config.storage_profile)

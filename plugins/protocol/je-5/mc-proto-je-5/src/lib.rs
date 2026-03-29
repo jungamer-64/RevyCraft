@@ -17,8 +17,8 @@ use encoding::{
     encode_update_health, encode_window_items, encode_window_property,
 };
 use mc_proto_common::{
-    Edition, ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot, TransportKind,
-    WireFormatKind,
+    CoreEvent, Edition, EntityId, PlayerSnapshot, ProtocolDescriptor, ProtocolError,
+    ProtocolSessionSnapshot, RuntimeCommand, TransportKind, WireFormatKind,
 };
 use mc_proto_je_common::{
     __version_support::inventory::{
@@ -27,7 +27,6 @@ use mc_proto_je_common::{
     },
     JavaEditionAdapter, JavaEditionProfile, JavaProtocolSessionStore,
 };
-use revy_voxel_core::{EntityId, PlayerSnapshot, RuntimeCommand};
 use revy_voxel_model::{
     BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
@@ -292,7 +291,7 @@ impl JavaEditionProfile for Je5Profile {
     fn observe_event(
         &self,
         session: &ProtocolSessionSnapshot,
-        event: &revy_voxel_core::CoreEvent,
+        event: &CoreEvent,
     ) -> Result<(), ProtocolError> {
         self.sessions.observe_event(session, event);
         Ok(())

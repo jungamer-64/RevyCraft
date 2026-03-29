@@ -2,9 +2,8 @@ use super::nbt::{
     NbtTag, as_compound, byte_field, double_from_tag, float_field, float_from_tag, int_field,
     list_field, long_field, read_gzip_nbt, short_field, string_field, write_gzip_nbt,
 };
-use mc_proto_common::StorageError;
+use mc_proto_common::{PlayerId, PlayerSnapshot, StorageError};
 use mc_proto_je_common::__version_support::blocks::{legacy_item, semantic_item};
-use revy_voxel_core::{PlayerId, PlayerSnapshot};
 use revy_voxel_model::{DimensionId, InventorySlot, PlayerInventory, Vec3};
 use std::collections::BTreeMap;
 use std::fs;
