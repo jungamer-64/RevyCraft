@@ -1,18 +1,26 @@
 use crate::common::{
-    JavaPlaySession, PreparedServer, SERVER_BOOTSTRAP_BIN, assert_process_alive,
-    assert_upgrade_task_failed, expect_upgrade_error, fetch_status, kill_server,
-    remote_admin_upgrade_options, spawn_upgrade_task, upgrade_test_lock, wait_for_upgrade_phase,
-    write_stdin_lines,
+    PreparedServer, SERVER_BOOTSTRAP_BIN, expect_upgrade_error, fetch_status, kill_server,
+    remote_admin_upgrade_options, upgrade_test_lock,
 };
-use crate::support::{
-    ServerTomlOptions, TestResult, UPGRADE_CONSOLE_PERMISSIONS, UPGRADE_REMOTE_PERMISSIONS,
-    read_child_output,
-};
-use mc_plugin_admin_grpc::admin as proto;
-use mc_proto_test_support::TestJavaPacket;
-use std::thread;
+use crate::support::TestResult;
 use std::time::Duration;
 use tonic::Code;
+
+#[cfg(unix)]
+use crate::common::{
+    JavaPlaySession, assert_process_alive, assert_upgrade_task_failed, spawn_upgrade_task,
+    wait_for_upgrade_phase, write_stdin_lines,
+};
+#[cfg(unix)]
+use crate::support::{
+    ServerTomlOptions, UPGRADE_CONSOLE_PERMISSIONS, UPGRADE_REMOTE_PERMISSIONS, read_child_output,
+};
+#[cfg(unix)]
+use mc_plugin_admin_grpc::admin as proto;
+#[cfg(unix)]
+use mc_proto_test_support::TestJavaPacket;
+#[cfg(unix)]
+use std::thread;
 
 async fn assert_failed_upgrade_keeps_grpc(
     server: &PreparedServer,

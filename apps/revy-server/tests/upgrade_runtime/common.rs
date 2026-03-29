@@ -276,6 +276,7 @@ pub(crate) fn write_stdin_lines(child: &mut Child, lines: &[&str]) -> TestResult
     Ok(())
 }
 
+#[cfg(unix)]
 pub(crate) fn assert_process_alive(child: &mut Child, context: &str) -> TestResult<()> {
     if let Some(status) = child.try_wait()? {
         return Err(format!("{context}; status={status}").into());
@@ -302,6 +303,7 @@ pub(crate) async fn assert_upgrade_task_succeeded(task: UpgradeTask) -> TestResu
     Ok(())
 }
 
+#[cfg(unix)]
 pub(crate) async fn assert_upgrade_task_failed(
     task: UpgradeTask,
     expected_code: Code,
@@ -385,6 +387,7 @@ impl PreparedServer {
         )
     }
 
+    #[cfg(unix)]
     pub(crate) fn spawn_piped_with_envs(&self, extra_envs: &[(&str, &str)]) -> TestResult<Child> {
         spawn_server_with_config_path_and_envs(
             self.temp_path(),

@@ -46,7 +46,7 @@ use tonic::{Request, Response, Status};
 use std::os::fd::{FromRawFd, IntoRawFd};
 
 #[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket, RawSocket};
+use std::os::windows::io::{FromRawSocket, IntoRawSocket, RawSocket};
 
 const MANIFEST: StaticPluginManifest =
     StaticPluginManifest::admin_surface("admin-grpc", "gRPC Admin Surface Plugin", "grpc-v1");
