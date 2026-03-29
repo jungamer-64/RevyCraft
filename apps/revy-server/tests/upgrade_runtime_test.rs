@@ -2,7 +2,6 @@ mod support;
 
 #[path = "upgrade_runtime/common.rs"]
 mod common;
-#[cfg(unix)]
 #[path = "upgrade_runtime/console_cases.rs"]
 mod console_cases;
 #[path = "upgrade_runtime/failure_cases.rs"]

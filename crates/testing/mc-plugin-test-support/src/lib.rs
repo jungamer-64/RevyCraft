@@ -260,7 +260,7 @@ impl PackagedPluginHarness {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     #[must_use]
     fn artifact_cache_dir(&self) -> &Path {
         &self.artifact_cache
@@ -1070,7 +1070,7 @@ fn packaged_plugin_test_cache_root() -> PathBuf {
         .join("revy-server-runtime-plugin-test-cache")
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 fn packaged_plugin_test_cargo_target_root() -> PathBuf {
     packaged_plugin_test_cache_root().join("cargo-targets")
 }
@@ -1498,18 +1498,23 @@ fn plugin_manifest_contents(
 mod tests {
     use super::{
         LINUX_EDQUOT, LINUX_ENOSPC, PACKAGED_PLUGIN_TEST_HARNESS_BUILDS,
-        PACKAGED_PLUGIN_TEST_VARIANT_BUILDS, PackagedPluginFailureInjectionPoint,
-        PackagedPluginHarness, PackagedPluginInjectedFailureKind, PackagedPluginKind,
-        PackagedPluginOperationError, PackagedPluginRecoveryContext, PackagedPluginRecoveryMode,
+        PackagedPluginFailureInjectionPoint, PackagedPluginHarness,
+        PackagedPluginInjectedFailureKind, PackagedPluginKind, PackagedPluginOperationError,
+        PackagedPluginRecoveryContext, PackagedPluginRecoveryMode,
         clear_packaged_plugin_injected_failure, copy_packaged_plugin_tree,
         dynamic_library_filename, packaged_plugin_test_error_is_quota_like,
-        packaged_plugin_test_output_is_quota_like, packaged_plugin_test_recover_from_quota_failure,
-        plugin_manifest_contents, run_packaged_plugin_operation_with_quota_recovery,
-        set_packaged_plugin_injected_failure,
+        packaged_plugin_test_recover_from_quota_failure, plugin_manifest_contents,
+        run_packaged_plugin_operation_with_quota_recovery, set_packaged_plugin_injected_failure,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[cfg(target_os = "linux")]
+    use super::PACKAGED_PLUGIN_TEST_VARIANT_BUILDS;
+
+    #[cfg(unix)]
+    use super::packaged_plugin_test_output_is_quota_like;
 
     #[cfg(unix)]
     use std::os::unix::process::ExitStatusExt;

@@ -21,5 +21,8 @@ libc = "0.2"
 mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading"] }
+
 [lints]
 workspace = true

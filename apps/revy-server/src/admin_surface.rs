@@ -16,6 +16,15 @@ use tokio::sync::mpsc;
 #[cfg(unix)]
 use std::os::fd::RawFd;
 
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, RawHandle};
+
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE},
+    System::Threading::GetCurrentProcess,
+};
+
 pub(crate) struct AdminSurfaceSupervisor {
     server: Arc<ServerSupervisor>,
     shared_context: Arc<SharedAdminSurfaceHostContext>,
@@ -666,6 +675,18 @@ fn init_process_resources() -> HashMap<String, AdminSurfaceResource> {
             resources.insert("stdio.stderr".to_string(), fd_resource(stderr_fd));
         }
     }
+    #[cfg(windows)]
+    {
+        if let Ok(stdin_handle) = dup_handle(std::io::stdin().as_raw_handle()) {
+            resources.insert("stdio.stdin".to_string(), handle_resource(stdin_handle));
+        }
+        if let Ok(stdout_handle) = dup_handle(std::io::stdout().as_raw_handle()) {
+            resources.insert("stdio.stdout".to_string(), handle_resource(stdout_handle));
+        }
+        if let Ok(stderr_handle) = dup_handle(std::io::stderr().as_raw_handle()) {
+            resources.insert("stdio.stderr".to_string(), handle_resource(stderr_handle));
+        }
+    }
     resources
 }
 
@@ -684,5 +705,38 @@ fn fd_resource(fd: RawFd) -> AdminSurfaceResource {
     AdminSurfaceResource::NativeHandle {
         handle_kind: "fd".to_string(),
         raw_handle: fd as u64,
+    }
+}
+
+#[cfg(windows)]
+fn dup_handle(handle: RawHandle) -> Result<RawHandle, std::io::Error> {
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::other("standard handle was not available"));
+    }
+    let current_process = unsafe { GetCurrentProcess() };
+    let mut duplicated: HANDLE = std::ptr::null_mut();
+    let ok = unsafe {
+        DuplicateHandle(
+            current_process,
+            handle as HANDLE,
+            current_process,
+            &mut duplicated,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(duplicated as RawHandle)
+    }
+}
+
+#[cfg(windows)]
+fn handle_resource(handle: RawHandle) -> AdminSurfaceResource {
+    AdminSurfaceResource::NativeHandle {
+        handle_kind: "handle".to_string(),
+        raw_handle: handle as usize as u64,
     }
 }

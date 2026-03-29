@@ -4,7 +4,6 @@ pub(crate) use crate::sessions::{JavaPlaySession, StatusSession};
 use crate::support::*;
 use mc_plugin_admin_grpc::admin as proto;
 use std::fs;
-#[cfg(unix)]
 use std::fs::File;
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
@@ -48,7 +47,6 @@ pub(crate) async fn grpc_client(
     .await
 }
 
-#[cfg(unix)]
 pub(crate) fn wait_for_output_contains(
     path: &Path,
     needle: &str,
@@ -399,7 +397,6 @@ impl PreparedServer {
         )
     }
 
-    #[cfg(unix)]
     pub(crate) fn spawn_with_log_files(
         &self,
         stdout_path: &Path,

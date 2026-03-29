@@ -27,6 +27,34 @@ use std::thread;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
+
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{
+        CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_BROKEN_PIPE, ERROR_HANDLE_EOF,
+        HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    },
+    Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType, ReadFile},
+    System::{
+        Pipes::PeekNamedPipe,
+        Threading::{GetCurrentProcess, WaitForSingleObject},
+    },
+};
+
+#[cfg(unix)]
+type NativeHandle = RawFd;
+
+#[cfg(windows)]
+type NativeHandle = usize;
+
+#[cfg(unix)]
+const PROCESS_RESOURCE_HANDLE_KIND: &str = "fd";
+
+#[cfg(windows)]
+const PROCESS_RESOURCE_HANDLE_KIND: &str = "handle";
+
 const MANIFEST: StaticPluginManifest = StaticPluginManifest::admin_surface(
     "admin-console",
     "Console Admin Surface Plugin",
@@ -40,8 +68,8 @@ pub struct ConsoleAdminSurfacePlugin {
 
 struct ConsoleInstance {
     principal_id: String,
-    stdin_fd: RawFd,
-    stdout_fd: RawFd,
+    stdin_handle: NativeHandle,
+    stdout_handle: NativeHandle,
     worker: Option<ConsoleWorker>,
 }
 
@@ -77,14 +105,14 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
         host: SdkAdminSurfaceHost,
         _surface_config_path: Option<&str>,
     ) -> Result<AdminSurfaceStatusView, String> {
-        let stdin_fd = take_fd_resource(&host, "stdio.stdin")?;
-        let stdout_fd = take_fd_resource(&host, "stdio.stdout")?;
+        let stdin_handle = take_native_resource(&host, "stdio.stdin")?;
+        let stdout_handle = take_native_resource(&host, "stdio.stdout")?;
         let principal_id = console_principal_id(instance_id);
         let worker = start_worker(
             instance_id.to_string(),
             principal_id.clone(),
-            stdin_fd,
-            stdout_fd,
+            stdin_handle,
+            stdout_handle,
             host,
         )?;
         let mut instances = self
@@ -95,14 +123,14 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
             instance_id.to_string(),
             ConsoleInstance {
                 principal_id,
-                stdin_fd,
-                stdout_fd,
+                stdin_handle,
+                stdout_handle,
                 worker: Some(worker),
             },
         ) {
             stop_worker(previous.worker);
-            close_fd(previous.stdin_fd);
-            close_fd(previous.stdout_fd);
+            close_native_handle(previous.stdin_handle);
+            close_native_handle(previous.stdout_handle);
         }
         Ok(console_status())
     }
@@ -140,23 +168,23 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
                 instance.worker = Some(start_worker(
                     instance_id.to_string(),
                     instance.principal_id.clone(),
-                    instance.stdin_fd,
-                    instance.stdout_fd,
+                    instance.stdin_handle,
+                    instance.stdout_handle,
                     host,
                 )?);
             }
             return Ok(console_status());
         }
 
-        let stdin_fd = take_fd_resource(&host, "stdio.stdin")?;
-        let stdout_fd = take_fd_resource(&host, "stdio.stdout")?;
+        let stdin_handle = take_native_resource(&host, "stdio.stdin")?;
+        let stdout_handle = take_native_resource(&host, "stdio.stdout")?;
         let principal_id = console_principal_id(instance_id);
         instances.insert(
             instance_id.to_string(),
             ConsoleInstance {
                 principal_id: principal_id.clone(),
-                stdin_fd,
-                stdout_fd,
+                stdin_handle,
+                stdout_handle,
                 worker: None,
             },
         );
@@ -179,8 +207,8 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
             instance.worker = Some(start_worker(
                 instance_id.to_string(),
                 instance.principal_id.clone(),
-                instance.stdin_fd,
-                instance.stdout_fd,
+                instance.stdin_handle,
+                instance.stdout_handle,
                 host,
             )?);
         }
@@ -203,8 +231,8 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
             instance.worker = Some(start_worker(
                 instance_id.to_string(),
                 instance.principal_id.clone(),
-                instance.stdin_fd,
-                instance.stdout_fd,
+                instance.stdin_handle,
+                instance.stdout_handle,
                 host,
             )?);
         }
@@ -217,13 +245,9 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
             .lock()
             .expect("console admin surface mutex should not be poisoned");
         if let Some(instance) = instances.remove(instance_id) {
-            match instance.worker {
-                Some(worker) => detach_worker(Some(worker)),
-                None => {
-                    close_fd(instance.stdin_fd);
-                    close_fd(instance.stdout_fd);
-                }
-            }
+            detach_worker(instance.worker);
+            close_native_handle(instance.stdin_handle);
+            close_native_handle(instance.stdout_handle);
         }
         Ok(())
     }
@@ -245,23 +269,23 @@ fn console_status() -> AdminSurfaceStatusView {
 fn start_worker(
     instance_id: String,
     principal_id: String,
-    stdin_fd: RawFd,
-    stdout_fd: RawFd,
+    stdin_handle: NativeHandle,
+    stdout_handle: NativeHandle,
     host: SdkAdminSurfaceHost,
 ) -> Result<ConsoleWorker, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_thread = Arc::clone(&stop);
-    let stdin_dup = dup_fd(stdin_fd)?;
-    let stdout_dup = dup_fd(stdout_fd)?;
+    let stdin_dup = OwnedNativeHandle::new(dup_native_handle(stdin_handle)?);
+    let stdout_dup = OwnedNativeHandle::new(dup_native_handle(stdout_handle)?);
     let join = thread::Builder::new()
         .name(format!("console-admin-surface-{instance_id}"))
         .spawn(move || {
-            let stdin = unsafe { std::fs::File::from_raw_fd(stdin_dup) };
-            let mut stdout = unsafe { std::fs::File::from_raw_fd(stdout_dup) };
+            let stdin = unsafe { file_from_native_handle(stdin_dup.into_raw()) };
+            let mut stdout = unsafe { file_from_native_handle(stdout_dup.into_raw()) };
             if let Err(error) = run_console_loop(
                 &host,
                 &principal_id,
-                stdin.as_raw_fd(),
+                native_handle_from_file(&stdin),
                 &mut stdout,
                 stop_for_thread,
             ) {
@@ -292,16 +316,16 @@ fn detach_worker(worker: Option<ConsoleWorker>) {
 fn run_console_loop(
     host: &SdkAdminSurfaceHost,
     principal_id: &str,
-    stdin_fd: RawFd,
+    stdin_handle: NativeHandle,
     stdout: &mut std::fs::File,
     stop: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut pending = Vec::new();
     let mut chunk = [0_u8; 4096];
     while !stop.load(Ordering::SeqCst) {
-        match poll_fd(stdin_fd, 200)? {
+        match poll_native_handle(stdin_handle, 200)? {
             PollResult::Ready => {
-                let read = read_fd(stdin_fd, &mut chunk)?;
+                let read = read_native_handle(stdin_handle, &mut chunk)?;
                 if read == 0 {
                     break;
                 }
@@ -608,13 +632,14 @@ fn take_line(buffer: &mut Vec<u8>) -> Result<Option<String>, String> {
         .map_err(|_| "console input was not valid utf-8".to_string())
 }
 
-fn take_fd_resource(host: &SdkAdminSurfaceHost, name: &str) -> Result<RawFd, String> {
+fn take_native_resource(host: &SdkAdminSurfaceHost, name: &str) -> Result<NativeHandle, String> {
     match host.take_process_resource(name)? {
         Some(AdminSurfaceResource::NativeHandle {
             handle_kind,
             raw_handle,
-        }) if handle_kind == "fd" => i32::try_from(raw_handle)
-            .map_err(|_| format!("admin surface resource `{name}` did not fit in a raw fd")),
+        }) if handle_kind == PROCESS_RESOURCE_HANDLE_KIND => {
+            native_handle_from_resource_value(raw_handle, name)
+        }
         Some(other) => Err(format!(
             "admin surface resource `{name}` had unexpected shape: {other:?}"
         )),
@@ -630,8 +655,63 @@ enum PollResult {
     TimedOut,
 }
 
-fn dup_fd(fd: RawFd) -> Result<RawFd, String> {
-    let duplicated = unsafe { libc::dup(fd) };
+struct OwnedNativeHandle(Option<NativeHandle>);
+
+impl OwnedNativeHandle {
+    fn new(handle: NativeHandle) -> Self {
+        Self(Some(handle))
+    }
+
+    fn into_raw(mut self) -> NativeHandle {
+        self.0
+            .take()
+            .expect("owned native handle should always contain a handle")
+    }
+}
+
+impl Drop for OwnedNativeHandle {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            close_native_handle(handle);
+        }
+    }
+}
+
+#[cfg(unix)]
+unsafe fn file_from_native_handle(handle: NativeHandle) -> std::fs::File {
+    unsafe { std::fs::File::from_raw_fd(handle) }
+}
+
+#[cfg(windows)]
+unsafe fn file_from_native_handle(handle: NativeHandle) -> std::fs::File {
+    unsafe { std::fs::File::from_raw_handle(handle as RawHandle) }
+}
+
+#[cfg(unix)]
+fn native_handle_from_file(file: &std::fs::File) -> NativeHandle {
+    file.as_raw_fd()
+}
+
+#[cfg(windows)]
+fn native_handle_from_file(file: &std::fs::File) -> NativeHandle {
+    file.as_raw_handle() as NativeHandle
+}
+
+#[cfg(unix)]
+fn native_handle_from_resource_value(raw_handle: u64, name: &str) -> Result<NativeHandle, String> {
+    i32::try_from(raw_handle)
+        .map_err(|_| format!("admin surface resource `{name}` did not fit in a raw fd"))
+}
+
+#[cfg(windows)]
+fn native_handle_from_resource_value(raw_handle: u64, name: &str) -> Result<NativeHandle, String> {
+    usize::try_from(raw_handle)
+        .map_err(|_| format!("admin surface resource `{name}` did not fit in a raw handle"))
+}
+
+#[cfg(unix)]
+fn dup_native_handle(handle: NativeHandle) -> Result<NativeHandle, String> {
+    let duplicated = unsafe { libc::dup(handle) };
     if duplicated < 0 {
         Err(std::io::Error::last_os_error().to_string())
     } else {
@@ -639,13 +719,48 @@ fn dup_fd(fd: RawFd) -> Result<RawFd, String> {
     }
 }
 
-fn close_fd(fd: RawFd) {
-    let _ = unsafe { libc::close(fd) };
+#[cfg(windows)]
+fn dup_native_handle(handle: NativeHandle) -> Result<NativeHandle, String> {
+    if handle == 0 || handle == INVALID_HANDLE_VALUE as usize {
+        return Err("admin console handle was invalid".to_string());
+    }
+    let current_process = unsafe { GetCurrentProcess() };
+    let mut duplicated: HANDLE = std::ptr::null_mut();
+    let ok = unsafe {
+        DuplicateHandle(
+            current_process,
+            handle as HANDLE,
+            current_process,
+            &mut duplicated,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error().to_string())
+    } else {
+        Ok(duplicated as NativeHandle)
+    }
 }
 
-fn poll_fd(fd: RawFd, timeout_ms: i32) -> Result<PollResult, String> {
+#[cfg(unix)]
+fn close_native_handle(handle: NativeHandle) {
+    let _ = unsafe { libc::close(handle) };
+}
+
+#[cfg(windows)]
+fn close_native_handle(handle: NativeHandle) {
+    if handle == 0 || handle == INVALID_HANDLE_VALUE as usize {
+        return;
+    }
+    let _ = unsafe { CloseHandle(handle as HANDLE) };
+}
+
+#[cfg(unix)]
+fn poll_native_handle(handle: NativeHandle, timeout_ms: i32) -> Result<PollResult, String> {
     let mut descriptor = libc::pollfd {
-        fd,
+        fd: handle,
         events: libc::POLLIN,
         revents: 0,
     };
@@ -660,8 +775,48 @@ fn poll_fd(fd: RawFd, timeout_ms: i32) -> Result<PollResult, String> {
     }
 }
 
-fn read_fd(fd: RawFd, buffer: &mut [u8]) -> Result<usize, String> {
-    let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+#[cfg(windows)]
+fn poll_native_handle(handle: NativeHandle, timeout_ms: i32) -> Result<PollResult, String> {
+    let file_type = unsafe { GetFileType(handle as HANDLE) };
+    if file_type == FILE_TYPE_PIPE {
+        let mut available = 0;
+        let ok = unsafe {
+            PeekNamedPipe(
+                handle as HANDLE,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut available,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            let error = std::io::Error::last_os_error();
+            if matches!(
+                error.raw_os_error(),
+                Some(code) if code == ERROR_BROKEN_PIPE as i32 || code == ERROR_HANDLE_EOF as i32
+            ) {
+                return Ok(PollResult::Ready);
+            }
+            return Err(error.to_string());
+        }
+        return Ok(if available == 0 {
+            PollResult::TimedOut
+        } else {
+            PollResult::Ready
+        });
+    }
+
+    match unsafe { WaitForSingleObject(handle as HANDLE, timeout_ms.try_into().unwrap_or(0)) } {
+        WAIT_OBJECT_0 => Ok(PollResult::Ready),
+        WAIT_TIMEOUT => Ok(PollResult::TimedOut),
+        _ => Err(std::io::Error::last_os_error().to_string()),
+    }
+}
+
+#[cfg(unix)]
+fn read_native_handle(handle: NativeHandle, buffer: &mut [u8]) -> Result<usize, String> {
+    let read = unsafe { libc::read(handle, buffer.as_mut_ptr().cast(), buffer.len()) };
     if read < 0 {
         let error = std::io::Error::last_os_error();
         if error.kind() == std::io::ErrorKind::Interrupted {
@@ -670,6 +825,32 @@ fn read_fd(fd: RawFd, buffer: &mut [u8]) -> Result<usize, String> {
         return Err(error.to_string());
     }
     usize::try_from(read).map_err(|_| "console read length overflowed usize".to_string())
+}
+
+#[cfg(windows)]
+fn read_native_handle(handle: NativeHandle, buffer: &mut [u8]) -> Result<usize, String> {
+    let mut bytes_read = 0;
+    let bytes_to_read = buffer.len().min(u32::MAX as usize) as u32;
+    let ok = unsafe {
+        ReadFile(
+            handle as HANDLE,
+            buffer.as_mut_ptr(),
+            bytes_to_read,
+            &mut bytes_read,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        let error = std::io::Error::last_os_error();
+        if matches!(
+            error.raw_os_error(),
+            Some(code) if code == ERROR_BROKEN_PIPE as i32 || code == ERROR_HANDLE_EOF as i32
+        ) {
+            return Ok(0);
+        }
+        return Err(error.to_string());
+    }
+    Ok(bytes_read as usize)
 }
 
 export_plugin!(admin_surface, ConsoleAdminSurfacePlugin, MANIFEST);

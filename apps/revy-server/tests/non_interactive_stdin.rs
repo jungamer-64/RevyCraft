@@ -1,5 +1,6 @@
 mod support;
 
+#[cfg(unix)]
 use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol};
 use std::fs;
 use std::io::Write;

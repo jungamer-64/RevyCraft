@@ -1674,6 +1674,7 @@ dependencies = [
  "libc",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
