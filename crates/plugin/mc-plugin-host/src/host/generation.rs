@@ -14,10 +14,15 @@ use super::{
     encode_protocol_request, encode_storage_request, take_owned_buffer,
 };
 use crate::config::PluginBufferLimits;
+#[cfg(any(test, feature = "in-process-testing"))]
 use mc_plugin_api::codec::admin_surface::encode_admin_surface_response;
+#[cfg(any(test, feature = "in-process-testing"))]
 use mc_plugin_api::codec::auth::encode_auth_response;
+#[cfg(any(test, feature = "in-process-testing"))]
 use mc_plugin_api::codec::gameplay::encode_gameplay_response;
+#[cfg(any(test, feature = "in-process-testing"))]
 use mc_plugin_api::codec::protocol::encode_protocol_response;
+#[cfg(any(test, feature = "in-process-testing"))]
 use mc_plugin_api::codec::storage::encode_storage_response;
 #[cfg(any(test, feature = "in-process-testing"))]
 use mc_plugin_sdk_rust::test_support::{
@@ -152,6 +157,7 @@ pub(crate) fn write_owned_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
     }
 }
 
+#[cfg(any(test, feature = "in-process-testing"))]
 fn ensure_direct_response_fits(
     byte_len: usize,
     max_bytes: usize,

@@ -40,9 +40,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p server-bootstrap --test upgrade_runtime
-      - run: cargo test -p server-runtime core_reload_preserves_live_java_session
-      - run: cargo test -p server-runtime full_reload_preserves_live_java_session
+      - run: cargo test -p revy-server --test upgrade_runtime
+      - run: cargo test -p revy-server-runtime core_reload_preserves_live_java_session
+      - run: cargo test -p revy-server-runtime full_reload_preserves_live_java_session
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -57,9 +57,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p server-bootstrap --test upgrade_runtime
-      - run: cargo test -p server-runtime core_reload_preserves_live_java_session
-      - run: cargo test -p server-runtime full_reload_preserves_live_java_session
+      - run: cargo test -p revy-server --test upgrade_runtime
+      - run: cargo test -p revy-server-runtime core_reload_preserves_live_java_session
+      - run: cargo test -p revy-server-runtime full_reload_preserves_live_java_session
       - uses: actions/upload-artifact@v4
         if: always()
         with:
