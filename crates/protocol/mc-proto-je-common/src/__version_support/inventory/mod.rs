@@ -16,7 +16,10 @@ pub use self::window_items::window_items;
 mod tests {
     use super::*;
     use mc_proto_common::{PacketReader, PacketWriter};
-    use revy_voxel_model::{InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory};
+    use revy_voxel_model::{
+        InventorySlot, InventoryWindowContents, ItemDataMap, ItemDataValue, ItemStack,
+        PlayerInventory,
+    };
     use revy_voxel_rules::ContainerKindId;
 
     fn player_container() -> ContainerKindId {
@@ -108,6 +111,28 @@ mod tests {
                 .expect("1.13.2 slot should decode"),
             Some(stone_stack())
         );
+    }
+
+    #[test]
+    fn legacy_slots_fail_closed_for_component_items() {
+        let mut stack = stone_stack();
+        let mut components = ItemDataMap::new();
+        let _ = components.insert(
+            "minecraft:custom_name",
+            ItemDataValue::String("{\"text\":\"Stone\"}".to_string()),
+        );
+        stack.components = components;
+
+        let error = write_slot(
+            &mut PacketWriter::default(),
+            Some(&stack),
+            JE_1_7_10_INVENTORY_SPEC.slot,
+        )
+        .expect_err("legacy slots should reject component payloads");
+        assert!(matches!(
+            error,
+            mc_proto_common::ProtocolError::InvalidPacket("unsupported inventory item")
+        ));
     }
 
     #[test]

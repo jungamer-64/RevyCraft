@@ -93,6 +93,9 @@ pub fn semantic_flattened_block_1_13_2(state_id: i32) -> BlockState {
 
 #[must_use]
 pub fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
+    if !stack.is_legacy_compatible() {
+        return None;
+    }
     let damage = stack.damage;
     match stack.key.as_str() {
         catalog::STONE => Some((1, damage)),
@@ -115,6 +118,9 @@ pub fn legacy_item(stack: &ItemStack) -> Option<(i16, u16)> {
 
 #[must_use]
 pub fn flattened_item_id_1_13_2(stack: &ItemStack) -> Option<i32> {
+    if !stack.is_legacy_compatible() {
+        return None;
+    }
     match stack.key.as_str() {
         catalog::STONE => Some(1),
         catalog::GRASS_BLOCK => Some(8),

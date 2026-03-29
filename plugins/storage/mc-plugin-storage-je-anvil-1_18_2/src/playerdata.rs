@@ -4,7 +4,7 @@ use super::nbt::{
 };
 use mc_plugin_sdk_rust::{PlayerId, PlayerSnapshot};
 use mc_storage_common::StorageError;
-use revy_voxel_model::{DimensionId, InventorySlot, ItemStack, PlayerInventory, Vec3};
+use revy_voxel_model::{DimensionId, InventorySlot, PlayerInventory, Vec3};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -22,7 +22,7 @@ pub(super) fn write_playerdata(
         let root = if path.exists() {
             merge_player_nbt(read_gzip_nbt(&path)?, player)?
         } else {
-            player_to_nbt(player)
+            player_to_nbt(player)?
         };
         write_gzip_nbt(&path, "", &root)?;
     }
@@ -50,14 +50,14 @@ pub(super) fn read_playerdata(
 
 fn merge_player_nbt(root: NbtTag, player: &PlayerSnapshot) -> Result<NbtTag, StorageError> {
     let mut compound = as_compound(&root)?.clone();
-    let player_root = as_compound(&player_to_nbt(player))?.clone();
+    let player_root = as_compound(&player_to_nbt(player)?)?.clone();
     for (key, value) in player_root {
         compound.insert(key, value);
     }
     Ok(NbtTag::Compound(compound))
 }
 
-fn player_to_nbt(player: &PlayerSnapshot) -> NbtTag {
+fn player_to_nbt(player: &PlayerSnapshot) -> Result<NbtTag, StorageError> {
     let mut compound = BTreeMap::new();
     compound.insert(
         "Pos".to_string(),
@@ -101,10 +101,10 @@ fn player_to_nbt(player: &PlayerSnapshot) -> NbtTag {
     );
     compound.insert(
         "Inventory".to_string(),
-        NbtTag::List(10, inventory_to_nbt(&player.inventory)),
+        NbtTag::List(10, inventory_to_nbt(&player.inventory)?),
     );
     compound.insert("Name".to_string(), NbtTag::String(player.username.clone()));
-    NbtTag::Compound(compound)
+    Ok(NbtTag::Compound(compound))
 }
 
 fn player_from_nbt(root: &NbtTag, path: &Path) -> Result<PlayerSnapshot, StorageError> {
@@ -144,23 +144,26 @@ fn player_from_nbt(root: &NbtTag, path: &Path) -> Result<PlayerSnapshot, Storage
     })
 }
 
-fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
-    let mut entries = inventory
-        .slots
-        .iter()
-        .enumerate()
-        .filter_map(|(window_slot, stack): (usize, &Option<ItemStack>)| {
-            let stack = stack.as_ref()?;
-            let nbt_slot = window_slot_to_playerdata_slot(
-                u8::try_from(window_slot).expect("window slot should fit into u8"),
-            )?;
-            Some(item_stack_to_nbt(stack, nbt_slot))
-        })
-        .collect::<Vec<_>>();
-    if let Some(stack) = inventory.offhand.as_ref() {
-        entries.push(item_stack_to_nbt(stack, PLAYERDATA_OFFHAND_SLOT));
+fn inventory_to_nbt(inventory: &PlayerInventory) -> Result<Vec<NbtTag>, StorageError> {
+    let mut entries = Vec::new();
+    for (window_slot, stack) in inventory.slots.iter().enumerate() {
+        let Some(stack) = stack.as_ref() else {
+            continue;
+        };
+        let Some(nbt_slot) = window_slot_to_playerdata_slot(
+            u8::try_from(window_slot).expect("window slot should fit into u8"),
+        ) else {
+            continue;
+        };
+        entries.push(super::item_stack_to_nbt(stack, Some(nbt_slot))?);
     }
-    entries
+    if let Some(stack) = inventory.offhand.as_ref() {
+        entries.push(super::item_stack_to_nbt(
+            stack,
+            Some(PLAYERDATA_OFFHAND_SLOT),
+        )?);
+    }
+    Ok(entries)
 }
 
 fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
@@ -172,18 +175,13 @@ fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
     };
     for entry in entries {
         let compound = as_compound(entry)?;
-        validate_item_keys(compound, true)?;
-        if compound.contains_key("tag") {
-            return Err(StorageError::InvalidData(
-                "player inventory item tag is not supported".to_string(),
-            ));
-        }
+        super::validate_storage_item(compound, true, "player inventory")?;
         let slot = byte_field(compound, "Slot")?;
-        let count = byte_field(compound, "Count").unwrap_or(0);
+        let count = super::item_count_or_zero(compound)?;
         if count <= 0 {
             continue;
         }
-        let stack = item_stack_from_nbt(compound)?;
+        let stack = super::item_stack_from_nbt(compound)?;
         if slot == PLAYERDATA_OFFHAND_SLOT {
             let _ = inventory.set_slot(InventorySlot::Offhand, Some(stack));
             continue;
@@ -196,61 +194,6 @@ fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
         let _ = inventory.set(window_slot, Some(stack));
     }
     Ok(inventory)
-}
-
-fn item_stack_to_nbt(stack: &ItemStack, slot: i8) -> NbtTag {
-    let mut compound = BTreeMap::new();
-    compound.insert("Slot".to_string(), NbtTag::Byte(slot));
-    compound.insert(
-        "id".to_string(),
-        NbtTag::String(stack.key.as_str().to_string()),
-    );
-    compound.insert(
-        "Count".to_string(),
-        NbtTag::Byte(i8::try_from(stack.count).expect("count should fit into i8")),
-    );
-    if stack.damage != 0 {
-        compound.insert("Damage".to_string(), NbtTag::Int(i32::from(stack.damage)));
-    }
-    NbtTag::Compound(compound)
-}
-
-fn item_stack_from_nbt(compound: &BTreeMap<String, NbtTag>) -> Result<ItemStack, StorageError> {
-    let key = string_field(compound, "id")?;
-    let count = u8::try_from(byte_field(compound, "Count")?)
-        .map_err(|_| StorageError::InvalidData("negative item count not supported".to_string()))?;
-    let damage = match compound.get("Damage") {
-        Some(NbtTag::Short(value)) => u16::try_from(*value).map_err(|_| {
-            StorageError::InvalidData("negative item damage not supported".to_string())
-        })?,
-        Some(NbtTag::Int(value)) => u16::try_from(*value).map_err(|_| {
-            StorageError::InvalidData("item damage did not fit into u16".to_string())
-        })?,
-        Some(_) => {
-            return Err(StorageError::InvalidData(
-                "item Damage field had an unsupported type".to_string(),
-            ));
-        }
-        None => 0,
-    };
-    Ok(ItemStack::new(key, count, damage))
-}
-
-fn validate_item_keys(
-    compound: &BTreeMap<String, NbtTag>,
-    allow_slot: bool,
-) -> Result<(), StorageError> {
-    for key in compound.keys() {
-        let allowed = matches!(key.as_str(), "id" | "Count" | "Damage")
-            || (allow_slot && key == "Slot")
-            || key == "tag";
-        if !allowed {
-            return Err(StorageError::InvalidData(format!(
-                "unsupported item field `{key}`"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn ensure_overworld(compound: &BTreeMap<String, NbtTag>) -> Result<(), StorageError> {

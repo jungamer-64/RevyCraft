@@ -468,6 +468,38 @@ fn modern_storage_profile_activates_and_resolves() {
 }
 
 #[test]
+fn modern_26_1_storage_profile_activates_and_resolves() {
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new()
+            .storage_raw(InProcessStoragePlugin {
+                plugin_id: JE_26_1_STORAGE_PLUGIN_ID.to_string(),
+                manifest: storage_26_1_entrypoints().manifest,
+                factory: storage_26_1_entrypoints().factory,
+            })
+            .bootstrap_config(BootstrapConfig {
+                storage_profile: JE_26_1_STORAGE_PROFILE_ID.into(),
+                ..BootstrapConfig::default()
+            }),
+        PluginAbiRange::default(),
+        PluginFailureMatrix::default(),
+    );
+
+    host.activate_storage_profile(JE_26_1_STORAGE_PROFILE_ID)
+        .expect("known 26.1 storage profile should activate");
+
+    assert!(
+        host.resolve_storage_profile(JE_26_1_STORAGE_PROFILE_ID)
+            .is_some()
+    );
+    assert!(
+        host.status()
+            .storage
+            .iter()
+            .any(|plugin| plugin.plugin_id == JE_26_1_STORAGE_PLUGIN_ID)
+    );
+}
+
+#[test]
 fn unknown_storage_and_auth_profiles_fail_activation() {
     let host = build_test_plugin_host(
         TestPluginHostBuilder::new(),

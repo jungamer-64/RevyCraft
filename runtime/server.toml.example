@@ -11,6 +11,8 @@ world_dir = "world"
 storage_profile = "je-anvil-1_7_10"
 # Opt-in example for JE 1.18.2 worlds:
 # storage_profile = "je-anvil-1_18_2"
+# Opt-in example for JE 26.1 worlds:
+# storage_profile = "je-anvil-26_1"
 
 [static.plugins]
 plugins_dir = "plugins"
@@ -26,7 +28,7 @@ max_players = 20
 [live.topology]
 be_enabled = true
 default_adapter = "je-5"
-enabled_adapters = ["je-5", "je-47", "je-340", "je-404"]
+enabled_adapters = ["je-5", "je-47", "je-340", "je-404", "je-775"]
 default_bedrock_adapter = "be-924"
 enabled_bedrock_adapters = ["be-924"]
 reload_watch = false
@@ -38,6 +40,7 @@ allowlist = [
   "je-47",
   "je-340",
   "je-404",
+  "je-775",
   "be-924",
   "gameplay-canonical",
   "gameplay-readonly",
@@ -49,6 +52,8 @@ allowlist = [
 ]
 # Opt-in example for JE 1.18.2 worlds:
 # replace "storage-je-anvil-1_7_10" above with "storage-je-anvil-1_18_2"
+# Opt-in example for JE 26.1 worlds:
+# replace "storage-je-anvil-1_7_10" above with "storage-je-anvil-26_1"
 reload_watch = false
 
 [live.plugins.buffer_limits]
@@ -115,4 +120,5 @@ profile = "console-v1"
 "je-47" = "canonical"
 "je-340" = "canonical"
 "je-404" = "canonical"
+"je-775" = "canonical"
 "be-924" = "canonical"

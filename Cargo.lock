@@ -1802,9 +1802,11 @@ dependencies = [
  "mc-plugin-proto-je-404",
  "mc-plugin-proto-je-47",
  "mc-plugin-proto-je-5",
+ "mc-plugin-proto-je-775",
  "mc-plugin-sdk-rust",
  "mc-plugin-storage-je-anvil-1_18_2",
  "mc-plugin-storage-je-anvil-1_7_10",
+ "mc-plugin-storage-je-anvil-26_1",
  "mc-plugin-test-support",
  "mc-proto-be-924",
  "mc-proto-be-placeholder",
@@ -1813,6 +1815,7 @@ dependencies = [
  "mc-proto-je-404",
  "mc-proto-je-47",
  "mc-proto-je-5",
+ "mc-proto-je-775",
  "mc-storage-common",
  "revy-server-types",
  "revy-voxel-core",
@@ -1907,6 +1910,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-proto-je-775"
+version = "0.1.0"
+dependencies = [
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-proto-common",
+ "mc-proto-je-775",
+]
+
+[[package]]
 name = "mc-plugin-sdk-rust"
 version = "0.1.0"
 dependencies = [
@@ -1943,6 +1956,21 @@ dependencies = [
  "mc-plugin-sdk-rust",
  "mc-storage-common",
  "mc-storage-je-anvil-1_7_10",
+]
+
+[[package]]
+name = "mc-plugin-storage-je-anvil-26_1"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "mc-content-canonical",
+ "mc-plugin-api",
+ "mc-plugin-sdk-rust",
+ "mc-storage-common",
+ "revy-voxel-model",
+ "revy-voxel-rules",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -2060,6 +2088,17 @@ dependencies = [
  "revy-voxel-model",
  "revy-voxel-rules",
  "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "mc-proto-je-775"
+version = "0.1.0"
+dependencies = [
+ "mc-proto-common",
+ "mc-proto-je-common",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "uuid",
 ]
 
@@ -3066,9 +3105,11 @@ dependencies = [
  "mc-plugin-proto-je-404",
  "mc-plugin-proto-je-47",
  "mc-plugin-proto-je-5",
+ "mc-plugin-proto-je-775",
  "mc-plugin-sdk-rust",
  "mc-plugin-storage-je-anvil-1_18_2",
  "mc-plugin-storage-je-anvil-1_7_10",
+ "mc-plugin-storage-je-anvil-26_1",
  "mc-plugin-test-support",
  "mc-proto-be-924",
  "mc-proto-be-common",
@@ -3078,6 +3119,7 @@ dependencies = [
  "mc-proto-je-404",
  "mc-proto-je-47",
  "mc-proto-je-5",
+ "mc-proto-je-775",
  "mc-proto-je-common",
  "mc-proto-test-support",
  "mc-storage-common",

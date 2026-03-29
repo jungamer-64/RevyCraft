@@ -43,7 +43,14 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     seed_packaged_plugins(
         &dist_dir,
-        &["je-5", "je-47", "je-340", "je-404", "be-placeholder"],
+        &[
+            "je-5",
+            "je-47",
+            "je-340",
+            "je-404",
+            "je-775",
+            "be-placeholder",
+        ],
     )?;
 
     let bootstrap = bootstrap_config_with_plugins_dir(dist_dir);
@@ -51,7 +58,14 @@ fn packaged_protocol_plugins_load_via_dlopen() -> Result<(), RuntimeError> {
         TestPluginHost::discover(&bootstrap)?.expect("packaged plugins should be discovered");
     let registries = host.load_protocol_plugin_set()?;
 
-    for adapter_id in ["je-5", "je-47", "je-340", "je-404", "be-placeholder"] {
+    for adapter_id in [
+        "je-5",
+        "je-47",
+        "je-340",
+        "je-404",
+        "je-775",
+        "be-placeholder",
+    ] {
         assert!(
             registries.protocols().resolve_adapter(adapter_id).is_some(),
             "packaged plugin adapter should resolve"

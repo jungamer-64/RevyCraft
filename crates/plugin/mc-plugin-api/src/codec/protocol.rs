@@ -653,6 +653,7 @@ mod tests {
         let mut protocol = ProtocolCapabilitySet::new();
         let _ = protocol.insert(ProtocolCapability::Je340);
         let _ = protocol.insert(ProtocolCapability::Je404);
+        let _ = protocol.insert(ProtocolCapability::Je775);
         let capability_set = SessionCapabilitySet {
             protocol,
             gameplay: GameplayCapabilitySet::new(),
@@ -663,6 +664,7 @@ mod tests {
         };
         assert!(capability_set.protocol.contains(&ProtocolCapability::Je340));
         assert!(capability_set.protocol.contains(&ProtocolCapability::Je404));
+        assert!(capability_set.protocol.contains(&ProtocolCapability::Je775));
         assert_eq!(capability_set.gameplay_profile.as_str(), "canonical");
         assert_eq!(capability_set.entity_id, Some(EntityId(7)));
         assert_eq!(

@@ -52,6 +52,7 @@ pub(crate) const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
     JE_47_ADAPTER_ID,
     JE_340_ADAPTER_ID,
     JE_404_ADAPTER_ID,
+    JE_775_ADAPTER_ID,
     BE_924_ADAPTER_ID,
     BE_PLACEHOLDER_ADAPTER_ID,
 ];
@@ -67,6 +68,12 @@ pub(crate) const STORAGE_AND_AUTH_PLUGIN_IDS: &[&str] = &[
 ];
 pub(crate) const STORAGE_1_18_2_AND_AUTH_PLUGIN_IDS: &[&str] = &[
     JE_1_18_2_STORAGE_PLUGIN_ID,
+    "auth-offline",
+    "auth-bedrock-offline",
+    "auth-bedrock-xbl",
+];
+pub(crate) const STORAGE_26_1_AND_AUTH_PLUGIN_IDS: &[&str] = &[
+    JE_26_1_STORAGE_PLUGIN_ID,
     "auth-offline",
     "auth-bedrock-offline",
     "auth-bedrock-xbl",
@@ -223,6 +230,14 @@ pub(crate) fn register_in_process_protocol_adapter(
             let entrypoints = je_1_13_2_entrypoints();
             InProcessProtocolPlugin {
                 plugin_id: JE_404_ADAPTER_ID.to_string(),
+                manifest: entrypoints.manifest,
+                factory: entrypoints.factory,
+            }
+        }
+        JE_775_ADAPTER_ID => {
+            let entrypoints = je_26_1_entrypoints();
+            InProcessProtocolPlugin {
+                plugin_id: JE_775_ADAPTER_ID.to_string(),
                 manifest: entrypoints.manifest,
                 factory: entrypoints.factory,
             }

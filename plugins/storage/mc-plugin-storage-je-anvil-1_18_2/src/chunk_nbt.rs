@@ -529,17 +529,7 @@ fn encode_block_entity(
                 );
                 compound.insert(
                     "Items".to_string(),
-                    NbtTag::List(
-                        10,
-                        container
-                            .slots
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, stack): (usize, &Option<ItemStack>)| {
-                                stack.as_ref().map(|stack| encode_item_slot(index, stack))
-                            })
-                            .collect(),
-                    ),
+                    NbtTag::List(10, encode_container_item_list(&container.slots)?),
                 );
             }
             "canonical:furnace" => {
@@ -549,18 +539,7 @@ fn encode_block_entity(
                 );
                 compound.insert(
                     "Items".to_string(),
-                    NbtTag::List(
-                        10,
-                        container
-                            .slots
-                            .iter()
-                            .take(3)
-                            .enumerate()
-                            .filter_map(|(index, stack): (usize, &Option<ItemStack>)| {
-                                stack.as_ref().map(|stack| encode_item_slot(index, stack))
-                            })
-                            .collect(),
-                    ),
+                    NbtTag::List(10, encode_container_item_list(&container.slots[..3])?),
                 );
                 compound.insert(
                     "BurnTime".to_string(),
@@ -593,6 +572,20 @@ fn encode_block_entity(
     Ok(NbtTag::Compound(compound))
 }
 
+fn encode_container_item_list(slots: &[Option<ItemStack>]) -> Result<Vec<NbtTag>, StorageError> {
+    let mut items = Vec::new();
+    for (index, stack) in slots.iter().enumerate() {
+        let Some(stack) = stack.as_ref() else {
+            continue;
+        };
+        items.push(super::item_stack_to_nbt(
+            stack,
+            Some(i8::try_from(index).expect("slot index should fit into i8")),
+        )?);
+    }
+    Ok(items)
+}
+
 fn block_entity_kind_matches(
     existing_compound: &BTreeMap<String, NbtTag>,
     block_entity: &BlockEntityState,
@@ -622,26 +615,6 @@ fn container_property(container: &ContainerBlockEntityState, key: &str) -> i16 {
         .get(&ContainerPropertyKey::new(key))
         .copied()
         .unwrap_or_default()
-}
-
-fn encode_item_slot(index: usize, stack: &ItemStack) -> NbtTag {
-    let mut compound = BTreeMap::new();
-    compound.insert(
-        "Slot".to_string(),
-        NbtTag::Byte(i8::try_from(index).expect("slot index should fit into i8")),
-    );
-    compound.insert(
-        "id".to_string(),
-        NbtTag::String(stack.key.as_str().to_string()),
-    );
-    compound.insert(
-        "Count".to_string(),
-        NbtTag::Byte(i8::try_from(stack.count).expect("count should fit into i8")),
-    );
-    if stack.damage != 0 {
-        compound.insert("Damage".to_string(), NbtTag::Int(i32::from(stack.damage)));
-    }
-    NbtTag::Compound(compound)
 }
 
 fn decode_block_entity(entry: &NbtTag) -> Result<(BlockPos, BlockEntityState), StorageError> {
@@ -704,12 +677,7 @@ fn decode_container_items(
     let mut slots = vec![None; slot_count];
     for item in items {
         let item = as_compound(item)?;
-        validate_item_keys(item)?;
-        if item.contains_key("tag") {
-            return Err(StorageError::InvalidData(
-                "item tag is not supported".to_string(),
-            ));
-        }
+        super::validate_storage_item(item, true, "container")?;
         let slot = usize::try_from(byte_field(item, "Slot")?)
             .map_err(|_| StorageError::InvalidData("negative item slot index".to_string()))?;
         if slot >= slots.len() {
@@ -717,41 +685,9 @@ fn decode_container_items(
                 "item slot {slot} was out of bounds"
             )));
         }
-        slots[slot] = Some(item_stack_from_nbt(item)?);
+        slots[slot] = Some(super::item_stack_from_nbt(item)?);
     }
     Ok(slots)
-}
-
-fn validate_item_keys(compound: &BTreeMap<String, NbtTag>) -> Result<(), StorageError> {
-    for key in compound.keys() {
-        if !matches!(key.as_str(), "Slot" | "id" | "Count" | "Damage" | "tag") {
-            return Err(StorageError::InvalidData(format!(
-                "unsupported item field `{key}`"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn item_stack_from_nbt(compound: &BTreeMap<String, NbtTag>) -> Result<ItemStack, StorageError> {
-    let key = string_field(compound, "id")?;
-    let count = u8::try_from(byte_field(compound, "Count")?)
-        .map_err(|_| StorageError::InvalidData("negative item count not supported".to_string()))?;
-    let damage = match compound.get("Damage") {
-        Some(NbtTag::Short(value)) => u16::try_from(*value).map_err(|_| {
-            StorageError::InvalidData("negative item damage not supported".to_string())
-        })?,
-        Some(NbtTag::Int(value)) => u16::try_from(*value).map_err(|_| {
-            StorageError::InvalidData("item damage did not fit into u16".to_string())
-        })?,
-        Some(_) => {
-            return Err(StorageError::InvalidData(
-                "item Damage field had an unsupported type".to_string(),
-            ));
-        }
-        None => 0,
-    };
-    Ok(ItemStack::new(key, count, damage))
 }
 
 fn biome_cell_index(x: usize, y: usize, z: usize) -> usize {

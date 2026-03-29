@@ -52,10 +52,12 @@ mc-plugin-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-plugin-pr
 mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/be-placeholder/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-je-340 = { path = "../../../plugins/protocol/je-340/mc-plugin-proto-je-340", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-je-404 = { path = "../../../plugins/protocol/je-404/mc-plugin-proto-je-404", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-proto-je-775 = { path = "../../../plugins/protocol/je-775/mc-plugin-proto-je-775", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-plugin-proto-je-5", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-plugin-proto-je-47", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-storage-je-anvil-1_7_10 = { path = "../../storage/mc-storage-je-anvil-1_7_10" }
 mc-plugin-storage-je-anvil-1_18_2 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_18_2", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-storage-je-anvil-26_1 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-26_1", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-test-support = { path = "../../testing/mc-plugin-test-support" }
 mc-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-proto-be-924" }
@@ -64,6 +66,7 @@ mc-proto-test-support = { path = "../../testing/mc-proto-test-support" }
 mc-proto-je-common = { path = "../../protocol/mc-proto-je-common" }
 mc-proto-je-340 = { path = "../../../plugins/protocol/je-340/mc-proto-je-340" }
 mc-proto-je-404 = { path = "../../../plugins/protocol/je-404/mc-proto-je-404" }
+mc-proto-je-775 = { path = "../../../plugins/protocol/je-775/mc-proto-je-775" }
 mc-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-proto-je-5" }
 mc-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-proto-je-47" }
 revy-voxel-model = { path = "../../model/revy-voxel-model" }

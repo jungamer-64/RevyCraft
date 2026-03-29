@@ -13,7 +13,10 @@ pub(super) fn decrement_cursor(cursor: &mut Option<ItemStack>) {
 }
 
 pub(crate) fn stack_keys_match(left: &ItemStack, right: &ItemStack) -> bool {
-    left.key == right.key && left.damage == right.damage
+    left.key == right.key
+        && left.damage == right.damage
+        && left.components == right.components
+        && left.extra == right.extra
 }
 
 pub(crate) fn merge_stack_into_player_inventory(
@@ -54,4 +57,47 @@ fn persistent_slot_order() -> impl Iterator<Item = InventorySlot> {
         .map(InventorySlot::Hotbar)
         .chain((0_u8..27).map(InventorySlot::MainInventory))
         .chain(std::iter::once(InventorySlot::Offhand))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use revy_voxel_model::{ItemDataMap, ItemDataValue};
+
+    fn component_stack(name: &str) -> ItemStack {
+        let mut stack = ItemStack::new("minecraft:stone", 4, 0);
+        let mut components = ItemDataMap::new();
+        let _ = components.insert(
+            "minecraft:custom_name",
+            ItemDataValue::String(name.to_string()),
+        );
+        stack.components = components;
+        stack
+    }
+
+    #[test]
+    fn stack_keys_match_requires_matching_components() {
+        assert!(!stack_keys_match(
+            &component_stack("left"),
+            &component_stack("right"),
+        ));
+    }
+
+    #[test]
+    fn merge_keeps_component_variants_separate() {
+        let mut inventory = PlayerInventory::new_empty();
+        let _ = inventory.set_slot(InventorySlot::Hotbar(0), Some(component_stack("left")));
+
+        let remainder = merge_stack_into_player_inventory(&mut inventory, component_stack("right"));
+
+        assert!(remainder.is_none());
+        assert_eq!(
+            inventory.get_slot(InventorySlot::Hotbar(0)),
+            Some(&component_stack("left")),
+        );
+        assert_eq!(
+            inventory.get_slot(InventorySlot::Hotbar(1)),
+            Some(&component_stack("right")),
+        );
+    }
 }

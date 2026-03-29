@@ -157,6 +157,7 @@ fn all_protocol_plugins_register_and_resolve() {
         ("je-47", je_1_8_x_entrypoints()),
         ("je-340", je_1_12_2_entrypoints()),
         ("je-404", je_1_13_2_entrypoints()),
+        ("je-775", je_26_1_entrypoints()),
         ("be-placeholder", be_placeholder_entrypoints()),
     ] {
         builder = builder.protocol_raw(InProcessProtocolPlugin {
@@ -178,7 +179,14 @@ fn all_protocol_plugins_register_and_resolve() {
         .load_protocol_plugin_set()
         .expect("protocol plugins should load");
 
-    for adapter_id in ["je-5", "je-47", "je-340", "je-404", "be-placeholder"] {
+    for adapter_id in [
+        "je-5",
+        "je-47",
+        "je-340",
+        "je-404",
+        "je-775",
+        "be-placeholder",
+    ] {
         assert!(
             registries.protocols().resolve_adapter(adapter_id).is_some(),
             "adapter `{adapter_id}` should resolve"

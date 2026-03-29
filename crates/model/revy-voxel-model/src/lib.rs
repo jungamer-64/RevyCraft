@@ -370,11 +370,112 @@ impl ItemKey {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct OpaqueF32(u32);
+
+impl OpaqueF32 {
+    #[must_use]
+    pub fn from_f32(value: f32) -> Self {
+        Self(value.to_bits())
+    }
+
+    #[must_use]
+    pub fn into_f32(self) -> f32 {
+        f32::from_bits(self.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct OpaqueF64(u64);
+
+impl OpaqueF64 {
+    #[must_use]
+    pub fn from_f64(value: f64) -> Self {
+        Self(value.to_bits())
+    }
+
+    #[must_use]
+    pub fn into_f64(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ItemDataValue {
+    Byte(i8),
+    Short(i16),
+    Int(i32),
+    Long(i64),
+    Float(OpaqueF32),
+    Double(OpaqueF64),
+    ByteArray(Vec<u8>),
+    String(String),
+    List(Vec<ItemDataValue>),
+    Compound(BTreeMap<String, ItemDataValue>),
+    IntArray(Vec<i32>),
+    LongArray(Vec<i64>),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ItemDataMap(BTreeMap<String, ItemDataValue>);
+
+impl ItemDataMap {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn insert(
+        &mut self,
+        key: impl Into<String>,
+        value: ItemDataValue,
+    ) -> Option<ItemDataValue> {
+        self.0.insert(key.into(), value)
+    }
+
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&ItemDataValue> {
+        self.0.get(key)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &ItemDataValue)> {
+        self.0.iter()
+    }
+
+    #[must_use]
+    pub fn as_map(&self) -> &BTreeMap<String, ItemDataValue> {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn into_map(self) -> BTreeMap<String, ItemDataValue> {
+        self.0
+    }
+}
+
+impl From<BTreeMap<String, ItemDataValue>> for ItemDataMap {
+    fn from(value: BTreeMap<String, ItemDataValue>) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemStack {
     pub key: ItemKey,
     pub count: u8,
     pub damage: u16,
+    #[serde(default, skip_serializing_if = "ItemDataMap::is_empty")]
+    pub components: ItemDataMap,
+    #[serde(default, skip_serializing_if = "ItemDataMap::is_empty")]
+    pub extra: ItemDataMap,
 }
 
 impl ItemStack {
@@ -384,12 +485,24 @@ impl ItemStack {
             key: ItemKey::new(key),
             count,
             damage,
+            components: ItemDataMap::default(),
+            extra: ItemDataMap::default(),
         }
     }
 
     #[must_use]
     pub fn unsupported(count: u8, damage: u16) -> Self {
         Self::new("minecraft:unsupported", count, damage)
+    }
+
+    #[must_use]
+    pub fn is_legacy_compatible(&self) -> bool {
+        self.components.is_empty() && self.extra.is_empty()
+    }
+
+    #[must_use]
+    pub fn has_modern_payload(&self) -> bool {
+        !self.is_legacy_compatible()
     }
 }
 
