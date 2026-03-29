@@ -1,6 +1,11 @@
-# `CoreCommand` / `GameplayCommand` / `GameplayTransaction` / `CoreEvent` の流れ
+# `CoreCommand` から `CoreEvent` までの流れ
 
-この文書は、play 処理と login 処理で `CoreCommand`、`GameplayCommand`、`GameplayTransaction`、`CoreEvent` がどうつながるかを見るための正本です。
+- 対象読者: play 処理と login 処理で `CoreCommand`、`GameplayCommand`、`GameplayTransaction`、`CoreEvent` の流れを追いたい contributors
+- この文書で扱う範囲: 型の役割、runtime 側の分岐、login special-case、event dispatch までの流れ
+- この文書で扱わないこと: reload coordinator の実装、boundary redesign の crate graph、operator 向け command 運用
+- 次に読む文書: [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
+
+この文書は単独で読む詳細編です。`runtime` / plugin host の全体像は [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md) を先に読むと追いやすくなります。
 
 ## 一枚で見る流れ
 
@@ -81,7 +86,7 @@ runtime 側の本体は [`../../crates/runtime/revy-server-runtime/src/runtime/k
 - `PlaceBlock`
 - `UseBlock`
 
-ここで runtime が `CoreCommand` を `GameplayCommand` へ落とし、gameplay plugin の `prepare_command(...)` を detached transaction 上で 1 回だけ実行します。plugin は host mutation API を通じて draft state を更新し、runtime はその journal を live core に対して validate/apply します。read-set が stale なら callback は再実行せず、結果を authoritative resync/drop に寄せます。
+ここで runtime が `CoreCommand` を `GameplayCommand` へ落とし、gameplay plugin の `prepare_command(...)` を detached transaction 上で 1 回だけ実行します。plugin は host mutation API を通じて draft state を更新し、runtime はその journal を live core に対して validate/apply します。read-set が stale なら callback は再実行せず、結果を authoritative resync / drop に寄せます。
 
 ## login 時に何が足されるか
 
@@ -96,11 +101,7 @@ runtime 側の本体は [`../../crates/runtime/revy-server-runtime/src/runtime/k
 
 この順番を追いたいときは [`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) を読むのが最短です。
 
-ただし `LoginAccepted` は core の accept pointであって、その場で shared session state を `Play`
-へ進めるわけではありません。runtime は `LoginAccepted` をまず connection-targeted event として
-queue に積み、session task が login success packet を write できた時点で
-`player_id / entity_id / phase / session_capabilities` を commit します。commit 前の短い window は
-`SessionRegistry` の pending login route が `EventTarget::Player` 配送だけを bridge します。
+ただし `LoginAccepted` は core の accept point であって、その場で shared session state を `Play` へ進めるわけではありません。runtime は `LoginAccepted` をまず connection-targeted event として queue に積み、session task が login success packet を write できた時点で `player_id / entity_id / phase / session_capabilities` を commit します。commit 前の短い window は `SessionRegistry` の pending login route が `EventTarget::Player` 配送だけを bridge します。
 
 ## runtime 側の受け渡し
 
@@ -121,4 +122,4 @@ core の前後で見るべき runtime 側の入口は次です。
 - gameplay callback は invocation 開始時点の snapshot を読み、runtime は callback を再実行しない
 - runtime は dispatch と session orchestration に徹する
 
-protocol / gameplay の責務境界を reload 観点で見たいときは [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md) を参照してください。
+reload 観点の責務境界は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) を参照してください。

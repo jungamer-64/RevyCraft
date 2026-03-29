@@ -1,39 +1,43 @@
-# RevyCraft Docs
+# RevyCraft ドキュメント
 
-この `docs/` は、読者ごとに「どの文書を正本として読めばよいか」を揃えるためのハブです。リポジトリの入口は [`../README.md`](../README.md)、ここは audience ごとの導線と topic ごとの正本を示す場所として扱います。
+この `docs/` は、読者ごとに「どの文書を正本として読めばよいか」を揃えるためのハブです。リポジトリの入口は [`../README.md`](../README.md)、ここは docs の導線と正本をまとめる場所として扱います。
 
-## 読者別の入口
+## 読者別入口
 
-| 読者 | 最初に読む文書 | その後の正本 |
+| 読者 | 最初に読む文書 | 続けて読む文書 |
 | --- | --- | --- |
 | 運用者 | [`operators/getting-started.md`](operators/getting-started.md) | [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md) |
 | 実装 contributors | [`contributors/repository-overview.md`](contributors/repository-overview.md) | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md)、[`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md) |
-| plugin 作者 | [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md) | [`plugin-authors/rust-sdk-and-manifest.md`](plugin-authors/rust-sdk-and-manifest.md) |
+| plugin 作者 | [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md) | 同じ文書の Rust 実装・packaging 節 |
 
-## トピックごとの正本
+## やりたいこと別入口
 
-- package / 起動 / release bundle
+- 開発環境で server を起動したい
   [`operators/getting-started.md`](operators/getting-started.md)
-- `runtime/server.toml` の解釈、相対 path 解決、reload、admin surfaces
+- `runtime/server.toml` の key と reload 反映境界を確認したい
   [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md)
-- workspace の責務分割、boot path、公開 surface と内部 surface
-  [`contributors/repository-overview.md`](contributors/repository-overview.md)
-- 全体の境界設計の要約
-  [`contributors/boundary-design-overview.md`](contributors/boundary-design-overview.md)
-- runtime / plugin host / session lifecycle の責務境界
-  [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md)
-- `reload runtime`、`core` migration、reloadable boundary の最終設計
-  [`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md)
-- `CoreCommand` / `GameplayCommand` / `GameplayTransaction` / `CoreEvent` の流れ
-  [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md)
-- reload の内部意味論、failure policy、consistency gate
-  [`contributors/reload-semantics-and-boundaries.md`](contributors/reload-semantics-and-boundaries.md)
-- boundary redesign の target crate graph、dependency 方向、migration guardrail
-  [`contributors/adr-boundary-redesign.md`](contributors/adr-boundary-redesign.md)
-- plugin kind、packaged layout、discovery と activation
+- plugin の kind、manifest、Rust SDK の使い分けを知りたい
   [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md)
-- Rust SDK、macro、manifest、ABI `5.0`
-  [`plugin-authors/rust-sdk-and-manifest.md`](plugin-authors/rust-sdk-and-manifest.md)
+- workspace の入口、公開 surface、boot path を掴みたい
+  [`contributors/repository-overview.md`](contributors/repository-overview.md)
+- runtime / plugin host / semantic boundary を理解したい
+  [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md)
+- `reload runtime` と `core` migration の内部設計を追いたい
+  [`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md)
+- `CoreCommand` / `GameplayCommand` / `GameplayTransaction` / `CoreEvent` の流れを追いたい
+  [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md)
+
+## 正本一覧
+
+| 分類 | 正本 |
+| --- | --- |
+| operator | [`operators/getting-started.md`](operators/getting-started.md) |
+| operator | [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md) |
+| plugin author | [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md) |
+| contributor | [`contributors/repository-overview.md`](contributors/repository-overview.md) |
+| contributor | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md) |
+| contributor | [`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md) |
+| contributor deep dive | [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md) |
 
 ## 共通用語
 
@@ -49,7 +53,3 @@
   auth / gameplay / storage / admin-surface の kind ごとに config で選ぶ実行プロファイルです。
 - `quarantine`
   壊れた candidate artifact や active plugin を隔離する failure policy です。
-
-## 読み方
-
-ドキュメントどうしの説明が食い違うときは、topic ごとの正本を優先してください。それでも実装と差がある場合は、`apps/revy-server`、`tools/xtask`、`crates/runtime/revy-server-config`、`crates/runtime/revy-server-runtime` が source of truth です。

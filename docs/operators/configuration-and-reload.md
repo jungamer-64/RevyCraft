@@ -1,17 +1,20 @@
 # 設定と reload 運用
 
+- 対象読者: `runtime/server.toml` を編集し、手動 `reload` や admin surface を運用する人
+- この文書で扱う範囲: 設定ファイルの選ばれ方、relative path、`reload` mode、watch `reload`、`failure policy`、admin surface の運用ルール
+- この文書で扱わないこと: package / release bundle 手順、runtime 内部の manager 分割、`core` migration の実装詳細
+- 次に読む文書: [`../contributors/core-reload-runtime-design.md`](../contributors/core-reload-runtime-design.md)
+
 この文書は、`runtime/server.toml` の解釈、relative path 解決、`reload runtime <mode>`、admin surface の正本です。ここで扱う reload は現在の operator surface である `reload runtime artifacts / topology / core / full` であり、旧 `reload plugins` / `reload generation` / `reload config` は扱いません。package / 起動 / release bundle の入口は [`getting-started.md`](getting-started.md) を参照してください。
 
-`core` migration の内部設計は contributor 向けの [`../contributors/core-reload-runtime-design.md`](../contributors/core-reload-runtime-design.md) を参照してください。
-
-## config file の選ばれ方
+## `config` file の選ばれ方
 
 `server-bootstrap` は次の順で config path を決めます。
 
 1. `REVY_SERVER_CONFIG`
 2. `runtime/server.toml`
 
-選ばれた path が存在しない場合は fail-fast で boot error になります。`ServerConfig::default()` への fallback は行いません。manual reload / watch reload が config を再読込するときも同じで、選ばれた path が無ければ reload error になります。
+選ばれた path が存在しない場合は fail-fast で boot error になります。`ServerConfig::default()` への fallback は行いません。手動 `reload` / watch `reload` が config を再読込するときも同じで、選ばれた path が無ければ reload error になります。
 
 `package-plugins` と `build-release-bundles` は別の既定 path を持ちます。そちらは [`getting-started.md`](getting-started.md) を参照してください。
 
@@ -46,7 +49,7 @@ TOML file が存在して読み込まれる場合、relative path はその TOML
 
 `static.bootstrap.level_type` は現在 `"flat"` のみ対応です。`storage_profile` は restart-required のままです。
 
-## live selection の基本
+## 実行時 selection の基本
 
 plugin package が `runtime/plugins/` に存在しても、そのまま active になるわけではありません。runtime が使う集合は次で決まります。
 
@@ -75,7 +78,14 @@ JE online auth や Bedrock XBL を有効化したいときは allowlist と prof
   `live.profiles.bedrock_auth = "bedrock-xbl-v1"`
   allowlist に `auth-bedrock-xbl` を追加
 
-## manual reload の使い分け
+## 手動 `reload` の使い分け
+
+| mode | 何を切り替えるか | 主に反映される差分 |
+| --- | --- | --- |
+| `reload runtime artifacts` | active selection を固定したまま plugin artifact だけを差し替える | shared library の更新 |
+| `reload runtime topology` | listener / routing generation を切り替える | `live.network.*`、`live.topology.*` |
+| `reload runtime core` | selection / topology を維持したまま `ServerCore` を migration する | core に投影される config 差分 |
+| `reload runtime full` | selection / topology / core をまとめて再評価する | allowlist、profiles、admin、network、topology、core |
 
 ### `reload runtime artifacts`
 
@@ -160,7 +170,7 @@ reload 後は新規接続が新 generation に入り、旧 generation の sessio
 - allowlist
 - auth / bedrock auth / gameplay / admin surface selection
 - buffer limits
-- failure policy
+- `failure policy`
 - admin principal の permission
 - `static.bootstrap.level_name`
 - `static.bootstrap.game_mode`
@@ -173,18 +183,18 @@ reload 後は新規接続が新 generation に入り、旧 generation の sessio
 
 `full` は単なる config reload ではなく、artifact / topology / core をひとまとめにした reload mode です。途中で core migration が失敗した場合は、selection / topology も commit しません。
 
-## watch reload
+## watch `reload`
 
 `live.plugins.reload_watch = true` または `live.topology.reload_watch = true` が有効な場合、runtime loop は定期的に config source を読み直し、`reload runtime full` 相当の処理を試みます。
 
-watch reload の重要な点は次の 2 つです。
+watch `reload` の重要な点は次の 2 つです。
 
 - artifact 差分だけではなく selection / topology / core migration をまとめて再評価します。
 - loaded config か active config のどちらかで watch flag が有効なら、次回の watch tick が継続されます。
 
 custom boot path で reload host を持たない supervisor を作る場合、watch flag は使えません。`server-bootstrap` から通常起動する限りは reload-capable な boot になります。
 
-## failure policy
+## `failure policy`
 
 kind ごとの既定値は次です。
 
@@ -210,9 +220,9 @@ kind ごとの既定値は次です。
 - `fail-fast`
   runtime 全体の重大障害として扱い、graceful stop へ入ります。
 
-`core` migration failure は plugin kind の failure policy ではなく rollback-first の runtime policy で扱います。通常の candidate failure では旧 core を維持し、rollback 不可能な不整合だけを fail-fast 条件とします。
+`core` migration failure は plugin 種別ごとの `failure policy` ではなく rollback-first の `runtime` policy で扱います。通常の candidate failure では旧 core を維持し、rollback 不可能な不整合だけを fail-fast 条件とします。
 
-## admin surfaces
+## admin surface
 
 ### console surface
 
@@ -239,7 +249,7 @@ permission は `static.admin.principals."console:<instance>"` で制御します
 - transport は plaintext h2 のみです。
 - bind policy は plugin-owned config の `bind_addr` / `allow_non_loopback` で決まります。
 - `static.admin.principals.<id>` が host 側 permission policy です。
-- `principals.<id>.token_file` は gRPC surface config file 基準で relative 解決されます。
+- `principals.<id>.token_file` は gRPC surface の設定ファイル基準で relative 解決されます。
 - token は trim した結果が non-empty である必要があります。
 - principal 間で同じ token を使うことはできません。
 - TLS と public exposure は reverse proxy / ingress 側で扱う前提です。

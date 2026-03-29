@@ -1,8 +1,35 @@
-# runtime と plugin architecture
+# `runtime` と `plugin` の設計
 
-この文書は、runtime / plugin host / session lifecycle の責務境界をまとめた正本です。ここでは `reload runtime <mode>` を前提に、`core` を reloadable boundary の内側へ移した現在の architecture を説明します。operator 向けの config key や command surface は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、reload の内部意味論は [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)、`core` migration の詳細は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) を参照してください。
+- 対象読者: `runtime` / plugin host / semantic boundary を理解したい contributors
+- この文書で扱う範囲: 現行実装、目標境界、state owner、plugin の責務、目標 crate 構成、依存規則、境界チェック
+- この文書で扱わないこと: operator 向け config key の意味、`reload runtime` の細かな transaction 手順、plugin authoring のコード例
+- 次に読む文書: [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
 
-この文書は current implementation の説明です。target crate graph と boundary migration の正本は [`adr-boundary-redesign.md`](adr-boundary-redesign.md) を参照してください。
+この文書は contributor 向け設計文書の主正本です。現行実装の説明に加えて、boundary redesign の目標境界、依存規則、境界チェックもここでまとめて扱います。
+
+## 現行実装と目標境界
+
+RevyCraft の current workspace は実装としては成立していますが、次の境界はまだ複数の crate にまたがって滲みやすい状態です。
+
+- semantic contract と engine internal が `revy-voxel-core` / `mc-plugin-api` に混在している
+- protocol と storage の責務が `mc-proto-*` / storage plugin にまたがっている
+- admin / reload DTO が `revy-server-runtime`、`revy-server-config`、`mc-plugin-api`、`mc-plugin-host` に重複している
+- `revy-server-config` が validated config だけでなく plugin-host translation まで持っている
+
+この文書では、現在の `runtime` / plugin host の読み方を示しつつ、次の目標境界を正本として固定します。
+
+- `revy-voxel-semantic`
+  shared semantic contract を置く
+- `revy-voxel-core`
+  `ServerCore`、journal validate / apply、canonical event generation、inventory / world / runtime state machine のような engine internal を置く
+- `mc-proto-common`
+  protocol-only crate に寄せる
+- `mc-storage-common`
+  storage-only crate に寄せる
+- `revy-server-types`
+  operator-facing shared DTO の single source of truth に寄せる
+- `revy-server-config`
+  validated config と reload planning のみに寄せる
 
 ## レイヤー構成
 
@@ -13,7 +40,7 @@
 3. `crates/core/revy-core`
    id、capability、event targeting、revision control、session routing primitive を持つ internal kernel です。runtime や plugin ABI から直接見せる層ではありません。
 4. `crates/core/revy-voxel-core`
-   voxel/Minecraft 系の semantic state machine です。`revy-core` を内部 primitive として使います。
+   voxel / Minecraft 系の semantic state machine です。`revy-core` を内部 primitive として使います。
 5. `crates/plugin/mc-plugin-host`
    packaged plugin discovery、activation、selection、reload、quarantine を担います。
 6. `crates/plugin/mc-plugin-api` / `mc-plugin-sdk-rust`
@@ -21,16 +48,16 @@
 7. `plugins/*`
    protocol / gameplay / storage / auth / admin-surface の concrete plugin 実装です。
 
-## runtime の state owner
+## `runtime` の state owner
 
-`RuntimeServer` は façade で、実際の state owner は次の manager に分かれています。
+`RuntimeServer` は facade で、実際の state owner は次の manager に分かれています。
 
 - `SelectionManager`
-  active config、`LoadedPluginSet`、auth/admin-surface selection、remote admin principal snapshot を持ちます。
+  active config、`LoadedPluginSet`、auth / admin-surface selection、remote admin principal snapshot を持ちます。
 - `TopologyManager`
   active / draining generation、listener worker、generation swap を持ちます。
 - `RuntimeKernel`
-  単なる `ServerCore` owner ではなく、reloadable `core runtime` owner として `ServerCore`、`revy-core` の revision primitive で包んだ kernel state、snapshot-isolated gameplay journal commit、tick / save、dirty flag、world_dir、`core` migration の export / materialize / reattach / swap / rollback を持ちます。
+  `ServerCore`、`revy-core` の revision primitive で包んだ kernel state、snapshot-isolated gameplay journal commit、tick / save、dirty flag、world_dir、`core` migration の export / materialize / reattach / swap / rollback を持ちます。
 - `SessionRegistry`
   live session handle、accepted queue、`revy-core` の connection-id source、session task、routing-only の pending login route を持ちます。
 - `ReloadCoordinator`
@@ -38,7 +65,7 @@
 
 runtime を読むときは `runtime/mod.rs` -> `selection.rs` -> `topology_manager.rs` -> `kernel.rs` -> `session/*` / `admin.rs` の順が追いやすいです。
 
-## package / discovery / activation
+## package / 発見 / 有効化
 
 runtime が直接扱うのは packaged plugin です。workspace crate や `target/` の shared library をそのまま読むわけではありません。
 
@@ -72,26 +99,28 @@ catalog に載った plugin がそのまま active になるわけではあり�
 
 plugin には 2 種類の manifest があります。
 
-- packaged layout の `plugin.toml`
+- package 形式の `plugin.toml`
   plugin directory の発見と artifact 解決に使います。
 - shared library 内の `PluginManifestV1`
-  ABI、plugin kind、profile capability、reload capability の validation に使います。
+  ABI、plugin 種別、profile capability、reload capability の検証に使います。
 
 Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host は `plugin.toml` で package を見つけ、library を load したあとに embedded manifest を検証します。
 
 ## `revy-voxel-core` と plugin の責務境界
 
-`revy-core` と `revy-voxel-core` の境界もここで固定します。
+`revy-core` と `revy-voxel-core` の境界は次のように固定します。
 
 - `revy-core`
   `ConnectionId` / `PlayerId` / capability set、`EventTarget` / routed event、revision control、session routing primitive を持ちます。
 - `revy-voxel-core`
-  `GameplayTransaction`、world state、inventory/container lifecycle、mining、login/bootstrap、canonical `CoreEvent` generation を持ちます。
+  `GameplayTransaction`、world state、inventory / container lifecycle、mining、login / bootstrap、canonical `CoreEvent` generation を持ちます。
+
+plugin 種別ごとの責務は次です。
 
 - protocol plugin
-  handshake routing、status / login / play packet の decode / encode、transport/version 固有の session state を持ちます。
+  handshake routing、status / login / play packet の decode / encode、transport / version 固有 session state を持ちます。
 - gameplay plugin
-  semantic な `GameplayCommand` を評価し、invocation-scoped `GameplayTransaction` を通じて snapshot を読みつつ op journal を積みます。live core への validate/apply は runtime / `revy-voxel-core` 側が担当します。
+  semantic な `GameplayCommand` を評価し、invocation-scoped `GameplayTransaction` を通じて snapshot を読みつつ op journal を積みます。live core への validate / apply は runtime / `revy-voxel-core` 側が担当します。
 - storage plugin
   world snapshot の load / save / import / export を担います。`core` migration blob は process-local であり、persistent storage schema とは共有しません。
 - auth plugin
@@ -101,95 +130,107 @@ Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host 
 
 plugin / protocol authoring 側の依存もこの境界に合わせます。`mc-plugin-sdk-rust`、`mc-plugin-api`、`mc-proto-common` が公開 surface として shared semantic type を再公開するので、外側の crate は `revy-voxel-core` を直接依存先にせず、まずこれらの surface 経由で型を参照する前提で扱います。
 
-`revy-voxel-core` 自体は semantic command / event / inventory state machine に徹します。raw slot layout、JE の echo / reject、Bedrock の active window rewrite のような version / wire 差分は protocol plugin 側に残します。一方で reloadable boundary の観点では、`revy-voxel-core` は world snapshot だけではなく keepalive、dropped item、active mining、open window のような live-only state も含む `core runtime` として扱います。`revy-core` には block/chunk/container/mining のような voxel 語彙を持ち込みません。
+## 迷ったときの境界判断
 
-## bootstrap 時の selection
+### app と runtime
 
-`SelectionResolver::resolve_bootstrap(...)` は次を行います。
+`apps/revy-server` に置くのは process-scope の boot、stdio / gRPC admin surface、upgrade 協調です。session や world state の owner は `crates/runtime/revy-server-runtime` に寄せます。
 
-- storage profile を解決し、`world_dir` から snapshot を読む
-- active auth profile を解決し、`online_mode` と descriptor mode の整合を確認する
-- Bedrock 有効時だけ bedrock auth profile を解決する
-- active admin-surface instance 群を解決する
-- `LoadedPluginSet` から runtime が使う handle 群を確定する
+### runtime と plugin host
 
-このため、auth mode の整合や gameplay profile の存在確認は session 開始前にかなり弾かれます。
+runtime は「どの plugin を今の runtime view で使うか」を決めて使います。packaged plugin の discovery、activation、reload、quarantine は `mc-plugin-host` に寄せます。
 
-boot 時点では storage snapshot から `ServerCore` を materialize しますが、reload 時は同じ path を使いません。reload は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) で定義する `CoreRuntimeStateBlob` と `SessionReattachRecord` を使い、online player を saved-player に落とさずに candidate core へ再接続禁止で張り替えます。
+### semantic と engine internal
 
-## session lifecycle
+plugin や protocol 共通層が共有してよい型は `revy-voxel-semantic` までです。`revy-voxel-core` と `revy-core` は engine internal として扱います。
 
-### Java / TCP
+### config と runtime translation
 
-- accept 時点では adapter 未確定
-- handshake frame を protocol registry の probe に流して adapter を決める
-- `Status` は protocol plugin が decode / encode し、runtime が MOTD と online player 数を埋める
-- `Login` は auth plugin で `PlayerId` を得て、`CoreCommand::LoginStart` へ変換する
+`revy-server-config` は schema、load / normalize / validate、reload plan に寄せます。plugin-host bootstrap や runtime selection への translation は runtime 側の責務です。
 
-`online_mode = true` の場合、runtime は RSA 鍵と verify token を持ち、暗号化 handshake を挟みます。auth plugin reload が起きても、進行中 login は開始時点の auth generation で完結します。
+### build-time と run-time
 
-### Bedrock / UDP
+実行時の正本は `target/` ではなく `runtime/plugins/<plugin-id>/plugin.toml` を起点にした packaged plugin です。runtime は「build 済みかどうか」ではなく「package 済みかどうか」を実行条件にします。
 
-- `live.topology.be_enabled = true` のときだけ UDP listener が bind される
-- network settings request で adapter を確定する
-- login 後に `bedrock_auth` profile を使って認証する
+## 目標 crate 構成
 
-### Play
+```text
+apps/revy-server
+  -> revy-server-runtime
+     -> revy-server-config
+     -> revy-server-types
+     -> mc-plugin-host
+     -> revy-voxel-core
+        -> revy-voxel-semantic
+           -> revy-core
 
-play phase では次の流れになります。
+mc-plugin-api
+  -> revy-voxel-semantic
+  -> revy-server-types
 
-1. protocol plugin が wire packet を `CoreCommand` へ decode
-2. runtime が command を direct-core と gameplay-owned に分岐する
-3. gameplay-owned command は `GameplayCommand` として detached gameplay callback へ渡される
-4. gameplay plugin は snapshot-isolated な `GameplayTransaction` 上で read / write し、journal を返す
-5. runtime / `revy-voxel-core` が live core に対して journal を validate/apply し、成功した commit だけ canonical `CoreEvent` を生成する
-6. protocol plugin が `CoreEvent` を wire packet 群へ encode
+mc-plugin-sdk-rust
+  -> mc-plugin-api
+  -> revy-voxel-semantic
+  -> revy-server-types
 
-`CoreEvent::LoginAccepted` は core 側の accept pointですが、shared session state の authoritative
-な `Login -> Play` 遷移は session task が login success packet を実際に write できたあとに commit
-します。その短いあいだだけ `SessionRegistry` の pending login route が `EventTarget::Player`
-配送を bridge します。
+mc-proto-common
+  -> revy-voxel-semantic
 
-型の細かい流れは [`core-command-event-flow.md`](core-command-event-flow.md) を参照してください。
+mc-storage-common
+  -> revy-voxel-semantic
 
-stale snapshot conflict が起きた場合、runtime は gameplay callback を再実行しません。play command は authoritative resync/drop、login は transient failure disconnect、gameplay tick はその session の当該 tick だけ破棄して次 tick へ持ち越します。
+versioned protocol crates
+  -> mc-proto-common
+  -> edition-family helper
 
-play 中 session は `reload runtime core` と `reload runtime full` の primary target です。protocol 固有 session blob、gameplay 固有 session blob、`core` runtime blob を別々に export / import しつつ、connection 自体は切らない前提で再アタッチします。
+storage crates
+  -> mc-storage-common
+```
 
-## reload runtime の責務分割
+## 依存規則
 
-公開 reload surface は `reload runtime artifacts / topology / core / full` を前提にします。
+次の規則を boundary redesign の境界チェックとして固定します。
 
-- `artifacts`
-  selection を固定したまま protocol / gameplay / storage / admin-surface generation を入れ替える
-- `topology`
-  listener / routing generation を入れ替える
-- `core`
-  `ServerCore` を live session を切らずに差し替える
-- `full`
-  selection / topology / core migration を単一 transaction として扱う
+- no crate outside runtime / core engine depends on `revy-voxel-core` or `revy-core` as a shared public contract proxy
+- no storage crate depends on versioned protocol crate
+- no config crate depends on `mc-plugin-host`
+- no duplicated canonical admin / reload DTO definitions across `revy-server-config` / `revy-server-runtime` / `mc-plugin-api` / `mc-plugin-host`
 
-この分割により、protocol 固有 session state、gameplay callback state、world-semantic state を別々に export / import しつつ、commit point は runtime 側で一元管理できます。
+最初の rule は、最終的には `ServerCore` / `GameplayTransaction` を public surface から消すことが目的です。migration 中は crate-level dependency check で proxy を張り、`revy-voxel-semantic` 導入後に tighten します。
 
-## admin control plane
+## 移行順序と境界チェック
 
-operator surface の kernel は `revy-server-runtime` に集約されています。host が持つのは request execution、permission lookup、runtime state、generic resource broker で、console / gRPC のような具体 surface は plugin が持ちます。
+boundary redesign の進め方は次を前提にします。
 
-- principal
-  すべて opaque `principal_id` です。console は `console:<instance>`、その他は `static.admin.principals.<id>` で権限を管理します。
-- console surface
-  `console-v1` admin surface plugin が stdio resource を取得し、parse / render と入力 loop を持ちます。
-- gRPC surface
-  `grpc-v1` admin surface plugin が認証後に `AdminControlPlaneHandle` を叩きます。
+1. docs と boundary check を入れて、current debt を explicit allowlist として固定する
+2. `revy-voxel-semantic` を導入し、shared semantic type を移す
+3. `mc-storage-common` と `mc-storage-je-anvil-1_7_10` を導入し、protocol / storage を切り離す
+4. `revy-server-types` を導入し、admin / reload DTO を寄せる
+5. plugin-host translation を runtime 側へ移し、`revy-server-config` を validated config に閉じる
 
-admin reload surface は `reload runtime <mode>` に統一されています。permission も `reload-runtime` に一本化されており、進行中 request は開始時点の snapshot で完了し、次の request から新設定へ切り替わります。
+境界チェックの入口は次です。
 
-## どこで reload を読むか
+```bash
+cargo run -p xtask -- check-boundaries
+```
 
-reload を深く追うときは次を順に読むと把握しやすいです。
+この check は `cargo metadata` から direct workspace dependency を読み、forbidden edge を検出し、`tools/xtask/boundary-check.toml` の explicit allowlist と tracked duplicate symbol を照合します。いま全部 clean であることよりも、新しい drift を増やさないことを目的に使います。
 
-1. [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
-2. [`../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs)
-3. [`../../crates/runtime/revy-server-runtime/src/runtime/topology_manager.rs`](../../crates/runtime/revy-server-runtime/src/runtime/topology_manager.rs)
-4. [`../../crates/runtime/revy-server-runtime/src/runtime/reload_coordinator.rs`](../../crates/runtime/revy-server-runtime/src/runtime/reload_coordinator.rs)
-5. [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)
+## 移行前の baseline
+
+2026-03-29 に `cargo test -p revy-server-runtime --lib --quiet` を再実行した local baseline では、次の 5 件が failure しました。
+
+- `runtime::tests::gameplay::container_windows::world_backed_crafting_table_opens_and_crafts_chest_via_protocol`
+- `runtime::tests::gameplay::furnace::world_backed_furnace_opens_smelts_and_closes_via_protocol`
+- `runtime::tests::gameplay::furnace::world_backed_furnace_output_persists_across_restart`
+- `runtime::tests::gameplay::world_chest::world_backed_chest_place_open_and_persist_across_restart`
+- `runtime::tests::gameplay::world_chest::world_backed_chest_syncs_slot_updates_to_other_viewers`
+
+boundary redesign の code motion は、この baseline を green に戻すか、明示的に quarantine してから始める前提です。
+
+## 関連文書
+
+- reload の意味論、`consistency_gate`、`core` migration
+  [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
+- play / login の command / event flow
+  [`core-command-event-flow.md`](core-command-event-flow.md)

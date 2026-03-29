@@ -1,23 +1,54 @@
-# `core` reloadable boundary と `reload runtime` 設計
+# `reload runtime` の設計と `core` 移行
 
-この文書は、`ServerCore` を reload 境界の内側へ移し、接続を切らずに live session を完全保持したまま runtime を更新する contributors 向け正本です。ここでは、現在の `reload runtime <mode>` 実装が採用している `core` migration の意味論を説明します。旧 `reload plugins` / `reload generation` / `reload config` の公開 surface は扱いません。
+- 対象読者: `reload runtime <mode>`、`ReloadCoordinator`、`core` 移行の内部設計を追いたい contributors
+- この文書で扱う範囲: 公開 reload surface、mode ごとの意味論、`consistency_gate`、`CoreRuntimeStateBlob`、rollback policy、acceptance
+- この文書で扱わないこと: operator 向けの command 手順、plugin authoring の詳細、target crate split の背景説明
+- 次に読む文書: [`core-command-event-flow.md`](core-command-event-flow.md)
 
-operator 向けの command surface と permission は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、reload 全体の意味論は [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md) を参照してください。
+この文書は、`ServerCore` を reload 境界の内側へ移し、接続を切らずに live session を保持したまま runtime を更新する contributor 向け正本です。operator 向けの command surface と permission は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md) を参照してください。
 
-## 目的
+## 公開 `reload` surface
 
-- `ServerCore` を boot-time state ではなく reloadable runtime state として扱う
-- play 中の接続を切らずに `ServerCore` を差し替える
-- `reload runtime full` で artifact / topology / core migration を単一 transaction として扱う
-- `cursor`、open window、keepalive、dropped item、active mining、view/chunk state を含む live-only state を完全保持する
+外向けの入口は `ServerSupervisor::reload_runtime(mode)` です。
 
-非目的:
+- `reload runtime artifacts`
+- `reload runtime topology`
+- `reload runtime core`
+- `reload runtime full`
 
-- `static.bootstrap.online_mode`、`level_type`、`world_dir` を live 変更可能にすること
-- `static.plugins.*` を live 変更可能にすること
-- legacy な remote-admin schema を復活させること
-- `storage_profile` を restart なしで切り替えること
-- persistent storage schema と `core` migration blob を共通化すること
+`RuntimeReloadMode` は次を持つ前提です。
+
+- `Artifacts`
+  active selection を固定したまま artifact 差分だけを reload する
+- `Topology`
+  最新 config の `network` / `topology` を materialize して listener / routing generation を切り替える
+- `Core`
+  最新 config を読み、core に投影される差分だけを取り込みつつ `ServerCore` を migration する
+- `Full`
+  最新 config から selection / topology / core migration をまとめて評価し、成功時のみ一括 commit する
+
+旧 `reload plugins` / `reload generation` / `reload config` は設計上の surface から外します。
+
+## reload の前提
+
+reload は reload-capable supervisor boot が必要です。`server-bootstrap` の通常起動では reload host を伴う boot path を使い、手動 `reload` と watch `reload` を許可します。reload host を持たない custom boot path では手動 `reload` も watch `reload` も使えません。
+
+`plugins.reload_watch` や `topology.reload_watch` は watch trigger であり、実際に実行する処理は `reload runtime full` と同じ意味論を持ちます。
+
+reload の並行実行は `ReloadCoordinator` の `reload_serial` で直列化します。手動 `reload` はここで待機し、watch `reload` は他の reload / upgrade が進行中なら skip して次の poll へ回します。
+
+## `protocol` / `gameplay` / `core` の境界
+
+reload を読むときの責務分割は次です。
+
+- protocol
+  wire format、routing、transport 固有 session state、session transfer blob を持つ
+- gameplay
+  semantic `GameplayCommand` を評価し、callback 単位の `GameplayTransaction` を commit する
+- core
+  world / entity / inventory / keepalive / dropped item / active mining を含む canonical runtime state を持つ
+
+`core` を reloadable boundary に出すことで、protocol 固有 session blob と gameplay 固有 session blob に加えて、world-semantic な live state も migration 対象へ入ります。
 
 ## なぜ現行 `snapshot -> from_snapshot` では足りないか
 
@@ -32,33 +63,6 @@ operator 向けの command surface と permission は [`../operators/configurati
 
 一方で protocol / gameplay reload は [`../../crates/plugin/mc-plugin-host/src/host/support/reload.rs`](../../crates/plugin/mc-plugin-host/src/host/support/reload.rs) の session transfer blob を export / import して live session を継続できます。`core` だけが同等の migration 口を持たないため、`snapshot -> from_snapshot` をそのまま使うと「接続は残るが core 側では player が offline 扱いになる」状態になります。
 
-この設計では `WorldSnapshot` を保存用 schema として残しつつ、reload 専用の process-local state blob を別に導入します。
-
-## 新しい公開 surface
-
-公開入口は `reload runtime <mode>` に一本化します。
-
-- `ServerSupervisor::reload_runtime(mode)`
-- local console: `reload runtime artifacts`
-- local console: `reload runtime topology`
-- local console: `reload runtime core`
-- local console: `reload runtime full`
-- built-in gRPC: `ReloadRuntime { mode }`
-- admin permission: `reload-runtime`
-
-`RuntimeReloadMode` は次を持つ前提にします。
-
-- `Artifacts`
-  active selection を固定したまま artifact 差分だけを reload する
-- `Topology`
-  最新 config の `network` / `topology` を materialize して listener / routing generation を切り替える
-- `Core`
-  最新 config を読み、core に投影される差分だけを取り込みつつ `ServerCore` を migration する
-- `Full`
-  最新 config から selection / topology / core migration をまとめて評価し、成功時のみ一括 commit する
-
-旧 `reload plugins` / `reload generation` / `reload config` は設計上の surface から外します。この文書では互換 alias としても扱いません。
-
 ## 内部責務の再編
 
 `RuntimeServer` の state owner は次のように読み替えます。
@@ -68,7 +72,7 @@ operator 向けの command surface と permission は [`../operators/configurati
 - `TopologyManager`
   active / draining generation と listener worker を保持する
 - `RuntimeKernel`
-  単なる `ServerCore` owner ではなく、`core` migration の export / materialize / reattach / swap / rollback を担う `core runtime owner` として振る舞う
+  `core` migration の export / materialize / reattach / swap / rollback を担う `core runtime owner` として振る舞う
 - `SessionRegistry`
   live session handle と connection-level metadata を保持する
 - `ReloadCoordinator`
@@ -88,7 +92,7 @@ operator 向けの command surface と permission は [`../operators/configurati
 - online player session state
 - keepalive scheduler state
 - session-scoped inventory window state
-- view/chunk tracking state
+- view / chunk tracking state
 - world-backed chest / furnace viewer state
 
 ### `SessionReattachRecord`
@@ -121,20 +125,85 @@ reload の途中成果物です。commit まで mutable global state を書き�
 - protocol / gameplay へ送る resync event 群
 - rollback に必要な error context
 
-## 完全保持の対象
+## mode ごとの内部動作
 
-`reload runtime core` と `reload runtime full` は次を保持対象にします。
+mode ごとの config 射影と restart-required 判定の正本は `revy-server-config` の `ServerConfig::plan_topology_reload` / `plan_core_reload` / `plan_full_reload` です。runtime 側はこの plan を実行する責務に寄せます。
 
-- player / entity identity
-- open window と `window_id`
-- `cursor`
-- pending keepalive id と timeout scheduling
-- dropped item と active mining の進行状態
-- client view と loaded chunk state
-- world-backed chest / furnace と viewer state
-- session から参照される protocol / gameplay generation pin
+### `reload runtime artifacts`
 
-完全保持は「できれば維持する」ではなく acceptance の基準です。維持できない candidate は rollback 対象とします。
+1. `reload_serial` 下で modified plugin を stage する
+2. write consistency lock を取得する
+3. live protocol / gameplay session snapshot と `core` runtime blob を固定する
+4. staged candidate を live runtime snapshot に対して finalize する
+5. selection を差し替える
+
+core swap と topology generation swap は行いません。
+
+### `reload runtime topology`
+
+1. restart-required な static 差分が無いことを確認する
+2. current config を clone する
+3. loaded config から `network` / `topology` だけ差し替える
+4. candidate topology generation を materialize する
+5. active generation を切り替え、旧 generation を draining へ移す
+
+selection と core は current state を維持します。
+
+### `reload runtime core`
+
+1. `reload_serial` 下で candidate config plan を確定する
+2. write consistency lock を取得する
+3. current selection と active topology generation を固定する
+4. live runtime から `CoreRuntimeStateBlob` を export する
+5. candidate core を materialize する
+6. play session を candidate core へ reattach する
+7. protocol / gameplay へ必要な resync event を発行する
+8. 成功時のみ core owner を swap する
+
+失敗時は旧 core を維持し、session を切断しません。
+
+### `reload runtime full`
+
+1. `reload_serial` 下で config plan、plugin-host candidate、topology candidate を stage する
+2. write consistency lock を取得する
+3. live runtime snapshot に対して staged plugin candidate を finalize する
+4. `CoreRuntimeStateBlob` を export して candidate core を materialize する
+5. plugin generation migration と session reattach を実行する
+6. commit 条件がそろった場合のみ selection / topology / core を一括反映する
+
+`full` は `config-scoped reload` の別名ではなく、artifact / topology / core をまとめた公開 mode です。
+
+## `reload_serial` と `consistency_gate`
+
+reload orchestration には 2 つの同期原語があります。
+
+- `reload_serial`
+  reload / upgrade staging の多重実行を防ぐ mutex
+- `consistency_gate`
+  quiescent な live snapshot と commit point を守る async `RwLock<()>`
+
+`consistency_gate` は次の目的に使います。
+
+- session spawn、command dispatch、event dispatch、tick 側は read lock を取る
+- reload commit / upgrade freeze 側は write lock を取る
+
+結果として次が成り立ちます。
+
+- in-flight の reader がいるあいだ reload commit は待機する
+- reload が write lock を持っているあいだ、新しい session command の進行は止まる
+- heavy な plugin load / candidate staging は gate の外で進められる
+- `full` は selection / topology / core の commit point を同じ write lock の中で完結する
+
+## `generation` と移行の境界
+
+runtime には少なくとも 2 種類の世代があります。
+
+- topology generation
+  listener と routing の世代
+- plugin generation
+  protocol / gameplay / storage / auth / admin-surface plugin の世代
+
+`core` migration は topology generation のような別番号を持つ公開概念ではなく、live session を同一 connection / entity identity のまま新しい core owner に張り替える内部 operation として扱います。
 
 ## phase ごとの扱い
 
@@ -147,64 +216,7 @@ reload の途中成果物です。commit まで mutable global state を書き�
 
 `LoginAccepted` は再送しません。play 中 session は同一 connection のまま継続し、reattach 後の差分 resync だけを送ります。
 
-## mode ごとの内部動作
-
-### `reload runtime artifacts`
-
-現行 `reload plugins` に近い mode です。
-
-1. consistency write lock を取得
-2. live protocol / gameplay session snapshot と `core` runtime blob を固定
-3. current selection config で plugin host を reconcile
-4. protocol / gameplay / storage generation を migration
-5. selection を差し替える
-
-core swap と topology generation swap は行いません。
-
-### `reload runtime topology`
-
-現行 `reload generation` に近い mode です。
-
-1. 最新 config を load する
-2. restart-required な static 差分が無いことを確認する
-3. `network` / `topology` だけを candidate generation に反映する
-4. listener / routing を materialize する
-5. active generation を切り替える
-
-selection と core は current state を維持します。既存 session の継続は draining generation で扱います。
-
-### `reload runtime core`
-
-最新 config を load し、selection / topology を固定したまま core に投影される差分だけを反映する mode です。
-
-1. 最新 config を load し、`plan_core_reload` で restart-required ではない core projection だけを抽出する
-2. consistency write lock を取得
-3. current selection と active topology generation を固定する
-4. live runtime から `CoreRuntimeStateBlob` と `SessionReattachRecord` を export する
-5. candidate core を materialize する
-6. play session を candidate core へ reattach する
-7. protocol / gameplay generation へ必要な resync event を発行する
-8. すべて成功した場合のみ core owner と active config を swap する
-9. 途中で失敗した場合は旧 core を維持し、candidate を破棄する
-
-この mode で反映される config 差分は `level_name` / `game_mode` / `difficulty` / `view_distance` / `max_players` に限られます。
-
-### `reload runtime full`
-
-artifact / topology / core の全体更新を単一 transaction として扱う mode です。
-
-1. consistency write lock を取得
-2. 最新 config を load し、restart-required な static 差分が無いことを確認する
-3. candidate selection を resolve する
-4. candidate topology generation を materialize する
-5. `CoreRuntimeStateBlob` を export し、candidate core を materialize する
-6. protocol / gameplay / storage generation migration と play session reattach を行う
-7. selection / topology / core の commit 条件がそろったときだけ一括反映する
-8. core migration が失敗した場合は topology / selection も commit しない
-
-`full` は「途中まで切り替わる best-effort reload」ではなく、`core` swap を含む commit point までは transaction として扱います。
-
-## migration algorithm
+## 移行アルゴリズム
 
 `core` migration の順序は固定します。
 
@@ -225,7 +237,7 @@ artifact / topology / core の全体更新を単一 transaction として扱う 
 - keepalive scheduler は `pending_keep_alive_id`、`last_keep_alive_sent_at`、`next_keep_alive_at` を含めてそのまま移す
 - world-backed chest / furnace は viewer set と block entity の両方を同期する
 
-## failure policy と互換境界
+## `failure policy` と互換境界
 
 ### restart-required のまま残るもの
 
@@ -248,7 +260,7 @@ artifact / topology / core の全体更新を単一 transaction として扱う 
 - protocol / gameplay session blob と `core` blob の version mismatch
   旧 core を維持する
 
-fail-fast は rollback 不可能な不整合に限ります。たとえば「旧 core へ戻せないまま protocol / gameplay generation の active state が破損した」ようなケースだけを対象にします。通常の candidate failure では session を切断しません。
+fail-fast は rollback 不可能な不整合に限ります。通常の candidate failure では session を切断しません。
 
 ### blob schema の扱い
 
@@ -258,7 +270,22 @@ fail-fast は rollback 不可能な不整合に限ります。たとえば「旧
 - `storage` plugin の `load_snapshot` / `save_snapshot` に露出しない
 - `storage` reload の `import_runtime_state` とは役割を分ける
 
-## testing と acceptance
+## 完全保持の対象
+
+`reload runtime core` と `reload runtime full` は次を保持対象にします。
+
+- player / entity identity
+- open window と `window_id`
+- `cursor`
+- pending keepalive id と timeout scheduling
+- dropped item と active mining の進行状態
+- client view と loaded chunk state
+- world-backed chest / furnace と viewer state
+- session から参照される protocol / gameplay generation pin
+
+完全保持は「できれば維持する」ではなく acceptance の基準です。維持できない candidate は rollback 対象とします。
+
+## テストと受け入れ条件
 
 最低限の acceptance は次です。
 
@@ -275,8 +302,8 @@ fail-fast は rollback 不可能な不整合に限ります。たとえば「旧
 
 ## 読む順番
 
-1. [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)
-2. [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)
-3. [`../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs`](../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs)
-4. [`../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs)
+1. [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)
+2. [`../../crates/runtime/revy-server-runtime/src/runtime/reload_coordinator.rs`](../../crates/runtime/revy-server-runtime/src/runtime/reload_coordinator.rs)
+3. [`../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs)
+4. [`../../crates/runtime/revy-server-runtime/src/runtime/topology_manager.rs`](../../crates/runtime/revy-server-runtime/src/runtime/topology_manager.rs)
 5. [`../../crates/plugin/mc-plugin-host/src/host/support/reload.rs`](../../crates/plugin/mc-plugin-host/src/host/support/reload.rs)

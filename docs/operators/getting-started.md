@@ -1,6 +1,9 @@
 # 運用者向けスタートガイド
 
-この文書は、RevyCraft を package、起動、release bundle 化するための正本です。`runtime/server.toml` の各 key や reload の意味は [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。
+- 対象読者: RevyCraft を package、起動、release bundle 化したい運用者
+- この文書で扱う範囲: 開発起動、config source の選ばれ方、release bundle、runtime ディレクトリの見方
+- この文書で扱わないこと: `runtime/server.toml` の各 key の意味、reload mode の内部設計、admin surface の詳細権限
+- 次に読む文書: [`configuration-and-reload.md`](configuration-and-reload.md)
 
 ## 開発起動
 
@@ -31,7 +34,7 @@ cargo run -p revy-server
 | `cargo run -p revy-server` | `REVY_SERVER_CONFIG` または `runtime/server.toml` | error |
 | `cargo run -p xtask -- build-release-bundles` | `runtime/server.toml.example` | error |
 
-この差は意図的です。開発 packaging は active config に寄せ、runtime boot と release bundle はどちらも選ばれた config の存在を必須にしています。
+開発 packaging は active config に寄せ、runtime boot と release bundle はどちらも選ばれた config の存在を必須にしています。
 
 ## optional plugin を含めて全量 package したいとき
 
@@ -76,7 +79,7 @@ cargo run -p xtask -- build-release-bundles \
 
 cross target build に必要な Rust target component や linker 設定は事前に用意してください。
 
-## runtime ディレクトリの見方
+## `runtime/` ディレクトリの見方
 
 - `runtime/server.toml`
   開発時に優先して使う active config です。
@@ -96,4 +99,4 @@ cross target build に必要な Rust target component や linker 設定は事前
 - gRPC admin surface
   `[live.admin.surfaces.<instance>]` で `profile = "grpc-v1"` と plugin-owned config path を指定すると、gRPC admin surface plugin が unary gRPC control plane を bind します。
 
-console の stdin EOF はその console surface の入力 loop だけを閉じ、server process 自体は継続します。permission、reload command、principal 設定は [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。
+permission、reload command、principal 設定、surface config の扱いは [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。
