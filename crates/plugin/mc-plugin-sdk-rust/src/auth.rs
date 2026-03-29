@@ -1,5 +1,4 @@
 use super::*;
-use revy_voxel_core::AuthCapabilitySet;
 
 pub trait RustAuthPlugin: Send + Sync + 'static {
     fn descriptor(&self) -> AuthDescriptor;

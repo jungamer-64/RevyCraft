@@ -15,7 +15,7 @@ use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::storage::RustStoragePlugin;
 use mc_proto_common::StorageError;
-use revy_voxel_core::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
+use mc_plugin_sdk_rust::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
 use revy_voxel_model::{ChunkColumn, ChunkPos};
 use std::collections::BTreeMap;
 use std::fs;

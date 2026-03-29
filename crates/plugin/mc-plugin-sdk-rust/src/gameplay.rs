@@ -1,5 +1,4 @@
 use super::*;
-use revy_voxel_core::{GameplayCapabilitySet, GameplayCommand, GameplayProfileId};
 use revy_voxel_model::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3};
 use revy_voxel_rules::{BlockEntityState, ContainerKindId};
 
@@ -55,7 +54,7 @@ pub trait GameplayHost {
 
     fn spawn_dropped_item(&self, position: Vec3, item: ItemStack) -> Result<(), String>;
 
-    fn emit_event(&self, event: revy_voxel_core::TargetedEvent) -> Result<(), String>;
+    fn emit_event(&self, event: TargetedEvent) -> Result<(), String>;
 }
 
 pub trait RustGameplayPlugin: Send + Sync + 'static {

@@ -3,7 +3,7 @@ use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::gameplay::{self, GameplayHost, RustGameplayPlugin};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
-use revy_voxel_core::{
+use mc_plugin_sdk_rust::{
     CoreEvent, EventTarget, GameplayCapability, GameplayCommand, PlayerId, TargetedEvent,
 };
 
@@ -17,7 +17,7 @@ impl RustGameplayPlugin for ReadonlyGameplayPlugin {
         gameplay::gameplay_descriptor("readonly")
     }
 
-    fn capability_set(&self) -> revy_voxel_core::GameplayCapabilitySet {
+    fn capability_set(&self) -> mc_plugin_sdk_rust::GameplayCapabilitySet {
         mc_plugin_sdk_rust::capabilities::gameplay_capabilities(&[
             GameplayCapability::RuntimeReload,
         ])

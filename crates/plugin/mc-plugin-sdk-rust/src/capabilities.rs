@@ -1,7 +1,8 @@
-use revy_voxel_core::{
+use crate::{
     AdminSurfaceCapability, AdminSurfaceCapabilitySet, AuthCapability, AuthCapabilitySet,
-    CapabilityAnnouncement, GameplayCapability, GameplayCapabilitySet, PluginBuildTag,
-    ProtocolCapability, ProtocolCapabilitySet, StorageCapability, StorageCapabilitySet,
+    CapabilityAnnouncement, ClosedCapabilitySet, GameplayCapability, GameplayCapabilitySet,
+    PluginBuildTag, ProtocolCapability, ProtocolCapabilitySet, StorageCapability,
+    StorageCapabilitySet,
 };
 
 #[must_use]
@@ -72,11 +73,11 @@ pub(crate) fn admin_surface_announcement(
     capability_announcement_for_build_tag(capabilities, option_env!("REVY_PLUGIN_BUILD_TAG"))
 }
 
-fn capability_set<C>(capabilities: &[C]) -> revy_voxel_core::ClosedCapabilitySet<C>
+fn capability_set<C>(capabilities: &[C]) -> ClosedCapabilitySet<C>
 where
     C: Copy + Ord,
 {
-    let mut set = revy_voxel_core::ClosedCapabilitySet::new();
+    let mut set = ClosedCapabilitySet::new();
     for &capability in capabilities {
         let _ = set.insert(capability);
     }
@@ -84,7 +85,7 @@ where
 }
 
 fn capability_announcement_for_build_tag<C>(
-    capabilities: &revy_voxel_core::ClosedCapabilitySet<C>,
+    capabilities: &ClosedCapabilitySet<C>,
     build_tag: Option<&str>,
 ) -> CapabilityAnnouncement<C>
 where

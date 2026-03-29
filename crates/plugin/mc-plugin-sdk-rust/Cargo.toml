@@ -16,7 +16,6 @@ in-process-testing = []
 [dependencies]
 bytes.workspace = true
 revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
-revy-voxel-core = { path = "../../core/revy-voxel-core" }
 revy-voxel-model = { path = "../../model/revy-voxel-model" }
 mc-plugin-api = { path = "../mc-plugin-api" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }

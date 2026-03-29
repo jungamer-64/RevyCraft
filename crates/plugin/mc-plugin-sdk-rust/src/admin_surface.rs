@@ -5,7 +5,7 @@ use mc_plugin_api::codec::admin_surface::{
     AdminSurfaceResource, AdminSurfaceStatusView,
 };
 use mc_plugin_api::host_api::AdminSurfaceHostApiV1;
-use revy_voxel_core::{AdminSurfaceCapabilitySet, AdminSurfaceProfileId};
+use crate::{AdminSurfaceCapabilitySet, AdminSurfaceProfileId};
 
 pub trait AdminSurfaceHost: Send + Sync {
     fn log(&self, level: u32, message: &str) -> Result<(), String>;

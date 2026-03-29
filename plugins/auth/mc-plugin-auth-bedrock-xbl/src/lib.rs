@@ -11,7 +11,7 @@ use mc_plugin_sdk_rust::capabilities::auth_capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use p384::ecdsa::{Signature as EcdsaSignature, VerifyingKey, signature::Verifier};
-use revy_voxel_core::{AuthCapability, AuthCapabilitySet, PlayerId};
+use mc_plugin_sdk_rust::{AuthCapability, AuthCapabilitySet, PlayerId};
 use serde_json::Value;
 use uuid::Uuid;
 

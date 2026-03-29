@@ -139,7 +139,7 @@ macro_rules! delegate_protocol_adapter {
 
             fn encode_login_success(
                 &self,
-                player: &revy_voxel_core::PlayerSnapshot,
+                player: &$crate::PlayerSnapshot,
             ) -> Result<Vec<u8>, mc_proto_common::ProtocolError> {
                 self.$field.encode_login_success(player)
             }
@@ -150,14 +150,14 @@ macro_rules! delegate_protocol_adapter {
                 &self,
                 session: &mc_proto_common::ProtocolSessionSnapshot,
                 frame: &[u8],
-            ) -> Result<Option<revy_voxel_core::RuntimeCommand>, mc_proto_common::ProtocolError>
+            ) -> Result<Option<$crate::RuntimeCommand>, mc_proto_common::ProtocolError>
             {
                 self.$field.decode_play(session, frame)
             }
 
             fn encode_play_event(
                 &self,
-                event: &revy_voxel_core::CoreEvent,
+                event: &$crate::CoreEvent,
                 session: &mc_proto_common::ProtocolSessionSnapshot,
                 context: &mc_proto_common::PlayEncodingContext,
             ) -> Result<Vec<Vec<u8>>, mc_proto_common::ProtocolError> {
@@ -183,7 +183,7 @@ macro_rules! delegate_protocol_adapter {
                 self.$field.bedrock_listener_descriptor()
             }
 
-            fn capability_set(&self) -> revy_voxel_core::ProtocolCapabilitySet {
+            fn capability_set(&self) -> $crate::ProtocolCapabilitySet {
                 $capability_body
             }
         }

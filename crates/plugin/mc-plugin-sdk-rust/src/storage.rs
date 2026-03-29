@@ -1,5 +1,4 @@
 use super::*;
-use revy_voxel_core::StorageCapabilitySet;
 
 pub trait RustStoragePlugin: Send + Sync + 'static {
     fn descriptor(&self) -> StorageDescriptor;

@@ -8,8 +8,21 @@ mod traits;
 mod types;
 mod wire;
 
+pub mod semantic {
+    pub use revy_voxel_core::{
+        ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, PlayerId, PlayerSnapshot,
+        PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
+        ServerCore, SessionCommand, WorldSnapshot,
+    };
+}
+
 pub use self::errors::{ProtocolError, StorageError};
 pub use self::packet::{PacketReader, PacketWriter};
+pub use self::semantic::{
+    ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, PlayerId, PlayerSnapshot,
+    PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, ServerCore,
+    SessionCommand, WorldSnapshot,
+};
 pub use self::traits::{
     HandshakeProbe, PlaySyncAdapter, ProtocolAdapter, SessionAdapter, StorageAdapter, WireCodec,
 };

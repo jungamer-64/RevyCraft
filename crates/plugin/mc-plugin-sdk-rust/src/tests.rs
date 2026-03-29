@@ -20,9 +20,9 @@ use mc_proto_common::{
     ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
     StatusRequest, TransportKind, WireCodec, WireFormatKind,
 };
-use revy_voxel_core::{
+use crate::{
     CapabilityAnnouncement, CoreEvent, GameplayCapability, GameplayProfileId, PlayerId,
-    PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
+    PlayerSnapshot, PluginBuildTag, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
 };
 use revy_voxel_model::{BlockPos, DimensionId, WorldMeta};
 use std::ffi::c_void;
@@ -376,7 +376,7 @@ fn capability_helpers_add_build_tags_without_changing_base_names() {
         announcement
             .build_tag
             .as_ref()
-            .map(revy_voxel_core::PluginBuildTag::as_str),
+            .map(PluginBuildTag::as_str),
         Some("protocol-reload-v2")
     );
 }
@@ -419,7 +419,7 @@ mod plugin_a {
             gameplay::gameplay_descriptor("plugin-a")
         }
 
-        fn capability_set(&self) -> revy_voxel_core::GameplayCapabilitySet {
+        fn capability_set(&self) -> crate::GameplayCapabilitySet {
             capabilities::gameplay_capabilities(&[GameplayCapability::RuntimeReload])
         }
 
@@ -468,7 +468,7 @@ mod plugin_b {
             gameplay::gameplay_descriptor("plugin-b")
         }
 
-        fn capability_set(&self) -> revy_voxel_core::GameplayCapabilitySet {
+        fn capability_set(&self) -> crate::GameplayCapabilitySet {
             capabilities::gameplay_capabilities(&[GameplayCapability::RuntimeReload])
         }
 

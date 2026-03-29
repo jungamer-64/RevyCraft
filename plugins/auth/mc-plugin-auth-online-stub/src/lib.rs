@@ -4,7 +4,7 @@ use mc_plugin_sdk_rust::auth::RustAuthPlugin;
 use mc_plugin_sdk_rust::capabilities::auth_capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
-use revy_voxel_core::{AuthCapability, AuthCapabilitySet, PlayerId};
+use mc_plugin_sdk_rust::{AuthCapability, AuthCapabilitySet, PlayerId};
 use uuid::Uuid;
 
 pub const ONLINE_STUB_AUTH_PROFILE_ID: &str = "mojang-online-v1";

@@ -18,7 +18,6 @@ name = "upgrade_runtime"
 path = "tests/upgrade_runtime_test.rs"
 
 [dependencies]
-revy-voxel-core = { path = "../../crates/core/revy-voxel-core" }
 mc-plugin-api = { path = "../../crates/plugin/mc-plugin-api" }
 mc-plugin-host = { path = "../../crates/plugin/mc-plugin-host" }
 mc-proto-common = { path = "../../crates/protocol/mc-proto-common" }

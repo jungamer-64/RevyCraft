@@ -20,7 +20,6 @@ in-process-testing = ["mc-plugin-sdk-rust/in-process-testing"]
 base64.workspace = true
 bedrock-jwt.workspace = true
 bedrockrs_proto.workspace = true
-revy-voxel-core = { path = "../../../crates/core/revy-voxel-core" }
 mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
 p384.workspace = true

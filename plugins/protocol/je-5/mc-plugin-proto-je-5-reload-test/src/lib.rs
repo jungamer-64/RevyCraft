@@ -10,7 +10,7 @@ use mc_proto_common::{
     SessionAdapter, StatusRequest, TransportKind, WireCodec,
 };
 use mc_proto_je_5::{JE_5_ADAPTER_ID, Je5Adapter};
-use revy_voxel_core::{
+use mc_plugin_sdk_rust::{
     CoreEvent, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
 };
 

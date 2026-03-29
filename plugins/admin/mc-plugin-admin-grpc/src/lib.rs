@@ -25,7 +25,7 @@ use mc_plugin_sdk_rust::admin_surface::{
 use mc_plugin_sdk_rust::capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
-use revy_voxel_core::{AdminSurfaceCapability, AdminSurfaceCapabilitySet};
+use mc_plugin_sdk_rust::{AdminSurfaceCapability, AdminSurfaceCapabilitySet};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;

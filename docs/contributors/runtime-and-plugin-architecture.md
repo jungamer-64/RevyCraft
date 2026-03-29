@@ -97,6 +97,8 @@ Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host 
 - admin-surface plugin
   console / gRPC などの operator surface、identity mapping、surface-owned config、process / handoff resource を担います。
 
+plugin / protocol authoring 側の依存もこの境界に合わせます。`mc-plugin-sdk-rust`、`mc-plugin-api`、`mc-proto-common` が公開 surface として shared semantic type を再公開するので、外側の crate は `revy-voxel-core` を直接依存先にせず、まずこれらの surface 経由で型を参照する前提で扱います。
+
 `revy-voxel-core` 自体は semantic command / event / inventory state machine に徹します。raw slot layout、JE の echo / reject、Bedrock の active window rewrite のような version / wire 差分は protocol plugin 側に残します。一方で reloadable boundary の観点では、`revy-voxel-core` は world snapshot だけではなく keepalive、dropped item、active mining、open window のような live-only state も含む `core runtime` として扱います。`revy-core` には block/chunk/container/mining のような voxel 語彙を持ち込みません。
 
 ## bootstrap 時の selection

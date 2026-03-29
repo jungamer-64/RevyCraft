@@ -1,8 +1,4 @@
 use super::*;
-use revy_voxel_core::{
-    AdminSurfaceCapability, AuthCapability, GameplayCapability, ProtocolCapability,
-    StorageCapability,
-};
 
 pub enum StaticPluginCapabilities {
     Protocol,

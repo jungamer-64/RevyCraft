@@ -5,7 +5,7 @@ use mc_plugin_sdk_rust::capabilities::auth_capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use reqwest::StatusCode;
-use revy_voxel_core::{AuthCapability, AuthCapabilitySet, PlayerId};
+use mc_plugin_sdk_rust::{AuthCapability, AuthCapabilitySet, PlayerId};
 use serde::Deserialize;
 use std::time::Duration;
 use uuid::Uuid;
