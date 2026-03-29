@@ -1,8 +1,7 @@
 use super::Je1710StorageAdapter;
-use mc_core::{
-    BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, CoreConfig, InventorySlot,
-    ItemStack, PlayerId, ServerCore,
-};
+use mc_content_api::{BlockEntityState, ContainerPropertyKey};
+use mc_core::{CoreConfig, PlayerId, ServerCore};
+use mc_model::{BlockPos, BlockState, ChunkColumn, ChunkPos, InventorySlot, ItemStack};
 use mc_proto_common::StorageAdapter;
 use std::collections::BTreeMap;
 use std::fs;
@@ -27,7 +26,7 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
     );
     let mut snapshot = core.snapshot();
     let mut custom_chunk = ChunkColumn::new(ChunkPos::new(4, 5));
-    custom_chunk.set_block(0, 0, 0, Some(mc_core::BlockState::new("minecraft:bedrock")));
+    custom_chunk.set_block(0, 0, 0, Some(BlockState::new("minecraft:bedrock")));
     snapshot.chunks.insert(custom_chunk.pos, custom_chunk);
     let chest_pos = BlockPos::new(64, 4, 80);
     snapshot
@@ -88,25 +87,19 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
             ],
             BTreeMap::from([
                 (
-                    mc_core::ContainerPropertyKey::new(
-                        mc_content_canonical::ids::FURNACE_BURN_LEFT,
-                    ),
+                    ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_BURN_LEFT),
                     120,
                 ),
                 (
-                    mc_core::ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_BURN_MAX),
+                    ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_BURN_MAX),
                     300,
                 ),
                 (
-                    mc_core::ContainerPropertyKey::new(
-                        mc_content_canonical::ids::FURNACE_COOK_PROGRESS,
-                    ),
+                    ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_COOK_PROGRESS),
                     42,
                 ),
                 (
-                    mc_core::ContainerPropertyKey::new(
-                        mc_content_canonical::ids::FURNACE_COOK_TOTAL,
-                    ),
+                    ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_COOK_TOTAL),
                     200,
                 ),
             ]),

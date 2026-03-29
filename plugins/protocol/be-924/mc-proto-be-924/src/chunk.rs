@@ -2,7 +2,7 @@ use bedrockrs_proto::V924;
 use bedrockrs_proto::v662::packets::LevelChunkPacket;
 use bedrockrs_proto::v662::types::ChunkPos as BedrockChunkPos;
 use mc_content_canonical::catalog;
-use mc_core::{BlockState, ChunkColumn, ChunkSection};
+use mc_model::{BlockState, ChunkColumn, ChunkSection};
 use mc_proto_common::ProtocolError;
 use nbtx::Value;
 use serde::Serialize;
@@ -213,7 +213,7 @@ fn bedrock_palette_entry(block: &BlockState) -> BedrockBlockPaletteEntry {
     let states = block
         .properties
         .iter()
-        .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+        .map(|(name, value): (&String, &String)| (name.clone(), Value::String(value.clone())))
         .collect::<BTreeMap<_, _>>();
     BedrockBlockPaletteEntry {
         name: block.key.as_str().to_string(),

@@ -1,9 +1,9 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::shared::{decode_option, encode_option};
-use mc_core::{
-    ContainerKindId, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
-    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack,
-    PlayerInventory,
+use mc_content_api::ContainerKindId;
+use mc_model::{
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerInventory,
 };
 
 pub(crate) fn encode_inventory_container(

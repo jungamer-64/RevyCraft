@@ -30,11 +30,12 @@ use bedrockrs_proto::v766::packets::ClientPlayMode;
 use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
 use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
-use mc_core::{
-    BlockPos, BlockState, ChunkColumn, ChunkPos, ContainerKindId, ContainerPropertyKey,
-    CoreCommand, CoreEvent, DroppedItemSnapshot, EntityId, InventoryClickButton,
-    InventoryClickTarget, InventoryClickValidation, InventorySlot, InventoryTransactionContext,
-    InventoryWindowContents, ItemStack, PlayerId, PlayerInventory, RuntimeCommand,
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
+use mc_core::{CoreCommand, CoreEvent, EntityId, PlayerId, RuntimeCommand};
+use mc_model::{
+    BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DroppedItemSnapshot,
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerInventory,
 };
 use mc_proto_be_common::__version_support::world::bedrock_actor_id;
 use mc_proto_common::{
@@ -513,7 +514,7 @@ fn decodes_legacy_inventory_transaction_item_use() {
         RuntimeCommand::Core(CoreCommand::PlaceBlock {
             player_id: decoded_player,
             position,
-            face: Some(mc_core::BlockFace::Top),
+            face: Some(BlockFace::Top),
             ..
         }) if decoded_player == player_id && position == BlockPos::new(2, 3, 4)
     ));
@@ -557,7 +558,7 @@ fn decodes_player_auth_input_item_use() {
         RuntimeCommand::Core(CoreCommand::DigBlock {
             player_id: decoded_player,
             position,
-            face: Some(mc_core::BlockFace::West),
+            face: Some(BlockFace::West),
             ..
         }) if decoded_player == player_id && position == BlockPos::new(5, 6, 7)
     ));
@@ -613,8 +614,8 @@ fn encodes_dropped_item_spawn_and_despawn_packets() {
                 entity_id: EntityId(77),
                 item: DroppedItemSnapshot {
                     item: item("minecraft:cobblestone", 1),
-                    position: mc_core::Vec3::new(1.5, 4.5, 0.5),
-                    velocity: mc_core::Vec3::new(0.0, 0.0, 0.0),
+                    position: mc_model::Vec3::new(1.5, 4.5, 0.5),
+                    velocity: mc_model::Vec3::new(0.0, 0.0, 0.0),
                 },
             },
             &play_context(),
@@ -775,7 +776,7 @@ fn decodes_player_action_destroy_packets_to_dig_statuses() {
                 player_id: decoded_player,
                 position,
                 status,
-                face: Some(mc_core::BlockFace::Top),
+                face: Some(BlockFace::Top),
             }) if decoded_player == player_id
                 && position == BlockPos::new(2, 4, 0)
                 && status == expected_status

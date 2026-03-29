@@ -4,6 +4,7 @@ use bedrockrs_proto::ProtoVersion;
 use bedrockrs_proto::V924;
 use bedrockrs_proto::compression::Compression as BedrockCompression;
 use binary_util::interfaces::{Reader, Writer};
+use mc_model::BlockPos;
 use rak_rs::client::DEFAULT_MTU;
 use rak_rs::connection::queue::{RecvQueue, SendQueue};
 use rak_rs::protocol::Magic;
@@ -531,7 +532,7 @@ impl BedrockTestClient {
 
     pub(crate) async fn place_block(
         &mut self,
-        position: mc_core::BlockPos,
+        position: BlockPos,
         face: i32,
     ) -> Result<(), RuntimeError> {
         self.send_play_payload(&bedrock_place_block_payload(position, face)?)
@@ -540,7 +541,7 @@ impl BedrockTestClient {
 
     pub(crate) async fn break_block(
         &mut self,
-        position: mc_core::BlockPos,
+        position: BlockPos,
         face: i32,
     ) -> Result<(), RuntimeError> {
         self.send_play_payload(&bedrock_break_block_payload(position, face)?)
@@ -549,7 +550,7 @@ impl BedrockTestClient {
 
     pub(crate) async fn start_break_block(
         &mut self,
-        position: mc_core::BlockPos,
+        position: BlockPos,
         face: i32,
     ) -> Result<(), RuntimeError> {
         self.send_play_payload(&bedrock_start_break_block_payload(position, face)?)
@@ -558,7 +559,7 @@ impl BedrockTestClient {
 
     pub(crate) async fn abort_break_block(
         &mut self,
-        position: mc_core::BlockPos,
+        position: BlockPos,
         face: i32,
     ) -> Result<(), RuntimeError> {
         self.send_play_payload(&bedrock_abort_break_block_payload(position, face)?)

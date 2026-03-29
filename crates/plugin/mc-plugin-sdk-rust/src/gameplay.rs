@@ -1,5 +1,7 @@
 use super::*;
+use mc_content_api::{BlockEntityState, ContainerKindId};
 use mc_core::{GameplayCapabilitySet, GameplayCommand, GameplayProfileId};
+use mc_model::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3};
 
 pub trait GameplayHost {
     fn log(&self, level: u32, message: &str) -> Result<(), String>;
@@ -8,26 +10,16 @@ pub trait GameplayHost {
 
     fn read_world_meta(&self) -> Result<WorldMeta, String>;
 
-    fn read_block_state(
-        &self,
-        position: mc_core::BlockPos,
-    ) -> Result<Option<mc_core::BlockState>, String>;
+    fn read_block_state(&self, position: BlockPos) -> Result<Option<BlockState>, String>;
 
-    fn read_block_entity(
-        &self,
-        position: mc_core::BlockPos,
-    ) -> Result<Option<mc_core::BlockEntityState>, String>;
+    fn read_block_entity(&self, position: BlockPos) -> Result<Option<BlockEntityState>, String>;
 
-    fn can_edit_block(
-        &self,
-        player_id: PlayerId,
-        position: mc_core::BlockPos,
-    ) -> Result<bool, String>;
+    fn can_edit_block(&self, player_id: PlayerId, position: BlockPos) -> Result<bool, String>;
 
     fn set_player_pose(
         &self,
         player_id: PlayerId,
-        position: Option<mc_core::Vec3>,
+        position: Option<Vec3>,
         yaw: Option<f32>,
         pitch: Option<f32>,
         on_ground: bool,
@@ -38,8 +30,8 @@ pub trait GameplayHost {
     fn set_inventory_slot(
         &self,
         player_id: PlayerId,
-        slot: mc_core::InventorySlot,
-        stack: Option<mc_core::ItemStack>,
+        slot: InventorySlot,
+        stack: Option<ItemStack>,
     ) -> Result<(), String>;
 
     fn clear_mining(&self, player_id: PlayerId) -> Result<(), String>;
@@ -47,33 +39,21 @@ pub trait GameplayHost {
     fn begin_mining(
         &self,
         player_id: PlayerId,
-        position: mc_core::BlockPos,
+        position: BlockPos,
         duration_ms: u64,
     ) -> Result<(), String>;
 
-    fn open_container_at(
-        &self,
-        player_id: PlayerId,
-        position: mc_core::BlockPos,
-    ) -> Result<(), String>;
+    fn open_container_at(&self, player_id: PlayerId, position: BlockPos) -> Result<(), String>;
 
     fn open_virtual_container(
         &self,
         player_id: PlayerId,
-        kind: &mc_core::ContainerKindId,
+        kind: &ContainerKindId,
     ) -> Result<(), String>;
 
-    fn set_block(
-        &self,
-        position: mc_core::BlockPos,
-        block: Option<mc_core::BlockState>,
-    ) -> Result<(), String>;
+    fn set_block(&self, position: BlockPos, block: Option<BlockState>) -> Result<(), String>;
 
-    fn spawn_dropped_item(
-        &self,
-        position: mc_core::Vec3,
-        item: mc_core::ItemStack,
-    ) -> Result<(), String>;
+    fn spawn_dropped_item(&self, position: Vec3, item: ItemStack) -> Result<(), String>;
 
     fn emit_event(&self, event: mc_core::TargetedEvent) -> Result<(), String>;
 }

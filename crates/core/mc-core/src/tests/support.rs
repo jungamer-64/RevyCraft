@@ -1,5 +1,6 @@
 pub(super) use crate::*;
 
+use mc_content_canonical::catalog;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -28,7 +29,7 @@ pub(super) enum InventoryContainer {
 #[derive(Clone, Debug, Default)]
 struct TestContentBehavior;
 
-pub(super) fn test_content_behavior() -> Arc<dyn ContentBehavior> {
+pub(super) fn test_content_behavior() -> Arc<dyn mc_content_api::ContentBehavior> {
     Arc::new(TestContentBehavior)
 }
 
@@ -89,7 +90,7 @@ pub(super) fn furnace_property_key(property_id: u8) -> ContainerPropertyKey {
 
 pub(super) fn crafting_table_state(
     window: &crate::core::OpenInventoryWindow,
-) -> &crate::core::OpenContainerState {
+) -> &mc_content_api::OpenContainerState {
     assert_eq!(
         window.container.kind,
         container_kind(InventoryContainer::CraftingTable)
@@ -99,7 +100,7 @@ pub(super) fn crafting_table_state(
 
 pub(super) fn chest_state(
     window: &crate::core::OpenInventoryWindow,
-) -> &crate::core::OpenContainerState {
+) -> &mc_content_api::OpenContainerState {
     assert_eq!(
         window.container.kind,
         container_kind(InventoryContainer::Chest)
@@ -109,7 +110,7 @@ pub(super) fn chest_state(
 
 pub(super) fn chest_state_mut(
     window: &mut crate::core::OpenInventoryWindow,
-) -> &mut crate::core::OpenContainerState {
+) -> &mut mc_content_api::OpenContainerState {
     assert_eq!(
         window.container.kind,
         container_kind(InventoryContainer::Chest)
@@ -119,7 +120,7 @@ pub(super) fn chest_state_mut(
 
 pub(super) fn furnace_state(
     window: &crate::core::OpenInventoryWindow,
-) -> &crate::core::OpenContainerState {
+) -> &mc_content_api::OpenContainerState {
     assert_eq!(
         window.container.kind,
         container_kind(InventoryContainer::Furnace)
@@ -129,7 +130,7 @@ pub(super) fn furnace_state(
 
 pub(super) fn furnace_state_mut(
     window: &mut crate::core::OpenInventoryWindow,
-) -> &mut crate::core::OpenContainerState {
+) -> &mut mc_content_api::OpenContainerState {
     assert_eq!(
         window.container.kind,
         container_kind(InventoryContainer::Furnace)
@@ -338,6 +339,15 @@ pub(super) fn craft_input(index: u8) -> InventorySlot {
     InventorySlot::crafting_input(index).expect("craft input should exist")
 }
 
+pub(super) fn survival_mining_duration_ms_for_item(
+    block: &BlockState,
+    item: Option<&ItemStack>,
+) -> Option<u64> {
+    let behavior = test_content_behavior();
+    let tool = behavior.tool_spec_for_item(item);
+    behavior.survival_mining_duration_ms(block, tool)
+}
+
 fn creative_starter_inventory() -> PlayerInventory {
     let mut inventory = PlayerInventory::new_empty();
     for (slot, key) in (36_u8..45).zip([
@@ -424,7 +434,7 @@ fn container_spec(kind: &ContainerKindId) -> Option<ContainerSpec> {
     })
 }
 
-impl ContentBehavior for TestContentBehavior {
+impl mc_content_api::ContentBehavior for TestContentBehavior {
     fn generate_chunk(&self, _meta: &WorldMeta, chunk_pos: ChunkPos) -> ChunkColumn {
         let mut chunk = ChunkColumn::new(chunk_pos);
         for z in 0_u8..16 {
@@ -507,11 +517,11 @@ impl ContentBehavior for TestContentBehavior {
     }
 
     fn placeable_block_state_from_item_key(&self, key: &str) -> Option<BlockState> {
-        catalog::placeable_block_state_from_item_key(key)
+        mc_content_canonical::placeable_block_state_from_item_key(key)
     }
 
     fn is_supported_inventory_item(&self, key: &str) -> bool {
-        catalog::is_supported_inventory_item(key)
+        mc_content_canonical::item_supported_for_inventory(key)
     }
 
     fn starter_inventory(&self) -> PlayerInventory {
@@ -547,7 +557,7 @@ impl ContentBehavior for TestContentBehavior {
     }
 
     fn survival_drop_for_block(&self, block: &BlockState) -> Option<ItemStack> {
-        catalog::survival_drop_for_block(block)
+        mc_content_canonical::canonical_content().survival_drop_for_block(block)
     }
 
     fn normalize_container(&self, state: &mut OpenContainerState) {

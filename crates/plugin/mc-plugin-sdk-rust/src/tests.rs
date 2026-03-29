@@ -1,10 +1,10 @@
 use super::{__macro_support, admin_surface, capabilities, gameplay, manifest, protocol};
 use bytes::BytesMut;
 use mc_core::{
-    BlockPos, CapabilityAnnouncement, CoreEvent, DimensionId, GameplayCapability,
-    GameplayProfileId, PlayerId, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet,
-    RuntimeCommand, WorldMeta,
+    CapabilityAnnouncement, CoreEvent, GameplayCapability, GameplayProfileId, PlayerId,
+    PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
 };
+use mc_model::{BlockPos, DimensionId, WorldMeta};
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
 use mc_plugin_api::codec::admin::AdminPermission;
 use mc_plugin_api::codec::admin_surface::{

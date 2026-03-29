@@ -16,10 +16,11 @@ use encoding::{
     encode_position_and_look, encode_set_slot, encode_spawn_position, encode_time_update,
     encode_update_health, encode_window_items, encode_window_property,
 };
-use mc_core::{
-    BlockPos, BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, DroppedItemSnapshot,
-    EntityId, InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack,
-    PlayerSnapshot, RuntimeCommand, WorldMeta,
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
+use mc_core::{EntityId, PlayerSnapshot, RuntimeCommand};
+use mc_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
 };
 use mc_proto_common::{
     Edition, ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot, TransportKind,

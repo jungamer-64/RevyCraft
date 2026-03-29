@@ -1,6 +1,7 @@
 use super::chunk_nbt::{chunk_from_nbt, chunk_to_nbt};
 use super::nbt::{NbtTag, decompress_zlib, read_nbt, zlib_compress_nbt};
-use mc_core::{BlockEntityState, BlockPos, ChunkColumn, ChunkPos};
+use mc_content_api::BlockEntityState;
+use mc_model::{BlockPos, ChunkColumn, ChunkPos};
 use mc_proto_common::StorageError;
 use std::collections::BTreeMap;
 use std::fs;

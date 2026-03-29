@@ -1,5 +1,6 @@
 use super::slot_codec::{SlotEncoding, SlotNbtEncoding};
-use mc_core::{ContainerKindId, InventorySlot};
+use mc_content_api::ContainerKindId;
+use mc_model::InventorySlot;
 
 pub const PLAYER_WINDOW_CRAFTING_RESULT_SLOT: i16 = 0;
 pub const PLAYER_WINDOW_CRAFTING_INPUT_SLOTS: [i16; 4] = [1, 2, 3, 4];

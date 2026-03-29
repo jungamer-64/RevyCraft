@@ -11,7 +11,7 @@ description = "Canonical Minecraft-like content behavior for RevyCraft."
 
 [dependencies]
 mc-content-api = { path = "../mc-content-api" }
-mc-core = { path = "../../core/mc-core" }
+mc-model = { path = "../../model/mc-model" }
 serde.workspace = true
 
 [lints]

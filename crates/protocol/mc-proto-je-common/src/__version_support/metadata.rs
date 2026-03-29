@@ -1,5 +1,5 @@
 use crate::__version_support::inventory::{SlotEncoding, write_slot};
-use mc_core::ItemStack;
+use mc_model::ItemStack;
 use mc_proto_common::{PacketWriter, ProtocolError};
 
 pub fn write_empty_metadata_1_8(writer: &mut PacketWriter) {

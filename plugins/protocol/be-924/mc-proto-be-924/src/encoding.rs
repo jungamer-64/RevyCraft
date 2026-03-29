@@ -32,9 +32,11 @@ use bedrockrs_proto::v818::types::SyncedPlayerMovementSettings;
 use bedrockrs_proto::v898::packets::ResourcePackStackPacket;
 use bedrockrs_proto::v924::packets::StartGamePacket;
 use bedrockrs_proto::v924::types::LevelSettings;
-use mc_core::{
-    BlockPos, BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, DroppedItemSnapshot,
-    EntityId, InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
+use mc_core::{EntityId, PlayerSnapshot};
+use mc_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
+    ItemStack, WorldMeta,
 };
 use mc_proto_be_common::__version_support::world::{
     bedrock_actor_id, block_pos_to_network, vec3_to_bedrock,
@@ -257,9 +259,7 @@ pub(crate) fn encode_entity_despawn_packets(
                 target_actor_id: ActorUniqueID(bedrock_actor_id(*entity_id)),
             })])
         })
-        .map(|packet| packet.map(|payload| vec![payload]))
-        .collect::<Result<Vec<_>, _>>()
-        .map(|packets| packets.into_iter().flatten().collect())
+        .collect()
 }
 
 pub(crate) fn encode_chunk_batch_packets(
@@ -268,9 +268,8 @@ pub(crate) fn encode_chunk_batch_packets(
     chunks
         .iter()
         .map(level_chunk_packet)
-        .map(|packet| packet.and_then(|packet| encode_v924(&[packet]).map(|payload| vec![payload])))
-        .collect::<Result<Vec<_>, _>>()
-        .map(|packets| packets.into_iter().flatten().collect())
+        .map(|packet| packet.and_then(|packet| encode_v924(&[packet])))
+        .collect()
 }
 
 pub(crate) fn encode_block_changed_packets(

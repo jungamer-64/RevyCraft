@@ -4,10 +4,12 @@ use super::JE_1_18_2_MIN_SECTION_Y;
 use super::nbt::{
     NbtTag, as_compound, byte_field, int_field, list_field, short_field, string_field,
 };
+use mc_content_api::{
+    BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
+};
 use mc_content_canonical::catalog;
-use mc_core::{
-    BlockEntityKindId, BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, ChunkSection,
-    ContainerBlockEntityState, ContainerPropertyKey, ItemStack, expand_block_index,
+use mc_model::{
+    BlockPos, BlockState, ChunkColumn, ChunkPos, ChunkSection, ItemStack, expand_block_index,
 };
 use mc_proto_common::StorageError;
 use std::collections::{BTreeMap, BTreeSet};
@@ -361,7 +363,7 @@ fn encode_section(
 }
 
 fn encode_block_states(snapshot_section: Option<&ChunkSection>) -> NbtTag {
-    let mut palette = vec![BlockState::new(catalog::AIR)];
+    let mut palette: Vec<BlockState> = vec![BlockState::new(catalog::AIR)];
     let mut indices = vec![0_usize; 4096];
 
     if let Some(snapshot_section) = snapshot_section {
@@ -404,7 +406,9 @@ fn encode_palette_entry(state: &BlockState) -> NbtTag {
                 state
                     .properties
                     .iter()
-                    .map(|(key, value)| (key.clone(), NbtTag::String(value.clone())))
+                    .map(|(key, value): (&String, &String)| {
+                        (key.clone(), NbtTag::String(value.clone()))
+                    })
                     .collect(),
             ),
         );
@@ -491,7 +495,7 @@ fn encode_block_entities(
     existing_block_entities: &BTreeMap<BlockPos, BTreeMap<String, NbtTag>>,
 ) -> Result<Vec<NbtTag>, StorageError> {
     let mut encoded = Vec::new();
-    for (position, block_entity) in block_entities {
+    for (position, block_entity) in block_entities.iter() {
         if position.chunk_pos() != chunk.pos {
             continue;
         }
@@ -531,7 +535,7 @@ fn encode_block_entity(
                             .slots
                             .iter()
                             .enumerate()
-                            .filter_map(|(index, stack)| {
+                            .filter_map(|(index, stack): (usize, &Option<ItemStack>)| {
                                 stack.as_ref().map(|stack| encode_item_slot(index, stack))
                             })
                             .collect(),
@@ -552,7 +556,7 @@ fn encode_block_entity(
                             .iter()
                             .take(3)
                             .enumerate()
-                            .filter_map(|(index, stack)| {
+                            .filter_map(|(index, stack): (usize, &Option<ItemStack>)| {
                                 stack.as_ref().map(|stack| encode_item_slot(index, stack))
                             })
                             .collect(),
@@ -612,10 +616,10 @@ fn block_entity_kind_matches(
     }
 }
 
-fn container_property(container: &mc_core::ContainerBlockEntityState, key: &str) -> i16 {
+fn container_property(container: &ContainerBlockEntityState, key: &str) -> i16 {
     container
         .properties
-        .get(&mc_core::ContainerPropertyKey::new(key))
+        .get(&ContainerPropertyKey::new(key))
         .copied()
         .unwrap_or_default()
 }

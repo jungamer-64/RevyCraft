@@ -3,7 +3,7 @@ use super::nbt::{
     NbtTag, as_compound, byte_field, compound_field, int_field, long_field, read_gzip_nbt,
     string_field, write_gzip_nbt,
 };
-use mc_core::{BlockPos, DimensionId, WorldMeta};
+use mc_model::{BlockPos, DimensionId, WorldMeta};
 use mc_proto_common::StorageError;
 use std::collections::BTreeMap;
 use std::path::Path;

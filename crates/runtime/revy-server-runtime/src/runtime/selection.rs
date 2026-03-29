@@ -132,7 +132,7 @@ impl SelectionManager {
 pub(crate) struct SelectionResolver;
 
 impl SelectionResolver {
-    pub(crate) fn content_behavior() -> std::sync::Arc<dyn mc_core::ContentBehavior> {
+    pub(crate) fn content_behavior() -> std::sync::Arc<dyn mc_content_api::ContentBehavior> {
         canonical_content()
     }
 

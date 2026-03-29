@@ -10,9 +10,11 @@ mod runtime_ids;
 mod tests;
 
 use bedrockrs_proto::ProtoVersion;
-use mc_core::{
-    BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, CoreEvent, DroppedItemSnapshot,
-    EntityId, InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
+use mc_core::{CoreEvent, EntityId, PlayerSnapshot};
+use mc_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
+    ItemStack, WorldMeta,
 };
 use mc_proto_be_common::{BedrockAdapter, BedrockProfile};
 use mc_proto_common::{
@@ -224,7 +226,7 @@ impl BedrockProfile for Bedrock924Profile {
 
     fn encode_block_changed_packets(
         &self,
-        position: mc_core::BlockPos,
+        position: BlockPos,
         block: &BlockState,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         encoding::encode_block_changed_packets(position, block)
@@ -233,7 +235,7 @@ impl BedrockProfile for Bedrock924Profile {
     fn encode_block_breaking_progress_packets(
         &self,
         breaker_entity_id: EntityId,
-        position: mc_core::BlockPos,
+        position: BlockPos,
         stage: Option<u8>,
         duration_ms: u64,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {

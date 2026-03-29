@@ -1,11 +1,13 @@
 #![allow(clippy::multiple_crate_versions)]
+use mc_content_api::ContainerKindId;
 use mc_content_canonical::{
     canonical_content, item_supported_for_inventory, placeable_block_state_from_item_key,
 };
 use mc_core::{
-    BlockPos, CoreEvent, EventTarget, GameplayCapability, GameplayCommand, InteractionHand,
-    InventorySlot, ItemStack, PlayerId, PlayerSnapshot, TargetedEvent,
+    CoreEvent, EventTarget, GameplayCapability, GameplayCommand, PlayerId, PlayerSnapshot,
+    TargetedEvent,
 };
+use mc_model::{BlockFace, BlockPos, InteractionHand, InventorySlot, ItemStack};
 use mc_plugin_sdk_rust::capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::gameplay::{self, GameplayHost, RustGameplayPlugin};
@@ -16,7 +18,7 @@ pub struct CanonicalGameplayPlugin;
 
 const HOTBAR_SLOT_COUNT: u8 = 9;
 
-fn player_container_kind() -> mc_core::ContainerKindId {
+fn player_container_kind() -> ContainerKindId {
     canonical_content().player_container_kind()
 }
 
@@ -241,7 +243,7 @@ fn place_block(
     player_id: PlayerId,
     hand: InteractionHand,
     position: BlockPos,
-    face: Option<mc_core::BlockFace>,
+    face: Option<BlockFace>,
     held_item: Option<&ItemStack>,
 ) -> Result<(), String> {
     let content = canonical_content();
@@ -294,7 +296,7 @@ fn use_block(
     player_id: PlayerId,
     hand: InteractionHand,
     position: BlockPos,
-    face: Option<mc_core::BlockFace>,
+    face: Option<BlockFace>,
     held_item: Option<&ItemStack>,
 ) -> Result<(), String> {
     let content = canonical_content();

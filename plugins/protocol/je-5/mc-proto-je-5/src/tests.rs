@@ -1,9 +1,13 @@
 use crate::{JE_5_ADAPTER_ID, Je5Adapter, PROTOCOL_VERSION_1_7_10, VERSION_NAME_1_7_10};
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, ChunkPos, ConnectionId, CoreCommand, CoreConfig, CoreEvent,
-    DroppedItemSnapshot, EntityId, InventoryClickButton, InventoryClickTarget,
-    InventoryClickValidation, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
-    ItemStack, PlayerId, PlayerSnapshot, RuntimeCommand, ServerCore, SessionCommand, Vec3,
+    ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, PlayerId, PlayerSnapshot,
+    RuntimeCommand, ServerCore, SessionCommand,
+};
+use mc_model::{
+    BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot,
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, Vec3,
 };
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter,
@@ -16,28 +20,28 @@ use mc_proto_je_common::__version_support::{
 };
 use uuid::Uuid;
 
-fn player_container() -> mc_core::ContainerKindId {
-    mc_core::ContainerKindId::new("canonical:player")
+fn player_container() -> ContainerKindId {
+    ContainerKindId::new("canonical:player")
 }
 
-fn crafting_table_container() -> mc_core::ContainerKindId {
-    mc_core::ContainerKindId::new("canonical:crafting_table")
+fn crafting_table_container() -> ContainerKindId {
+    ContainerKindId::new("canonical:crafting_table")
 }
 
-fn chest_container() -> mc_core::ContainerKindId {
-    mc_core::ContainerKindId::new("canonical:chest_27")
+fn chest_container() -> ContainerKindId {
+    ContainerKindId::new("canonical:chest_27")
 }
 
-fn furnace_container() -> mc_core::ContainerKindId {
-    mc_core::ContainerKindId::new("canonical:furnace")
+fn furnace_container() -> ContainerKindId {
+    ContainerKindId::new("canonical:furnace")
 }
 
-fn furnace_property(id: u8) -> mc_core::ContainerPropertyKey {
+fn furnace_property(id: u8) -> ContainerPropertyKey {
     match id {
-        0 => mc_core::ContainerPropertyKey::new("canonical:furnace.burn_left"),
-        1 => mc_core::ContainerPropertyKey::new("canonical:furnace.burn_max"),
-        2 => mc_core::ContainerPropertyKey::new("canonical:furnace.cook_progress"),
-        3 => mc_core::ContainerPropertyKey::new("canonical:furnace.cook_total"),
+        0 => ContainerPropertyKey::new("canonical:furnace.burn_left"),
+        1 => ContainerPropertyKey::new("canonical:furnace.burn_max"),
+        2 => ContainerPropertyKey::new("canonical:furnace.cook_progress"),
+        3 => ContainerPropertyKey::new("canonical:furnace.cook_total"),
         _ => panic!("unsupported furnace property id {id}"),
     }
 }
@@ -50,7 +54,7 @@ fn player_snapshot(name: &str) -> PlayerSnapshot {
         yaw: 0.0,
         pitch: 0.0,
         on_ground: true,
-        dimension: mc_core::DimensionId::Overworld,
+        dimension: DimensionId::Overworld,
         health: 20.0,
         food: 20,
         food_saturation: 5.0,
@@ -179,7 +183,7 @@ fn encodes_status_and_login_events() {
 
 #[test]
 fn encodes_spawn_position_as_position_iii() {
-    let packet = crate::encoding::encode_spawn_position(mc_core::BlockPos::new(12, 64, -3));
+    let packet = crate::encoding::encode_spawn_position(BlockPos::new(12, 64, -3));
     let mut reader = PacketReader::new(&packet);
     assert_eq!(reader.read_varint().expect("packet id should decode"), 0x05);
     assert_eq!(reader.read_i32().expect("x should decode"), 12);
@@ -290,8 +294,8 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
     assert!(matches!(
         command,
         RuntimeCommand::Core(CoreCommand::UseBlock {
-            position: mc_core::BlockPos { x: 2, y: 3, z: 0 },
-            face: Some(mc_core::BlockFace::Top),
+            position: BlockPos { x: 2, y: 3, z: 0 },
+            face: Some(BlockFace::Top),
             held_item: Some(ref stack),
             ..
         }) if stack.key.as_str() == "minecraft:stone"
@@ -508,7 +512,7 @@ fn encodes_inventory_and_block_events() {
     let packets = adapter
         .encode_play_event_for(
             &CoreEvent::BlockChanged {
-                position: mc_core::BlockPos::new(2, 4, 0),
+                position: BlockPos::new(2, 4, 0),
                 block: Some(BlockState::new("minecraft:glass")),
             },
             &context,

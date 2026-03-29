@@ -1,9 +1,12 @@
 use crate::{JE_47_ADAPTER_ID, Je47Adapter, PROTOCOL_VERSION_1_8_X, VERSION_NAME_1_8_X};
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
 use mc_core::{
-    BlockPos, ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DimensionId, DroppedItemSnapshot,
-    EntityId, InteractionHand, InventoryClickButton, InventoryClickTarget,
-    InventoryClickValidation, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
-    ItemStack, PlayerId, PlayerSnapshot, RuntimeCommand, SessionCommand, Vec3,
+    CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot, RuntimeCommand, SessionCommand,
+};
+use mc_model::{
+    BlockFace, BlockPos, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot, InteractionHand,
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, Vec3,
 };
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter,
@@ -14,28 +17,28 @@ use mc_proto_je_common::__version_support::positions::pack_block_position;
 use mc_proto_je_common::__version_support::{blocks::legacy_block_state_id, inventory::read_slot};
 use uuid::Uuid;
 
-fn player_container() -> mc_core::ContainerKindId {
-    mc_core::ContainerKindId::new("canonical:player")
+fn player_container() -> ContainerKindId {
+    ContainerKindId::new("canonical:player")
 }
 
-fn crafting_table_container() -> mc_core::ContainerKindId {
-    mc_core::ContainerKindId::new("canonical:crafting_table")
+fn crafting_table_container() -> ContainerKindId {
+    ContainerKindId::new("canonical:crafting_table")
 }
 
-fn chest_container() -> mc_core::ContainerKindId {
-    mc_core::ContainerKindId::new("canonical:chest_27")
+fn chest_container() -> ContainerKindId {
+    ContainerKindId::new("canonical:chest_27")
 }
 
-fn furnace_container() -> mc_core::ContainerKindId {
-    mc_core::ContainerKindId::new("canonical:furnace")
+fn furnace_container() -> ContainerKindId {
+    ContainerKindId::new("canonical:furnace")
 }
 
-fn furnace_property(id: u8) -> mc_core::ContainerPropertyKey {
+fn furnace_property(id: u8) -> ContainerPropertyKey {
     match id {
-        0 => mc_core::ContainerPropertyKey::new("canonical:furnace.burn_left"),
-        1 => mc_core::ContainerPropertyKey::new("canonical:furnace.burn_max"),
-        2 => mc_core::ContainerPropertyKey::new("canonical:furnace.cook_progress"),
-        3 => mc_core::ContainerPropertyKey::new("canonical:furnace.cook_total"),
+        0 => ContainerPropertyKey::new("canonical:furnace.burn_left"),
+        1 => ContainerPropertyKey::new("canonical:furnace.burn_max"),
+        2 => ContainerPropertyKey::new("canonical:furnace.cook_progress"),
+        3 => ContainerPropertyKey::new("canonical:furnace.cook_total"),
         _ => panic!("unsupported furnace property id {id}"),
     }
 }
@@ -211,7 +214,7 @@ fn decodes_play_packets_into_core_commands() {
 
     let mut placement = PacketWriter::default();
     placement.write_varint(0x08);
-    placement.write_i64(pack_block_position(mc_core::BlockPos::new(2, 3, 4)));
+    placement.write_i64(pack_block_position(BlockPos::new(2, 3, 4)));
     placement.write_i8(1);
     placement.write_i16(54);
     placement.write_u8(1);
@@ -228,8 +231,8 @@ fn decodes_play_packets_into_core_commands() {
         command,
         RuntimeCommand::Core(CoreCommand::UseBlock {
             hand: InteractionHand::Main,
-            position: mc_core::BlockPos { x: 2, y: 3, z: 4 },
-            face: Some(mc_core::BlockFace::Top),
+            position: BlockPos { x: 2, y: 3, z: 4 },
+            face: Some(BlockFace::Top),
             held_item: Some(ref stack),
             ..
         }) if stack.key.as_str() == "minecraft:chest" && stack.count == 1
@@ -427,8 +430,8 @@ fn encodes_block_change_packets() {
     let packet = adapter
         .encode_play_event_for(
             &CoreEvent::BlockChanged {
-                position: mc_core::BlockPos::new(2, 3, 4),
-                block: Some(mc_core::BlockState::new("minecraft:glass")),
+                position: BlockPos::new(2, 3, 4),
+                block: Some(mc_model::BlockState::new("minecraft:glass")),
             },
             &PlayEncodingContext {
                 player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"block-change-18")),
@@ -441,11 +444,11 @@ fn encodes_block_change_packets() {
     assert_eq!(reader.read_varint().expect("packet id should decode"), 0x23);
     assert_eq!(
         reader.read_i64().expect("position should decode"),
-        pack_block_position(mc_core::BlockPos::new(2, 3, 4))
+        pack_block_position(BlockPos::new(2, 3, 4))
     );
     assert_eq!(
         reader.read_varint().expect("state id should decode"),
-        legacy_block_state_id(&mc_core::BlockState::new("minecraft:glass"))
+        legacy_block_state_id(&mc_model::BlockState::new("minecraft:glass"))
     );
 }
 

@@ -19,6 +19,7 @@ bedrockrs_network.workspace = true
 bedrockrs_proto.workspace = true
 bytes.workspace = true
 libloading.workspace = true
+mc-content-api = { path = "../../content/mc-content-api" }
 mc-content-canonical = { path = "../../content/mc-content-canonical" }
 mc-core = { path = "../../core/mc-core" }
 mc-plugin-api = { path = "../../plugin/mc-plugin-api" }
@@ -62,6 +63,7 @@ mc-proto-je-340 = { path = "../../../plugins/protocol/je-340/mc-proto-je-340" }
 mc-proto-je-404 = { path = "../../../plugins/protocol/je-404/mc-proto-je-404" }
 mc-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-proto-je-5" }
 mc-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-proto-je-47" }
+mc-model = { path = "../../model/mc-model" }
 binary-util = "0.3.4"
 rak-rs = { version = "0.3.3", default-features = false, features = ["async_tokio", "mcpe"] }
 base64.workspace = true

@@ -8,9 +8,11 @@ use crate::{
     PACKET_CB_TRANSACTION, PACKET_CB_UPDATE_HEALTH, PACKET_CB_WINDOW_ITEMS,
     PACKET_CB_WINDOW_PROPERTY,
 };
-use mc_core::{
-    BlockPos, ChunkColumn, ContainerKindId, DimensionId, DroppedItemSnapshot, EntityId,
-    InventoryWindowContents, PlayerSnapshot, WorldMeta,
+use mc_content_api::ContainerKindId;
+use mc_core::{EntityId, PlayerSnapshot};
+use mc_model::{
+    BlockPos, BlockState, ChunkColumn, DimensionId, DroppedItemSnapshot, InventoryWindowContents,
+    ItemStack, WorldMeta,
 };
 use mc_proto_common::{PacketWriter, ProtocolError};
 use mc_proto_je_common::__version_support::{
@@ -184,7 +186,7 @@ pub(crate) fn encode_destroy_entities(entity_ids: &[EntityId]) -> Result<Vec<u8>
     Ok(writer.into_inner())
 }
 
-pub(crate) fn encode_block_change(position: BlockPos, block: &mc_core::BlockState) -> Vec<u8> {
+pub(crate) fn encode_block_change(position: BlockPos, block: &BlockState) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_BLOCK_CHANGE);
     writer.write_i64(pack_block_position(position));
@@ -208,7 +210,7 @@ pub(crate) fn encode_block_break_animation(
 pub(crate) fn encode_set_slot(
     window_id: i8,
     slot: i16,
-    stack: Option<&mc_core::ItemStack>,
+    stack: Option<&ItemStack>,
 ) -> Result<Vec<u8>, ProtocolError> {
     let mut writer = PacketWriter::default();
     writer.write_varint(PACKET_CB_SET_SLOT);

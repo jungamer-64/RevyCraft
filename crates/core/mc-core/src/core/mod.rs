@@ -14,16 +14,16 @@ use crate::events::{CoreEvent, EventTarget, TargetedEvent};
 use crate::inventory::{InventoryWindowContents, ItemStack, PlayerInventory};
 use crate::player::PlayerSnapshot;
 use crate::world::{
-    BlockEntityState, BlockPos, ChunkColumn, ChunkPos, ContainerBlockEntityState, DimensionId,
-    DroppedItemSnapshot, WorldMeta, required_chunks,
+    BlockEntityState, BlockPos, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot, WorldMeta,
+    required_chunks,
 };
 use crate::{DEFAULT_KEEPALIVE_INTERVAL_MS, DEFAULT_KEEPALIVE_TIMEOUT_MS, EntityId, PlayerId};
-use mc_content_api::{BlockEntityKindId, ContainerKindId, ContainerSpec, MiningToolSpec};
+use mc_content_api::{ContainerKindId, ContentBehavior, MiningToolSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-pub use self::inventory::{ContainerBinding, OpenContainerState, OpenInventoryWindow};
+pub use self::inventory::OpenInventoryWindow;
 use self::state_backend::CoreStateMut;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,69 +168,6 @@ pub(super) struct SessionStore {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemScheduler;
-
-pub trait ContentBehavior: std::fmt::Debug + Send + Sync + 'static {
-    fn generate_chunk(&self, meta: &WorldMeta, chunk_pos: ChunkPos) -> ChunkColumn;
-
-    fn player_container_kind(&self) -> ContainerKindId;
-
-    fn container_spec(&self, kind: &ContainerKindId) -> Option<ContainerSpec>;
-
-    fn container_title(&self, kind: &ContainerKindId) -> String;
-
-    fn container_kind_for_block(&self, block: &crate::BlockState) -> Option<ContainerKindId>;
-
-    fn default_block_entity_for_block(
-        &self,
-        block: &crate::BlockState,
-    ) -> Option<ContainerBlockEntityState>;
-
-    fn default_block_entity_for_kind(
-        &self,
-        kind: &BlockEntityKindId,
-    ) -> Option<ContainerBlockEntityState>;
-
-    fn block_entity_kind_for_container(&self, kind: &ContainerKindId) -> Option<BlockEntityKindId>;
-
-    fn container_kind_for_block_entity(
-        &self,
-        entity: &ContainerBlockEntityState,
-    ) -> Option<ContainerKindId>;
-
-    fn is_air_block(&self, block: &crate::BlockState) -> bool;
-
-    fn is_unbreakable_block(&self, block: &crate::BlockState) -> bool;
-
-    fn placeable_block_state_from_item_key(&self, key: &str) -> Option<crate::BlockState>;
-
-    fn is_supported_inventory_item(&self, key: &str) -> bool;
-
-    fn starter_inventory(&self) -> PlayerInventory;
-
-    fn tool_spec_for_item(&self, item: Option<&ItemStack>) -> Option<MiningToolSpec>;
-
-    fn survival_mining_duration_ms(
-        &self,
-        block: &crate::BlockState,
-        tool: Option<MiningToolSpec>,
-    ) -> Option<u64>;
-
-    fn survival_drop_for_block(&self, block: &crate::BlockState) -> Option<ItemStack>;
-
-    fn normalize_container(&self, state: &mut OpenContainerState);
-
-    fn normalize_player_inventory(&self, inventory: &mut PlayerInventory);
-
-    fn try_take_output(
-        &self,
-        kind: &ContainerKindId,
-        local_slots: &mut Vec<Option<ItemStack>>,
-        cursor: &mut Option<ItemStack>,
-        button: crate::InventoryClickButton,
-    ) -> bool;
-
-    fn tick_container(&self, state: &mut OpenContainerState);
-}
 
 #[derive(Clone, Debug)]
 pub struct ServerCore {

@@ -1,67 +1,7 @@
 use crate::inventory::{InventoryWindowContents, ItemStack, PlayerInventory};
-use crate::world::{BlockPos, ContainerBlockEntityState};
-use mc_content_api::{BlockEntityKindId, ContainerKindId, ContainerPropertyKey};
+use mc_content_api::{ContainerBlockEntityState, ContainerPropertyKey, OpenContainerState};
+use mc_model::BlockPos;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ContainerBinding {
-    Virtual,
-    Block {
-        position: BlockPos,
-        block_entity_kind: BlockEntityKindId,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpenContainerState {
-    pub kind: ContainerKindId,
-    pub binding: ContainerBinding,
-    pub local_slots: Vec<Option<ItemStack>>,
-    #[serde(default)]
-    pub properties: BTreeMap<ContainerPropertyKey, i16>,
-}
-
-impl OpenContainerState {
-    #[must_use]
-    pub fn world_position(&self) -> Option<BlockPos> {
-        match self.binding {
-            ContainerBinding::Virtual => None,
-            ContainerBinding::Block { position, .. } => Some(position),
-        }
-    }
-
-    #[must_use]
-    pub fn block_entity_kind(&self) -> Option<&BlockEntityKindId> {
-        match &self.binding {
-            ContainerBinding::Virtual => None,
-            ContainerBinding::Block {
-                block_entity_kind, ..
-            } => Some(block_entity_kind),
-        }
-    }
-
-    #[must_use]
-    pub fn block_entity_state(&self) -> Option<ContainerBlockEntityState> {
-        Some(ContainerBlockEntityState {
-            kind: self.block_entity_kind()?.clone(),
-            slots: self.local_slots.clone(),
-            properties: self.properties.clone(),
-        })
-    }
-
-    pub(super) fn local_slot_mut(&mut self, index: u16) -> Option<&mut Option<ItemStack>> {
-        self.local_slots.get_mut(usize::from(index))
-    }
-
-    #[must_use]
-    pub(crate) fn property_entries(&self) -> Vec<(ContainerPropertyKey, i16)> {
-        self.properties
-            .iter()
-            .map(|(property, value)| (property.clone(), *value))
-            .collect()
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenInventoryWindow {

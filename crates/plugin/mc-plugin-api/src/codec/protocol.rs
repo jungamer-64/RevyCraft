@@ -296,11 +296,15 @@ mod tests {
         ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_protocol_request,
         decode_protocol_response, encode_protocol_request, encode_protocol_response,
     };
+    use mc_content_api::ContainerKindId;
     use mc_core::{
-        BlockPos, CapabilityAnnouncement, ChunkColumn, ConnectionId, ContainerKindId, CoreCommand,
-        CoreEvent, EntityId, GameplayCapabilitySet, GameplayProfileId, InventorySlot, ItemStack,
-        PlayerId, PlayerInventory, PlayerSnapshot, PluginGenerationId, ProtocolCapability,
-        ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet, Vec3, WorldMeta,
+        CapabilityAnnouncement, ConnectionId, CoreCommand, CoreEvent, EntityId,
+        GameplayCapabilitySet, GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId,
+        ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet,
+    };
+    use mc_model::{
+        BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, InventorySlot, ItemStack,
+        PlayerInventory, Vec3, WorldMeta,
     };
     use mc_proto_common::{
         BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState,
@@ -324,7 +328,7 @@ mod tests {
             yaw: 90.0,
             pitch: 15.0,
             on_ground: true,
-            dimension: mc_core::DimensionId::Overworld,
+            dimension: DimensionId::Overworld,
             health: 20.0,
             food: 18,
             food_saturation: 5.0,
@@ -338,7 +342,7 @@ mod tests {
             level_name: "world".to_string(),
             seed: 99,
             spawn: BlockPos::new(0, 64, 0),
-            dimension: mc_core::DimensionId::Overworld,
+            dimension: DimensionId::Overworld,
             age: 10,
             time: 20,
             level_type: "FLAT".to_string(),
@@ -371,8 +375,8 @@ mod tests {
     }
 
     fn sample_event() -> CoreEvent {
-        let mut chunk = ChunkColumn::new(mc_core::ChunkPos::new(0, 0));
-        chunk.set_block(1, 64, 1, Some(mc_core::BlockState::new("minecraft:stone")));
+        let mut chunk = ChunkColumn::new(ChunkPos::new(0, 0));
+        chunk.set_block(1, 64, 1, Some(BlockState::new("minecraft:stone")));
         CoreEvent::PlayBootstrap {
             player: sample_player(),
             entity_id: EntityId(7),

@@ -1,4 +1,4 @@
-use mc_core::BlockPos;
+use mc_model::BlockPos;
 use num_traits::ToPrimitive;
 
 #[must_use]

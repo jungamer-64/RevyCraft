@@ -1,13 +1,8 @@
 use crate::PlayerId;
-use crate::inventory::PlayerInventory;
-use crate::world::{DimensionId, Vec3};
+use mc_model::{DimensionId, PlayerInventory, Vec3};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InteractionHand {
-    Main,
-    Offhand,
-}
+pub(crate) use mc_model::InteractionHand;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlayerSnapshot {

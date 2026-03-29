@@ -2,9 +2,11 @@ use super::chunk_nbt;
 use super::level;
 use super::nbt::{NbtTag, read_gzip_nbt, write_gzip_nbt, zlib_compress_nbt};
 use super::{JE_1_18_2_DATA_VERSION, Je1182StoragePlugin};
-use mc_core::{
-    BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, InventorySlot,
-    ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, Vec3, WorldMeta, WorldSnapshot,
+use mc_content_api::{BlockEntityState, ContainerPropertyKey};
+use mc_core::{PlayerId, PlayerSnapshot, WorldSnapshot};
+use mc_model::{
+    BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, InventorySlot, ItemStack,
+    PlayerInventory, Vec3, WorldMeta,
 };
 use mc_plugin_sdk_rust::storage::RustStoragePlugin;
 use mc_proto_common::StorageError;
@@ -243,25 +245,19 @@ fn sample_snapshot() -> WorldSnapshot {
             ],
             BTreeMap::from([
                 (
-                    mc_core::ContainerPropertyKey::new(
-                        mc_content_canonical::ids::FURNACE_BURN_LEFT,
-                    ),
+                    ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_BURN_LEFT),
                     40,
                 ),
                 (
-                    mc_core::ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_BURN_MAX),
+                    ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_BURN_MAX),
                     200,
                 ),
                 (
-                    mc_core::ContainerPropertyKey::new(
-                        mc_content_canonical::ids::FURNACE_COOK_PROGRESS,
-                    ),
+                    ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_COOK_PROGRESS),
                     80,
                 ),
                 (
-                    mc_core::ContainerPropertyKey::new(
-                        mc_content_canonical::ids::FURNACE_COOK_TOTAL,
-                    ),
+                    ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_COOK_TOTAL),
                     200,
                 ),
             ]),

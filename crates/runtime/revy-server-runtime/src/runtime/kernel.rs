@@ -171,7 +171,7 @@ impl RuntimeKernel {
     ) -> Vec<TargetedEvent> {
         let mut state = self.state.lock().await;
         let crafting_table_kind =
-            mc_core::ContainerKindId::new(mc_content_canonical::ids::CRAFTING_TABLE);
+            mc_content_api::ContainerKindId::new(mc_content_canonical::ids::CRAFTING_TABLE);
         for _ in 1..window_id {
             let hidden_open_events = {
                 let mut tx = state.core.begin_gameplay_transaction(0);

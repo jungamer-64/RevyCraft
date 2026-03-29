@@ -5,10 +5,11 @@ use crate::{
     PACKET_SB_PLAYER_BLOCK_PLACEMENT, PACKET_SB_PLAYER_DIGGING, PACKET_SB_POSITION,
     PACKET_SB_POSITION_LOOK, PACKET_SB_SETTINGS,
 };
-use mc_core::{
-    BlockFace, BlockPos, CoreCommand, InteractionHand, InventoryClickButton, InventoryClickTarget,
-    InventoryClickValidation, InventoryTransactionContext, PlayerId, RuntimeCommand,
-    SessionCommand, Vec3,
+use mc_content_api::ContainerKindId;
+use mc_core::{CoreCommand, PlayerId, RuntimeCommand, SessionCommand};
+use mc_model::{
+    BlockFace, BlockPos, InteractionHand, InventoryClickButton, InventoryClickTarget,
+    InventoryClickValidation, InventoryTransactionContext, Vec3,
 };
 use mc_proto_common::{PacketReader, ProtocolError, ProtocolSessionSnapshot};
 use mc_proto_je_common::{
@@ -79,7 +80,7 @@ pub(crate) fn decode_play_packet(
             let slot = reader.read_i16()?;
             let stack = read_slot(&mut reader, crate::INVENTORY_SPEC.slot)?;
             Ok(inventory_slot(
-                &mc_core::ContainerKindId::new("canonical:player"),
+                &ContainerKindId::new("canonical:player"),
                 crate::INVENTORY_SPEC.layout,
                 slot,
             )

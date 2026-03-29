@@ -1,11 +1,12 @@
 use crate::handshake::decode_handshake_frame;
 use crate::login::{encode_login_success_packet, read_login_byte_array, write_login_byte_array};
 use crate::status::{encode_status_pong_packet, encode_status_response_packet};
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
 use mc_content_canonical::catalog;
-use mc_core::{
-    BlockPos, BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, CoreEvent,
-    DroppedItemSnapshot, EntityId, InventorySlot, InventoryTransactionContext,
-    InventoryWindowContents, ItemStack, PlayerSnapshot, RuntimeCommand, WorldMeta,
+use mc_core::{CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
+use mc_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,

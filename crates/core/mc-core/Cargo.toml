@@ -11,10 +11,14 @@ description = "Version-agnostic Minecraft world, player, event, and server-core 
 
 [dependencies]
 mc-content-api = { path = "../../content/mc-content-api" }
+mc-model = { path = "../../model/mc-model" }
 num-traits.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+mc-content-canonical = { path = "../../content/mc-content-canonical" }
 
 [lints]
 workspace = true

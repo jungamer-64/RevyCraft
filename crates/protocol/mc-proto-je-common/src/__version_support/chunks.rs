@@ -3,7 +3,7 @@ use crate::__version_support::blocks::{
 };
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
-use mc_core::ChunkColumn;
+use mc_model::ChunkColumn;
 use mc_proto_common::ProtocolError;
 use num_traits::ToPrimitive;
 use std::collections::BTreeMap;

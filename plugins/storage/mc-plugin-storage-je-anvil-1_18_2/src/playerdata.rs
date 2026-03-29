@@ -2,7 +2,8 @@ use super::nbt::{
     NbtTag, as_compound, byte_field, double_from_tag, float_field, float_from_tag, int_field,
     list_field, read_gzip_nbt, string_field, write_gzip_nbt,
 };
-use mc_core::{DimensionId, InventorySlot, PlayerId, PlayerInventory, PlayerSnapshot, Vec3};
+use mc_core::{PlayerId, PlayerSnapshot};
+use mc_model::{DimensionId, InventorySlot, ItemStack, PlayerInventory, Vec3};
 use mc_proto_common::StorageError;
 use std::collections::BTreeMap;
 use std::fs;
@@ -148,7 +149,7 @@ fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
         .slots
         .iter()
         .enumerate()
-        .filter_map(|(window_slot, stack)| {
+        .filter_map(|(window_slot, stack): (usize, &Option<ItemStack>)| {
             let stack = stack.as_ref()?;
             let nbt_slot = window_slot_to_playerdata_slot(
                 u8::try_from(window_slot).expect("window slot should fit into u8"),
@@ -197,7 +198,7 @@ fn inventory_from_tag(tag: &NbtTag) -> Result<PlayerInventory, StorageError> {
     Ok(inventory)
 }
 
-fn item_stack_to_nbt(stack: &mc_core::ItemStack, slot: i8) -> NbtTag {
+fn item_stack_to_nbt(stack: &ItemStack, slot: i8) -> NbtTag {
     let mut compound = BTreeMap::new();
     compound.insert("Slot".to_string(), NbtTag::Byte(slot));
     compound.insert(
@@ -214,9 +215,7 @@ fn item_stack_to_nbt(stack: &mc_core::ItemStack, slot: i8) -> NbtTag {
     NbtTag::Compound(compound)
 }
 
-fn item_stack_from_nbt(
-    compound: &BTreeMap<String, NbtTag>,
-) -> Result<mc_core::ItemStack, StorageError> {
+fn item_stack_from_nbt(compound: &BTreeMap<String, NbtTag>) -> Result<ItemStack, StorageError> {
     let key = string_field(compound, "id")?;
     let count = u8::try_from(byte_field(compound, "Count")?)
         .map_err(|_| StorageError::InvalidData("negative item count not supported".to_string()))?;
@@ -234,7 +233,7 @@ fn item_stack_from_nbt(
         }
         None => 0,
     };
-    Ok(mc_core::ItemStack::new(key, count, damage))
+    Ok(ItemStack::new(key, count, damage))
 }
 
 fn validate_item_keys(

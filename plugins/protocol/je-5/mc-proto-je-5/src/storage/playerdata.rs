@@ -2,7 +2,8 @@ use super::nbt::{
     NbtTag, as_compound, byte_field, double_from_tag, float_field, float_from_tag, int_field,
     list_field, long_field, read_gzip_nbt, short_field, string_field, write_gzip_nbt,
 };
-use mc_core::{DimensionId, InventorySlot, PlayerId, PlayerInventory, PlayerSnapshot, Vec3};
+use mc_core::{PlayerId, PlayerSnapshot};
+use mc_model::{DimensionId, InventorySlot, PlayerInventory, Vec3};
 use mc_proto_common::StorageError;
 use mc_proto_je_common::__version_support::blocks::{legacy_item, semantic_item};
 use std::collections::BTreeMap;
@@ -133,25 +134,27 @@ fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
         .slots
         .iter()
         .enumerate()
-        .filter_map(|(window_slot, stack)| {
-            let stack = stack.as_ref()?;
-            let (item_id, damage) = legacy_item(stack)?;
-            let nbt_slot = window_slot_to_playerdata_slot(
-                u8::try_from(window_slot).expect("window slot should fit into u8"),
-            )?;
-            let mut compound = BTreeMap::new();
-            compound.insert("Slot".to_string(), NbtTag::Byte(nbt_slot));
-            compound.insert("id".to_string(), NbtTag::Short(item_id));
-            compound.insert(
-                "Damage".to_string(),
-                NbtTag::Short(i16::from_be_bytes(damage.to_be_bytes())),
-            );
-            compound.insert(
-                "Count".to_string(),
-                NbtTag::Byte(i8::try_from(stack.count).expect("count should fit into i8")),
-            );
-            Some(NbtTag::Compound(compound))
-        })
+        .filter_map(
+            |(window_slot, stack): (usize, &Option<mc_model::ItemStack>)| {
+                let stack = stack.as_ref()?;
+                let (item_id, damage) = legacy_item(stack)?;
+                let nbt_slot = window_slot_to_playerdata_slot(
+                    u8::try_from(window_slot).expect("window slot should fit into u8"),
+                )?;
+                let mut compound = BTreeMap::new();
+                compound.insert("Slot".to_string(), NbtTag::Byte(nbt_slot));
+                compound.insert("id".to_string(), NbtTag::Short(item_id));
+                compound.insert(
+                    "Damage".to_string(),
+                    NbtTag::Short(i16::from_be_bytes(damage.to_be_bytes())),
+                );
+                compound.insert(
+                    "Count".to_string(),
+                    NbtTag::Byte(i8::try_from(stack.count).expect("count should fit into i8")),
+                );
+                Some(NbtTag::Compound(compound))
+            },
+        )
         .collect();
     if let Some(stack) = inventory.offhand.as_ref()
         && let Some((item_id, damage)) = legacy_item(stack)

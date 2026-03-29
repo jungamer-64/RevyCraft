@@ -1,4 +1,5 @@
-use mc_core::{BlockFace, BlockPos, EntityId};
+use mc_core::EntityId;
+use mc_model::{BlockFace, BlockPos, Vec3 as ModelVec3};
 use mc_proto_common::ProtocolError;
 use num_traits::ToPrimitive;
 use vek::Vec3;
@@ -26,7 +27,7 @@ pub(crate) fn block_pos_from_network(
 }
 
 #[must_use]
-pub(crate) fn vec3_to_bedrock(position: mc_core::Vec3) -> Vec3<f32> {
+pub(crate) fn vec3_to_bedrock(position: ModelVec3) -> Vec3<f32> {
     Vec3::new(
         f64_to_bedrock_component(position.x),
         f64_to_bedrock_component(position.y),

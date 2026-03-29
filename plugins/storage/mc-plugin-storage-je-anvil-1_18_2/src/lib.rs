@@ -9,7 +9,8 @@ mod region;
 #[cfg(test)]
 mod tests;
 
-use mc_core::{ChunkColumn, ChunkPos, StorageCapability, StorageCapabilitySet, WorldSnapshot};
+use mc_core::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
+use mc_model::{ChunkColumn, ChunkPos};
 use mc_plugin_api::codec::storage::StorageDescriptor;
 use mc_plugin_sdk_rust::capabilities::{build_tag_contains, storage_capabilities};
 use mc_plugin_sdk_rust::export_plugin;

@@ -1,5 +1,6 @@
 use super::*;
 use bedrockrs_proto::V924;
+use mc_model::BlockPos;
 
 const BEDROCK_STONE_RUNTIME_ID: u32 = 2_532;
 const BEDROCK_AIR_RUNTIME_ID: u32 = 12_530;
@@ -129,9 +130,7 @@ async fn bedrock_block_changes_are_broadcast_to_mixed_java_clients() -> Result<(
     let _ = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::StartGame, 32).await?;
     let _ = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::LevelChunk, 64).await?;
 
-    bedrock
-        .place_block(mc_core::BlockPos::new(2, 3, 0), 1)
-        .await?;
+    bedrock.place_block(BlockPos::new(2, 3, 0), 1).await?;
 
     let legacy_place = read_until_java_packet(
         &mut legacy,
@@ -168,9 +167,7 @@ async fn bedrock_block_changes_are_broadcast_to_mixed_java_clients() -> Result<(
         (2, 4, 0, 16)
     );
 
-    bedrock
-        .break_block(mc_core::BlockPos::new(2, 4, 0), 1)
-        .await?;
+    bedrock.break_block(BlockPos::new(2, 4, 0), 1).await?;
 
     let legacy_break = read_until_java_packet(
         &mut legacy,
@@ -243,9 +240,7 @@ async fn bedrock_survival_block_changes_and_inventory_decrement_are_broadcast_to
     let _ = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::StartGame, 32).await?;
     let _ = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::LevelChunk, 64).await?;
 
-    bedrock
-        .place_block(mc_core::BlockPos::new(2, 3, 0), 1)
-        .await?;
+    bedrock.place_block(BlockPos::new(2, 3, 0), 1).await?;
 
     let legacy_place = read_until_java_packet(
         &mut legacy,
@@ -294,9 +289,7 @@ async fn bedrock_survival_block_changes_and_inventory_decrement_are_broadcast_to
         other => panic!("expected inventory slot packet, got {other:?}"),
     }
 
-    bedrock
-        .start_break_block(mc_core::BlockPos::new(2, 2, 0), 1)
-        .await?;
+    bedrock.start_break_block(BlockPos::new(2, 2, 0), 1).await?;
     let cracking =
         read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::LevelEvent, 64).await?;
     let (event_id, x, y, z, data) = bedrock_level_event_from_packet(&cracking)?;
@@ -377,15 +370,11 @@ async fn bedrock_survival_abort_cancels_block_break_and_emits_stop_cracking()
     let _ = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::StartGame, 32).await?;
     let _ = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::LevelChunk, 64).await?;
 
-    bedrock
-        .start_break_block(mc_core::BlockPos::new(2, 2, 0), 1)
-        .await?;
+    bedrock.start_break_block(BlockPos::new(2, 2, 0), 1).await?;
     let start = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::LevelEvent, 64).await?;
     assert_eq!(bedrock_level_event_from_packet(&start)?.0, 3600);
 
-    bedrock
-        .abort_break_block(mc_core::BlockPos::new(2, 2, 0), 1)
-        .await?;
+    bedrock.abort_break_block(BlockPos::new(2, 2, 0), 1).await?;
     let stop = read_until_bedrock_packet(&mut bedrock, TestBedrockPacket::LevelEvent, 64).await?;
     assert_eq!(bedrock_level_event_from_packet(&stop)?.0, 3601);
 

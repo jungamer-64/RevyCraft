@@ -15,9 +15,8 @@ pub use self::window_items::window_items;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_core::{
-        ContainerKindId, InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory,
-    };
+    use mc_content_api::ContainerKindId;
+    use mc_model::{InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory};
     use mc_proto_common::{PacketReader, PacketWriter};
 
     fn player_container() -> ContainerKindId {

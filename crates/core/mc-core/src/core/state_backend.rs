@@ -32,8 +32,8 @@ pub(super) struct TxOverlay {
 }
 
 pub(super) trait CoreStateRead {
-    fn content_behavior(&self) -> &dyn super::ContentBehavior;
-    fn content_behavior_arc(&self) -> Arc<dyn super::ContentBehavior>;
+    fn content_behavior(&self) -> &dyn mc_content_api::ContentBehavior;
+    fn content_behavior_arc(&self) -> Arc<dyn mc_content_api::ContentBehavior>;
     fn config(&self) -> &CoreConfig;
     fn world_meta_ref(&self) -> &WorldMeta;
     fn block_state(&self, position: BlockPos) -> Option<BlockState>;
@@ -321,11 +321,11 @@ impl<'a> OverlayStateRef<'a> {
 }
 
 impl CoreStateRead for BaseState<'_> {
-    fn content_behavior(&self) -> &dyn super::ContentBehavior {
+    fn content_behavior(&self) -> &dyn mc_content_api::ContentBehavior {
         self.core.content_behavior.as_ref()
     }
 
-    fn content_behavior_arc(&self) -> Arc<dyn super::ContentBehavior> {
+    fn content_behavior_arc(&self) -> Arc<dyn mc_content_api::ContentBehavior> {
         self.view().content_behavior_arc()
     }
 
@@ -407,11 +407,11 @@ impl CoreStateRead for BaseState<'_> {
 }
 
 impl CoreStateRead for BaseStateRef<'_> {
-    fn content_behavior(&self) -> &dyn super::ContentBehavior {
+    fn content_behavior(&self) -> &dyn mc_content_api::ContentBehavior {
         self.core.content_behavior.as_ref()
     }
 
-    fn content_behavior_arc(&self) -> Arc<dyn super::ContentBehavior> {
+    fn content_behavior_arc(&self) -> Arc<dyn mc_content_api::ContentBehavior> {
         self.core.content_behavior.clone()
     }
 
@@ -741,11 +741,11 @@ impl CoreStateMut for BaseState<'_> {
 }
 
 impl CoreStateRead for OverlayState<'_> {
-    fn content_behavior(&self) -> &dyn super::ContentBehavior {
+    fn content_behavior(&self) -> &dyn mc_content_api::ContentBehavior {
         self.base.content_behavior.as_ref()
     }
 
-    fn content_behavior_arc(&self) -> Arc<dyn super::ContentBehavior> {
+    fn content_behavior_arc(&self) -> Arc<dyn mc_content_api::ContentBehavior> {
         self.view().content_behavior_arc()
     }
 
@@ -827,11 +827,11 @@ impl CoreStateRead for OverlayState<'_> {
 }
 
 impl CoreStateRead for OverlayStateRef<'_> {
-    fn content_behavior(&self) -> &dyn super::ContentBehavior {
+    fn content_behavior(&self) -> &dyn mc_content_api::ContentBehavior {
         self.base.content_behavior.as_ref()
     }
 
-    fn content_behavior_arc(&self) -> Arc<dyn super::ContentBehavior> {
+    fn content_behavior_arc(&self) -> Arc<dyn mc_content_api::ContentBehavior> {
         self.base.content_behavior.clone()
     }
 

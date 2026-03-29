@@ -15,10 +15,11 @@ use encoding::{
     encode_set_slot, encode_spawn_position, encode_time_update, encode_update_health,
     encode_window_items, encode_window_property,
 };
-use mc_core::{
-    BlockPos, BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, DroppedItemSnapshot,
-    EntityId, InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack,
-    PlayerSnapshot, RuntimeCommand, WorldMeta,
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
+use mc_core::{EntityId, PlayerSnapshot, RuntimeCommand};
+use mc_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
 };
 use mc_proto_common::{
     ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot, TransportKind, WireFormatKind,
@@ -136,12 +137,7 @@ impl JavaEditionProfile for Je340Profile {
     }
 
     fn encode_chunk_batch(&self, chunks: &[ChunkColumn]) -> Result<Vec<Vec<u8>>, ProtocolError> {
-        chunks
-            .iter()
-            .map(encode_chunk)
-            .map(|packet| packet.map(|packet| vec![packet]))
-            .collect::<Result<Vec<_>, _>>()
-            .map(|packets| packets.into_iter().flatten().collect())
+        chunks.iter().map(encode_chunk).collect()
     }
 
     fn encode_entity_spawn(

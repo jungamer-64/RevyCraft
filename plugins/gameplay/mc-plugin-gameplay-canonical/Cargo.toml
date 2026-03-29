@@ -17,8 +17,10 @@ disable-exported-symbols = []
 in-process-testing = ["mc-plugin-sdk-rust/in-process-testing"]
 
 [dependencies]
+mc-content-api = { path = "../../../crates/content/mc-content-api" }
 mc-content-canonical = { path = "../../../crates/content/mc-content-canonical" }
 mc-core = { path = "../../../crates/core/mc-core" }
+mc-model = { path = "../../../crates/model/mc-model" }
 mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
 

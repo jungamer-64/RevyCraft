@@ -1,36 +1,17 @@
-use crate::inventory::{InventorySlot, InventoryWindowContents, ItemStack};
+use crate::inventory::InventoryWindowContents;
 use crate::player::{InteractionHand, PlayerSnapshot};
 use crate::world::{
     BlockFace, BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, Vec3, WorldMeta,
 };
 use crate::{ConnectionId, EntityId, PlayerId};
 use mc_content_api::{ContainerKindId, ContainerPropertyKey};
+use mc_model::{InventorySlot, ItemStack};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InventoryTransactionContext {
-    pub window_id: u8,
-    pub action_number: i16,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InventoryClickButton {
-    Left,
-    Right,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InventoryClickTarget {
-    Slot(InventorySlot),
-    Outside,
-    Unsupported,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum InventoryClickValidation {
-    StrictSlotEcho { clicked_item: Option<ItemStack> },
-    Authoritative,
-}
+pub(crate) use mc_model::{
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
+    InventoryTransactionContext,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CoreCommand {

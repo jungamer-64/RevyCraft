@@ -1,10 +1,42 @@
 use super::support::*;
 
+fn air() -> BlockState {
+    BlockState::new("minecraft:air")
+}
+
+fn grass_block() -> BlockState {
+    BlockState::new("minecraft:grass_block")
+}
+
+fn stone() -> BlockState {
+    BlockState::new("minecraft:stone")
+}
+
+fn glass() -> BlockState {
+    BlockState::new("minecraft:glass")
+}
+
+fn sand() -> BlockState {
+    BlockState::new("minecraft:sand")
+}
+
+fn dirt() -> BlockState {
+    BlockState::new("minecraft:dirt")
+}
+
+fn chest() -> BlockState {
+    BlockState::new("minecraft:chest")
+}
+
+fn is_air(block: &BlockState) -> bool {
+    block.key.as_str() == "minecraft:air"
+}
+
 fn block_change_count<F>(events: &[TargetedEvent], position: BlockPos, predicate: F) -> usize
 where
     F: Fn(&BlockState) -> bool,
 {
-    let air = BlockState::air();
+    let air = air();
     events
         .iter()
         .filter(|event| match &event.event {
@@ -55,7 +87,7 @@ fn snapshot_block(core: &ServerCore, position: BlockPos) -> BlockState {
             )
         })
         .flatten()
-        .unwrap_or_else(BlockState::air)
+        .unwrap_or_else(air)
 }
 
 fn dropped_item_entity_id(events: &[TargetedEvent], player_id: PlayerId) -> EntityId {
@@ -240,7 +272,7 @@ fn session_resync_events_cover_live_play_state_without_login_success() {
 #[test]
 fn chunk_column_stores_semantic_states() {
     let mut column = ChunkColumn::new(ChunkPos::new(0, 0));
-    column.set_block(1, 12, 2, Some(BlockState::grass_block()));
+    column.set_block(1, 12, 2, Some(grass_block()));
 
     assert_eq!(
         column
@@ -678,15 +710,13 @@ fn gameplay_begin_mining_direct_path_matches_manual_transaction_commit() {
         let player = tx
             .player_snapshot(player_id)
             .expect("player should be online during mining parity test");
-        let duration_ms = crate::catalog::survival_mining_duration_ms(
+        let duration_ms = survival_mining_duration_ms_for_item(
             tx.block_state(position)
                 .as_ref()
                 .expect("mined block should exist"),
-            crate::catalog::tool_spec_for_item(
-                player
-                    .inventory
-                    .selected_hotbar_stack(player.selected_hotbar_slot),
-            ),
+            player
+                .inventory
+                .selected_hotbar_stack(player.selected_hotbar_slot),
         )
         .unwrap_or(50);
         tx.begin_mining(player_id, position, duration_ms);
@@ -948,7 +978,7 @@ fn creative_place_and_break_emit_authoritative_corrections() {
         },
         0,
     );
-    assert!(block_change_count(&break_events, corrected_block, BlockState::is_air) >= 2);
+    assert!(block_change_count(&break_events, corrected_block, is_air) >= 2);
 }
 
 #[test]
@@ -1282,10 +1312,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
         },
         0,
     );
-    assert_eq!(
-        block_change_count(&reject_break, chest_pos, BlockState::is_air),
-        0
-    );
+    assert_eq!(block_change_count(&reject_break, chest_pos, is_air), 0);
     assert_eq!(
         core.snapshot()
             .block_entities
@@ -1335,7 +1362,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
         },
         0,
     );
-    assert!(block_change_count(&break_events, chest_pos, BlockState::is_air) >= 2);
+    assert!(block_change_count(&break_events, chest_pos, is_air) >= 2);
     assert_container_closed(&break_events, first, 1);
     assert_container_closed(&break_events, second, 1);
     let close_index = break_events
@@ -1360,7 +1387,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
                     CoreEvent::BlockChanged { position, block }
                 ) if *event_player_id == first
                     && *position == chest_pos
-                    && block.as_ref().is_none_or(BlockState::is_air)
+                    && block.as_ref().is_none_or(is_air)
             )
         })
         .expect("player block change event should be present after chest removal");
@@ -1626,10 +1653,7 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
         },
         0,
     );
-    assert_eq!(
-        block_change_count(&reject_break, furnace_pos, BlockState::is_air),
-        0
-    );
+    assert_eq!(block_change_count(&reject_break, furnace_pos, is_air), 0);
     assert_eq!(
         core.snapshot().block_entities.get(&furnace_pos),
         Some(&furnace_block_entity(
@@ -1657,7 +1681,7 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
         },
         0,
     );
-    assert!(block_change_count(&break_events, furnace_pos, BlockState::is_air) >= 1);
+    assert!(block_change_count(&break_events, furnace_pos, is_air) >= 1);
     assert_container_closed(&break_events, first, 1);
     let close_index = break_events
         .iter()
@@ -1681,7 +1705,7 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
                     CoreEvent::BlockChanged { position, block }
                 ) if *event_player_id == first
                     && *position == furnace_pos
-                    && block.as_ref().is_none_or(BlockState::is_air)
+                    && block.as_ref().is_none_or(is_air)
             )
         })
         .expect("furnace removal block change should be present");
@@ -1705,7 +1729,7 @@ fn survival_place_consumes_selected_stack_and_updates_world() {
 
     assert!(
         block_change_count(&place_events, BlockPos::new(2, 4, 0), |block| {
-            *block == BlockState::stone()
+            *block == stone()
         }) >= 1
     );
     assert_inventory_slot_changed_to(
@@ -1714,10 +1738,7 @@ fn survival_place_consumes_selected_stack_and_updates_world() {
         InventorySlot::Hotbar(0),
         Some(("minecraft:stone", 63)),
     );
-    assert_eq!(
-        snapshot_block(&survival, BlockPos::new(2, 4, 0)),
-        BlockState::stone()
-    );
+    assert_eq!(snapshot_block(&survival, BlockPos::new(2, 4, 0)), stone());
     assert_eq!(
         survival
             .snapshot()
@@ -1744,16 +1765,13 @@ fn survival_break_spawns_drop_and_snapshot_roundtrip_omits_active_drops() {
         0,
     );
     assert!(block_break_progress_count(&start_events, player, break_pos, Some(0)) >= 1);
-    assert_eq!(
-        block_change_count(&start_events, break_pos, BlockState::is_air),
-        0
-    );
+    assert_eq!(block_change_count(&start_events, break_pos, is_air), 0);
 
     let early = core.tick(2_249);
-    assert_eq!(block_change_count(&early, break_pos, BlockState::is_air), 0);
+    assert_eq!(block_change_count(&early, break_pos, is_air), 0);
 
     let break_events = core.tick(2_250);
-    assert!(block_change_count(&break_events, break_pos, BlockState::is_air) >= 1);
+    assert!(block_change_count(&break_events, break_pos, is_air) >= 1);
     assert_player_dropped_item_spawned_at(
         &break_events,
         player,
@@ -1761,7 +1779,7 @@ fn survival_break_spawns_drop_and_snapshot_roundtrip_omits_active_drops() {
         1,
         Vec3::new(2.5, 1.5, 0.5),
     );
-    assert_eq!(snapshot_block(&core, break_pos), BlockState::air());
+    assert_eq!(snapshot_block(&core, break_pos), air());
 
     let snapshot = core.snapshot();
     let mut restored = restore_server_core_from_snapshot(CoreConfig::default(), snapshot);
@@ -1789,14 +1807,14 @@ fn survival_break_drop_mapping_handles_grass_and_glass() {
         0,
     );
     assert_eq!(
-        block_change_count(&grass_break, BlockPos::new(2, 3, 0), BlockState::is_air),
+        block_change_count(&grass_break, BlockPos::new(2, 3, 0), is_air),
         0
     );
     let grass_finish = core.tick(900);
     assert_player_dropped_item_spawned(&grass_finish, player, Some(("minecraft:dirt", 1)));
 
     let glass_pos = BlockPos::new(4, 4, 0);
-    let _ = set_block_via_tx(&mut core, glass_pos, BlockState::glass(), 0);
+    let _ = set_block_via_tx(&mut core, glass_pos, glass(), 0);
     let glass_break = core.apply_command(
         CoreCommand::DigBlock {
             player_id: player,
@@ -1806,10 +1824,7 @@ fn survival_break_drop_mapping_handles_grass_and_glass() {
         },
         0,
     );
-    assert_eq!(
-        block_change_count(&glass_break, glass_pos, BlockState::is_air),
-        0
-    );
+    assert_eq!(block_change_count(&glass_break, glass_pos, is_air), 0);
     let glass_finish = core.tick(450);
     assert_eq!(
         count_player_events(&glass_finish, player, |event| {
@@ -1823,7 +1838,7 @@ fn survival_break_drop_mapping_handles_grass_and_glass() {
 fn survival_mining_respects_exact_boundaries_for_dirt_sand_and_stone() {
     for (position, threshold_ms, placed_block) in [
         (BlockPos::new(2, 2, 0), 750_u64, None),
-        (BlockPos::new(4, 4, 0), 750_u64, Some(BlockState::sand())),
+        (BlockPos::new(4, 4, 0), 750_u64, Some(sand())),
         (BlockPos::new(2, 1, 0), 2_250_u64, None),
     ] {
         let (mut core, player) = logged_in_core(CoreConfig::default(), 1, "boundary");
@@ -1840,11 +1855,11 @@ fn survival_mining_respects_exact_boundaries_for_dirt_sand_and_stone() {
             },
             0,
         );
-        assert_eq!(block_change_count(&start, position, BlockState::is_air), 0);
+        assert_eq!(block_change_count(&start, position, is_air), 0);
         let early = core.tick(threshold_ms.saturating_sub(1));
-        assert_eq!(block_change_count(&early, position, BlockState::is_air), 0);
+        assert_eq!(block_change_count(&early, position, is_air), 0);
         let finish = core.tick(threshold_ms);
-        assert!(block_change_count(&finish, position, BlockState::is_air) >= 1);
+        assert!(block_change_count(&finish, position, is_air) >= 1);
     }
 }
 
@@ -1875,11 +1890,8 @@ fn survival_mining_cancel_and_held_slot_change_clear_progress() {
     );
     assert!(block_break_progress_count(&cancel, player, position, None) >= 1);
     let after_cancel = core.tick(1_000);
-    assert_eq!(
-        block_change_count(&after_cancel, position, BlockState::is_air),
-        0
-    );
-    assert_eq!(snapshot_block(&core, position), BlockState::dirt());
+    assert_eq!(block_change_count(&after_cancel, position, is_air), 0);
+    assert_eq!(snapshot_block(&core, position), dirt());
 
     let restart = core.apply_command(
         CoreCommand::DigBlock {
@@ -1894,10 +1906,7 @@ fn survival_mining_cancel_and_held_slot_change_clear_progress() {
     let held_change = set_held_slot(&mut core, player, 1);
     assert!(block_break_progress_count(&held_change, player, position, None) >= 1);
     let after_slot_change = core.tick(2_000);
-    assert_eq!(
-        block_change_count(&after_slot_change, position, BlockState::is_air),
-        0
-    );
+    assert_eq!(block_change_count(&after_slot_change, position, is_air), 0);
 }
 
 #[test]
@@ -1925,15 +1934,9 @@ fn survival_successful_place_and_external_block_change_clear_active_mining() {
         100,
     );
     assert!(block_break_progress_count(&place, player, mined_pos, None) >= 1);
-    assert_eq!(
-        snapshot_block(&core, BlockPos::new(4, 4, 0)),
-        BlockState::stone()
-    );
+    assert_eq!(snapshot_block(&core, BlockPos::new(4, 4, 0)), stone());
     let after_place = core.tick(1_000);
-    assert_eq!(
-        block_change_count(&after_place, mined_pos, BlockState::is_air),
-        0
-    );
+    assert_eq!(block_change_count(&after_place, mined_pos, is_air), 0);
 
     let _ = core.apply_command(
         CoreCommand::DigBlock {
@@ -1944,14 +1947,11 @@ fn survival_successful_place_and_external_block_change_clear_active_mining() {
         },
         1_100,
     );
-    let external = set_block_via_tx(&mut core, mined_pos, BlockState::sand(), 1_200);
+    let external = set_block_via_tx(&mut core, mined_pos, sand(), 1_200);
     assert!(block_break_progress_count(&external, player, mined_pos, None) >= 1);
     let after_external = core.tick(2_000);
-    assert_eq!(snapshot_block(&core, mined_pos), BlockState::sand());
-    assert_eq!(
-        block_change_count(&after_external, mined_pos, BlockState::is_air),
-        0
-    );
+    assert_eq!(snapshot_block(&core, mined_pos), sand());
+    assert_eq!(block_change_count(&after_external, mined_pos, is_air), 0);
 }
 
 #[test]
@@ -1981,10 +1981,10 @@ fn survival_multiple_players_do_not_share_mining_progress() {
     );
 
     let early = core.tick(2_249);
-    assert_eq!(block_change_count(&early, position, BlockState::is_air), 0);
+    assert_eq!(block_change_count(&early, position, is_air), 0);
 
     let finish = core.tick(2_250);
-    assert!(block_change_count(&finish, position, BlockState::is_air) >= 1);
+    assert!(block_change_count(&finish, position, is_air) >= 1);
     assert!(online_player(&core, second).active_mining.is_none());
 }
 
@@ -2006,13 +2006,10 @@ fn active_mining_is_not_persisted_in_snapshots() {
     let (_player, _) = login_player(&mut restored, 2, "snapshot-miner");
     let events = restored.tick(3_000);
     assert_eq!(
-        block_change_count(&events, BlockPos::new(2, 1, 0), BlockState::is_air),
+        block_change_count(&events, BlockPos::new(2, 1, 0), is_air),
         0
     );
-    assert_eq!(
-        snapshot_block(&restored, BlockPos::new(2, 1, 0)),
-        BlockState::stone()
-    );
+    assert_eq!(snapshot_block(&restored, BlockPos::new(2, 1, 0)), stone());
 }
 
 #[test]
@@ -2336,7 +2333,7 @@ fn gameplay_transaction_overlay_reads_surface_player_and_block_changes_before_co
             InventorySlot::Hotbar(0),
             Some(item("minecraft:glass", 12)),
         );
-        tx.set_block(position, Some(BlockState::chest()));
+        tx.set_block(position, Some(chest()));
 
         let player = tx
             .player_snapshot(player_id)
@@ -2351,7 +2348,7 @@ fn gameplay_transaction_overlay_reads_surface_player_and_block_changes_before_co
                 .map(stack_summary),
             Some(("minecraft:glass", 12)),
         );
-        assert_eq!(tx.block_state(position), Some(BlockState::chest()));
+        assert_eq!(tx.block_state(position), Some(chest()));
         assert_eq!(
             tx.block_entity(position).and_then(|block_entity| {
                 block_entity
@@ -2378,9 +2375,9 @@ fn gameplay_transaction_commit_materializes_previewed_state() {
             InventorySlot::Hotbar(0),
             Some(item("minecraft:glass", 12)),
         );
-        tx.set_block(block_pos, Some(BlockState::chest()));
+        tx.set_block(block_pos, Some(chest()));
         tx.spawn_dropped_item(drop_pos, item("minecraft:cobblestone", 4));
-        assert_eq!(tx.block_state(block_pos), Some(BlockState::chest()));
+        assert_eq!(tx.block_state(block_pos), Some(chest()));
     });
 
     let player = core
@@ -2396,7 +2393,7 @@ fn gameplay_transaction_commit_materializes_previewed_state() {
             .map(stack_summary),
         Some(("minecraft:glass", 12)),
     );
-    assert_eq!(snapshot_block(&core, block_pos), BlockState::chest());
+    assert_eq!(snapshot_block(&core, block_pos), chest());
     let (_drop_entity_id, dropped_state) = core
         .entities
         .dropped_items
@@ -2551,7 +2548,7 @@ fn gameplay_transaction_commit_preserves_emit_event_order() {
             EventTarget::Player(player_id),
             CoreEvent::BlockChanged {
                 position: marker_pos,
-                block: Some(BlockState::glass()),
+                block: Some(glass()),
             },
         );
         tx.set_inventory_slot(
@@ -2618,14 +2615,14 @@ fn gameplay_journal_apply_matches_direct_transaction_commit() {
     let direct_events = {
         let mut tx = direct_core.begin_gameplay_transaction(0);
         assert_eq!(tx.block_state(position), None);
-        tx.set_block(position, Some(BlockState::glass()));
+        tx.set_block(position, Some(glass()));
         tx.commit()
     };
 
     let journal = {
         let mut tx = GameplayTransaction::detached(journal_core.clone(), 0);
         assert_eq!(tx.block_state(position), None);
-        tx.set_block(position, Some(BlockState::glass()));
+        tx.set_block(position, Some(glass()));
         tx.into_journal()
     };
     let journal_events = match journal_core.validate_and_apply_gameplay_journal(journal) {
@@ -2636,7 +2633,7 @@ fn gameplay_journal_apply_matches_direct_transaction_commit() {
     };
 
     assert_eq!(journal_events, direct_events);
-    assert_eq!(snapshot_block(&journal_core, position), BlockState::glass());
+    assert_eq!(snapshot_block(&journal_core, position), glass());
 }
 
 #[test]
@@ -2647,11 +2644,11 @@ fn gameplay_journal_apply_survives_unrelated_live_change() {
     let journal = {
         let mut tx = GameplayTransaction::detached(core.clone(), 0);
         assert_eq!(tx.block_state(position), None);
-        tx.set_block(position, Some(BlockState::glass()));
+        tx.set_block(position, Some(glass()));
         tx.into_journal()
     };
 
-    let _ = set_block_via_tx(&mut core, unrelated_position, BlockState::chest(), 0);
+    let _ = set_block_via_tx(&mut core, unrelated_position, chest(), 0);
 
     let events = match core.validate_and_apply_gameplay_journal(journal) {
         GameplayJournalApplyResult::Applied(events) => events,
@@ -2661,11 +2658,8 @@ fn gameplay_journal_apply_survives_unrelated_live_change() {
     };
 
     let _ = events;
-    assert_eq!(
-        snapshot_block(&core, unrelated_position),
-        BlockState::chest()
-    );
-    assert_eq!(snapshot_block(&core, position), BlockState::glass());
+    assert_eq!(snapshot_block(&core, unrelated_position), chest());
+    assert_eq!(snapshot_block(&core, position), glass());
 }
 
 #[test]

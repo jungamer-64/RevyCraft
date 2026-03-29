@@ -2,10 +2,10 @@ use super::nbt::{
     NbtTag, as_compound, byte_array_field, byte_field, compound_field, int_field, list_field,
     short_field, string_field,
 };
-use mc_core::{
-    BlockEntityKindId, BlockEntityState, BlockPos, ChunkColumn, ChunkPos,
-    ContainerBlockEntityState, ContainerPropertyKey, ItemStack, expand_block_index,
+use mc_content_api::{
+    BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
 };
+use mc_model::{BlockPos, ChunkColumn, ChunkPos, ItemStack, expand_block_index};
 use mc_proto_common::StorageError;
 use mc_proto_je_common::__version_support::{
     blocks::{legacy_block, legacy_item, semantic_block, semantic_item},
@@ -43,7 +43,9 @@ pub(super) fn chunk_to_nbt(
             10,
             block_entities
                 .iter()
-                .filter(|(position, _)| position.chunk_pos() == chunk.pos)
+                .filter(|(position, _): &(&BlockPos, &BlockEntityState)| {
+                    position.chunk_pos() == chunk.pos
+                })
                 .filter_map(|(position, block_entity)| encode_tile_entity(*position, block_entity))
                 .collect(),
         ),
@@ -52,8 +54,10 @@ pub(super) fn chunk_to_nbt(
     let sections = chunk
         .sections
         .iter()
-        .filter(|(section_y, section)| **section_y >= 0 && **section_y < 16 && !section.is_empty())
-        .map(|(section_y, section)| {
+        .filter(|(section_y, section): &(&i32, &mc_model::ChunkSection)| {
+            **section_y >= 0 && **section_y < 16 && !section.is_empty()
+        })
+        .map(|(section_y, section): (&i32, &mc_model::ChunkSection)| {
             let mut blocks = vec![0_u8; 4096];
             let mut data = vec![0_u8; 2048];
             let block_light = vec![0_u8; 2048];
@@ -157,7 +161,9 @@ fn encode_tile_entity(position: BlockPos, block_entity: &BlockEntityState) -> Op
                             .slots
                             .iter()
                             .enumerate()
-                            .filter_map(|(index, stack)| encode_item_slot(index, stack.as_ref()))
+                            .filter_map(|(index, stack): (usize, &Option<ItemStack>)| {
+                                encode_item_slot(index, stack.as_ref())
+                            })
                             .collect(),
                     ),
                 );
@@ -194,7 +200,9 @@ fn encode_tile_entity(position: BlockPos, block_entity: &BlockEntityState) -> Op
                             .iter()
                             .take(3)
                             .enumerate()
-                            .filter_map(|(index, stack)| encode_item_slot(index, stack.as_ref()))
+                            .filter_map(|(index, stack): (usize, &Option<ItemStack>)| {
+                                encode_item_slot(index, stack.as_ref())
+                            })
                             .collect(),
                     ),
                 );
@@ -205,10 +213,10 @@ fn encode_tile_entity(position: BlockPos, block_entity: &BlockEntityState) -> Op
     }
 }
 
-fn container_property(container: &mc_core::ContainerBlockEntityState, key: &str) -> i16 {
+fn container_property(container: &ContainerBlockEntityState, key: &str) -> i16 {
     container
         .properties
-        .get(&mc_core::ContainerPropertyKey::new(key))
+        .get(&ContainerPropertyKey::new(key))
         .copied()
         .unwrap_or_default()
 }

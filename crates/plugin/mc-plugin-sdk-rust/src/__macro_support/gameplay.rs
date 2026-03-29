@@ -1,5 +1,7 @@
 use crate::gameplay::{GameplayHost, RustGameplayPlugin};
-use mc_core::{BlockEntityState, PlayerId, PlayerSnapshot, TargetedEvent, WorldMeta};
+use mc_content_api::{BlockEntityState, ContainerKindId};
+use mc_core::{PlayerId, PlayerSnapshot, TargetedEvent};
+use mc_model::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};
 use mc_plugin_api::abi::{ByteSlice, OwnedBuffer, PluginErrorCode, Utf8Slice};
 use mc_plugin_api::codec::gameplay::host_blob::{
     decode_block_entity, decode_block_state, decode_player_snapshot, decode_targeted_event_blob,
@@ -50,10 +52,7 @@ impl GameplayHost for SdkGameplayHost {
         decode_world_meta(&bytes).map_err(|error| error.to_string())
     }
 
-    fn read_block_state(
-        &self,
-        position: mc_core::BlockPos,
-    ) -> Result<Option<mc_core::BlockState>, String> {
+    fn read_block_state(&self, position: BlockPos) -> Result<Option<BlockState>, String> {
         let Some(callback) = self.api.read_block_state else {
             return Err("gameplay host did not provide read_block_state".to_string());
         };
@@ -62,10 +61,7 @@ impl GameplayHost for SdkGameplayHost {
         decode_block_state(&bytes).map_err(|error| error.to_string())
     }
 
-    fn read_block_entity(
-        &self,
-        position: mc_core::BlockPos,
-    ) -> Result<Option<BlockEntityState>, String> {
+    fn read_block_entity(&self, position: BlockPos) -> Result<Option<BlockEntityState>, String> {
         let Some(callback) = self.api.read_block_entity else {
             return Err("gameplay host did not provide read_block_entity".to_string());
         };
@@ -74,11 +70,7 @@ impl GameplayHost for SdkGameplayHost {
         decode_block_entity(&bytes).map_err(|error| error.to_string())
     }
 
-    fn can_edit_block(
-        &self,
-        player_id: PlayerId,
-        position: mc_core::BlockPos,
-    ) -> Result<bool, String> {
+    fn can_edit_block(&self, player_id: PlayerId, position: BlockPos) -> Result<bool, String> {
         let Some(callback) = self.api.can_edit_block else {
             return Err("gameplay host did not provide can_edit_block".to_string());
         };
@@ -89,7 +81,7 @@ impl GameplayHost for SdkGameplayHost {
     fn set_player_pose(
         &self,
         player_id: PlayerId,
-        position: Option<mc_core::Vec3>,
+        position: Option<Vec3>,
         yaw: Option<f32>,
         pitch: Option<f32>,
         on_ground: bool,
@@ -112,8 +104,8 @@ impl GameplayHost for SdkGameplayHost {
     fn set_inventory_slot(
         &self,
         player_id: PlayerId,
-        slot: mc_core::InventorySlot,
-        stack: Option<mc_core::ItemStack>,
+        slot: InventorySlot,
+        stack: Option<ItemStack>,
     ) -> Result<(), String> {
         let Some(callback) = self.api.set_inventory_slot else {
             return Err("gameplay host did not provide set_inventory_slot".to_string());
@@ -134,7 +126,7 @@ impl GameplayHost for SdkGameplayHost {
     fn begin_mining(
         &self,
         player_id: PlayerId,
-        position: mc_core::BlockPos,
+        position: BlockPos,
         duration_ms: u64,
     ) -> Result<(), String> {
         let Some(callback) = self.api.begin_mining else {
@@ -144,11 +136,7 @@ impl GameplayHost for SdkGameplayHost {
         call_host_mutation(self.api.context, &payload, callback)
     }
 
-    fn open_container_at(
-        &self,
-        player_id: PlayerId,
-        position: mc_core::BlockPos,
-    ) -> Result<(), String> {
+    fn open_container_at(&self, player_id: PlayerId, position: BlockPos) -> Result<(), String> {
         let Some(callback) = self.api.open_container_at else {
             return Err("gameplay host did not provide open_container_at".to_string());
         };
@@ -159,7 +147,7 @@ impl GameplayHost for SdkGameplayHost {
     fn open_virtual_container(
         &self,
         player_id: PlayerId,
-        kind: &mc_core::ContainerKindId,
+        kind: &ContainerKindId,
     ) -> Result<(), String> {
         let Some(callback) = self.api.open_virtual_container else {
             return Err("gameplay host did not provide open_virtual_container".to_string());
@@ -168,11 +156,7 @@ impl GameplayHost for SdkGameplayHost {
         call_host_mutation(self.api.context, &payload, callback)
     }
 
-    fn set_block(
-        &self,
-        position: mc_core::BlockPos,
-        block: Option<mc_core::BlockState>,
-    ) -> Result<(), String> {
+    fn set_block(&self, position: BlockPos, block: Option<BlockState>) -> Result<(), String> {
         let Some(callback) = self.api.set_block else {
             return Err("gameplay host did not provide set_block".to_string());
         };
@@ -180,11 +164,7 @@ impl GameplayHost for SdkGameplayHost {
         call_host_mutation(self.api.context, &payload, callback)
     }
 
-    fn spawn_dropped_item(
-        &self,
-        position: mc_core::Vec3,
-        item: mc_core::ItemStack,
-    ) -> Result<(), String> {
+    fn spawn_dropped_item(&self, position: Vec3, item: ItemStack) -> Result<(), String> {
         let Some(callback) = self.api.spawn_dropped_item else {
             return Err("gameplay host did not provide spawn_dropped_item".to_string());
         };

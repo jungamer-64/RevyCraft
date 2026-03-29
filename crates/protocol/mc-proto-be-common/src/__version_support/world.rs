@@ -1,5 +1,6 @@
 use crate::world;
-use mc_core::{BlockFace, BlockPos, EntityId};
+use mc_core::EntityId;
+use mc_model::{BlockFace, BlockPos, Vec3 as ModelVec3};
 use mc_proto_common::ProtocolError;
 use vek::Vec3;
 
@@ -27,6 +28,6 @@ pub const fn protocol_error(message: &'static str) -> ProtocolError {
     world::protocol_error(message)
 }
 
-pub fn vec3_to_bedrock(position: mc_core::Vec3) -> Vec3<f32> {
+pub fn vec3_to_bedrock(position: ModelVec3) -> Vec3<f32> {
     world::vec3_to_bedrock(position)
 }

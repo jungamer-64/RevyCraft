@@ -12,7 +12,9 @@ pub(in crate::core) use self::lifecycle::{
     sync_world_container_viewers_state, tick_active_container_state, tick_dropped_item_state,
     unregister_world_container_viewer_state, writeback_world_container_state,
 };
-pub use self::state::{ContainerBinding, OpenContainerState, OpenInventoryWindow};
+pub use self::state::OpenInventoryWindow;
 pub(in crate::core) use self::sync::{
     inventory_diff_events, property_diff_events, property_events, window_resync_events,
 };
+#[allow(unused_imports)]
+pub(crate) use mc_content_api::{ContainerBinding, OpenContainerState};

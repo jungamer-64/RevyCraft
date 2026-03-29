@@ -8,9 +8,11 @@ use crate::{
     PACKET_CB_SPAWN_POSITION, PACKET_CB_TIME_UPDATE, PACKET_CB_TRANSACTION,
     PACKET_CB_UPDATE_HEALTH, PACKET_CB_WINDOW_ITEMS, PACKET_CB_WINDOW_PROPERTY,
 };
-use mc_core::{
-    BlockPos, BlockState, ChunkColumn, ContainerKindId, DimensionId, DroppedItemSnapshot, EntityId,
-    InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
+use mc_content_api::ContainerKindId;
+use mc_core::{EntityId, PlayerSnapshot};
+use mc_model::{
+    BlockPos, BlockState, ChunkColumn, DimensionId, DroppedItemSnapshot, InventoryWindowContents,
+    ItemStack, WorldMeta,
 };
 use mc_proto_common::{PacketWriter, ProtocolError};
 use mc_proto_je_common::__version_support::{

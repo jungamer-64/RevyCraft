@@ -1,9 +1,10 @@
 use crate::probe::{bedrock_probe_intent, detects_bedrock_datagram};
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
 use mc_content_canonical::catalog;
-use mc_core::{
-    BlockPos, BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, CoreEvent,
-    DroppedItemSnapshot, EntityId, InventorySlot, InventoryWindowContents, ItemStack,
-    PlayerSnapshot, RuntimeCommand, WorldMeta,
+use mc_core::{CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
+use mc_model::{
+    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
+    ItemStack, WorldMeta,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest,

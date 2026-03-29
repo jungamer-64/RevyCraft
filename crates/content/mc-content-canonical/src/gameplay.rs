@@ -1,12 +1,12 @@
 use crate::catalog;
 use crate::ids;
 use mc_content_api::{
-    BlockEntityKindId, ContainerKindId, ContainerPropertyKey, ContainerSlotRole, ContainerSpec,
-    MiningToolSpec,
+    BlockEntityKindId, ContainerBlockEntityState, ContainerKindId, ContainerPropertyKey,
+    ContainerSlotRole, ContainerSpec, ContentBehavior, MiningToolSpec, OpenContainerState,
 };
-use mc_core::{
-    BlockState, ChunkColumn, ChunkPos, ContainerBlockEntityState, ContentBehavior,
-    InventoryClickButton, InventorySlot, ItemStack, OpenContainerState, PlayerInventory, WorldMeta,
+use mc_model::{
+    BlockState, ChunkColumn, ChunkPos, InventoryClickButton, InventorySlot, ItemStack,
+    PlayerInventory, WorldMeta,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;

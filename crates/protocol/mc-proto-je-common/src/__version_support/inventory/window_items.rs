@@ -1,5 +1,6 @@
 use super::layout::{PlayerInventoryLayout, container_descriptor, is_player_container};
-use mc_core::{ContainerKindId, InventorySlot, InventoryWindowContents, ItemStack};
+use mc_content_api::ContainerKindId;
+use mc_model::{InventorySlot, InventoryWindowContents, ItemStack};
 
 #[must_use]
 pub fn window_items(

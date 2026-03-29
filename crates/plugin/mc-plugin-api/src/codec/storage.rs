@@ -195,7 +195,8 @@ mod tests {
         StorageDescriptor, StorageRequest, StorageResponse, decode_storage_request,
         decode_storage_response, encode_storage_request, encode_storage_response,
     };
-    use mc_core::{BlockPos, CoreCommand, CoreConfig, PlayerId, ServerCore};
+    use mc_core::{CoreCommand, CoreConfig, PlayerId, ServerCore};
+    use mc_model::BlockPos;
     use uuid::Uuid;
 
     fn sample_snapshot() -> mc_core::WorldSnapshot {

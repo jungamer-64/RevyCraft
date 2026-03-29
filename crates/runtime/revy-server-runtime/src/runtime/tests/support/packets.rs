@@ -20,6 +20,7 @@ use bedrockrs_proto::v766::packets::ClientPlayMode;
 use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
 use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
+use mc_model::BlockPos;
 use mc_proto_be_924::BE_924_PROTOCOL_NUMBER;
 use serde_json::json;
 use std::io::Cursor;
@@ -185,7 +186,7 @@ pub(crate) fn player_digging_1_12(status: i32, x: i32, y: i32, z: i32, face: u8)
     let mut writer = PacketWriter::default();
     writer.write_varint(0x14);
     writer.write_varint(status);
-    writer.write_i64(pack_block_position(mc_core::BlockPos::new(x, y, z)));
+    writer.write_i64(pack_block_position(BlockPos::new(x, y, z)));
     writer.write_u8(face);
     writer.into_inner()
 }
@@ -217,7 +218,7 @@ pub(crate) fn player_position_look_1_12(x: f64, y: f64, z: f64, yaw: f32, pitch:
 pub(crate) fn player_block_placement_1_12(x: i32, y: i32, z: i32, face: i32, hand: i32) -> Vec<u8> {
     let mut writer = PacketWriter::default();
     writer.write_varint(0x1f);
-    writer.write_i64(pack_block_position(mc_core::BlockPos::new(x, y, z)));
+    writer.write_i64(pack_block_position(BlockPos::new(x, y, z)));
     writer.write_varint(face);
     writer.write_varint(hand);
     writer.write_f32(0.5);
@@ -226,14 +227,14 @@ pub(crate) fn player_block_placement_1_12(x: i32, y: i32, z: i32, face: i32, han
     writer.into_inner()
 }
 
-pub(crate) fn pack_block_position(position: mc_core::BlockPos) -> i64 {
+pub(crate) fn pack_block_position(position: BlockPos) -> i64 {
     let x = i64::from(position.x) & 0x3ff_ffff;
     let y = i64::from(position.y) & 0xfff;
     let z = i64::from(position.z) & 0x3ff_ffff;
     (x << 38) | (y << 26) | z
 }
 
-pub(crate) fn unpack_block_position(packed: i64) -> mc_core::BlockPos {
+pub(crate) fn unpack_block_position(packed: i64) -> BlockPos {
     fn sign_extend(value: i64, bits: u8) -> i64 {
         let shift = 64 - i64::from(bits);
         (value << shift) >> shift
@@ -242,7 +243,7 @@ pub(crate) fn unpack_block_position(packed: i64) -> mc_core::BlockPos {
     let x = sign_extend((packed >> 38) & 0x3ff_ffff, 26);
     let y = sign_extend((packed >> 26) & 0xfff, 12);
     let z = sign_extend(packed & 0x3ff_ffff, 26);
-    mc_core::BlockPos::new(
+    BlockPos::new(
         i32::try_from(x).expect("packed x should fit into i32"),
         i32::try_from(y).expect("packed y should fit into i32"),
         i32::try_from(z).expect("packed z should fit into i32"),
@@ -352,28 +353,28 @@ pub(crate) fn bedrock_login_packet(
 }
 
 pub(crate) fn bedrock_place_block_payload(
-    position: mc_core::BlockPos,
+    position: BlockPos,
     face: i32,
 ) -> Result<Vec<u8>, RuntimeError> {
     bedrock_block_interaction_payload(ItemUseInventoryTransactionType::Place, position, face)
 }
 
 pub(crate) fn bedrock_break_block_payload(
-    position: mc_core::BlockPos,
+    position: BlockPos,
     face: i32,
 ) -> Result<Vec<u8>, RuntimeError> {
     bedrock_block_interaction_payload(ItemUseInventoryTransactionType::Destroy, position, face)
 }
 
 pub(crate) fn bedrock_start_break_block_payload(
-    position: mc_core::BlockPos,
+    position: BlockPos,
     face: i32,
 ) -> Result<Vec<u8>, RuntimeError> {
     bedrock_player_action_payload(PlayerActionType::StartDestroyBlock, position, face)
 }
 
 pub(crate) fn bedrock_abort_break_block_payload(
-    position: mc_core::BlockPos,
+    position: BlockPos,
     face: i32,
 ) -> Result<Vec<u8>, RuntimeError> {
     bedrock_player_action_payload(PlayerActionType::AbortDestroyBlock, position, face)
@@ -546,7 +547,7 @@ pub(crate) fn packet_id(frame: &[u8]) -> i32 {
 
 fn bedrock_block_interaction_payload(
     action_type: ItemUseInventoryTransactionType,
-    position: mc_core::BlockPos,
+    position: BlockPos,
     face: i32,
 ) -> Result<Vec<u8>, RuntimeError> {
     encode_bedrock_player_auth_input(PlayerAuthInputPacket {
@@ -592,7 +593,7 @@ fn bedrock_block_interaction_payload(
 
 fn bedrock_player_action_payload(
     action: PlayerActionType,
-    position: mc_core::BlockPos,
+    position: BlockPos,
     face: i32,
 ) -> Result<Vec<u8>, RuntimeError> {
     encode_packets(

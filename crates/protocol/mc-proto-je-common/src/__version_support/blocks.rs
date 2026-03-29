@@ -1,5 +1,5 @@
 use mc_content_canonical::catalog;
-use mc_core::{BlockState, ItemStack};
+use mc_model::{BlockState, ItemStack};
 
 fn block(key: &str) -> BlockState {
     BlockState::new(key)

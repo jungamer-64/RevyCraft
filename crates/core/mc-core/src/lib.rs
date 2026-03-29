@@ -1,8 +1,7 @@
 #![allow(clippy::multiple_crate_versions)]
-pub mod inventory;
 
-#[cfg(test)]
-mod catalog;
+pub(crate) mod inventory;
+
 pub(crate) mod core;
 pub(crate) mod events;
 pub(crate) mod player;
@@ -18,40 +17,38 @@ pub use self::core::transaction::{
     GameplayJournal, GameplayJournalApplyResult, GameplayTransaction,
 };
 pub use self::core::{
-    ActiveMiningState, ClientView, ContainerBinding, ContentBehavior, CoreConfig,
-    CoreRuntimeStateBlob, DroppedItemState, OnlinePlayerRuntimeState, OpenContainerState,
-    OpenInventoryWindow, PlayerSessionState, ServerCore, WorldContainerViewers,
+    ActiveMiningState, ClientView, CoreConfig, CoreRuntimeStateBlob, DroppedItemState,
+    OnlinePlayerRuntimeState, OpenInventoryWindow, PlayerSessionState, ServerCore,
+    WorldContainerViewers,
 };
 pub use self::events::{
-    CoreCommand, CoreEvent, EventTarget, GameplayCommand, InventoryClickButton,
-    InventoryClickTarget, InventoryClickValidation, InventoryTransactionContext, PlayerSummary,
-    RuntimeCommand, SessionCommand, TargetedEvent,
+    CoreCommand, CoreEvent, EventTarget, GameplayCommand, PlayerSummary, RuntimeCommand,
+    SessionCommand, TargetedEvent,
 };
-pub use self::inventory::{
-    InventorySlot, InventoryWindowContents, ItemKey, ItemStack, PlayerInventory,
+pub use self::player::PlayerSnapshot;
+pub use self::world::WorldSnapshot;
+
+#[allow(unused_imports)]
+pub(crate) use mc_content_api::{
+    BlockDescriptor, BlockEntityKindId, BlockEntityState, ContainerBinding,
+    ContainerBlockEntityState, ContainerKindId, ContainerPropertyKey, ContainerSlotRole,
+    ContainerSpec, ContentBehavior, ItemDescriptor, MiningToolSpec, OpenContainerState, ToolClass,
 };
-pub use self::player::{InteractionHand, PlayerSnapshot};
-pub use self::world::{
-    BlockEntityState, BlockFace, BlockKey, BlockPos, BlockState, ChunkColumn, ChunkDelta, ChunkPos,
-    ChunkSection, ContainerBlockEntityState, DimensionId, DroppedItemSnapshot, SectionBlockIndex,
-    SectionPos, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
-};
-pub use mc_content_api::{
-    BlockDescriptor, BlockEntityKindId, ContainerKindId, ContainerPropertyKey, ContainerSlotRole,
-    ContainerSpec, ItemDescriptor, MiningToolSpec, ToolClass,
+#[allow(unused_imports)]
+pub(crate) use mc_model::{
+    BlockFace, BlockKey, BlockPos, BlockState, ChunkColumn, ChunkDelta, ChunkPos, ChunkSection,
+    DimensionId, DroppedItemSnapshot, InteractionHand, InventoryClickButton, InventoryClickTarget,
+    InventoryClickValidation, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
+    ItemKey, ItemStack, PlayerInventory, SectionBlockIndex, SectionPos, Vec3, WorldMeta,
+    expand_block_index,
 };
 
 #[cfg(test)]
 pub(crate) use self::world::flatten_block_index;
 
 const CHUNK_WIDTH: i32 = 16;
-const SECTION_HEIGHT: i32 = 16;
 const DEFAULT_KEEPALIVE_INTERVAL_MS: u64 = 10_000;
 const DEFAULT_KEEPALIVE_TIMEOUT_MS: u64 = 30_000;
-const PLAYER_INVENTORY_SLOT_COUNT: usize = 45;
-const AUXILIARY_SLOT_COUNT: u8 = 9;
-const MAIN_INVENTORY_SLOT_COUNT: u8 = 27;
-const HOTBAR_START_SLOT: u8 = 36;
 const HOTBAR_SLOT_COUNT: u8 = 9;
 const PLAYER_WIDTH: f64 = 0.6;
 const PLAYER_HEIGHT: f64 = 1.8;

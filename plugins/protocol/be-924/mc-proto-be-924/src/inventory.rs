@@ -11,9 +11,10 @@ use bedrockrs_proto::v729::types::FullContainerName;
 use bedrockrs_proto::v748::packets::{InventoryContentPacket, InventorySlotPacket};
 use bedrockrs_proto::v776::packets::{CreativeContentPacket, CreativeItemData};
 use bedrockrs_proto_core::{ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
-use mc_core::{
-    ContainerKindId, ContainerPropertyKey, InventoryClickButton, InventoryClickTarget,
-    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack,
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
+use mc_model::{
+    InventoryClickButton, InventoryClickTarget, InventorySlot, InventoryTransactionContext,
+    InventoryWindowContents, ItemStack,
 };
 use mc_proto_common::ProtocolError;
 use std::io::Cursor;
@@ -72,7 +73,7 @@ pub(crate) fn encode_inventory_contents_packets(
         let local_slots = contents
             .local_slots
             .iter()
-            .map(|stack| network_item_stack_descriptor(stack.as_ref()))
+            .map(|stack: &Option<ItemStack>| network_item_stack_descriptor(stack.as_ref()))
             .collect::<Result<Vec<_>, _>>()?;
         packets.push(V924::InventoryContentPacket(InventoryContentPacket {
             inventory_id: ACTIVE_CONTAINER_INVENTORY_ID,

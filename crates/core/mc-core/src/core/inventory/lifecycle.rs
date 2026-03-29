@@ -4,8 +4,9 @@ use super::super::canonical::{
 };
 use super::super::state_backend::{CoreStateMut, CoreStateRead};
 use super::super::{DroppedItemState, PlayerSessionState};
-use super::state::{ContainerBinding, OpenContainerState, OpenInventoryWindow};
+use super::state::OpenInventoryWindow;
 use super::util::merge_stack_into_player_inventory;
+use super::{ContainerBinding, OpenContainerState};
 use crate::inventory::{InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory};
 use crate::world::{BlockEntityState, BlockPos, BlockState, Vec3};
 use crate::{EntityId, PlayerId, PlayerSnapshot};
@@ -675,7 +676,7 @@ fn dropped_item_rest_y(state: &impl CoreStateRead, x: f64, y: f64, z: f64) -> Op
 }
 
 fn persist_live_player_state(
-    content_behavior: &dyn super::super::ContentBehavior,
+    content_behavior: &dyn mc_content_api::ContentBehavior,
     snapshot: &PlayerSnapshot,
     cursor: Option<&ItemStack>,
     active_container: Option<&OpenInventoryWindow>,
@@ -707,7 +708,7 @@ fn persist_live_player_state(
 }
 
 fn close_active_container_window(
-    content_behavior: &dyn super::super::ContentBehavior,
+    content_behavior: &dyn mc_content_api::ContentBehavior,
     session: &mut PlayerSessionState,
     inventory: &mut PlayerInventory,
 ) -> Option<OpenInventoryWindow> {
@@ -717,7 +718,7 @@ fn close_active_container_window(
 }
 
 fn fold_active_container_items_into_player(
-    content_behavior: &dyn super::super::ContentBehavior,
+    content_behavior: &dyn mc_content_api::ContentBehavior,
     inventory: &mut PlayerInventory,
     window: &OpenInventoryWindow,
 ) {

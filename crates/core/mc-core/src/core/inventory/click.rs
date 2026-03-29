@@ -152,7 +152,7 @@ pub(in crate::core) fn apply_inventory_click_state(
 }
 
 fn apply_player_window_click(
-    content_behavior: &dyn super::super::ContentBehavior,
+    content_behavior: &dyn mc_content_api::ContentBehavior,
     inventory: &mut PlayerInventory,
     cursor: &mut Option<ItemStack>,
     slot: Option<InventorySlot>,
@@ -218,7 +218,7 @@ fn apply_player_window_click(
 }
 
 fn apply_active_container_click(
-    content_behavior: &dyn super::super::ContentBehavior,
+    content_behavior: &dyn mc_content_api::ContentBehavior,
     session: &mut super::super::PlayerSessionState,
     player_inventory: &mut PlayerInventory,
     window_id: u8,
