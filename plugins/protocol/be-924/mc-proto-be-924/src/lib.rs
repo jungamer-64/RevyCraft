@@ -11,8 +11,8 @@ mod tests;
 
 use bedrockrs_proto::ProtoVersion;
 use mc_core::{
-    BlockState, ChunkColumn, CoreEvent, DroppedItemSnapshot, EntityId, InventoryContainer,
-    InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
+    BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, CoreEvent, DroppedItemSnapshot,
+    EntityId, InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_be_common::{BedrockAdapter, BedrockProfile};
 use mc_proto_common::{
@@ -27,10 +27,10 @@ pub const BE_924_ADAPTER_ID: &str = "be-924";
 pub const BE_924_VERSION_NAME: &str = "bedrock-26.3";
 pub const BE_924_PROTOCOL_NUMBER: i32 = 924;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct BedrockTrackedWindow {
     window_id: u8,
-    container: InventoryContainer,
+    container: ContainerKindId,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,7 +49,7 @@ impl BedrockProtocolSessionStore {
             .lock()
             .expect("bedrock protocol session store should not be poisoned")
             .get(&session.connection_id)
-            .and_then(|state| state.active_window)
+            .and_then(|state| state.active_window.as_ref())
             .map(|window| window.window_id)
     }
 
@@ -64,15 +64,16 @@ impl BedrockProtocolSessionStore {
                 window_id,
                 container,
                 ..
-            } if *container != InventoryContainer::Player => {
+            } if *container != inventory::player_container_kind() => {
                 state.active_window = Some(BedrockTrackedWindow {
                     window_id: *window_id,
-                    container: *container,
+                    container: container.clone(),
                 });
             }
             CoreEvent::ContainerClosed { window_id } => {
                 if state
                     .active_window
+                    .as_ref()
                     .is_some_and(|window| window.window_id == *window_id)
                 {
                     state.active_window = None;
@@ -247,7 +248,7 @@ impl BedrockProfile for Bedrock924Profile {
     fn encode_inventory_contents_packets(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         contents: &InventoryWindowContents,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         encoding::encode_inventory_contents_packets(window_id, container, contents)
@@ -256,7 +257,7 @@ impl BedrockProfile for Bedrock924Profile {
     fn encode_container_opened_packets(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         title: &str,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         encoding::encode_container_opened_packets(window_id, container, title)
@@ -272,7 +273,7 @@ impl BedrockProfile for Bedrock924Profile {
     fn encode_container_property_changed_packets(
         &self,
         window_id: u8,
-        property_id: u8,
+        property_id: &ContainerPropertyKey,
         value: i16,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {
         encoding::encode_container_property_changed_packets(window_id, property_id, value)
@@ -281,7 +282,7 @@ impl BedrockProfile for Bedrock924Profile {
     fn encode_inventory_slot_changed_packets(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         slot: InventorySlot,
         stack: Option<&ItemStack>,
     ) -> Result<Vec<Vec<u8>>, ProtocolError> {

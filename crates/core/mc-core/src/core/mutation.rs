@@ -4,10 +4,13 @@ use super::canonical::{
 use super::state_backend::CoreStateMut;
 use super::{DroppedItemState, EntityKind, ServerCore};
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
-use crate::inventory::{InventoryContainer, InventorySlot, ItemStack};
+use crate::inventory::{InventorySlot, ItemStack};
 use crate::player::InteractionHand;
-use crate::world::{BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, Vec3};
+use crate::world::{
+    BlockEntityState, BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, Vec3,
+};
 use crate::{EntityId, HOTBAR_SLOT_COUNT, PlayerId};
+use mc_content_api::ContainerKindId;
 
 const DROPPED_ITEM_PICKUP_DELAY_MS: u64 = 500;
 const DROPPED_ITEM_DESPAWN_MS: u64 = 5 * 60 * 1000;
@@ -93,14 +96,13 @@ pub(super) fn state_inventory_slot(
     let Some(entity_id) = state.player_entity_id(player_id) else {
         return None;
     };
+    let content_behavior = state.content_behavior_arc();
     let Some(inventory) = state.player_inventory_mut(entity_id) else {
         return None;
     };
     let before_result = inventory.crafting_result().cloned();
     let _ = inventory.set_slot(slot, stack.clone());
-    if slot.is_crafting_result() || slot.crafting_input_index().is_some() {
-        ServerCore::recompute_crafting_result_for_inventory(inventory);
-    }
+    content_behavior.normalize_player_inventory(inventory);
     let after_result = inventory.crafting_result().cloned();
     Some(InventorySlotDelta {
         player_id,
@@ -114,23 +116,21 @@ pub(super) fn state_inventory_slot(
 pub(super) fn state_set_block(
     state: &mut impl CoreStateMut,
     position: BlockPos,
-    block: BlockState,
+    block: Option<BlockState>,
 ) -> BlockDelta {
     let cleared_mining = super::mining::state_clear_active_mining_at(state, position);
     state.set_block_state(position, block.clone());
     let closed_containers =
-        super::inventory::close_world_container_if_invalid_state(state, position, &block);
-    if block.key.as_str() == crate::catalog::CHEST {
-        let block_entity = state
-            .block_entity(position)
-            .unwrap_or_else(|| crate::BlockEntityState::chest(27));
-        state.set_block_entity(position, Some(block_entity));
-    }
-    if block.key.as_str() == crate::catalog::FURNACE {
-        let block_entity = state
-            .block_entity(position)
-            .unwrap_or_else(crate::BlockEntityState::furnace);
-        state.set_block_entity(position, Some(block_entity));
+        super::inventory::close_world_container_if_invalid_state(state, position, block.as_ref());
+    if let Some(block) = block.as_ref() {
+        if let Some(block_entity) = state
+            .content_behavior()
+            .default_block_entity_for_block(block)
+        {
+            state.set_block_entity(position, Some(BlockEntityState::Container(block_entity)));
+        }
+    } else {
+        state.set_block_entity(position, None);
     }
     BlockDelta {
         position,
@@ -176,6 +176,7 @@ impl ServerCore {
         player_id: PlayerId,
         hand: InteractionHand,
         player: &crate::player::PlayerSnapshot,
+        player_container: ContainerKindId,
     ) -> Vec<TargetedEvent> {
         let selected_slot = match hand {
             InteractionHand::Main => InventorySlot::Hotbar(player.selected_hotbar_slot),
@@ -186,7 +187,7 @@ impl ServerCore {
                 target: EventTarget::Player(player_id),
                 event: CoreEvent::InventorySlotChanged {
                     window_id: 0,
-                    container: InventoryContainer::Player,
+                    container: player_container,
                     slot: selected_slot,
                     stack: player.inventory.get_slot(selected_slot).cloned(),
                 },

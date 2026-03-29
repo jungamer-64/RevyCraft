@@ -9,7 +9,7 @@ use crate::{
     PACKET_CB_WINDOW_PROPERTY,
 };
 use mc_core::{
-    BlockPos, ChunkColumn, DimensionId, DroppedItemSnapshot, EntityId, InventoryContainer,
+    BlockPos, ChunkColumn, ContainerKindId, DimensionId, DroppedItemSnapshot, EntityId,
     InventoryWindowContents, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_common::{PacketWriter, ProtocolError};
@@ -220,7 +220,7 @@ pub(crate) fn encode_set_slot(
 
 pub(crate) fn encode_open_window(
     window_id: u8,
-    container: InventoryContainer,
+    container: &ContainerKindId,
     title: &str,
 ) -> Result<Vec<u8>, ProtocolError> {
     let mut writer = PacketWriter::default();
@@ -264,7 +264,7 @@ pub(crate) fn encode_window_property(window_id: u8, property_id: u8, value: i16)
 
 pub(crate) fn encode_window_items(
     window_id: u8,
-    container: InventoryContainer,
+    container: &ContainerKindId,
     contents: &InventoryWindowContents,
 ) -> Result<Vec<u8>, ProtocolError> {
     let items = window_items(container, crate::INVENTORY_SPEC.layout, contents);

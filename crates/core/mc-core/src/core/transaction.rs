@@ -6,19 +6,19 @@ use super::{
         BaseStateRef, CoreStateMut, CoreStateRead, OverlayState, OverlayStateRef, TxOverlay,
     },
 };
-use crate::catalog;
 use crate::events::{CoreEvent, EventTarget, GameplayCommand, TargetedEvent};
-use crate::inventory::{InventoryContainer, InventorySlot, ItemStack};
+use crate::inventory::{InventorySlot, ItemStack};
 use crate::player::{InteractionHand, PlayerSnapshot};
 use crate::world::{BlockEntityState, BlockFace, BlockPos, BlockState, Vec3, WorldMeta};
 use crate::{ConnectionId, HOTBAR_SLOT_COUNT, PlayerId};
+use mc_content_api::ContainerKindId;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default)]
 struct GameplayReadSet {
     world_meta: Option<WorldMeta>,
     player_snapshots: BTreeMap<PlayerId, Option<PlayerSnapshot>>,
-    block_states: BTreeMap<BlockPos, BlockState>,
+    block_states: BTreeMap<BlockPos, Option<BlockState>>,
     block_entities: BTreeMap<BlockPos, Option<BlockEntityState>>,
     can_edit_block: BTreeMap<(PlayerId, BlockPos), bool>,
     online_player_count: Option<usize>,
@@ -174,7 +174,7 @@ impl<'a> GameplayTransaction<'a> {
     }
 
     #[must_use]
-    pub fn block_state(&mut self, position: BlockPos) -> BlockState {
+    pub fn block_state(&mut self, position: BlockPos) -> Option<BlockState> {
         let block_state = self.overlay_view().block_state(position);
         if !self.overlay_touches_block(position) {
             let _ = self
@@ -261,25 +261,18 @@ impl<'a> GameplayTransaction<'a> {
         });
     }
 
-    pub fn open_chest(&mut self, player_id: PlayerId, position: BlockPos) {
-        self.push_previewed_op(CoreOp::OpenChest {
+    pub fn open_container_at(&mut self, player_id: PlayerId, position: BlockPos) {
+        self.push_previewed_op(CoreOp::OpenContainerAt {
             player_id,
             position,
         });
     }
 
-    pub fn open_crafting_table(&mut self, player_id: PlayerId) {
-        self.push_previewed_op(CoreOp::OpenCraftingTable { player_id });
+    pub fn open_virtual_container(&mut self, player_id: PlayerId, kind: ContainerKindId) {
+        self.push_previewed_op(CoreOp::OpenVirtualContainer { player_id, kind });
     }
 
-    pub fn open_furnace(&mut self, player_id: PlayerId, position: BlockPos) {
-        self.push_previewed_op(CoreOp::OpenFurnace {
-            player_id,
-            position,
-        });
-    }
-
-    pub fn set_block(&mut self, position: BlockPos, block: BlockState) {
+    pub fn set_block(&mut self, position: BlockPos, block: Option<BlockState>) {
         self.push_previewed_op(CoreOp::SetBlock { position, block });
     }
 
@@ -342,10 +335,13 @@ impl<'a> GameplayTransaction<'a> {
                 player_id,
                 username.clone(),
                 self.snapshot.world.config.spawn,
+                self.snapshot.content_behavior.starter_inventory(),
             )
         });
         player.username = username;
-        ServerCore::recompute_crafting_result_for_inventory(&mut player.inventory);
+        self.snapshot
+            .content_behavior
+            .normalize_player_inventory(&mut player.inventory);
 
         let _ = self
             .read_set
@@ -657,10 +653,13 @@ fn creative_inventory_set(
     let Some(player) = tx.player_snapshot(player_id) else {
         return;
     };
+    let content_behavior = tx.snapshot.content_behavior.clone();
     if tx.world_meta().game_mode != 1
         || !slot.is_storage_slot()
         || stack.is_some_and(|stack| {
-            !stack.is_supported_inventory_item() || stack.count == 0 || stack.count > 64
+            !content_behavior.is_supported_inventory_item(stack.key.as_str())
+                || stack.count == 0
+                || stack.count > 64
         })
     {
         reject_inventory_slot_events(tx, player_id, slot, &player);
@@ -686,14 +685,21 @@ fn dig_block(
         return;
     }
     let current = tx.block_state(position);
-    let protected_container = matches!(current.key.as_str(), catalog::CHEST | catalog::FURNACE)
+    let content_behavior = tx.snapshot.content_behavior.clone();
+    let protected_container = current
+        .as_ref()
+        .and_then(|block| content_behavior.container_kind_for_block(block))
+        .is_some()
         && tx
             .block_entity(position)
             .is_some_and(|entity| entity.has_inventory_contents());
-    if !tx.can_edit_block(player_id, position)
-        || current.is_air()
-        || current.key.as_str() == catalog::BEDROCK
-        || protected_container
+    let is_empty = current
+        .as_ref()
+        .is_none_or(|block| content_behavior.is_air_block(block));
+    let is_unbreakable = current
+        .as_ref()
+        .is_some_and(|block| content_behavior.is_unbreakable_block(block));
+    if !tx.can_edit_block(player_id, position) || is_empty || is_unbreakable || protected_container
     {
         tx.clear_mining(player_id);
         tx.emit_event(
@@ -707,18 +713,20 @@ fn dig_block(
     }
     if tx.world_meta().game_mode == 1 {
         tx.clear_mining(player_id);
-        tx.set_block(position, BlockState::air());
+        tx.set_block(position, None);
         return;
     }
-    let duration_ms = catalog::survival_mining_duration_ms(
-        &current,
-        catalog::tool_spec_for_item(
-            player
-                .inventory
-                .selected_hotbar_stack(player.selected_hotbar_slot),
-        ),
-    )
-    .unwrap_or(50);
+    let current = current.expect("non-empty breakable block after validation");
+    let duration_ms = content_behavior
+        .survival_mining_duration_ms(
+            &current,
+            content_behavior.tool_spec_for_item(
+                player
+                    .inventory
+                    .selected_hotbar_stack(player.selected_hotbar_slot),
+            ),
+        )
+        .unwrap_or(50);
     tx.begin_mining(player_id, position, duration_ms);
 }
 
@@ -749,20 +757,27 @@ fn place_block(
         place_rejection(tx, player_id, hand, place_pos, &player);
         return;
     }
-    let Some(block) = catalog::placeable_block_state_from_item_key(selected_stack.key.as_str())
+    let content_behavior = tx.snapshot.content_behavior.clone();
+    let Some(block) =
+        content_behavior.placeable_block_state_from_item_key(selected_stack.key.as_str())
     else {
         place_rejection(tx, player_id, hand, place_pos, &player);
         return;
     };
-    if !tx.can_edit_block(player_id, place_pos)
-        || tx.block_state(position).is_air()
-        || !tx.block_state(place_pos).is_air()
-    {
+    let target_block = tx.block_state(position);
+    let place_block = tx.block_state(place_pos);
+    let target_is_empty = target_block
+        .as_ref()
+        .is_none_or(|block| content_behavior.is_air_block(block));
+    let place_is_empty = place_block
+        .as_ref()
+        .is_none_or(|block| content_behavior.is_air_block(block));
+    if !tx.can_edit_block(player_id, place_pos) || target_is_empty || !place_is_empty {
         place_rejection(tx, player_id, hand, place_pos, &player);
         return;
     }
     tx.clear_mining(player_id);
-    tx.set_block(place_pos, block);
+    tx.set_block(place_pos, Some(block));
     if tx.world_meta().game_mode != 1 {
         tx.set_inventory_slot(
             player_id,
@@ -781,7 +796,11 @@ fn use_block(
     held_item: Option<&ItemStack>,
 ) {
     let target_block = tx.block_state(position);
-    if target_block.key.as_str() == catalog::CHEST {
+    if target_block
+        .as_ref()
+        .and_then(|block| tx.snapshot.content_behavior.container_kind_for_block(block))
+        .is_some()
+    {
         if !tx.can_edit_block(player_id, position) {
             tx.emit_event(
                 EventTarget::Player(player_id),
@@ -793,37 +812,7 @@ fn use_block(
             return;
         }
         tx.clear_mining(player_id);
-        tx.open_chest(player_id, position);
-        return;
-    }
-    if target_block.key.as_str() == catalog::CRAFTING_TABLE {
-        if !tx.can_edit_block(player_id, position) {
-            tx.emit_event(
-                EventTarget::Player(player_id),
-                CoreEvent::BlockChanged {
-                    position,
-                    block: target_block,
-                },
-            );
-            return;
-        }
-        tx.clear_mining(player_id);
-        tx.open_crafting_table(player_id);
-        return;
-    }
-    if target_block.key.as_str() == catalog::FURNACE {
-        if !tx.can_edit_block(player_id, position) {
-            tx.emit_event(
-                EventTarget::Player(player_id),
-                CoreEvent::BlockChanged {
-                    position,
-                    block: target_block,
-                },
-            );
-            return;
-        }
-        tx.clear_mining(player_id);
-        tx.open_furnace(player_id, position);
+        tx.open_container_at(player_id, position);
         return;
     }
     place_block(tx, player_id, hand, position, face, held_item);
@@ -839,7 +828,7 @@ fn reject_inventory_slot_events(
         EventTarget::Player(player_id),
         CoreEvent::InventorySlotChanged {
             window_id: 0,
-            container: InventoryContainer::Player,
+            container: tx.snapshot.content_behavior.player_container_kind(),
             slot,
             stack: player.inventory.get_slot(slot).cloned(),
         },
@@ -867,7 +856,12 @@ fn place_rejection(
             block,
         },
     );
-    for event in ServerCore::place_inventory_correction(player_id, hand, player) {
+    for event in ServerCore::place_inventory_correction(
+        player_id,
+        hand,
+        player,
+        tx.snapshot.content_behavior.player_container_kind(),
+    ) {
         tx.emit_event(event.target, event.event);
     }
 }

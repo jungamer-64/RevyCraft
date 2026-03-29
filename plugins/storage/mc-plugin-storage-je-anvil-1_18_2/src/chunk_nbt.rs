@@ -4,12 +4,20 @@ use super::JE_1_18_2_MIN_SECTION_Y;
 use super::nbt::{
     NbtTag, as_compound, byte_field, int_field, list_field, short_field, string_field,
 };
+use mc_content_canonical::catalog;
 use mc_core::{
-    BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, ChunkSection, ItemStack,
-    expand_block_index,
+    BlockEntityKindId, BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, ChunkSection,
+    ContainerBlockEntityState, ContainerPropertyKey, ItemStack, expand_block_index,
 };
 use mc_proto_common::StorageError;
 use std::collections::{BTreeMap, BTreeSet};
+
+const CHEST_BLOCK_ENTITY_KIND: &str = "canonical:chest";
+const FURNACE_BLOCK_ENTITY_KIND: &str = "canonical:furnace";
+const FURNACE_BURN_LEFT: &str = "canonical:furnace.burn_left";
+const FURNACE_BURN_MAX: &str = "canonical:furnace.burn_max";
+const FURNACE_COOK_PROGRESS: &str = "canonical:furnace.cook_progress";
+const FURNACE_COOK_TOTAL: &str = "canonical:furnace.cook_total";
 
 pub(super) fn chunk_to_nbt(
     chunk: &ChunkColumn,
@@ -129,12 +137,12 @@ fn decode_section_blocks(
         let state = palette.get(palette_index).ok_or_else(|| {
             StorageError::InvalidData("block state palette index was out of bounds".to_string())
         })?;
-        if state.is_air() {
+        if state.key.as_str() == catalog::AIR {
             continue;
         }
         let (x, y, z) =
             expand_block_index(u16::try_from(index).expect("block index should fit into u16"));
-        chunk.set_block(x, section_y * 16 + i32::from(y), z, state.clone());
+        chunk.set_block(x, section_y * 16 + i32::from(y), z, Some(state.clone()));
     }
     Ok(())
 }
@@ -353,7 +361,7 @@ fn encode_section(
 }
 
 fn encode_block_states(snapshot_section: Option<&ChunkSection>) -> NbtTag {
-    let mut palette = vec![BlockState::air()];
+    let mut palette = vec![BlockState::new(catalog::AIR)];
     let mut indices = vec![0_usize; 4096];
 
     if let Some(snapshot_section) = snapshot_section {
@@ -509,56 +517,74 @@ fn encode_block_entity(
     compound.insert("y".to_string(), NbtTag::Int(position.y));
     compound.insert("z".to_string(), NbtTag::Int(position.z));
     match block_entity {
-        BlockEntityState::Chest { slots } => {
-            compound.insert(
-                "id".to_string(),
-                NbtTag::String("minecraft:chest".to_string()),
-            );
-            compound.insert(
-                "Items".to_string(),
-                NbtTag::List(
-                    10,
-                    slots
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, stack)| {
-                            stack.as_ref().map(|stack| encode_item_slot(index, stack))
-                        })
-                        .collect(),
-                ),
-            );
-        }
-        BlockEntityState::Furnace {
-            input,
-            fuel,
-            output,
-            burn_left,
-            burn_max,
-            cook_progress,
-            cook_total,
-        } => {
-            compound.insert(
-                "id".to_string(),
-                NbtTag::String("minecraft:furnace".to_string()),
-            );
-            compound.insert(
-                "Items".to_string(),
-                NbtTag::List(
-                    10,
-                    [input.as_ref(), fuel.as_ref(), output.as_ref()]
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(index, stack)| {
-                            stack.map(|stack| encode_item_slot(index, stack))
-                        })
-                        .collect(),
-                ),
-            );
-            compound.insert("BurnTime".to_string(), NbtTag::Short(*burn_left));
-            compound.insert("BurnTimeMax".to_string(), NbtTag::Short(*burn_max));
-            compound.insert("CookTime".to_string(), NbtTag::Short(*cook_progress));
-            compound.insert("CookTimeTotal".to_string(), NbtTag::Short(*cook_total));
-        }
+        BlockEntityState::Container(container) => match container.kind.as_str() {
+            CHEST_BLOCK_ENTITY_KIND => {
+                compound.insert(
+                    "id".to_string(),
+                    NbtTag::String("minecraft:chest".to_string()),
+                );
+                compound.insert(
+                    "Items".to_string(),
+                    NbtTag::List(
+                        10,
+                        container
+                            .slots
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, stack)| {
+                                stack.as_ref().map(|stack| encode_item_slot(index, stack))
+                            })
+                            .collect(),
+                    ),
+                );
+            }
+            "canonical:furnace" => {
+                compound.insert(
+                    "id".to_string(),
+                    NbtTag::String("minecraft:furnace".to_string()),
+                );
+                compound.insert(
+                    "Items".to_string(),
+                    NbtTag::List(
+                        10,
+                        container
+                            .slots
+                            .iter()
+                            .take(3)
+                            .enumerate()
+                            .filter_map(|(index, stack)| {
+                                stack.as_ref().map(|stack| encode_item_slot(index, stack))
+                            })
+                            .collect(),
+                    ),
+                );
+                compound.insert(
+                    "BurnTime".to_string(),
+                    NbtTag::Short(container_property(container, "canonical:furnace.burn_left")),
+                );
+                compound.insert(
+                    "BurnTime".to_string(),
+                    NbtTag::Short(container_property(container, FURNACE_BURN_LEFT)),
+                );
+                compound.insert(
+                    "BurnTimeMax".to_string(),
+                    NbtTag::Short(container_property(container, FURNACE_BURN_MAX)),
+                );
+                compound.insert(
+                    "CookTime".to_string(),
+                    NbtTag::Short(container_property(container, FURNACE_COOK_PROGRESS)),
+                );
+                compound.insert(
+                    "CookTimeTotal".to_string(),
+                    NbtTag::Short(container_property(container, FURNACE_COOK_TOTAL)),
+                );
+            }
+            kind => {
+                return Err(StorageError::InvalidData(format!(
+                    "unsupported container block entity kind `{kind}`"
+                )));
+            }
+        },
     }
     Ok(NbtTag::Compound(compound))
 }
@@ -569,13 +595,29 @@ fn block_entity_kind_matches(
 ) -> bool {
     match string_field(existing_compound, "id").ok().as_deref() {
         Some("minecraft:chest") | Some("Chest") => {
-            matches!(block_entity, BlockEntityState::Chest { .. })
+            matches!(
+                block_entity,
+                BlockEntityState::Container(container)
+                    if container.kind.as_str() == CHEST_BLOCK_ENTITY_KIND
+            )
         }
         Some("minecraft:furnace") | Some("Furnace") => {
-            matches!(block_entity, BlockEntityState::Furnace { .. })
+            matches!(
+                block_entity,
+                BlockEntityState::Container(container)
+                    if container.kind.as_str() == FURNACE_BLOCK_ENTITY_KIND
+            )
         }
         _ => false,
     }
+}
+
+fn container_property(container: &mc_core::ContainerBlockEntityState, key: &str) -> i16 {
+    container
+        .properties
+        .get(&mc_core::ContainerPropertyKey::new(key))
+        .copied()
+        .unwrap_or_default()
 }
 
 fn encode_item_slot(index: usize, stack: &ItemStack) -> NbtTag {
@@ -610,24 +652,39 @@ fn decode_block_entity(entry: &NbtTag) -> Result<(BlockPos, BlockEntityState), S
     match id.as_str() {
         "minecraft:chest" | "Chest" => Ok((
             position,
-            BlockEntityState::Chest {
+            BlockEntityState::Container(ContainerBlockEntityState {
+                kind: BlockEntityKindId::new(CHEST_BLOCK_ENTITY_KIND),
                 slots: decode_container_items(items, 27)?,
-            },
+                properties: BTreeMap::new(),
+            }),
         )),
         "minecraft:furnace" | "Furnace" => {
-            let mut slots = decode_container_items(items, 3)?.into_iter();
+            let slots = decode_container_items(items, 3)?;
             Ok((
                 position,
-                BlockEntityState::Furnace {
-                    input: slots.next().flatten(),
-                    fuel: slots.next().flatten(),
-                    output: slots.next().flatten(),
-                    burn_left: short_field(compound, "BurnTime").unwrap_or(0),
-                    burn_max: short_field(compound, "BurnTimeMax")
-                        .unwrap_or_else(|_| short_field(compound, "BurnTime").unwrap_or(0)),
-                    cook_progress: short_field(compound, "CookTime").unwrap_or(0),
-                    cook_total: short_field(compound, "CookTimeTotal").unwrap_or(200),
-                },
+                BlockEntityState::Container(ContainerBlockEntityState {
+                    kind: BlockEntityKindId::new(FURNACE_BLOCK_ENTITY_KIND),
+                    slots,
+                    properties: BTreeMap::from([
+                        (
+                            ContainerPropertyKey::new(FURNACE_BURN_LEFT),
+                            short_field(compound, "BurnTime").unwrap_or(0),
+                        ),
+                        (
+                            ContainerPropertyKey::new(FURNACE_BURN_MAX),
+                            short_field(compound, "BurnTimeMax")
+                                .unwrap_or_else(|_| short_field(compound, "BurnTime").unwrap_or(0)),
+                        ),
+                        (
+                            ContainerPropertyKey::new(FURNACE_COOK_PROGRESS),
+                            short_field(compound, "CookTime").unwrap_or(0),
+                        ),
+                        (
+                            ContainerPropertyKey::new(FURNACE_COOK_TOTAL),
+                            short_field(compound, "CookTimeTotal").unwrap_or(200),
+                        ),
+                    ]),
+                }),
             ))
         }
         _ => Err(StorageError::InvalidData(format!(

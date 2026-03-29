@@ -1,6 +1,7 @@
 use bedrockrs_proto::V924;
 use bedrockrs_proto::v662::packets::LevelChunkPacket;
 use bedrockrs_proto::v662::types::ChunkPos as BedrockChunkPos;
+use mc_content_canonical::catalog;
 use mc_core::{BlockState, ChunkColumn, ChunkSection};
 use mc_proto_common::ProtocolError;
 use nbtx::Value;
@@ -94,9 +95,10 @@ fn write_subchunk(
 fn encode_palette_indices(
     section: Option<&ChunkSection>,
 ) -> (Vec<BedrockBlockPaletteEntry>, Vec<u16>) {
-    let air = bedrock_palette_entry(&BlockState::air());
+    let air_block = BlockState::new(catalog::AIR);
+    let air = bedrock_palette_entry(&air_block);
     let mut palette = vec![air];
-    let mut lookup = HashMap::from([(block_palette_key(&BlockState::air()), 0_u16)]);
+    let mut lookup = HashMap::from([(block_palette_key(&air_block), 0_u16)]);
     let mut indices = vec![0_u16; 16 * 16 * 16];
 
     if let Some(section) = section {
@@ -106,7 +108,7 @@ fn encode_palette_indices(
                     let block = section
                         .get_block(x, y, z)
                         .cloned()
-                        .unwrap_or_else(BlockState::air);
+                        .unwrap_or_else(|| BlockState::new(catalog::AIR));
                     let key = block_palette_key(&block);
                     let palette_index = if let Some(existing) = lookup.get(&key) {
                         *existing

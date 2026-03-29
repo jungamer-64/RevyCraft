@@ -8,9 +8,9 @@ use crate::codec::__internal::gameplay_semantic::{
     encode_gameplay_request_payload, encode_gameplay_response_payload,
 };
 use crate::codec::__internal::shared::{
-    decode_block_pos, decode_block_state, decode_option, decode_player_id, decode_player_snapshot,
-    decode_world_meta, encode_block_pos, encode_block_state, encode_option, encode_player_id,
-    encode_player_snapshot, encode_world_meta,
+    decode_block_pos, decode_option, decode_optional_block_state, decode_player_id,
+    decode_player_snapshot, decode_world_meta, encode_block_pos, encode_option,
+    encode_optional_block_state, encode_player_id, encode_player_snapshot, encode_world_meta,
 };
 use mc_core::{
     CapabilityAnnouncement, GameplayCapability, GameplayCommand, GameplayProfileId, PlayerId,
@@ -350,10 +350,10 @@ pub mod host_blob {
     ///
     /// Returns an error when the block state cannot be serialized.
     pub fn encode_block_state(
-        block_state: &mc_core::BlockState,
+        block_state: Option<&mc_core::BlockState>,
     ) -> Result<Vec<u8>, ProtocolCodecError> {
         let mut encoder = Encoder::default();
-        super::encode_block_state(&mut encoder, block_state)?;
+        encode_optional_block_state(&mut encoder, block_state)?;
         Ok(encoder.into_inner())
     }
 
@@ -362,9 +362,11 @@ pub mod host_blob {
     /// # Errors
     ///
     /// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
-    pub fn decode_block_state(bytes: &[u8]) -> Result<mc_core::BlockState, ProtocolCodecError> {
+    pub fn decode_block_state(
+        bytes: &[u8],
+    ) -> Result<Option<mc_core::BlockState>, ProtocolCodecError> {
         let mut decoder = Decoder::new(bytes);
-        let block = super::decode_block_state(&mut decoder)?;
+        let block = decode_optional_block_state(&mut decoder)?;
         decoder.finish()?;
         Ok(block)
     }
@@ -527,14 +529,14 @@ pub mod host_blob {
     }
 
     #[must_use]
-    pub fn encode_open_chest(player_id: PlayerId, position: mc_core::BlockPos) -> Vec<u8> {
+    pub fn encode_open_container_at(player_id: PlayerId, position: mc_core::BlockPos) -> Vec<u8> {
         let mut encoder = Encoder::default();
         super::encode_player_id(&mut encoder, player_id);
         super::encode_block_pos(&mut encoder, position);
         encoder.into_inner()
     }
 
-    pub fn decode_open_chest(
+    pub fn decode_open_container_at(
         bytes: &[u8],
     ) -> Result<(PlayerId, mc_core::BlockPos), ProtocolCodecError> {
         let mut decoder = Decoder::new(bytes);
@@ -544,42 +546,43 @@ pub mod host_blob {
         Ok((player_id, position))
     }
 
-    #[must_use]
-    pub fn encode_open_furnace(player_id: PlayerId, position: mc_core::BlockPos) -> Vec<u8> {
-        encode_open_chest(player_id, position)
+    pub fn encode_open_virtual_container(
+        player_id: PlayerId,
+        kind: &mc_core::ContainerKindId,
+    ) -> Vec<u8> {
+        let mut encoder = Encoder::default();
+        super::encode_player_id(&mut encoder, player_id);
+        crate::codec::__internal::inventory::encode_inventory_container(&mut encoder, kind)
+            .expect("container kind should encode for gameplay host payload");
+        encoder.into_inner()
     }
 
-    pub fn decode_open_furnace(
+    pub fn decode_open_virtual_container(
         bytes: &[u8],
-    ) -> Result<(PlayerId, mc_core::BlockPos), ProtocolCodecError> {
-        decode_open_chest(bytes)
-    }
-
-    #[must_use]
-    pub fn encode_open_crafting_table(player_id: PlayerId) -> Vec<u8> {
-        encode_player_id(player_id)
-    }
-
-    pub fn decode_open_crafting_table(bytes: &[u8]) -> Result<PlayerId, ProtocolCodecError> {
-        decode_player_id(bytes)
+    ) -> Result<(PlayerId, mc_core::ContainerKindId), ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let player_id = super::decode_player_id(&mut decoder)?;
+        let kind = crate::codec::__internal::inventory::decode_inventory_container(&mut decoder)?;
+        decoder.finish()?;
+        Ok((player_id, kind))
     }
 
     pub fn encode_set_block(
         position: mc_core::BlockPos,
-        block: &mc_core::BlockState,
+        block: Option<&mc_core::BlockState>,
     ) -> Result<Vec<u8>, ProtocolCodecError> {
         let mut encoder = Encoder::default();
         super::encode_block_pos(&mut encoder, position);
-        super::encode_block_state(&mut encoder, block)?;
+        encode_optional_block_state(&mut encoder, block)?;
         Ok(encoder.into_inner())
     }
 
     pub fn decode_set_block(
         bytes: &[u8],
-    ) -> Result<(mc_core::BlockPos, mc_core::BlockState), ProtocolCodecError> {
+    ) -> Result<(mc_core::BlockPos, Option<mc_core::BlockState>), ProtocolCodecError> {
         let mut decoder = Decoder::new(bytes);
         let position = super::decode_block_pos(&mut decoder)?;
-        let block = super::decode_block_state(&mut decoder)?;
+        let block = decode_optional_block_state(&mut decoder)?;
         decoder.finish()?;
         Ok((position, block))
     }
@@ -790,44 +793,91 @@ mod tests {
             sample_world_meta()
         );
 
-        let block_blob = encode_block_state(&BlockState::stone()).expect("block state encodes");
+        let block_blob = encode_block_state(Some(&BlockState::new("minecraft:stone")))
+            .expect("block state encodes");
         assert_eq!(
             decode_block_state(&block_blob).expect("block state decodes"),
-            BlockState::stone()
+            Some(BlockState::new("minecraft:stone"))
         );
 
-        let block_entity_blob = encode_block_entity(Some(&BlockEntityState::Chest {
-            slots: vec![Some(ItemStack::new("minecraft:glass", 1, 0)), None],
-        }))
+        let block_entity_blob = encode_block_entity(Some(&BlockEntityState::Container(
+            mc_core::ContainerBlockEntityState {
+                kind: mc_core::BlockEntityKindId::new("canonical:chest"),
+                slots: vec![Some(ItemStack::new("minecraft:glass", 1, 0)), None],
+                properties: std::collections::BTreeMap::new(),
+            },
+        )))
         .expect("block entity encodes");
         assert_eq!(
             decode_block_entity(&block_entity_blob).expect("block entity decodes"),
-            Some(BlockEntityState::Chest {
-                slots: vec![Some(ItemStack::new("minecraft:glass", 1, 0)), None],
-            })
+            Some(BlockEntityState::Container(
+                mc_core::ContainerBlockEntityState {
+                    kind: mc_core::BlockEntityKindId::new("canonical:chest"),
+                    slots: vec![Some(ItemStack::new("minecraft:glass", 1, 0)), None],
+                    properties: std::collections::BTreeMap::new(),
+                }
+            ))
         );
 
-        let furnace_blob = encode_block_entity(Some(&BlockEntityState::Furnace {
-            input: Some(ItemStack::new("minecraft:sand", 1, 0)),
-            fuel: Some(ItemStack::new("minecraft:oak_planks", 1, 0)),
-            output: Some(ItemStack::new("minecraft:glass", 1, 0)),
-            burn_left: 120,
-            burn_max: 300,
-            cook_progress: 42,
-            cook_total: 200,
-        }))
+        let furnace_blob = encode_block_entity(Some(&BlockEntityState::Container(
+            mc_core::ContainerBlockEntityState {
+                kind: mc_core::BlockEntityKindId::new("canonical:furnace"),
+                slots: vec![
+                    Some(ItemStack::new("minecraft:sand", 1, 0)),
+                    Some(ItemStack::new("minecraft:oak_planks", 1, 0)),
+                    Some(ItemStack::new("minecraft:glass", 1, 0)),
+                ],
+                properties: std::collections::BTreeMap::from([
+                    (
+                        mc_core::ContainerPropertyKey::new("canonical:furnace.burn_left"),
+                        120,
+                    ),
+                    (
+                        mc_core::ContainerPropertyKey::new("canonical:furnace.burn_max"),
+                        300,
+                    ),
+                    (
+                        mc_core::ContainerPropertyKey::new("canonical:furnace.cook_progress"),
+                        42,
+                    ),
+                    (
+                        mc_core::ContainerPropertyKey::new("canonical:furnace.cook_total"),
+                        200,
+                    ),
+                ]),
+            },
+        )))
         .expect("furnace block entity encodes");
         assert_eq!(
             decode_block_entity(&furnace_blob).expect("furnace block entity decodes"),
-            Some(BlockEntityState::Furnace {
-                input: Some(ItemStack::new("minecraft:sand", 1, 0)),
-                fuel: Some(ItemStack::new("minecraft:oak_planks", 1, 0)),
-                output: Some(ItemStack::new("minecraft:glass", 1, 0)),
-                burn_left: 120,
-                burn_max: 300,
-                cook_progress: 42,
-                cook_total: 200,
-            })
+            Some(BlockEntityState::Container(
+                mc_core::ContainerBlockEntityState {
+                    kind: mc_core::BlockEntityKindId::new("canonical:furnace"),
+                    slots: vec![
+                        Some(ItemStack::new("minecraft:sand", 1, 0)),
+                        Some(ItemStack::new("minecraft:oak_planks", 1, 0)),
+                        Some(ItemStack::new("minecraft:glass", 1, 0)),
+                    ],
+                    properties: std::collections::BTreeMap::from([
+                        (
+                            mc_core::ContainerPropertyKey::new("canonical:furnace.burn_left"),
+                            120
+                        ),
+                        (
+                            mc_core::ContainerPropertyKey::new("canonical:furnace.burn_max"),
+                            300
+                        ),
+                        (
+                            mc_core::ContainerPropertyKey::new("canonical:furnace.cook_progress"),
+                            42,
+                        ),
+                        (
+                            mc_core::ContainerPropertyKey::new("canonical:furnace.cook_total"),
+                            200
+                        ),
+                    ]),
+                }
+            ))
         );
 
         let key = encode_can_edit_block_key(sample_player_id(), BlockPos::new(1, 2, 3));
@@ -839,10 +889,11 @@ mod tests {
         let position_bytes = encode_block_pos(BlockPos::new(4, 5, 6));
         assert_eq!(
             decode_block_state(
-                &encode_block_state(&BlockState::new("minecraft:glass")).expect("block encodes")
+                &encode_block_state(Some(&BlockState::new("minecraft:glass")))
+                    .expect("block encodes")
             )
             .expect("block decodes"),
-            BlockState::new("minecraft:glass")
+            Some(BlockState::new("minecraft:glass"))
         );
         assert!(!position_bytes.is_empty());
     }

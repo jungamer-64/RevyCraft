@@ -187,8 +187,14 @@ fn empty_world_save_generates_flat_world_files() -> Result<(), StorageError> {
 
     assert!(world_dir.join("level.dat").is_file());
     assert!(world_dir.join("playerdata").is_dir());
-    assert_eq!(spawn_chunk.get_block(0, 0, 0), BlockState::bedrock());
-    assert_eq!(spawn_chunk.get_block(0, 4, 0), BlockState::grass_block());
+    assert_eq!(
+        spawn_chunk.get_block(0, 0, 0),
+        Some(BlockState::new("minecraft:bedrock"))
+    );
+    assert_eq!(
+        spawn_chunk.get_block(0, 3, 0),
+        Some(BlockState::new("minecraft:grass_block"))
+    );
     assert!(
         fs::read_dir(world_dir.join("region"))?
             .filter_map(Result::ok)
@@ -205,11 +211,11 @@ fn sample_snapshot() -> WorldSnapshot {
     patterned
         .properties
         .insert("axis".to_string(), "y".to_string());
-    chunk.set_block(1, -64, 1, BlockState::bedrock());
-    chunk.set_block(2, -63, 2, BlockState::stone());
-    chunk.set_block(4, -63, 4, BlockState::chest());
-    chunk.set_block(6, 20, 6, BlockState::furnace());
-    chunk.set_block(3, 20, 3, patterned);
+    chunk.set_block(1, -64, 1, Some(BlockState::new("minecraft:bedrock")));
+    chunk.set_block(2, -63, 2, Some(BlockState::new("minecraft:stone")));
+    chunk.set_block(4, -63, 4, Some(BlockState::new("minecraft:chest")));
+    chunk.set_block(6, 20, 6, Some(BlockState::new("minecraft:furnace")));
+    chunk.set_block(3, 20, 3, Some(patterned));
     chunk.biomes = vec![4; 256];
 
     let mut chunks = BTreeMap::new();
@@ -220,19 +226,46 @@ fn sample_snapshot() -> WorldSnapshot {
     let mut block_entities = BTreeMap::new();
     block_entities.insert(
         BlockPos::new(4, -63, 4),
-        BlockEntityState::Chest { slots: chest_slots },
+        BlockEntityState::container(
+            mc_content_canonical::ids::CHEST_BLOCK_ENTITY,
+            chest_slots,
+            BTreeMap::new(),
+        ),
     );
     block_entities.insert(
         BlockPos::new(6, 20, 6),
-        BlockEntityState::Furnace {
-            input: Some(ItemStack::new("minecraft:iron_ore", 3, 0)),
-            fuel: Some(ItemStack::new("minecraft:coal", 5, 0)),
-            output: Some(ItemStack::new("minecraft:iron_ingot", 1, 0)),
-            burn_left: 40,
-            burn_max: 200,
-            cook_progress: 80,
-            cook_total: 200,
-        },
+        BlockEntityState::container(
+            mc_content_canonical::ids::FURNACE_BLOCK_ENTITY,
+            vec![
+                Some(ItemStack::new("minecraft:iron_ore", 3, 0)),
+                Some(ItemStack::new("minecraft:coal", 5, 0)),
+                Some(ItemStack::new("minecraft:iron_ingot", 1, 0)),
+            ],
+            BTreeMap::from([
+                (
+                    mc_core::ContainerPropertyKey::new(
+                        mc_content_canonical::ids::FURNACE_BURN_LEFT,
+                    ),
+                    40,
+                ),
+                (
+                    mc_core::ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_BURN_MAX),
+                    200,
+                ),
+                (
+                    mc_core::ContainerPropertyKey::new(
+                        mc_content_canonical::ids::FURNACE_COOK_PROGRESS,
+                    ),
+                    80,
+                ),
+                (
+                    mc_core::ContainerPropertyKey::new(
+                        mc_content_canonical::ids::FURNACE_COOK_TOTAL,
+                    ),
+                    200,
+                ),
+            ]),
+        ),
     );
 
     let player = sample_player();

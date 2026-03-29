@@ -1,11 +1,10 @@
 use super::{
-    OpenInventoryWindow, ServerCore,
+    ServerCore,
     inventory::{
         apply_inventory_click_state, close_inventory_window_state,
-        close_player_active_container_state, inventory_diff_events, open_non_player_window_state,
-        open_world_chest_state, open_world_crafting_table_state, open_world_furnace_state,
-        property_diff_events, property_events, tick_active_container_state,
-        tick_dropped_item_state, window_resync_events,
+        close_player_active_container_state, inventory_diff_events, open_virtual_container_state,
+        open_world_container_state, property_diff_events, property_events,
+        tick_active_container_state, tick_dropped_item_state, window_resync_events,
     },
     login::{finalize_login_delta, state_update_client_settings},
     mining::{
@@ -23,10 +22,11 @@ use crate::events::{
     CoreEvent, EventTarget, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
     InventoryTransactionContext, TargetedEvent,
 };
-use crate::inventory::{InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack};
+use crate::inventory::{InventorySlot, InventoryWindowContents, ItemStack};
 use crate::player::PlayerSnapshot;
 use crate::world::{BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, Vec3};
 use crate::{ConnectionId, EntityId, PlayerId};
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]
@@ -67,21 +67,13 @@ pub(super) enum CoreOp {
         button: InventoryClickButton,
         validation: InventoryClickValidation,
     },
-    OpenWindow {
-        player_id: PlayerId,
-        window: OpenInventoryWindow,
-        title: String,
-    },
-    OpenChest {
+    OpenContainerAt {
         player_id: PlayerId,
         position: BlockPos,
     },
-    OpenCraftingTable {
+    OpenVirtualContainer {
         player_id: PlayerId,
-    },
-    OpenFurnace {
-        player_id: PlayerId,
-        position: BlockPos,
+        kind: ContainerKindId,
     },
     CloseContainer {
         player_id: PlayerId,
@@ -107,7 +99,7 @@ pub(super) enum CoreOp {
         player_id: PlayerId,
         position: BlockPos,
     },
-    TickFurnaceWindow {
+    TickActiveContainer {
         player_id: PlayerId,
     },
     TickDroppedItem {
@@ -122,7 +114,7 @@ pub(super) enum CoreOp {
     },
     SetBlock {
         position: BlockPos,
-        block: BlockState,
+        block: Option<BlockState>,
     },
     SpawnDroppedItem {
         expected_entity_id: Option<EntityId>,
@@ -202,21 +194,21 @@ pub(super) struct OpenContainerDelta {
     pub(super) closed: Vec<CloseContainerDelta>,
     pub(super) player_id: PlayerId,
     pub(super) window_id: u8,
-    pub(super) container: InventoryContainer,
+    pub(super) container: ContainerKindId,
     pub(super) title: String,
     pub(super) contents: InventoryWindowContents,
-    pub(super) properties: Vec<(u8, i16)>,
+    pub(super) properties: Vec<(ContainerPropertyKey, i16)>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct WindowDiffDelta {
     pub(super) player_id: PlayerId,
     pub(super) window_id: u8,
-    pub(super) container: InventoryContainer,
+    pub(super) container: ContainerKindId,
     pub(super) before_contents: InventoryWindowContents,
     pub(super) after_contents: InventoryWindowContents,
-    pub(super) before_properties: Vec<(u8, i16)>,
-    pub(super) after_properties: Vec<(u8, i16)>,
+    pub(super) before_properties: Vec<(ContainerPropertyKey, i16)>,
+    pub(super) after_properties: Vec<(ContainerPropertyKey, i16)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -248,13 +240,13 @@ pub(super) struct InventoryClickDelta {
     pub(super) transaction: InventoryTransactionContext,
     pub(super) accepted: bool,
     pub(super) should_resync_on_reject: bool,
-    pub(super) container: InventoryContainer,
+    pub(super) container: ContainerKindId,
     pub(super) window_id: u8,
     pub(super) resolved_slot: Option<InventorySlot>,
     pub(super) before_contents: InventoryWindowContents,
     pub(super) after_contents: InventoryWindowContents,
-    pub(super) before_properties: Vec<(u8, i16)>,
-    pub(super) after_properties: Vec<(u8, i16)>,
+    pub(super) before_properties: Vec<(ContainerPropertyKey, i16)>,
+    pub(super) after_properties: Vec<(ContainerPropertyKey, i16)>,
     pub(super) before_cursor: Option<ItemStack>,
     pub(super) after_cursor: Option<ItemStack>,
     pub(super) selected_hotbar_before: u8,
@@ -436,24 +428,13 @@ pub(super) fn reduce_core_op(
             button,
             &validation,
         )),
-        CoreOp::OpenWindow {
-            player_id,
-            window,
-            title,
-        } => AppliedCoreOp::OpenContainer(open_non_player_window_state(
-            state, player_id, window, title,
-        )),
-        CoreOp::OpenChest {
+        CoreOp::OpenContainerAt {
             player_id,
             position,
-        } => AppliedCoreOp::OpenContainer(open_world_chest_state(state, player_id, position)),
-        CoreOp::OpenCraftingTable { player_id } => {
-            AppliedCoreOp::OpenContainer(open_world_crafting_table_state(state, player_id))
+        } => AppliedCoreOp::OpenContainer(open_world_container_state(state, player_id, position)),
+        CoreOp::OpenVirtualContainer { player_id, kind } => {
+            AppliedCoreOp::OpenContainer(open_virtual_container_state(state, player_id, kind))
         }
-        CoreOp::OpenFurnace {
-            player_id,
-            position,
-        } => AppliedCoreOp::OpenContainer(open_world_furnace_state(state, player_id, position)),
         CoreOp::CloseContainer {
             player_id,
             window_id,
@@ -510,7 +491,7 @@ pub(super) fn reduce_core_op(
         } => AppliedCoreOp::CompleteMining(state_complete_survival_mining(
             state, player_id, position, now_ms,
         )),
-        CoreOp::TickFurnaceWindow { player_id } => {
+        CoreOp::TickActiveContainer { player_id } => {
             AppliedCoreOp::WindowDiff(tick_active_container_state(state, player_id))
         }
         CoreOp::TickDroppedItem { entity_id } => {
@@ -596,19 +577,19 @@ impl CoreEventBuilder {
                 .map(|delta| self.build_selected_hotbar(delta))
                 .unwrap_or_default(),
             AppliedCoreOp::SetInventorySlot(delta) => delta
-                .map(|delta| self.build_inventory_slot(delta))
+                .map(|delta| self.build_inventory_slot(core, delta))
                 .unwrap_or_default(),
             AppliedCoreOp::SetViewDistance(delta) => delta
                 .map(|delta| self.build_view_update(delta))
                 .unwrap_or_default(),
             AppliedCoreOp::InventoryClick(delta) => delta
-                .map(|delta| self.build_inventory_click(delta))
+                .map(|delta| self.build_inventory_click(core, delta))
                 .unwrap_or_default(),
             AppliedCoreOp::OpenContainer(delta) => delta
-                .map(|delta| self.build_open_container(delta))
+                .map(|delta| self.build_open_container(core, delta))
                 .unwrap_or_default(),
             AppliedCoreOp::CloseContainer(delta) => delta
-                .map(|delta| self.build_close_container(delta))
+                .map(|delta| self.build_close_container(core, delta))
                 .unwrap_or_default(),
             AppliedCoreOp::ClearMining(delta) => delta
                 .map(|delta| self.build_clear_mining(core, delta))
@@ -623,7 +604,7 @@ impl CoreEventBuilder {
                 .map(|delta| self.build_complete_mining(core, delta))
                 .unwrap_or_default(),
             AppliedCoreOp::WindowDiff(delta) => delta
-                .map(|delta| self.build_window_diff(delta))
+                .map(|delta| self.build_window_diff(core, delta))
                 .unwrap_or_default(),
             AppliedCoreOp::DroppedItemTick(delta) => self.build_dropped_item_tick(core, delta),
             AppliedCoreOp::SetBlock(delta) => self.build_set_block(core, delta),
@@ -709,12 +690,17 @@ impl CoreEventBuilder {
         }]
     }
 
-    fn build_inventory_slot(&self, delta: InventorySlotDelta) -> Vec<TargetedEvent> {
+    fn build_inventory_slot(
+        &self,
+        core: &ServerCore,
+        delta: InventorySlotDelta,
+    ) -> Vec<TargetedEvent> {
+        let player_container = core.content_behavior.player_container_kind();
         let mut events = vec![TargetedEvent {
             target: EventTarget::Player(delta.player_id),
             event: CoreEvent::InventorySlotChanged {
                 window_id: 0,
-                container: InventoryContainer::Player,
+                container: player_container.clone(),
                 slot: delta.slot,
                 stack: delta.stack,
             },
@@ -724,7 +710,7 @@ impl CoreEventBuilder {
                 target: EventTarget::Player(delta.player_id),
                 event: CoreEvent::InventorySlotChanged {
                     window_id: 0,
-                    container: InventoryContainer::Player,
+                    container: player_container,
                     slot: InventorySlot::crafting_result(),
                     stack: crafting_result,
                 },
@@ -746,7 +732,13 @@ impl CoreEventBuilder {
             .collect()
     }
 
-    fn build_inventory_click(&self, delta: InventoryClickDelta) -> Vec<TargetedEvent> {
+    fn build_inventory_click(
+        &self,
+        core: &ServerCore,
+        delta: InventoryClickDelta,
+    ) -> Vec<TargetedEvent> {
+        let content_behavior = core.content_behavior.as_ref();
+        let player_container = content_behavior.player_container_kind();
         let mut events = vec![TargetedEvent {
             target: EventTarget::Player(delta.player_id),
             event: CoreEvent::InventoryTransactionProcessed {
@@ -760,9 +752,10 @@ impl CoreEventBuilder {
                 return events;
             }
             events.extend(window_resync_events(
+                content_behavior,
                 delta.player_id,
                 delta.window_id,
-                delta.container,
+                &delta.container,
                 &delta.after_contents,
                 delta.selected_hotbar_after,
                 delta.after_cursor.as_ref(),
@@ -778,8 +771,9 @@ impl CoreEventBuilder {
         }
 
         events.extend(inventory_diff_events(
+            content_behavior,
             delta.window_id,
-            delta.container,
+            &delta.container,
             delta.player_id,
             &delta.before_contents,
             &delta.after_contents,
@@ -798,7 +792,7 @@ impl CoreEventBuilder {
                 },
             });
         }
-        if delta.container == InventoryContainer::Player
+        if delta.container == player_container
             && delta.selected_hotbar_before != delta.selected_hotbar_after
         {
             events.push(TargetedEvent {
@@ -809,23 +803,27 @@ impl CoreEventBuilder {
             });
         }
         for viewer_sync in delta.world_sync.window_diffs {
-            events.extend(self.build_window_diff(viewer_sync));
+            events.extend(self.build_window_diff(core, viewer_sync));
         }
         events
     }
 
-    fn build_open_container(&self, delta: OpenContainerDelta) -> Vec<TargetedEvent> {
+    fn build_open_container(
+        &self,
+        core: &ServerCore,
+        delta: OpenContainerDelta,
+    ) -> Vec<TargetedEvent> {
         let mut events = delta
             .closed
             .into_iter()
-            .flat_map(|delta| self.build_close_container(delta))
+            .flat_map(|delta| self.build_close_container(core, delta))
             .collect::<Vec<_>>();
         events.extend([
             TargetedEvent {
                 target: EventTarget::Player(delta.player_id),
                 event: CoreEvent::ContainerOpened {
                     window_id: delta.window_id,
-                    container: delta.container,
+                    container: delta.container.clone(),
                     title: delta.title,
                 },
             },
@@ -846,7 +844,11 @@ impl CoreEventBuilder {
         events
     }
 
-    fn build_close_container(&self, delta: CloseContainerDelta) -> Vec<TargetedEvent> {
+    fn build_close_container(
+        &self,
+        core: &ServerCore,
+        delta: CloseContainerDelta,
+    ) -> Vec<TargetedEvent> {
         let mut events = vec![TargetedEvent {
             target: EventTarget::Player(delta.player_id),
             event: CoreEvent::ContainerClosed {
@@ -858,7 +860,7 @@ impl CoreEventBuilder {
                 target: EventTarget::Player(delta.player_id),
                 event: CoreEvent::InventoryContents {
                     window_id: 0,
-                    container: InventoryContainer::Player,
+                    container: core.content_behavior.player_container_kind(),
                     contents,
                 },
             });
@@ -914,10 +916,11 @@ impl CoreEventBuilder {
         }
     }
 
-    fn build_window_diff(&self, delta: WindowDiffDelta) -> Vec<TargetedEvent> {
+    fn build_window_diff(&self, core: &ServerCore, delta: WindowDiffDelta) -> Vec<TargetedEvent> {
         let mut events = inventory_diff_events(
+            core.content_behavior.as_ref(),
             delta.window_id,
-            delta.container,
+            &delta.container,
             delta.player_id,
             &delta.before_contents,
             &delta.after_contents,
@@ -939,7 +942,7 @@ impl CoreEventBuilder {
         let mut events = delta
             .inventory_delta
             .into_iter()
-            .flat_map(|delta| self.build_window_diff(delta))
+            .flat_map(|delta| self.build_window_diff(core, delta))
             .collect::<Vec<_>>();
         if let Some(delta) = delta.despawn {
             events.extend(self.build_entity_despawn(core, delta));
@@ -957,7 +960,7 @@ impl CoreEventBuilder {
             delta
                 .closed_containers
                 .into_iter()
-                .flat_map(|delta| self.build_close_container(delta)),
+                .flat_map(|delta| self.build_close_container(core, delta)),
         );
         events.extend(block_change_events(core, delta.position));
         events
@@ -1114,7 +1117,7 @@ fn login_initial_events(
             target: EventTarget::Connection(connection_id),
             event: CoreEvent::InventoryContents {
                 window_id: 0,
-                container: InventoryContainer::Player,
+                container: core.content_behavior.player_container_kind(),
                 contents: InventoryWindowContents::player(player.inventory.clone()),
             },
         },

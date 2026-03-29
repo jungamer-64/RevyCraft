@@ -1,6 +1,7 @@
 use crate::inventory::ItemStack;
 use crate::player::PlayerSnapshot;
 use crate::{CHUNK_WIDTH, PlayerId, SECTION_HEIGHT};
+use mc_content_api::{BlockEntityKindId, ContainerPropertyKey};
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,15 +35,13 @@ impl BlockState {
             properties: BTreeMap::new(),
         }
     }
+}
 
+#[cfg(test)]
+impl BlockState {
     #[must_use]
     pub fn air() -> Self {
         Self::new("minecraft:air")
-    }
-
-    #[must_use]
-    pub fn bedrock() -> Self {
-        Self::new("minecraft:bedrock")
     }
 
     #[must_use]
@@ -68,6 +67,11 @@ impl BlockState {
     #[must_use]
     pub fn oak_planks() -> Self {
         Self::new("minecraft:oak_planks")
+    }
+
+    #[must_use]
+    pub fn bedrock() -> Self {
+        Self::new("minecraft:bedrock")
     }
 
     #[must_use]
@@ -112,102 +116,50 @@ impl BlockState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerBlockEntityState {
+    pub kind: BlockEntityKindId,
+    pub slots: Vec<Option<ItemStack>>,
+    #[serde(default)]
+    pub properties: BTreeMap<ContainerPropertyKey, i16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockEntityState {
-    Chest {
-        slots: Vec<Option<ItemStack>>,
-    },
-    Furnace {
-        input: Option<ItemStack>,
-        fuel: Option<ItemStack>,
-        output: Option<ItemStack>,
-        burn_left: i16,
-        burn_max: i16,
-        cook_progress: i16,
-        cook_total: i16,
-    },
+    Container(ContainerBlockEntityState),
 }
 
 impl BlockEntityState {
     #[must_use]
-    pub fn chest(local_slot_count: usize) -> Self {
-        Self::Chest {
-            slots: vec![None; local_slot_count],
-        }
+    pub fn container(
+        kind: impl Into<BlockEntityKindId>,
+        slots: Vec<Option<ItemStack>>,
+        properties: BTreeMap<ContainerPropertyKey, i16>,
+    ) -> Self {
+        Self::Container(ContainerBlockEntityState {
+            kind: kind.into(),
+            slots,
+            properties,
+        })
     }
 
     #[must_use]
-    pub const fn furnace() -> Self {
-        Self::Furnace {
-            input: None,
-            fuel: None,
-            output: None,
-            burn_left: 0,
-            burn_max: 0,
-            cook_progress: 0,
-            cook_total: 200,
-        }
-    }
-
-    #[must_use]
-    pub fn chest_slots(&self) -> Option<&[Option<ItemStack>]> {
+    pub fn container_state(&self) -> Option<&ContainerBlockEntityState> {
         match self {
-            Self::Chest { slots } => Some(slots),
-            Self::Furnace { .. } => None,
+            Self::Container(container) => Some(container),
         }
     }
 
     #[must_use]
-    pub fn chest_slots_mut(&mut self) -> Option<&mut Vec<Option<ItemStack>>> {
+    pub fn container_state_mut(&mut self) -> Option<&mut ContainerBlockEntityState> {
         match self {
-            Self::Chest { slots } => Some(slots),
-            Self::Furnace { .. } => None,
-        }
-    }
-
-    #[must_use]
-    pub fn furnace_state(
-        &self,
-    ) -> Option<(
-        Option<&ItemStack>,
-        Option<&ItemStack>,
-        Option<&ItemStack>,
-        i16,
-        i16,
-        i16,
-        i16,
-    )> {
-        match self {
-            Self::Chest { .. } => None,
-            Self::Furnace {
-                input,
-                fuel,
-                output,
-                burn_left,
-                burn_max,
-                cook_progress,
-                cook_total,
-            } => Some((
-                input.as_ref(),
-                fuel.as_ref(),
-                output.as_ref(),
-                *burn_left,
-                *burn_max,
-                *cook_progress,
-                *cook_total,
-            )),
+            Self::Container(container) => Some(container),
         }
     }
 
     #[must_use]
     pub fn has_inventory_contents(&self) -> bool {
         match self {
-            Self::Chest { slots } => slots.iter().any(Option::is_some),
-            Self::Furnace {
-                input,
-                fuel,
-                output,
-                ..
-            } => input.is_some() || fuel.is_some() || output.is_some(),
+            Self::Container(container) => container.slots.iter().any(Option::is_some),
         }
     }
 }
@@ -450,12 +402,12 @@ impl ChunkSection {
         self.blocks.get(&flatten_block_index(x, y, z))
     }
 
-    pub fn set_block(&mut self, x: u8, y: u8, z: u8, state: BlockState) {
+    pub fn set_block(&mut self, x: u8, y: u8, z: u8, state: Option<BlockState>) {
         let index = flatten_block_index(x, y, z);
-        if state.is_air() {
-            self.blocks.remove(&index);
-        } else {
+        if let Some(state) = state {
             self.blocks.insert(index, state);
+        } else {
+            self.blocks.remove(&index);
         }
     }
 
@@ -487,24 +439,33 @@ impl ChunkColumn {
     }
 
     #[must_use]
-    pub fn get_block(&self, x: u8, y: i32, z: u8) -> BlockState {
+    pub fn get_block(&self, x: u8, y: i32, z: u8) -> Option<BlockState> {
         let section_y = y.div_euclid(SECTION_HEIGHT);
         let local_y = section_local_y(y);
         self.sections
             .get(&section_y)
             .and_then(|section| section.get_block(x, local_y, z))
             .cloned()
-            .unwrap_or_else(BlockState::air)
     }
 
-    pub fn set_block(&mut self, x: u8, y: i32, z: u8, state: BlockState) {
+    pub fn set_block(&mut self, x: u8, y: i32, z: u8, state: Option<BlockState>) {
         let section_y = y.div_euclid(SECTION_HEIGHT);
         let local_y = section_local_y(y);
-        let section = self
-            .sections
-            .entry(section_y)
-            .or_insert_with(|| ChunkSection::new(section_y));
-        section.set_block(x, local_y, z, state);
+        if let Some(state) = state {
+            let section = self
+                .sections
+                .entry(section_y)
+                .or_insert_with(|| ChunkSection::new(section_y));
+            section.set_block(x, local_y, z, Some(state));
+            if section.is_empty() {
+                self.sections.remove(&section_y);
+            }
+            return;
+        }
+        let Some(section) = self.sections.get_mut(&section_y) else {
+            return;
+        };
+        section.set_block(x, local_y, z, None);
         if section.is_empty() {
             self.sections.remove(&section_y);
         }
@@ -553,21 +514,6 @@ pub fn required_chunks(center: ChunkPos, view_distance: u8) -> BTreeSet<ChunkPos
         }
     }
     chunks
-}
-
-pub fn generate_superflat_chunk(chunk_pos: ChunkPos) -> ChunkColumn {
-    let mut column = ChunkColumn::new(chunk_pos);
-    for z in 0..CHUNK_WIDTH {
-        for x in 0..CHUNK_WIDTH {
-            let x = u8::try_from(x).expect("flat chunk x should fit into u8");
-            let z = u8::try_from(z).expect("flat chunk z should fit into u8");
-            column.set_block(x, 0, z, BlockState::bedrock());
-            column.set_block(x, 1, z, BlockState::stone());
-            column.set_block(x, 2, z, BlockState::dirt());
-            column.set_block(x, 3, z, BlockState::grass_block());
-        }
-    }
-    column
 }
 
 pub fn flatten_block_index(x: u8, y: u8, z: u8) -> SectionBlockIndex {

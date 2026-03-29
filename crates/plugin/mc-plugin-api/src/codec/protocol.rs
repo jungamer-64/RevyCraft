@@ -297,11 +297,10 @@ mod tests {
         decode_protocol_response, encode_protocol_request, encode_protocol_response,
     };
     use mc_core::{
-        BlockPos, CapabilityAnnouncement, ChunkColumn, ConnectionId, CoreCommand, CoreEvent,
-        EntityId, GameplayCapabilitySet, GameplayProfileId, InventoryContainer, InventorySlot,
-        ItemStack, PlayerId, PlayerInventory, PlayerSnapshot, PluginGenerationId,
-        ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet, Vec3,
-        WorldMeta,
+        BlockPos, CapabilityAnnouncement, ChunkColumn, ConnectionId, ContainerKindId, CoreCommand,
+        CoreEvent, EntityId, GameplayCapabilitySet, GameplayProfileId, InventorySlot, ItemStack,
+        PlayerId, PlayerInventory, PlayerSnapshot, PluginGenerationId, ProtocolCapability,
+        ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet, Vec3, WorldMeta,
     };
     use mc_proto_common::{
         BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeNextState,
@@ -349,6 +348,10 @@ mod tests {
         }
     }
 
+    fn player_container() -> ContainerKindId {
+        ContainerKindId::new("canonical:player")
+    }
+
     fn sample_descriptor() -> ProtocolDescriptor {
         ProtocolDescriptor {
             adapter_id: "je-5".to_string(),
@@ -369,7 +372,7 @@ mod tests {
 
     fn sample_event() -> CoreEvent {
         let mut chunk = ChunkColumn::new(mc_core::ChunkPos::new(0, 0));
-        chunk.set_block(1, 64, 1, mc_core::BlockState::stone());
+        chunk.set_block(1, 64, 1, Some(mc_core::BlockState::new("minecraft:stone")));
         CoreEvent::PlayBootstrap {
             player: sample_player(),
             entity_id: EntityId(7),
@@ -672,7 +675,7 @@ mod tests {
     fn samples_cover_inventory_and_event_variants() {
         let event = CoreEvent::InventorySlotChanged {
             window_id: 0,
-            container: InventoryContainer::Player,
+            container: player_container(),
             slot: InventorySlot::Offhand,
             stack: Some(ItemStack::new("minecraft:shield", 1, 0)),
         };

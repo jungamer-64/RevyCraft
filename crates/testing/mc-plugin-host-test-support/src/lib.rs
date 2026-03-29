@@ -333,7 +333,11 @@ mod tests {
         let runtime = RuntimeReloadContext {
             protocol_sessions: Vec::new(),
             gameplay_sessions: Vec::new(),
-            snapshot: ServerCore::new(CoreConfig::default()).snapshot(),
+            snapshot: ServerCore::new(
+                CoreConfig::default(),
+                mc_content_canonical::canonical_content(),
+            )
+            .snapshot(),
             world_dir: PathBuf::from("."),
         };
         assert_eq!(

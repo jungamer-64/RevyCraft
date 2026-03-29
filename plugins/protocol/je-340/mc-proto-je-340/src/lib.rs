@@ -16,9 +16,9 @@ use encoding::{
     encode_window_items, encode_window_property,
 };
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, EntityId, InventoryContainer,
-    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerSnapshot,
-    RuntimeCommand, WorldMeta,
+    BlockPos, BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, DroppedItemSnapshot,
+    EntityId, InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack,
+    PlayerSnapshot, RuntimeCommand, WorldMeta,
 };
 use mc_proto_common::{
     ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot, TransportKind, WireFormatKind,
@@ -35,6 +35,16 @@ const PROTOCOL_VERSION_1_12_2: i32 = 340;
 const VERSION_NAME_1_12_2: &str = "1.12.2";
 pub const JE_340_ADAPTER_ID: &str = "je-340";
 pub(crate) const INVENTORY_SPEC: InventoryProtocolSpec = JE_1_12_2_INVENTORY_SPEC;
+
+fn container_property_id(property: &ContainerPropertyKey) -> Option<u8> {
+    match property.as_str() {
+        "canonical:furnace.burn_left" => Some(0),
+        "canonical:furnace.burn_max" => Some(1),
+        "canonical:furnace.cook_progress" => Some(2),
+        "canonical:furnace.cook_total" => Some(3),
+        _ => None,
+    }
+}
 
 const PACKET_CB_NAMED_ENTITY_SPAWN: i32 = 0x05;
 const PACKET_CB_SPAWN_OBJECT: i32 = 0x00;
@@ -175,7 +185,7 @@ impl JavaEditionProfile for Je340Profile {
     fn encode_container_opened(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         title: &str,
     ) -> Result<Vec<u8>, ProtocolError> {
         encode_open_window(window_id, container, title)
@@ -188,7 +198,7 @@ impl JavaEditionProfile for Je340Profile {
     fn encode_inventory_contents(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         contents: &InventoryWindowContents,
     ) -> Result<Vec<u8>, ProtocolError> {
         encode_window_items(window_id, container, contents)
@@ -197,16 +207,19 @@ impl JavaEditionProfile for Je340Profile {
     fn encode_container_property_changed(
         &self,
         window_id: u8,
-        property_id: u8,
+        property_id: &ContainerPropertyKey,
         value: i16,
     ) -> Result<Vec<u8>, ProtocolError> {
+        let Some(property_id) = container_property_id(property_id) else {
+            return Ok(Vec::new());
+        };
         Ok(encode_window_property(window_id, property_id, value))
     }
 
     fn encode_inventory_slot_changed(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         slot: InventorySlot,
         stack: Option<&ItemStack>,
     ) -> Result<Option<Vec<u8>>, ProtocolError> {

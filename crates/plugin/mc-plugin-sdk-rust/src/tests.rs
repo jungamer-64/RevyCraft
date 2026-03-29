@@ -88,12 +88,11 @@ fn gameplay_host_api_for(context: &TestHostContext) -> GameplayHostApiV2 {
         set_inventory_slot: None,
         clear_mining: None,
         begin_mining: None,
-        open_chest: None,
-        open_furnace: None,
+        open_container_at: None,
+        open_virtual_container: None,
         set_block: None,
         spawn_dropped_item: None,
         emit_event: None,
-        open_crafting_table: None,
     }
 }
 

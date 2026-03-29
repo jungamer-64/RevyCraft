@@ -1,8 +1,9 @@
 use crate::probe::{bedrock_probe_intent, detects_bedrock_datagram};
+use mc_content_canonical::catalog;
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, CoreEvent, DroppedItemSnapshot, EntityId,
-    InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot,
-    RuntimeCommand, WorldMeta,
+    BlockPos, BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, CoreEvent,
+    DroppedItemSnapshot, EntityId, InventorySlot, InventoryWindowContents, ItemStack,
+    PlayerSnapshot, RuntimeCommand, WorldMeta,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest,
@@ -73,13 +74,13 @@ pub trait BedrockProfile: Default + Send + Sync {
     fn encode_inventory_contents_packets(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         contents: &InventoryWindowContents,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
     fn encode_container_opened_packets(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         title: &str,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
     fn encode_container_closed_packets(&self, window_id: u8)
@@ -87,13 +88,13 @@ pub trait BedrockProfile: Default + Send + Sync {
     fn encode_container_property_changed_packets(
         &self,
         window_id: u8,
-        property_id: u8,
+        property: &ContainerPropertyKey,
         value: i16,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
     fn encode_inventory_slot_changed_packets(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         slot: InventorySlot,
         stack: Option<&ItemStack>,
     ) -> Result<Vec<Vec<u8>>, ProtocolError>;
@@ -127,6 +128,13 @@ pub trait BedrockProfile: Default + Send + Sync {
         _blob: &[u8],
     ) -> Result<(), ProtocolError> {
         Ok(())
+    }
+}
+
+fn protocol_block<'a>(block: &'a Option<BlockState>) -> std::borrow::Cow<'a, BlockState> {
+    match block {
+        Some(block) => std::borrow::Cow::Borrowed(block),
+        None => std::borrow::Cow::Owned(BlockState::new(catalog::AIR)),
     }
 }
 
@@ -251,9 +259,9 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
                 .profile
                 .encode_dropped_item_spawn_packets(*entity_id, item),
             CoreEvent::ChunkBatch { chunks } => self.profile.encode_chunk_batch_packets(chunks),
-            CoreEvent::BlockChanged { position, block } => {
-                self.profile.encode_block_changed_packets(*position, block)
-            }
+            CoreEvent::BlockChanged { position, block } => self
+                .profile
+                .encode_block_changed_packets(*position, protocol_block(block).as_ref()),
             CoreEvent::BlockBreakingProgress {
                 breaker_entity_id,
                 position,
@@ -271,26 +279,24 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
                 contents,
             } => self
                 .profile
-                .encode_inventory_contents_packets(*window_id, *container, contents),
+                .encode_inventory_contents_packets(*window_id, container, contents),
             CoreEvent::ContainerOpened {
                 window_id,
                 container,
                 title,
             } => self
                 .profile
-                .encode_container_opened_packets(*window_id, *container, title),
+                .encode_container_opened_packets(*window_id, container, title),
             CoreEvent::ContainerClosed { window_id } => {
                 self.profile.encode_container_closed_packets(*window_id)
             }
             CoreEvent::ContainerPropertyChanged {
                 window_id,
-                property_id,
+                property,
                 value,
-            } => self.profile.encode_container_property_changed_packets(
-                *window_id,
-                *property_id,
-                *value,
-            ),
+            } => self
+                .profile
+                .encode_container_property_changed_packets(*window_id, property, *value),
             CoreEvent::InventorySlotChanged {
                 window_id,
                 container,
@@ -298,7 +304,7 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
                 stack,
             } => self.profile.encode_inventory_slot_changed_packets(
                 *window_id,
-                *container,
+                container,
                 *slot,
                 stack.as_ref(),
             ),

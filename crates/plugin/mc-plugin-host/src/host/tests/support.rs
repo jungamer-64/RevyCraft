@@ -2,6 +2,10 @@ use super::*;
 
 pub(super) const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
 
+pub(super) fn test_server_core(config: CoreConfig) -> ServerCore {
+    ServerCore::new(config, mc_content_canonical::canonical_content())
+}
+
 pub(super) fn seed_packaged_plugins(
     dist_dir: &Path,
     plugin_ids: &[&str],
@@ -66,7 +70,7 @@ pub(super) fn protocol_reload_context(
     RuntimeReloadContext {
         protocol_sessions: sessions,
         gameplay_sessions: Vec::new(),
-        snapshot: ServerCore::new(CoreConfig::default()).snapshot(),
+        snapshot: test_server_core(CoreConfig::default()).snapshot(),
         world_dir: PathBuf::from("."),
     }
 }
@@ -91,7 +95,7 @@ pub(super) fn protocol_reload_session(
 pub(super) fn stub_server_core(level_name: &str) -> ServerCore {
     let mut config = CoreConfig::default();
     config.level_name = level_name.to_string();
-    ServerCore::new(config)
+    test_server_core(config)
 }
 
 pub(super) fn je_handshake_frame(protocol_version: i32) -> Vec<u8> {

@@ -11,6 +11,7 @@ description = "Minecraft Java Edition 1.7.10 protocol codecs and persistence ada
 
 [dependencies]
 flate2.workspace = true
+mc-content-canonical = { path = "../../../../crates/content/mc-content-canonical" }
 mc-core = { path = "../../../../crates/core/mc-core" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
 mc-proto-je-common = { path = "../../../../crates/protocol/mc-proto-je-common" }

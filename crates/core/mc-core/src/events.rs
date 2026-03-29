@@ -1,9 +1,10 @@
-use crate::inventory::{InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack};
+use crate::inventory::{InventorySlot, InventoryWindowContents, ItemStack};
 use crate::player::{InteractionHand, PlayerSnapshot};
 use crate::world::{
     BlockFace, BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, Vec3, WorldMeta,
 };
 use crate::{ConnectionId, EntityId, PlayerId};
+use mc_content_api::{ContainerKindId, ContainerPropertyKey};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -396,12 +397,12 @@ pub enum CoreEvent {
     },
     InventoryContents {
         window_id: u8,
-        container: InventoryContainer,
+        container: ContainerKindId,
         contents: InventoryWindowContents,
     },
     ContainerOpened {
         window_id: u8,
-        container: InventoryContainer,
+        container: ContainerKindId,
         title: String,
     },
     ContainerClosed {
@@ -409,12 +410,12 @@ pub enum CoreEvent {
     },
     ContainerPropertyChanged {
         window_id: u8,
-        property_id: u8,
+        property: ContainerPropertyKey,
         value: i16,
     },
     InventorySlotChanged {
         window_id: u8,
-        container: InventoryContainer,
+        container: ContainerKindId,
         slot: InventorySlot,
         stack: Option<ItemStack>,
     },
@@ -430,7 +431,7 @@ pub enum CoreEvent {
     },
     BlockChanged {
         position: BlockPos,
-        block: BlockState,
+        block: Option<BlockState>,
     },
     KeepAliveRequested {
         keep_alive_id: i32,

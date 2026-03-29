@@ -3,11 +3,10 @@ use mc_core::GameplayTransaction;
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode, Utf8Slice};
 use mc_plugin_api::codec::gameplay::host_blob::{
     decode_begin_mining, decode_block_pos, decode_can_edit_block_key, decode_clear_mining,
-    decode_inventory_slot_update, decode_open_chest, decode_open_crafting_table,
-    decode_open_furnace, decode_player_id, decode_player_pose_update,
-    decode_selected_hotbar_slot_update, decode_set_block, decode_spawn_dropped_item,
-    decode_targeted_event_blob, encode_block_entity, encode_block_state, encode_player_snapshot,
-    encode_world_meta,
+    decode_inventory_slot_update, decode_open_container_at, decode_open_virtual_container,
+    decode_player_id, decode_player_pose_update, decode_selected_hotbar_slot_update,
+    decode_set_block, decode_spawn_dropped_item, decode_targeted_event_blob, encode_block_entity,
+    encode_block_state, encode_player_snapshot, encode_world_meta,
 };
 use mc_plugin_api::host_api::{AdminSurfaceHostApiV1, GameplayHostApiV2};
 use std::cell::Cell;
@@ -125,7 +124,7 @@ unsafe extern "C" fn gameplay_host_read_block_state(
             "gameplay host callback payload",
         )?;
         let position = decode_block_pos(payload).map_err(|error| error.to_string())?;
-        let bytes = encode_block_state(&scope.tx.block_state(position))
+        let bytes = encode_block_state(scope.tx.block_state(position).as_ref())
             .map_err(|error| error.to_string())?;
         write_owned_buffer(output, bytes);
         Ok(())
@@ -292,7 +291,7 @@ unsafe extern "C" fn gameplay_host_begin_mining(
     mutation_status(result, error_out)
 }
 
-unsafe extern "C" fn gameplay_host_open_chest(
+unsafe extern "C" fn gameplay_host_open_container_at(
     _context: *mut std::ffi::c_void,
     payload: ByteSlice,
     error_out: *mut OwnedBuffer,
@@ -304,14 +303,14 @@ unsafe extern "C" fn gameplay_host_open_chest(
             "gameplay host callback payload",
         )?;
         let (player_id, position) =
-            decode_open_chest(payload).map_err(|error| error.to_string())?;
-        scope.tx.open_chest(player_id, position);
+            decode_open_container_at(payload).map_err(|error| error.to_string())?;
+        scope.tx.open_container_at(player_id, position);
         Ok(())
     });
     mutation_status(result, error_out)
 }
 
-unsafe extern "C" fn gameplay_host_open_furnace(
+unsafe extern "C" fn gameplay_host_open_virtual_container(
     _context: *mut std::ffi::c_void,
     payload: ByteSlice,
     error_out: *mut OwnedBuffer,
@@ -322,27 +321,9 @@ unsafe extern "C" fn gameplay_host_open_furnace(
             scope.buffer_limits.callback_payload_bytes,
             "gameplay host callback payload",
         )?;
-        let (player_id, position) =
-            decode_open_furnace(payload).map_err(|error| error.to_string())?;
-        scope.tx.open_furnace(player_id, position);
-        Ok(())
-    });
-    mutation_status(result, error_out)
-}
-
-unsafe extern "C" fn gameplay_host_open_crafting_table(
-    _context: *mut std::ffi::c_void,
-    payload: ByteSlice,
-    error_out: *mut OwnedBuffer,
-) -> PluginErrorCode {
-    let result = with_current_gameplay_context(|scope| {
-        let payload = super::read_byte_slice(
-            payload,
-            scope.buffer_limits.callback_payload_bytes,
-            "gameplay host callback payload",
-        )?;
-        let player_id = decode_open_crafting_table(payload).map_err(|error| error.to_string())?;
-        scope.tx.open_crafting_table(player_id);
+        let (player_id, kind) =
+            decode_open_virtual_container(payload).map_err(|error| error.to_string())?;
+        scope.tx.open_virtual_container(player_id, kind);
         Ok(())
     });
     mutation_status(result, error_out)
@@ -428,12 +409,11 @@ pub(crate) fn gameplay_host_api() -> GameplayHostApiV2 {
         set_inventory_slot: Some(gameplay_host_set_inventory_slot),
         clear_mining: Some(gameplay_host_clear_mining),
         begin_mining: Some(gameplay_host_begin_mining),
-        open_chest: Some(gameplay_host_open_chest),
-        open_furnace: Some(gameplay_host_open_furnace),
+        open_container_at: Some(gameplay_host_open_container_at),
+        open_virtual_container: Some(gameplay_host_open_virtual_container),
         set_block: Some(gameplay_host_set_block),
         spawn_dropped_item: Some(gameplay_host_spawn_dropped_item),
         emit_event: Some(gameplay_host_emit_event),
-        open_crafting_table: Some(gameplay_host_open_crafting_table),
     }
 }
 

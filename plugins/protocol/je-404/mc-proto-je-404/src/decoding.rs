@@ -80,7 +80,7 @@ pub fn decode_play_packet(
             let slot = reader.read_i16()?;
             let stack = read_slot(&mut reader, crate::INVENTORY_SPEC.slot)?;
             Ok(inventory_slot(
-                mc_core::InventoryContainer::Player,
+                &mc_core::ContainerKindId::new("canonical:player"),
                 crate::INVENTORY_SPEC.layout,
                 slot,
             )
@@ -238,7 +238,9 @@ fn decode_click_window_packet(
     } else {
         sessions
             .resolve_container(session, window_id)
-            .and_then(|container| inventory_slot(container, crate::INVENTORY_SPEC.layout, raw_slot))
+            .and_then(|container| {
+                inventory_slot(&container, crate::INVENTORY_SPEC.layout, raw_slot)
+            })
             .map(InventoryClickTarget::Slot)
             .unwrap_or(InventoryClickTarget::Unsupported)
     };

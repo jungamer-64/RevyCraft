@@ -167,13 +167,41 @@ impl RuntimeKernel {
         &self,
         player_id: PlayerId,
         window_id: u8,
-        title: &str,
+        _title: &str,
     ) -> Vec<TargetedEvent> {
-        self.state
-            .lock()
-            .await
-            .core
-            .open_crafting_table(player_id, window_id, title)
+        let mut state = self.state.lock().await;
+        let crafting_table_kind =
+            mc_core::ContainerKindId::new(mc_content_canonical::ids::CRAFTING_TABLE);
+        for _ in 1..window_id {
+            let hidden_open_events = {
+                let mut tx = state.core.begin_gameplay_transaction(0);
+                tx.open_virtual_container(player_id, crafting_table_kind.clone());
+                tx.commit()
+            };
+            let hidden_window_id = hidden_open_events
+                .iter()
+                .find_map(|event| match event.event {
+                    CoreEvent::ContainerOpened { window_id, .. } => Some(window_id),
+                    _ => None,
+                })
+                .expect("hidden crafting table open should emit a window id");
+            let hidden_close_events = state.core.apply_command(
+                CoreCommand::CloseContainer {
+                    player_id,
+                    window_id: hidden_window_id,
+                },
+                0,
+            );
+            self.record_commit_side_effects(&mut state, &hidden_open_events, None);
+            self.record_commit_side_effects(&mut state, &hidden_close_events, None);
+        }
+        let events = {
+            let mut tx = state.core.begin_gameplay_transaction(0);
+            tx.open_virtual_container(player_id, crafting_table_kind);
+            tx.commit()
+        };
+        self.record_commit_side_effects(&mut state, &events, None);
+        events
     }
 
     pub(crate) async fn apply_builtin_tick(
@@ -609,7 +637,10 @@ mod tests {
     }
 
     fn logged_in_kernel(name: &str) -> (Arc<RuntimeKernel>, PlayerId, SessionCapabilitySet) {
-        let mut core = ServerCore::new(CoreConfig::default());
+        let mut core = ServerCore::new(
+            CoreConfig::default(),
+            crate::runtime::selection::SelectionResolver::content_behavior(),
+        );
         let player_id = tracking_player_id(name);
         let _events = core.apply_command(
             CoreCommand::LoginStart {
@@ -745,7 +776,10 @@ mod tests {
     async fn detached_login_conflict_returns_stale_without_half_online_player()
     -> Result<(), RuntimeError> {
         let kernel = Arc::new(RuntimeKernel::new(
-            ServerCore::new(CoreConfig::default()),
+            ServerCore::new(
+                CoreConfig::default(),
+                crate::runtime::selection::SelectionResolver::content_behavior(),
+            ),
             Arc::new(NullStorage),
             PathBuf::from("world"),
         ));

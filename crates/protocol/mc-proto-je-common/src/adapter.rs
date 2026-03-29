@@ -1,10 +1,11 @@
 use crate::handshake::decode_handshake_frame;
 use crate::login::{encode_login_success_packet, read_login_byte_array, write_login_byte_array};
 use crate::status::{encode_status_pong_packet, encode_status_response_packet};
+use mc_content_canonical::catalog;
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, CoreEvent, DroppedItemSnapshot, EntityId,
-    InventoryContainer, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
-    ItemStack, PlayerSnapshot, RuntimeCommand, WorldMeta,
+    BlockPos, BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, CoreEvent,
+    DroppedItemSnapshot, EntityId, InventorySlot, InventoryTransactionContext,
+    InventoryWindowContents, ItemStack, PlayerSnapshot, RuntimeCommand, WorldMeta,
 };
 use mc_proto_common::{
     ConnectionPhase, HandshakeIntent, HandshakeProbe, LoginRequest, MinecraftWireCodec,
@@ -16,10 +17,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct JavaTrackedWindow {
     pub window_id: u8,
-    pub container: InventoryContainer,
+    pub container: ContainerKindId,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +32,17 @@ struct JavaProtocolSessionState {
 #[derive(Default)]
 pub struct JavaProtocolSessionStore {
     sessions: Mutex<HashMap<mc_core::ConnectionId, JavaProtocolSessionState>>,
+}
+
+fn player_container_kind() -> ContainerKindId {
+    ContainerKindId::new("canonical:player")
+}
+
+fn protocol_block<'a>(block: &'a Option<BlockState>) -> std::borrow::Cow<'a, BlockState> {
+    match block {
+        Some(block) => std::borrow::Cow::Borrowed(block),
+        None => std::borrow::Cow::Owned(BlockState::new(catalog::AIR)),
+    }
 }
 
 impl JavaProtocolSessionStore {
@@ -50,17 +62,17 @@ impl JavaProtocolSessionStore {
         &self,
         session: &ProtocolSessionSnapshot,
         window_id: u8,
-    ) -> Option<InventoryContainer> {
+    ) -> Option<ContainerKindId> {
         if window_id == 0 {
-            return Some(InventoryContainer::Player);
+            return Some(player_container_kind());
         }
         self.sessions
             .lock()
             .expect("java protocol session store should not be poisoned")
             .get(&session.connection_id)
-            .and_then(|state| state.active_window)
+            .and_then(|state| state.active_window.as_ref())
             .filter(|window| window.window_id == window_id)
-            .map(|window| window.container)
+            .map(|window| window.container.clone())
     }
 
     pub fn should_gate_click(
@@ -98,15 +110,16 @@ impl JavaProtocolSessionStore {
                 window_id,
                 container,
                 ..
-            } if *container != InventoryContainer::Player => {
+            } if *container != player_container_kind() => {
                 state.active_window = Some(JavaTrackedWindow {
                     window_id: *window_id,
-                    container: *container,
+                    container: container.clone(),
                 });
             }
             CoreEvent::ContainerClosed { window_id } => {
                 if state
                     .active_window
+                    .as_ref()
                     .is_some_and(|window| window.window_id == *window_id)
                 {
                     state.active_window = None;
@@ -195,26 +208,26 @@ pub trait JavaEditionProfile: Default + Send + Sync {
     fn encode_container_opened(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         title: &str,
     ) -> Result<Vec<u8>, ProtocolError>;
     fn encode_container_closed(&self, window_id: u8) -> Result<Vec<u8>, ProtocolError>;
     fn encode_inventory_contents(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         contents: &InventoryWindowContents,
     ) -> Result<Vec<u8>, ProtocolError>;
     fn encode_container_property_changed(
         &self,
         window_id: u8,
-        property_id: u8,
+        property: &ContainerPropertyKey,
         value: i16,
     ) -> Result<Vec<u8>, ProtocolError>;
     fn encode_inventory_slot_changed(
         &self,
         window_id: u8,
-        container: InventoryContainer,
+        container: &ContainerKindId,
         slot: InventorySlot,
         stack: Option<&ItemStack>,
     ) -> Result<Option<Vec<u8>>, ProtocolError>;
@@ -427,7 +440,7 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
                 contents,
             } => {
                 Ok(vec![self.profile.encode_inventory_contents(
-                    *window_id, *container, contents,
+                    *window_id, container, contents,
                 )?])
             }
             CoreEvent::ContainerOpened {
@@ -436,19 +449,17 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
                 title,
             } => Ok(vec![
                 self.profile
-                    .encode_container_opened(*window_id, *container, title)?,
+                    .encode_container_opened(*window_id, container, title)?,
             ]),
             CoreEvent::ContainerClosed { window_id } => {
                 Ok(vec![self.profile.encode_container_closed(*window_id)?])
             }
             CoreEvent::ContainerPropertyChanged {
                 window_id,
-                property_id,
+                property,
                 value,
             } => Ok(vec![self.profile.encode_container_property_changed(
-                *window_id,
-                *property_id,
-                *value,
+                *window_id, property, *value,
             )?]),
             CoreEvent::InventorySlotChanged {
                 window_id,
@@ -457,7 +468,7 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
                 stack,
             } => Ok(self
                 .profile
-                .encode_inventory_slot_changed(*window_id, *container, *slot, stack.as_ref())?
+                .encode_inventory_slot_changed(*window_id, container, *slot, stack.as_ref())?
                 .into_iter()
                 .collect()),
             CoreEvent::InventoryTransactionProcessed {
@@ -474,7 +485,10 @@ impl<P: JavaEditionProfile> PlaySyncAdapter for JavaEditionAdapter<P> {
                 self.profile.encode_selected_hotbar_slot_changed(*slot)?,
             ]),
             CoreEvent::BlockChanged { position, block } => {
-                Ok(vec![self.profile.encode_block_changed(*position, block)?])
+                Ok(vec![self.profile.encode_block_changed(
+                    *position,
+                    protocol_block(block).as_ref(),
+                )?])
             }
             CoreEvent::BlockBreakingProgress {
                 breaker_entity_id,

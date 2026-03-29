@@ -12,8 +12,8 @@ use bedrockrs_proto::v748::packets::{InventoryContentPacket, InventorySlotPacket
 use bedrockrs_proto::v776::packets::{CreativeContentPacket, CreativeItemData};
 use bedrockrs_proto_core::{ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use mc_core::{
-    InventoryClickButton, InventoryClickTarget, InventoryContainer, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack,
+    ContainerKindId, ContainerPropertyKey, InventoryClickButton, InventoryClickTarget,
+    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack,
 };
 use mc_proto_common::ProtocolError;
 use std::io::Cursor;
@@ -27,6 +27,14 @@ const OFFHAND_INVENTORY_ID: u32 = 119;
 const EMPTY_USER_DATA: &str = "";
 const EMPTY_BLOCK_RUNTIME_ID: i32 = 0;
 const NO_DYNAMIC_CONTAINER_ID: Option<i32> = None;
+const PLAYER_KIND: &str = "canonical:player";
+const CRAFTING_TABLE_KIND: &str = "canonical:crafting_table";
+const CHEST_27_KIND: &str = "canonical:chest_27";
+const FURNACE_KIND: &str = "canonical:furnace";
+const FURNACE_BURN_LEFT: &str = "canonical:furnace.burn_left";
+const FURNACE_BURN_MAX: &str = "canonical:furnace.burn_max";
+const FURNACE_COOK_PROGRESS: &str = "canonical:furnace.cook_progress";
+const FURNACE_COOK_TOTAL: &str = "canonical:furnace.cook_total";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RequestSlot {
@@ -56,13 +64,13 @@ pub(crate) fn encode_creative_content_packet() -> Result<Vec<Vec<u8>>, ProtocolE
 
 pub(crate) fn encode_inventory_contents_packets(
     window_id: u8,
-    container: InventoryContainer,
+    container: &ContainerKindId,
     contents: &InventoryWindowContents,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
     let mut packets = Vec::new();
-    if container != InventoryContainer::Player && window_id != 0 {
+    if !is_player_container(container) && window_id != 0 {
         let local_slots = contents
-            .container_slots
+            .local_slots
             .iter()
             .map(|stack| network_item_stack_descriptor(stack.as_ref()))
             .collect::<Result<Vec<_>, _>>()?;
@@ -110,7 +118,7 @@ pub(crate) fn encode_inventory_contents_packets(
 
 pub(crate) fn encode_inventory_slot_changed_packets(
     _window_id: u8,
-    container: InventoryContainer,
+    container: &ContainerKindId,
     slot: InventorySlot,
     stack: Option<&ItemStack>,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
@@ -144,9 +152,9 @@ pub(crate) fn encode_selected_hotbar_slot_changed_packets(
 
 pub(crate) fn encode_container_opened_packets(
     window_id: u8,
-    container: InventoryContainer,
+    container: &ContainerKindId,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
-    if window_id == 0 || container == InventoryContainer::Player {
+    if window_id == 0 || is_player_container(container) {
         return Ok(Vec::new());
     }
     Ok(vec![encode_v924(&[V924::ContainerOpenPacket(
@@ -176,12 +184,15 @@ pub(crate) fn encode_container_closed_packets(
 
 pub(crate) fn encode_container_property_changed_packets(
     window_id: u8,
-    property_id: u8,
+    property: &ContainerPropertyKey,
     value: i16,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
     if window_id == 0 {
         return Ok(Vec::new());
     }
+    let Some(property_id) = container_property_id(property) else {
+        return Ok(Vec::new());
+    };
     Ok(vec![encode_v924(&[V924::ContainerSetDataPacket(
         bedrockrs_proto::v662::packets::ContainerSetDataPacket {
             container_id: ContainerID::First,
@@ -208,22 +219,22 @@ pub(crate) fn decode_request_slot(slot: &ItemStackRequestSlotInfo<V924>) -> Opti
             Some(RequestSlot::Slot(InventorySlot::Offhand))
         }
         ContainerEnumName::CraftingOutputPreviewContainer if slot_index == 0 => {
-            Some(RequestSlot::Slot(InventorySlot::Container(0)))
+            Some(RequestSlot::Slot(InventorySlot::container(0)))
         }
         ContainerEnumName::CraftingInputContainer if slot_index < 9 => {
-            Some(RequestSlot::Slot(InventorySlot::Container(slot_index + 1)))
+            Some(RequestSlot::Slot(InventorySlot::container(slot_index + 1)))
         }
         ContainerEnumName::LevelEntityContainer => {
-            Some(RequestSlot::Slot(InventorySlot::Container(slot_index)))
+            Some(RequestSlot::Slot(InventorySlot::container(slot_index)))
         }
         ContainerEnumName::FurnaceIngredientContainer if slot_index == 0 => {
-            Some(RequestSlot::Slot(InventorySlot::Container(0)))
+            Some(RequestSlot::Slot(InventorySlot::container(0)))
         }
         ContainerEnumName::FurnaceFuelContainer if slot_index == 0 => {
-            Some(RequestSlot::Slot(InventorySlot::Container(1)))
+            Some(RequestSlot::Slot(InventorySlot::container(1)))
         }
         ContainerEnumName::FurnaceResultContainer if slot_index == 0 => {
-            Some(RequestSlot::Slot(InventorySlot::Container(2)))
+            Some(RequestSlot::Slot(InventorySlot::container(2)))
         }
         _ => None,
     }
@@ -356,7 +367,7 @@ fn amount_to_button(amount: i8) -> InventoryClickButton {
 }
 
 fn encode_slot_location(
-    container: InventoryContainer,
+    container: &ContainerKindId,
     slot: InventorySlot,
 ) -> Result<Option<(u32, u32, FullContainerName<V924>)>, ProtocolError> {
     match slot {
@@ -381,7 +392,7 @@ fn encode_slot_location(
             OFFHAND_SLOT,
             full_container_name(ContainerEnumName::OffhandContainer, NO_DYNAMIC_CONTAINER_ID)?,
         ))),
-        InventorySlot::Container(index) if container != InventoryContainer::Player => {
+        InventorySlot::WindowLocal(index) if !is_player_container(container) => {
             let (slot_index, container_name) = active_container_slot_location(container, index)?;
             Ok(Some((
                 ACTIVE_CONTAINER_INVENTORY_ID,
@@ -389,19 +400,19 @@ fn encode_slot_location(
                 full_container_name(container_name, NO_DYNAMIC_CONTAINER_ID)?,
             )))
         }
-        InventorySlot::Auxiliary(_) | InventorySlot::Container(_) => Ok(None),
+        InventorySlot::WindowLocal(_) => Ok(None),
     }
 }
 
 fn active_container_slot_location(
-    container: InventoryContainer,
-    slot: u8,
+    container: &ContainerKindId,
+    slot: u16,
 ) -> Result<(u32, ContainerEnumName), ProtocolError> {
-    match container {
-        InventoryContainer::Player => Err(ProtocolError::Plugin(
+    match container.as_str() {
+        PLAYER_KIND => Err(ProtocolError::Plugin(
             "player container should not use active container slot mapping".to_string(),
         )),
-        InventoryContainer::CraftingTable => match slot {
+        CRAFTING_TABLE_KIND => match slot {
             0 => Ok((0, ContainerEnumName::CraftingOutputPreviewContainer)),
             1..=9 => Ok((
                 u32::from(slot - 1),
@@ -411,8 +422,8 @@ fn active_container_slot_location(
                 "unsupported crafting-table slot for bedrock encoding: {slot}"
             ))),
         },
-        InventoryContainer::Chest => Ok((u32::from(slot), ContainerEnumName::LevelEntityContainer)),
-        InventoryContainer::Furnace => match slot {
+        CHEST_27_KIND => Ok((u32::from(slot), ContainerEnumName::LevelEntityContainer)),
+        FURNACE_KIND => match slot {
             0 => Ok((0, ContainerEnumName::FurnaceIngredientContainer)),
             1 => Ok((0, ContainerEnumName::FurnaceFuelContainer)),
             2 => Ok((0, ContainerEnumName::FurnaceResultContainer)),
@@ -420,15 +431,17 @@ fn active_container_slot_location(
                 "unsupported furnace slot for bedrock encoding: {slot}"
             ))),
         },
+        _ => Err(ProtocolError::Plugin(format!(
+            "unsupported container kind for bedrock encoding: {container}"
+        ))),
     }
 }
 
-fn active_container_enum_name(container: InventoryContainer) -> ContainerEnumName {
-    match container {
-        InventoryContainer::Player => ContainerEnumName::CombinedHotbarAndInventoryContainer,
-        InventoryContainer::CraftingTable
-        | InventoryContainer::Chest
-        | InventoryContainer::Furnace => ContainerEnumName::LevelEntityContainer,
+fn active_container_enum_name(container: &ContainerKindId) -> ContainerEnumName {
+    if is_player_container(container) {
+        ContainerEnumName::CombinedHotbarAndInventoryContainer
+    } else {
+        ContainerEnumName::LevelEntityContainer
     }
 }
 
@@ -445,12 +458,31 @@ fn player_storage_slot(slot_index: u32) -> Option<InventorySlot> {
     }
 }
 
-fn container_type(container: InventoryContainer) -> ContainerType {
-    match container {
-        InventoryContainer::Player => ContainerType::Inventory,
-        InventoryContainer::CraftingTable => ContainerType::Workbench,
-        InventoryContainer::Chest => ContainerType::Container,
-        InventoryContainer::Furnace => ContainerType::Furnace,
+fn container_type(container: &ContainerKindId) -> ContainerType {
+    match container.as_str() {
+        PLAYER_KIND => ContainerType::Inventory,
+        CRAFTING_TABLE_KIND => ContainerType::Workbench,
+        CHEST_27_KIND => ContainerType::Container,
+        FURNACE_KIND => ContainerType::Furnace,
+        _ => ContainerType::None,
+    }
+}
+
+pub(crate) fn player_container_kind() -> ContainerKindId {
+    ContainerKindId::new(PLAYER_KIND)
+}
+
+fn is_player_container(container: &ContainerKindId) -> bool {
+    container.as_str() == PLAYER_KIND
+}
+
+fn container_property_id(property: &ContainerPropertyKey) -> Option<u8> {
+    match property.as_str() {
+        FURNACE_BURN_LEFT => Some(0),
+        FURNACE_BURN_MAX => Some(1),
+        FURNACE_COOK_PROGRESS => Some(2),
+        FURNACE_COOK_TOTAL => Some(3),
+        _ => None,
     }
 }
 
@@ -562,7 +594,7 @@ fn decode_container_enum_name(
 
 fn bedrock_item_encoding(stack: &ItemStack) -> Result<BedrockItemEncoding, ProtocolError> {
     let block_runtime_id =
-        mc_core::catalog::placeable_block_state_from_item_key(stack.key.as_str())
+        mc_content_canonical::placeable_block_state_from_item_key(stack.key.as_str())
             .map(|block| {
                 i32::try_from(block_runtime_id(&block))
                     .expect("bedrock block runtime id should fit into i32")

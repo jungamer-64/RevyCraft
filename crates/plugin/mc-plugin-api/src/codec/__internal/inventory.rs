@@ -1,43 +1,31 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::shared::{decode_option, encode_option};
 use mc_core::{
-    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventoryContainer,
+    ContainerKindId, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
     InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack,
     PlayerInventory,
 };
 
-pub(crate) fn encode_inventory_container(encoder: &mut Encoder, container: InventoryContainer) {
-    encoder.write_u8(match container {
-        InventoryContainer::Player => 1,
-        InventoryContainer::CraftingTable => 2,
-        InventoryContainer::Furnace => 3,
-        InventoryContainer::Chest => 4,
-    });
+pub(crate) fn encode_inventory_container(
+    encoder: &mut Encoder,
+    container: &ContainerKindId,
+) -> Result<(), ProtocolCodecError> {
+    encoder.write_string(container.as_str())
 }
 
 pub(crate) fn decode_inventory_container(
     decoder: &mut Decoder<'_>,
-) -> Result<InventoryContainer, ProtocolCodecError> {
-    match decoder.read_u8()? {
-        1 => Ok(InventoryContainer::Player),
-        2 => Ok(InventoryContainer::CraftingTable),
-        3 => Ok(InventoryContainer::Furnace),
-        4 => Ok(InventoryContainer::Chest),
-        _ => Err(ProtocolCodecError::InvalidValue(
-            "invalid inventory container",
-        )),
-    }
+) -> Result<ContainerKindId, ProtocolCodecError> {
+    Ok(ContainerKindId::new(decoder.read_string()?))
 }
 
 pub(crate) fn encode_inventory_slot(encoder: &mut Encoder, slot: InventorySlot) {
     match slot {
-        InventorySlot::Auxiliary(index) => {
+        InventorySlot::WindowLocal(index) => {
             encoder.write_u8(1);
-            encoder.write_u8(index);
-        }
-        InventorySlot::Container(index) => {
-            encoder.write_u8(2);
-            encoder.write_u8(index);
+            encoder.write_u8(
+                u8::try_from(index).expect("window-local inventory slot should fit into u8"),
+            );
         }
         InventorySlot::MainInventory(index) => {
             encoder.write_u8(3);
@@ -55,8 +43,7 @@ pub(crate) fn decode_inventory_slot(
     decoder: &mut Decoder<'_>,
 ) -> Result<InventorySlot, ProtocolCodecError> {
     match decoder.read_u8()? {
-        1 => Ok(InventorySlot::Auxiliary(decoder.read_u8()?)),
-        2 => Ok(InventorySlot::Container(decoder.read_u8()?)),
+        1 | 2 => Ok(InventorySlot::WindowLocal(u16::from(decoder.read_u8()?))),
         3 => Ok(InventorySlot::MainInventory(decoder.read_u8()?)),
         4 => Ok(InventorySlot::Hotbar(decoder.read_u8()?)),
         5 => Ok(InventorySlot::Offhand),
@@ -204,8 +191,8 @@ pub(crate) fn encode_inventory_window_contents(
     contents: &InventoryWindowContents,
 ) -> Result<(), ProtocolCodecError> {
     encode_player_inventory(encoder, &contents.player_inventory)?;
-    encoder.write_len(contents.container_slots.len())?;
-    for stack in &contents.container_slots {
+    encoder.write_len(contents.local_slots.len())?;
+    for stack in &contents.local_slots {
         encode_option(encoder, stack.as_ref(), encode_item_stack)?;
     }
     Ok(())
@@ -216,12 +203,12 @@ pub(crate) fn decode_inventory_window_contents(
 ) -> Result<InventoryWindowContents, ProtocolCodecError> {
     let player_inventory = decode_player_inventory(decoder)?;
     let len = decoder.read_len()?;
-    let mut container_slots = Vec::with_capacity(len);
+    let mut local_slots = Vec::with_capacity(len);
     for _ in 0..len {
-        container_slots.push(decode_option(decoder, decode_item_stack)?);
+        local_slots.push(decode_option(decoder, decode_item_stack)?);
     }
-    Ok(InventoryWindowContents {
+    Ok(InventoryWindowContents::with_local_slots(
         player_inventory,
-        container_slots,
-    })
+        local_slots,
+    ))
 }

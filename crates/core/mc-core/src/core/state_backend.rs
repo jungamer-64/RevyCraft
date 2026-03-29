@@ -1,21 +1,21 @@
 use super::{
     ActiveMiningState, ClientView, CoreConfig, DroppedItemState, EntityKind, PlayerIdentity,
-    PlayerSessionState, PlayerTransform, PlayerVitals, ServerCore,
+    PlayerSessionState, PlayerTransform, PlayerVitals, ServerCore, WorldContainerViewers,
 };
 use crate::inventory::PlayerInventory;
 use crate::player::PlayerSnapshot;
 use crate::world::{
-    BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, WorldMeta,
-    generate_superflat_chunk, required_chunks,
+    BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, WorldMeta, required_chunks,
 };
 use crate::{BLOCK_EDIT_REACH, EntityId, PLAYER_HEIGHT, PLAYER_WIDTH, PlayerId};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 #[derive(Default)]
 pub(super) struct TxOverlay {
     pub(super) chunks: BTreeMap<ChunkPos, ChunkColumn>,
     pub(super) block_entities: BTreeMap<BlockPos, Option<BlockEntityState>>,
-    pub(super) chest_viewers: BTreeMap<BlockPos, Option<BTreeMap<PlayerId, u8>>>,
+    pub(super) container_viewers: BTreeMap<BlockPos, Option<WorldContainerViewers>>,
     pub(super) saved_players: BTreeMap<PlayerId, Option<PlayerSnapshot>>,
     pub(super) players_by_player_id: BTreeMap<PlayerId, Option<EntityId>>,
     pub(super) entity_kinds: BTreeMap<EntityId, Option<EntityKind>>,
@@ -32,9 +32,11 @@ pub(super) struct TxOverlay {
 }
 
 pub(super) trait CoreStateRead {
+    fn content_behavior(&self) -> &dyn super::ContentBehavior;
+    fn content_behavior_arc(&self) -> Arc<dyn super::ContentBehavior>;
     fn config(&self) -> &CoreConfig;
     fn world_meta_ref(&self) -> &WorldMeta;
-    fn block_state(&self, position: BlockPos) -> BlockState;
+    fn block_state(&self, position: BlockPos) -> Option<BlockState>;
     fn block_entity(&self, position: BlockPos) -> Option<BlockEntityState>;
     fn saved_player(&self, player_id: PlayerId) -> Option<PlayerSnapshot>;
     fn player_entity_id(&self, player_id: PlayerId) -> Option<EntityId>;
@@ -49,7 +51,7 @@ pub(super) trait CoreStateRead {
     fn player_ids(&self) -> Vec<PlayerId>;
     fn player_entity_ids(&self) -> BTreeSet<EntityId>;
     fn dropped_item_ids(&self) -> Vec<EntityId>;
-    fn chest_viewers(&self, position: BlockPos) -> Option<BTreeMap<PlayerId, u8>>;
+    fn container_viewers(&self, position: BlockPos) -> Option<WorldContainerViewers>;
     fn keepalive_interval_ms(&self) -> u64;
 
     fn world_meta(&self) -> WorldMeta {
@@ -123,7 +125,7 @@ pub(super) trait CoreStateRead {
 
 pub(super) trait CoreStateMut: CoreStateRead {
     fn ensure_chunk_mut(&mut self, chunk_pos: ChunkPos) -> &mut ChunkColumn;
-    fn set_block_state(&mut self, position: BlockPos, block: BlockState);
+    fn set_block_state(&mut self, position: BlockPos, block: Option<BlockState>);
     fn set_block_entity(&mut self, position: BlockPos, block_entity: Option<BlockEntityState>);
     fn player_session_mut(&mut self, player_id: PlayerId) -> Option<&mut PlayerSessionState>;
     fn player_session_inventory_mut(
@@ -142,7 +144,7 @@ pub(super) trait CoreStateMut: CoreStateRead {
     fn set_dropped_item(&mut self, entity_id: EntityId, item: Option<DroppedItemState>);
     fn take_dropped_item(&mut self, entity_id: EntityId) -> Option<DroppedItemState>;
     fn set_saved_player(&mut self, player_id: PlayerId, snapshot: Option<PlayerSnapshot>);
-    fn set_chest_viewers(&mut self, position: BlockPos, viewers: Option<BTreeMap<PlayerId, u8>>);
+    fn set_container_viewers(&mut self, position: BlockPos, viewers: Option<WorldContainerViewers>);
     fn spawn_online_player(
         &mut self,
         player: PlayerSnapshot,
@@ -195,8 +197,8 @@ impl TxOverlay {
         for (position, block_entity) in self.block_entities {
             apply_optional_entry(&mut base.world.block_entities, position, block_entity);
         }
-        for (position, viewers) in self.chest_viewers {
-            apply_optional_entry(&mut base.world.chest_viewers, position, viewers);
+        for (position, viewers) in self.container_viewers {
+            apply_optional_entry(&mut base.world.container_viewers, position, viewers);
         }
         for (player_id, snapshot) in self.saved_players {
             apply_optional_entry(&mut base.world.saved_players, player_id, snapshot);
@@ -319,6 +321,14 @@ impl<'a> OverlayStateRef<'a> {
 }
 
 impl CoreStateRead for BaseState<'_> {
+    fn content_behavior(&self) -> &dyn super::ContentBehavior {
+        self.core.content_behavior.as_ref()
+    }
+
+    fn content_behavior_arc(&self) -> Arc<dyn super::ContentBehavior> {
+        self.view().content_behavior_arc()
+    }
+
     fn config(&self) -> &CoreConfig {
         &self.core.world.config
     }
@@ -327,7 +337,7 @@ impl CoreStateRead for BaseState<'_> {
         &self.core.world.world_meta
     }
 
-    fn block_state(&self, position: BlockPos) -> BlockState {
+    fn block_state(&self, position: BlockPos) -> Option<BlockState> {
         self.view().block_state(position)
     }
 
@@ -387,8 +397,8 @@ impl CoreStateRead for BaseState<'_> {
         self.view().dropped_item_ids()
     }
 
-    fn chest_viewers(&self, position: BlockPos) -> Option<BTreeMap<PlayerId, u8>> {
-        self.view().chest_viewers(position)
+    fn container_viewers(&self, position: BlockPos) -> Option<WorldContainerViewers> {
+        self.view().container_viewers(position)
     }
 
     fn keepalive_interval_ms(&self) -> u64 {
@@ -397,6 +407,14 @@ impl CoreStateRead for BaseState<'_> {
 }
 
 impl CoreStateRead for BaseStateRef<'_> {
+    fn content_behavior(&self) -> &dyn super::ContentBehavior {
+        self.core.content_behavior.as_ref()
+    }
+
+    fn content_behavior_arc(&self) -> Arc<dyn super::ContentBehavior> {
+        self.core.content_behavior.clone()
+    }
+
     fn config(&self) -> &CoreConfig {
         &self.core.world.config
     }
@@ -405,7 +423,7 @@ impl CoreStateRead for BaseStateRef<'_> {
         &self.core.world.world_meta
     }
 
-    fn block_state(&self, position: BlockPos) -> BlockState {
+    fn block_state(&self, position: BlockPos) -> Option<BlockState> {
         self.core.block_at(position)
     }
 
@@ -488,8 +506,8 @@ impl CoreStateRead for BaseStateRef<'_> {
             .collect::<Vec<_>>()
     }
 
-    fn chest_viewers(&self, position: BlockPos) -> Option<BTreeMap<PlayerId, u8>> {
-        self.core.world.chest_viewers.get(&position).cloned()
+    fn container_viewers(&self, position: BlockPos) -> Option<WorldContainerViewers> {
+        self.core.world.container_viewers.get(&position).cloned()
     }
 
     fn keepalive_interval_ms(&self) -> u64 {
@@ -499,14 +517,14 @@ impl CoreStateRead for BaseStateRef<'_> {
 
 impl CoreStateMut for BaseState<'_> {
     fn ensure_chunk_mut(&mut self, chunk_pos: ChunkPos) -> &mut ChunkColumn {
-        self.core
-            .world
-            .chunks
-            .entry(chunk_pos)
-            .or_insert_with(|| generate_superflat_chunk(chunk_pos))
+        self.core.world.chunks.entry(chunk_pos).or_insert_with(|| {
+            self.core
+                .content_behavior
+                .generate_chunk(&self.core.world.world_meta, chunk_pos)
+        })
     }
 
-    fn set_block_state(&mut self, position: BlockPos, block: BlockState) {
+    fn set_block_state(&mut self, position: BlockPos, block: Option<BlockState>) {
         self.core.set_block_at(position, block);
     }
 
@@ -625,13 +643,17 @@ impl CoreStateMut for BaseState<'_> {
         }
     }
 
-    fn set_chest_viewers(&mut self, position: BlockPos, viewers: Option<BTreeMap<PlayerId, u8>>) {
+    fn set_container_viewers(
+        &mut self,
+        position: BlockPos,
+        viewers: Option<WorldContainerViewers>,
+    ) {
         match viewers {
             Some(viewers) => {
-                self.core.world.chest_viewers.insert(position, viewers);
+                self.core.world.container_viewers.insert(position, viewers);
             }
             None => {
-                self.core.world.chest_viewers.remove(&position);
+                self.core.world.container_viewers.remove(&position);
             }
         }
     }
@@ -719,6 +741,14 @@ impl CoreStateMut for BaseState<'_> {
 }
 
 impl CoreStateRead for OverlayState<'_> {
+    fn content_behavior(&self) -> &dyn super::ContentBehavior {
+        self.base.content_behavior.as_ref()
+    }
+
+    fn content_behavior_arc(&self) -> Arc<dyn super::ContentBehavior> {
+        self.view().content_behavior_arc()
+    }
+
     fn config(&self) -> &CoreConfig {
         &self.base.world.config
     }
@@ -727,7 +757,7 @@ impl CoreStateRead for OverlayState<'_> {
         &self.base.world.world_meta
     }
 
-    fn block_state(&self, position: BlockPos) -> BlockState {
+    fn block_state(&self, position: BlockPos) -> Option<BlockState> {
         self.view().block_state(position)
     }
 
@@ -787,8 +817,8 @@ impl CoreStateRead for OverlayState<'_> {
         self.view().dropped_item_ids()
     }
 
-    fn chest_viewers(&self, position: BlockPos) -> Option<BTreeMap<PlayerId, u8>> {
-        self.view().chest_viewers(position)
+    fn container_viewers(&self, position: BlockPos) -> Option<WorldContainerViewers> {
+        self.view().container_viewers(position)
     }
 
     fn keepalive_interval_ms(&self) -> u64 {
@@ -797,6 +827,14 @@ impl CoreStateRead for OverlayState<'_> {
 }
 
 impl CoreStateRead for OverlayStateRef<'_> {
+    fn content_behavior(&self) -> &dyn super::ContentBehavior {
+        self.base.content_behavior.as_ref()
+    }
+
+    fn content_behavior_arc(&self) -> Arc<dyn super::ContentBehavior> {
+        self.base.content_behavior.clone()
+    }
+
     fn config(&self) -> &CoreConfig {
         &self.base.world.config
     }
@@ -805,7 +843,7 @@ impl CoreStateRead for OverlayStateRef<'_> {
         &self.base.world.world_meta
     }
 
-    fn block_state(&self, position: BlockPos) -> BlockState {
+    fn block_state(&self, position: BlockPos) -> Option<BlockState> {
         let chunk_pos = position.chunk_pos();
         if let Some(chunk) = self.overlay.chunks.get(&chunk_pos) {
             return chunk.get_block(local_block_x(position), position.y, local_block_z(position));
@@ -964,11 +1002,11 @@ impl CoreStateRead for OverlayStateRef<'_> {
         entity_ids.into_iter().collect()
     }
 
-    fn chest_viewers(&self, position: BlockPos) -> Option<BTreeMap<PlayerId, u8>> {
-        if let Some(entry) = self.overlay.chest_viewers.get(&position) {
+    fn container_viewers(&self, position: BlockPos) -> Option<WorldContainerViewers> {
+        if let Some(entry) = self.overlay.container_viewers.get(&position) {
             return entry.clone();
         }
-        self.base.world.chest_viewers.get(&position).cloned()
+        self.base.world.container_viewers.get(&position).cloned()
     }
 
     fn keepalive_interval_ms(&self) -> u64 {
@@ -984,11 +1022,15 @@ impl CoreStateMut for OverlayState<'_> {
                 .chunks
                 .get(&chunk_pos)
                 .cloned()
-                .unwrap_or_else(|| generate_superflat_chunk(chunk_pos))
+                .unwrap_or_else(|| {
+                    self.base
+                        .content_behavior
+                        .generate_chunk(&self.base.world.world_meta, chunk_pos)
+                })
         })
     }
 
-    fn set_block_state(&mut self, position: BlockPos, block: BlockState) {
+    fn set_block_state(&mut self, position: BlockPos, block: Option<BlockState>) {
         self.ensure_chunk_mut(position.chunk_pos()).set_block(
             local_block_x(position),
             position.y,
@@ -1153,8 +1195,12 @@ impl CoreStateMut for OverlayState<'_> {
         self.overlay.saved_players.insert(player_id, snapshot);
     }
 
-    fn set_chest_viewers(&mut self, position: BlockPos, viewers: Option<BTreeMap<PlayerId, u8>>) {
-        self.overlay.chest_viewers.insert(position, viewers);
+    fn set_container_viewers(
+        &mut self,
+        position: BlockPos,
+        viewers: Option<WorldContainerViewers>,
+    ) {
+        self.overlay.container_viewers.insert(position, viewers);
     }
 
     fn spawn_online_player(

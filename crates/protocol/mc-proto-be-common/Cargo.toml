@@ -12,6 +12,7 @@ description = "Shared Bedrock/RakNet helpers for the RevyCraft protocol plugins.
 [dependencies]
 base64.workspace = true
 bedrockrs_proto.workspace = true
+mc-content-canonical = { path = "../../content/mc-content-canonical" }
 mc-core = { path = "../../core/mc-core" }
 mc-proto-common = { path = "../mc-proto-common" }
 num-traits.workspace = true

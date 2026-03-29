@@ -9,9 +9,7 @@ mod region;
 #[cfg(test)]
 mod tests;
 
-use mc_core::{
-    BlockState, ChunkColumn, ChunkPos, StorageCapability, StorageCapabilitySet, WorldSnapshot,
-};
+use mc_core::{ChunkColumn, ChunkPos, StorageCapability, StorageCapabilitySet, WorldSnapshot};
 use mc_plugin_api::codec::storage::StorageDescriptor;
 use mc_plugin_sdk_rust::capabilities::{build_tag_contains, storage_capabilities};
 use mc_plugin_sdk_rust::export_plugin;
@@ -98,22 +96,8 @@ fn chunks_for_save(snapshot: &WorldSnapshot) -> BTreeMap<ChunkPos, ChunkColumn> 
     }
     let chunk_pos = snapshot.meta.spawn.chunk_pos();
     let mut chunks = BTreeMap::new();
-    chunks.insert(chunk_pos, flat_chunk(chunk_pos));
+    chunks.insert(chunk_pos, mc_content_canonical::default_chunk(chunk_pos));
     chunks
-}
-
-fn flat_chunk(chunk_pos: ChunkPos) -> ChunkColumn {
-    let mut column = ChunkColumn::new(chunk_pos);
-    for z in 0_u8..16 {
-        for x in 0_u8..16 {
-            column.set_block(x, 0, z, BlockState::bedrock());
-            column.set_block(x, 1, z, BlockState::stone());
-            column.set_block(x, 2, z, BlockState::stone());
-            column.set_block(x, 3, z, BlockState::dirt());
-            column.set_block(x, 4, z, BlockState::grass_block());
-        }
-    }
-    column
 }
 
 const MANIFEST: StaticPluginManifest = StaticPluginManifest::storage(

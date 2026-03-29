@@ -17,5 +17,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+mc-content-canonical = { path = "../../content/mc-content-canonical" }
+
 [lints]
 workspace = true

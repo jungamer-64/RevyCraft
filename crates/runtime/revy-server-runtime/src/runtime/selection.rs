@@ -1,6 +1,7 @@
 use super::{AdminPermission, OnlineAuthKeys};
 use crate::RuntimeError;
 use crate::config::ServerConfig;
+use mc_content_canonical::canonical_content;
 use mc_core::{AdapterId, GameplayProfileId, ServerCore};
 use mc_plugin_api::codec::auth::AuthMode;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
@@ -131,6 +132,10 @@ impl SelectionManager {
 pub(crate) struct SelectionResolver;
 
 impl SelectionResolver {
+    pub(crate) fn content_behavior() -> std::sync::Arc<dyn mc_core::ContentBehavior> {
+        canonical_content()
+    }
+
     pub(crate) fn gameplay_profile_for_adapter(
         config: &ServerConfig,
         adapter_id: &str,
@@ -169,8 +174,10 @@ impl SelectionResolver {
         let snapshot = storage_profile.load_snapshot(&config.bootstrap.world_dir)?;
         let core_config = Self::core_config(config);
         let core = match snapshot {
-            Some(snapshot) => ServerCore::from_snapshot(core_config, snapshot),
-            None => ServerCore::new(core_config),
+            Some(snapshot) => {
+                ServerCore::from_snapshot(core_config, snapshot, Self::content_behavior())
+            }
+            None => ServerCore::new(core_config, Self::content_behavior()),
         };
         Ok(BootstrapSelectionResolution {
             selection,

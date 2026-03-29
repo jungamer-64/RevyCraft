@@ -1,5 +1,5 @@
+use mc_content_canonical::catalog;
 use mc_core::BlockState;
-use mc_core::catalog::{BEDROCK, BRICKS, COBBLESTONE, DIRT, GLASS, GRASS_BLOCK, OAK_PLANKS, SAND};
 
 pub(crate) const BEDROCK_26_3_RUNTIME_ID_STONE: u32 = 2_532;
 pub(crate) const BEDROCK_26_3_RUNTIME_ID_COBBLESTONE: u32 = 5_088;
@@ -14,15 +14,15 @@ pub(crate) const BEDROCK_26_3_RUNTIME_ID_OAK_PLANKS: u32 = 14_388;
 
 pub(crate) fn block_runtime_id(block: &BlockState) -> u32 {
     match block.key.as_str() {
-        COBBLESTONE => BEDROCK_26_3_RUNTIME_ID_COBBLESTONE,
-        SAND => BEDROCK_26_3_RUNTIME_ID_SAND,
-        BRICKS => BEDROCK_26_3_RUNTIME_ID_BRICKS,
-        DIRT => BEDROCK_26_3_RUNTIME_ID_DIRT,
-        GRASS_BLOCK => BEDROCK_26_3_RUNTIME_ID_GRASS_BLOCK,
-        GLASS => BEDROCK_26_3_RUNTIME_ID_GLASS,
-        "minecraft:air" => BEDROCK_26_3_RUNTIME_ID_AIR,
-        BEDROCK => BEDROCK_26_3_RUNTIME_ID_BEDROCK,
-        OAK_PLANKS => BEDROCK_26_3_RUNTIME_ID_OAK_PLANKS,
+        catalog::COBBLESTONE => BEDROCK_26_3_RUNTIME_ID_COBBLESTONE,
+        catalog::SAND => BEDROCK_26_3_RUNTIME_ID_SAND,
+        catalog::BRICKS => BEDROCK_26_3_RUNTIME_ID_BRICKS,
+        catalog::DIRT => BEDROCK_26_3_RUNTIME_ID_DIRT,
+        catalog::GRASS_BLOCK => BEDROCK_26_3_RUNTIME_ID_GRASS_BLOCK,
+        catalog::GLASS => BEDROCK_26_3_RUNTIME_ID_GLASS,
+        catalog::AIR => BEDROCK_26_3_RUNTIME_ID_AIR,
+        catalog::BEDROCK => BEDROCK_26_3_RUNTIME_ID_BEDROCK,
+        catalog::OAK_PLANKS => BEDROCK_26_3_RUNTIME_ID_OAK_PLANKS,
         _ => BEDROCK_26_3_RUNTIME_ID_STONE,
     }
 }

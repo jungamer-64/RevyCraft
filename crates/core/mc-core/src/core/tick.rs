@@ -89,12 +89,8 @@ impl super::SystemScheduler {
             .into_iter()
             .filter_map(|player_id| {
                 core.player_session(player_id)
-                    .is_some_and(|session| {
-                        session.active_container.as_ref().is_some_and(|window| {
-                            window.container == crate::inventory::InventoryContainer::Furnace
-                        })
-                    })
-                    .then_some(CoreOp::TickFurnaceWindow { player_id })
+                    .is_some_and(|session| session.active_container.is_some())
+                    .then_some(CoreOp::TickActiveContainer { player_id })
             })
             .collect::<Vec<_>>();
         ops.extend(

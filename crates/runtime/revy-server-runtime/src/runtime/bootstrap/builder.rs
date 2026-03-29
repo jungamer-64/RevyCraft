@@ -165,6 +165,7 @@ pub(crate) async fn boot_server_from_upgrade(
     let core = ServerCore::from_runtime_state(
         SelectionResolver::core_config(&config),
         import.payload.core.clone(),
+        SelectionResolver::content_behavior(),
     );
     let adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Tcp);
     let bound_listeners = vec![

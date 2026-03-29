@@ -16,9 +16,21 @@ pub use self::window_items::window_items;
 mod tests {
     use super::*;
     use mc_core::{
-        InventoryContainer, InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory,
+        ContainerKindId, InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory,
     };
     use mc_proto_common::{PacketReader, PacketWriter};
+
+    fn player_container() -> ContainerKindId {
+        ContainerKindId::new("canonical:player")
+    }
+
+    fn chest_container() -> ContainerKindId {
+        ContainerKindId::new("canonical:chest_27")
+    }
+
+    fn furnace_container() -> ContainerKindId {
+        ContainerKindId::new("canonical:furnace")
+    }
 
     fn stone_stack() -> ItemStack {
         ItemStack::new("minecraft:stone", 32, 0)
@@ -101,17 +113,17 @@ mod tests {
 
     #[test]
     fn modern_layout_exposes_offhand_slot_without_affecting_legacy_slots() {
-        let mut inventory = PlayerInventory::creative_starter();
+        let mut inventory = mc_content_canonical::creative_starter_inventory();
         inventory.offhand = Some(ItemStack::new("minecraft:brick_block", 1, 0));
         let player_contents = InventoryWindowContents::player(inventory.clone());
 
         let legacy_items = window_items(
-            InventoryContainer::Player,
+            &player_container(),
             PlayerInventoryLayout::Legacy,
             &player_contents,
         );
         let modern_items = window_items(
-            InventoryContainer::Player,
+            &player_container(),
             PlayerInventoryLayout::ModernWithOffhand,
             &player_contents,
         );
@@ -120,7 +132,7 @@ mod tests {
         assert_eq!(modern_items.len(), inventory.slots.len() + 1);
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Player,
+                &player_container(),
                 PlayerInventoryLayout::Legacy,
                 InventorySlot::Offhand,
             ),
@@ -128,7 +140,7 @@ mod tests {
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Player,
+                &player_container(),
                 PlayerInventoryLayout::ModernWithOffhand,
                 InventorySlot::Offhand
             ),
@@ -136,18 +148,14 @@ mod tests {
         );
         assert_eq!(
             inventory_slot(
-                InventoryContainer::Player,
+                &player_container(),
                 PlayerInventoryLayout::ModernWithOffhand,
                 45,
             ),
             Some(InventorySlot::Offhand)
         );
         assert_eq!(
-            inventory_slot(
-                InventoryContainer::Player,
-                PlayerInventoryLayout::Legacy,
-                45
-            ),
+            inventory_slot(&player_container(), PlayerInventoryLayout::Legacy, 45),
             None
         );
         assert_eq!(
@@ -158,31 +166,28 @@ mod tests {
 
     #[test]
     fn furnace_slot_mapping_uses_container_descriptor_layout() {
-        assert_eq!(unique_slot_count(InventoryContainer::Furnace), 3);
-        assert_eq!(
-            window_type(InventoryContainer::Furnace),
-            FURNACE_WINDOW_TYPE
-        );
+        assert_eq!(unique_slot_count(&furnace_container()), 3);
+        assert_eq!(window_type(&furnace_container()), FURNACE_WINDOW_TYPE);
 
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Furnace,
+                &furnace_container(),
                 PlayerInventoryLayout::Legacy,
-                InventorySlot::Container(0),
+                InventorySlot::WindowLocal(0),
             ),
             Some(0)
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Furnace,
+                &furnace_container(),
                 PlayerInventoryLayout::Legacy,
-                InventorySlot::Container(2),
+                InventorySlot::WindowLocal(2),
             ),
             Some(2)
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Furnace,
+                &furnace_container(),
                 PlayerInventoryLayout::Legacy,
                 InventorySlot::MainInventory(0),
             ),
@@ -190,7 +195,7 @@ mod tests {
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Furnace,
+                &furnace_container(),
                 PlayerInventoryLayout::Legacy,
                 InventorySlot::MainInventory(26),
             ),
@@ -198,7 +203,7 @@ mod tests {
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Furnace,
+                &furnace_container(),
                 PlayerInventoryLayout::Legacy,
                 InventorySlot::Hotbar(0),
             ),
@@ -206,7 +211,7 @@ mod tests {
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Furnace,
+                &furnace_container(),
                 PlayerInventoryLayout::Legacy,
                 InventorySlot::Hotbar(8),
             ),
@@ -214,87 +219,59 @@ mod tests {
         );
 
         assert_eq!(
-            inventory_slot(
-                InventoryContainer::Furnace,
-                PlayerInventoryLayout::Legacy,
-                0
-            ),
-            Some(InventorySlot::Container(0))
+            inventory_slot(&furnace_container(), PlayerInventoryLayout::Legacy, 0),
+            Some(InventorySlot::WindowLocal(0))
         );
         assert_eq!(
-            inventory_slot(
-                InventoryContainer::Furnace,
-                PlayerInventoryLayout::Legacy,
-                2
-            ),
-            Some(InventorySlot::Container(2))
+            inventory_slot(&furnace_container(), PlayerInventoryLayout::Legacy, 2),
+            Some(InventorySlot::WindowLocal(2))
         );
         assert_eq!(
-            inventory_slot(
-                InventoryContainer::Furnace,
-                PlayerInventoryLayout::Legacy,
-                3
-            ),
+            inventory_slot(&furnace_container(), PlayerInventoryLayout::Legacy, 3),
             Some(InventorySlot::MainInventory(0))
         );
         assert_eq!(
-            inventory_slot(
-                InventoryContainer::Furnace,
-                PlayerInventoryLayout::Legacy,
-                29
-            ),
+            inventory_slot(&furnace_container(), PlayerInventoryLayout::Legacy, 29),
             Some(InventorySlot::MainInventory(26))
         );
         assert_eq!(
-            inventory_slot(
-                InventoryContainer::Furnace,
-                PlayerInventoryLayout::Legacy,
-                30
-            ),
+            inventory_slot(&furnace_container(), PlayerInventoryLayout::Legacy, 30),
             Some(InventorySlot::Hotbar(0))
         );
         assert_eq!(
-            inventory_slot(
-                InventoryContainer::Furnace,
-                PlayerInventoryLayout::Legacy,
-                38
-            ),
+            inventory_slot(&furnace_container(), PlayerInventoryLayout::Legacy, 38),
             Some(InventorySlot::Hotbar(8))
         );
         assert_eq!(
-            inventory_slot(
-                InventoryContainer::Furnace,
-                PlayerInventoryLayout::Legacy,
-                39
-            ),
+            inventory_slot(&furnace_container(), PlayerInventoryLayout::Legacy, 39),
             None
         );
     }
 
     #[test]
     fn chest_slot_mapping_uses_container_descriptor_layout() {
-        assert_eq!(unique_slot_count(InventoryContainer::Chest), 27);
-        assert_eq!(window_type(InventoryContainer::Chest), CHEST_WINDOW_TYPE);
+        assert_eq!(unique_slot_count(&chest_container()), 27);
+        assert_eq!(window_type(&chest_container()), CHEST_WINDOW_TYPE);
 
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Chest,
+                &chest_container(),
                 PlayerInventoryLayout::Legacy,
-                InventorySlot::Container(0),
+                InventorySlot::WindowLocal(0),
             ),
             Some(0)
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Chest,
+                &chest_container(),
                 PlayerInventoryLayout::Legacy,
-                InventorySlot::Container(26),
+                InventorySlot::WindowLocal(26),
             ),
             Some(26)
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Chest,
+                &chest_container(),
                 PlayerInventoryLayout::Legacy,
                 InventorySlot::MainInventory(0),
             ),
@@ -302,7 +279,7 @@ mod tests {
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Chest,
+                &chest_container(),
                 PlayerInventoryLayout::Legacy,
                 InventorySlot::MainInventory(26),
             ),
@@ -310,7 +287,7 @@ mod tests {
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Chest,
+                &chest_container(),
                 PlayerInventoryLayout::Legacy,
                 InventorySlot::Hotbar(0),
             ),
@@ -318,7 +295,7 @@ mod tests {
         );
         assert_eq!(
             protocol_slot(
-                InventoryContainer::Chest,
+                &chest_container(),
                 PlayerInventoryLayout::Legacy,
                 InventorySlot::Hotbar(8),
             ),
@@ -326,31 +303,31 @@ mod tests {
         );
 
         assert_eq!(
-            inventory_slot(InventoryContainer::Chest, PlayerInventoryLayout::Legacy, 0),
-            Some(InventorySlot::Container(0))
+            inventory_slot(&chest_container(), PlayerInventoryLayout::Legacy, 0),
+            Some(InventorySlot::WindowLocal(0))
         );
         assert_eq!(
-            inventory_slot(InventoryContainer::Chest, PlayerInventoryLayout::Legacy, 26),
-            Some(InventorySlot::Container(26))
+            inventory_slot(&chest_container(), PlayerInventoryLayout::Legacy, 26),
+            Some(InventorySlot::WindowLocal(26))
         );
         assert_eq!(
-            inventory_slot(InventoryContainer::Chest, PlayerInventoryLayout::Legacy, 27),
+            inventory_slot(&chest_container(), PlayerInventoryLayout::Legacy, 27),
             Some(InventorySlot::MainInventory(0))
         );
         assert_eq!(
-            inventory_slot(InventoryContainer::Chest, PlayerInventoryLayout::Legacy, 53),
+            inventory_slot(&chest_container(), PlayerInventoryLayout::Legacy, 53),
             Some(InventorySlot::MainInventory(26))
         );
         assert_eq!(
-            inventory_slot(InventoryContainer::Chest, PlayerInventoryLayout::Legacy, 54),
+            inventory_slot(&chest_container(), PlayerInventoryLayout::Legacy, 54),
             Some(InventorySlot::Hotbar(0))
         );
         assert_eq!(
-            inventory_slot(InventoryContainer::Chest, PlayerInventoryLayout::Legacy, 62),
+            inventory_slot(&chest_container(), PlayerInventoryLayout::Legacy, 62),
             Some(InventorySlot::Hotbar(8))
         );
         assert_eq!(
-            inventory_slot(InventoryContainer::Chest, PlayerInventoryLayout::Legacy, 63),
+            inventory_slot(&chest_container(), PlayerInventoryLayout::Legacy, 63),
             None
         );
     }
@@ -376,7 +353,7 @@ mod tests {
         );
 
         let items = window_items(
-            InventoryContainer::Furnace,
+            &furnace_container(),
             PlayerInventoryLayout::Legacy,
             &contents,
         );
@@ -408,11 +385,7 @@ mod tests {
         container_slots[26] = Some(ItemStack::new("minecraft:glass", 1, 0));
         let contents = InventoryWindowContents::with_container(inventory, container_slots);
 
-        let items = window_items(
-            InventoryContainer::Chest,
-            PlayerInventoryLayout::Legacy,
-            &contents,
-        );
+        let items = window_items(&chest_container(), PlayerInventoryLayout::Legacy, &contents);
 
         assert_eq!(items.len(), 63);
         assert_eq!(items[0], Some(ItemStack::new("minecraft:sand", 1, 0)));

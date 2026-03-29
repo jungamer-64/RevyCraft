@@ -9,10 +9,11 @@ use crate::codec::__internal::inventory::{
     encode_player_inventory,
 };
 use mc_core::{
-    BlockEntityState, BlockFace, BlockPos, BlockState, CapabilityAnnouncement, ChunkColumn,
-    ChunkSection, ClosedCapability, ClosedCapabilitySet, ConnectionId, CoreCommand, CoreEvent,
-    DimensionId, DroppedItemSnapshot, EntityId, GameplayCommand, InteractionHand, PlayerId,
-    PlayerSnapshot, PluginBuildTag, RuntimeCommand, SessionCommand, Vec3, WorldMeta, WorldSnapshot,
+    BlockEntityKindId, BlockEntityState, BlockFace, BlockPos, BlockState, CapabilityAnnouncement,
+    ChunkColumn, ChunkSection, ClosedCapability, ClosedCapabilitySet, ConnectionId,
+    ContainerBlockEntityState, ContainerPropertyKey, CoreCommand, CoreEvent, DimensionId,
+    DroppedItemSnapshot, EntityId, GameplayCommand, InteractionHand, PlayerId, PlayerSnapshot,
+    PluginBuildTag, RuntimeCommand, SessionCommand, Vec3, WorldMeta, WorldSnapshot,
     expand_block_index,
 };
 use mc_proto_common::ConnectionPhase;
@@ -277,6 +278,19 @@ pub(crate) fn decode_block_state(
     })
 }
 
+pub(crate) fn encode_optional_block_state(
+    encoder: &mut Encoder,
+    block_state: Option<&BlockState>,
+) -> Result<(), ProtocolCodecError> {
+    encode_option(encoder, block_state, encode_block_state)
+}
+
+pub(crate) fn decode_optional_block_state(
+    decoder: &mut Decoder<'_>,
+) -> Result<Option<BlockState>, ProtocolCodecError> {
+    decode_option(decoder, decode_block_state)
+}
+
 pub(crate) fn encode_dropped_item_snapshot(
     encoder: &mut Encoder,
     item: &DroppedItemSnapshot,
@@ -302,30 +316,22 @@ pub(crate) fn encode_block_entity_state(
     block_entity: &BlockEntityState,
 ) -> Result<(), ProtocolCodecError> {
     match block_entity {
-        BlockEntityState::Chest { slots } => {
-            encoder.write_u8(1);
+        BlockEntityState::Container(ContainerBlockEntityState {
+            kind,
+            slots,
+            properties,
+        }) => {
+            encoder.write_u8(3);
+            encoder.write_string(kind.as_str())?;
             encoder.write_len(slots.len())?;
             for slot in slots {
                 encode_option(encoder, slot.as_ref(), encode_item_stack)?;
             }
-        }
-        BlockEntityState::Furnace {
-            input,
-            fuel,
-            output,
-            burn_left,
-            burn_max,
-            cook_progress,
-            cook_total,
-        } => {
-            encoder.write_u8(2);
-            encode_option(encoder, input.as_ref(), encode_item_stack)?;
-            encode_option(encoder, fuel.as_ref(), encode_item_stack)?;
-            encode_option(encoder, output.as_ref(), encode_item_stack)?;
-            encoder.write_i16(*burn_left);
-            encoder.write_i16(*burn_max);
-            encoder.write_i16(*cook_progress);
-            encoder.write_i16(*cook_total);
+            encoder.write_len(properties.len())?;
+            for (key, value) in properties {
+                encoder.write_string(key.as_str())?;
+                encoder.write_i16(*value);
+            }
         }
     }
     Ok(())
@@ -341,17 +347,63 @@ pub(crate) fn decode_block_entity_state(
             for _ in 0..len {
                 slots.push(decode_option(decoder, decode_item_stack)?);
             }
-            Ok(BlockEntityState::Chest { slots })
+            Ok(BlockEntityState::Container(ContainerBlockEntityState {
+                kind: BlockEntityKindId::new("legacy:chest"),
+                slots,
+                properties: BTreeMap::new(),
+            }))
         }
-        2 => Ok(BlockEntityState::Furnace {
-            input: decode_option(decoder, decode_item_stack)?,
-            fuel: decode_option(decoder, decode_item_stack)?,
-            output: decode_option(decoder, decode_item_stack)?,
-            burn_left: decoder.read_i16()?,
-            burn_max: decoder.read_i16()?,
-            cook_progress: decoder.read_i16()?,
-            cook_total: decoder.read_i16()?,
-        }),
+        2 => {
+            let input = decode_option(decoder, decode_item_stack)?;
+            let fuel = decode_option(decoder, decode_item_stack)?;
+            let output = decode_option(decoder, decode_item_stack)?;
+            let burn_left = decoder.read_i16()?;
+            let burn_max = decoder.read_i16()?;
+            let cook_progress = decoder.read_i16()?;
+            let cook_total = decoder.read_i16()?;
+            let mut properties = BTreeMap::new();
+            properties.insert(
+                ContainerPropertyKey::new("legacy:furnace.burn_left"),
+                burn_left,
+            );
+            properties.insert(
+                ContainerPropertyKey::new("legacy:furnace.burn_max"),
+                burn_max,
+            );
+            properties.insert(
+                ContainerPropertyKey::new("legacy:furnace.cook_progress"),
+                cook_progress,
+            );
+            properties.insert(
+                ContainerPropertyKey::new("legacy:furnace.cook_total"),
+                cook_total,
+            );
+            Ok(BlockEntityState::Container(ContainerBlockEntityState {
+                kind: BlockEntityKindId::new("legacy:furnace"),
+                slots: vec![input, fuel, output],
+                properties,
+            }))
+        }
+        3 => {
+            let kind = BlockEntityKindId::new(decoder.read_string()?);
+            let slots_len = decoder.read_len()?;
+            let mut slots = Vec::with_capacity(slots_len);
+            for _ in 0..slots_len {
+                slots.push(decode_option(decoder, decode_item_stack)?);
+            }
+            let properties_len = decoder.read_len()?;
+            let mut properties = BTreeMap::new();
+            for _ in 0..properties_len {
+                let key = ContainerPropertyKey::new(decoder.read_string()?);
+                let value = decoder.read_i16()?;
+                properties.insert(key, value);
+            }
+            Ok(BlockEntityState::Container(ContainerBlockEntityState {
+                kind,
+                slots,
+                properties,
+            }))
+        }
         _ => Err(ProtocolCodecError::InvalidValue(
             "invalid block entity state",
         )),
@@ -380,7 +432,7 @@ fn decode_chunk_section(decoder: &mut Decoder<'_>) -> Result<ChunkSection, Proto
         let index = decoder.read_u16()?;
         let state = decode_block_state(decoder)?;
         let (x, y, z) = expand_block_index(index);
-        section.set_block(x, y, z, state);
+        section.set_block(x, y, z, Some(state));
     }
     Ok(section)
 }
@@ -1010,7 +1062,7 @@ pub(crate) fn encode_core_event(
         } => {
             encoder.write_u8(7);
             encoder.write_u8(*window_id);
-            encode_inventory_container(encoder, *container);
+            encode_inventory_container(encoder, container)?;
             encode_inventory_window_contents(encoder, contents)?;
         }
         CoreEvent::ContainerOpened {
@@ -1020,7 +1072,7 @@ pub(crate) fn encode_core_event(
         } => {
             encoder.write_u8(15);
             encoder.write_u8(*window_id);
-            encode_inventory_container(encoder, *container);
+            encode_inventory_container(encoder, container)?;
             encoder.write_string(title)?;
         }
         CoreEvent::ContainerClosed { window_id } => {
@@ -1029,12 +1081,12 @@ pub(crate) fn encode_core_event(
         }
         CoreEvent::ContainerPropertyChanged {
             window_id,
-            property_id,
+            property,
             value,
         } => {
             encoder.write_u8(17);
             encoder.write_u8(*window_id);
-            encoder.write_u8(*property_id);
+            encoder.write_string(property.as_str())?;
             encoder.write_i16(*value);
         }
         CoreEvent::InventorySlotChanged {
@@ -1045,7 +1097,7 @@ pub(crate) fn encode_core_event(
         } => {
             encoder.write_u8(8);
             encoder.write_u8(*window_id);
-            encode_inventory_container(encoder, *container);
+            encode_inventory_container(encoder, container)?;
             encode_inventory_slot(encoder, *slot);
             encode_option(encoder, stack.as_ref(), encode_item_stack)?;
         }
@@ -1068,7 +1120,7 @@ pub(crate) fn encode_core_event(
         CoreEvent::BlockChanged { position, block } => {
             encoder.write_u8(10);
             encode_block_pos(encoder, *position);
-            encode_block_state(encoder, block)?;
+            encode_optional_block_state(encoder, block.as_ref())?;
         }
         CoreEvent::KeepAliveRequested { keep_alive_id } => {
             encoder.write_u8(11);
@@ -1146,7 +1198,7 @@ pub(crate) fn decode_core_event(
         }),
         17 => Ok(CoreEvent::ContainerPropertyChanged {
             window_id: decoder.read_u8()?,
-            property_id: decoder.read_u8()?,
+            property: ContainerPropertyKey::new(decoder.read_string()?),
             value: decoder.read_i16()?,
         }),
         8 => Ok(CoreEvent::InventorySlotChanged {
@@ -1167,7 +1219,7 @@ pub(crate) fn decode_core_event(
         }),
         10 => Ok(CoreEvent::BlockChanged {
             position: decode_block_pos(decoder)?,
-            block: decode_block_state(decoder)?,
+            block: decode_optional_block_state(decoder)?,
         }),
         11 => Ok(CoreEvent::KeepAliveRequested {
             keep_alive_id: decoder.read_i32()?,

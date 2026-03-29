@@ -105,7 +105,7 @@ fn player_from_nbt(root: &NbtTag) -> Result<PlayerSnapshot, StorageError> {
         .get("Inventory")
         .map(inventory_from_tag)
         .transpose()?
-        .unwrap_or_else(PlayerInventory::creative_starter);
+        .unwrap_or_else(mc_content_canonical::creative_starter_inventory);
     Ok(PlayerSnapshot {
         id: PlayerId(Uuid::from_u128(u128::from_be_bytes(uuid_bytes))),
         username: string_field(compound, "Name").unwrap_or_else(|_| "player".to_string()),

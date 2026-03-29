@@ -122,7 +122,7 @@ fn load_plugin_set_activates_runtime_profiles() {
 fn gameplay_command_snapshot_preserves_entity_id() {
     use mc_core::{
         CoreConfig, EntityId, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
-        ProtocolCapabilitySet, ServerCore, SessionCapabilitySet,
+        ProtocolCapabilitySet, SessionCapabilitySet,
     };
 
     let _ = entity_id_probe_gameplay_plugin::take_recorded_session();
@@ -147,7 +147,7 @@ fn gameplay_command_snapshot_preserves_entity_id() {
         .resolve_gameplay_profile("entity-aware")
         .expect("entity-aware gameplay profile should resolve");
     let player_id = PlayerId(Uuid::from_u128(7));
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = test_server_core(CoreConfig::default());
     profile
         .handle_command(
             &mut core,
@@ -200,7 +200,7 @@ fn gameplay_prepare_command_journal_replays_host_mutations() {
         .resolve_gameplay_profile("counting")
         .expect("counting gameplay profile should resolve");
     let player_id = PlayerId(Uuid::from_u128(17));
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = test_server_core(CoreConfig::default());
     let _ = core.apply_command(
         CoreCommand::LoginStart {
             connection_id: ConnectionId(1),
@@ -286,7 +286,7 @@ fn gameplay_prepare_command_conflict_does_not_reinvoke_callback() {
         .resolve_gameplay_profile("counting")
         .expect("counting gameplay profile should resolve");
     let player_id = PlayerId(Uuid::from_u128(18));
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = test_server_core(CoreConfig::default());
     let _ = core.apply_command(
         CoreCommand::LoginStart {
             connection_id: ConnectionId(2),

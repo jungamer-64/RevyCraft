@@ -1,9 +1,10 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_core::catalog;
+use mc_content_canonical::{
+    canonical_content, item_supported_for_inventory, placeable_block_state_from_item_key,
+};
 use mc_core::{
-    BlockPos, BlockState, CoreEvent, EventTarget, GameplayCapability, GameplayCommand,
-    InteractionHand, InventoryContainer, InventorySlot, ItemStack, PlayerId, PlayerSnapshot,
-    TargetedEvent,
+    BlockPos, CoreEvent, EventTarget, GameplayCapability, GameplayCommand, InteractionHand,
+    InventorySlot, ItemStack, PlayerId, PlayerSnapshot, TargetedEvent,
 };
 use mc_plugin_sdk_rust::capabilities;
 use mc_plugin_sdk_rust::export_plugin;
@@ -14,6 +15,10 @@ use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 pub struct CanonicalGameplayPlugin;
 
 const HOTBAR_SLOT_COUNT: u8 = 9;
+
+fn player_container_kind() -> mc_core::ContainerKindId {
+    canonical_content().player_container_kind()
+}
 
 impl RustGameplayPlugin for CanonicalGameplayPlugin {
     fn descriptor(&self) -> mc_plugin_api::codec::gameplay::GameplayDescriptor {
@@ -161,7 +166,9 @@ fn creative_inventory_set(
     if host.read_world_meta()?.game_mode != 1
         || !slot.is_storage_slot()
         || stack.is_some_and(|stack| {
-            !stack.is_supported_inventory_item() || stack.count == 0 || stack.count > 64
+            !item_supported_for_inventory(stack.key.as_str())
+                || stack.count == 0
+                || stack.count > 64
         })
     {
         return reject_inventory_slot_events(host, player_id, slot, &player);
@@ -175,6 +182,7 @@ fn dig_block(
     position: BlockPos,
     status: u8,
 ) -> Result<(), String> {
+    let content = canonical_content();
     if !matches!(status, 0..=2) {
         return Ok(());
     }
@@ -185,13 +193,20 @@ fn dig_block(
         return host.clear_mining(player_id);
     }
     let current = host.read_block_state(position)?;
-    let protected_container = matches!(current.key.as_str(), catalog::CHEST | catalog::FURNACE)
+    let protected_container = current
+        .as_ref()
+        .and_then(|block| content.container_kind_for_block(block))
+        .is_some()
         && host
             .read_block_entity(position)?
             .is_some_and(|entity| entity.has_inventory_contents());
     if !host.can_edit_block(player_id, position)?
-        || current.is_air()
-        || current.key.as_str() == catalog::BEDROCK
+        || current
+            .as_ref()
+            .is_none_or(|block| content.is_air_block(block))
+        || current
+            .as_ref()
+            .is_some_and(|block| content.is_unbreakable_block(block))
         || protected_container
     {
         host.clear_mining(player_id)?;
@@ -205,17 +220,19 @@ fn dig_block(
     }
     if host.read_world_meta()?.game_mode == 1 {
         host.clear_mining(player_id)?;
-        return host.set_block(position, BlockState::air());
+        return host.set_block(position, None);
     }
-    let duration_ms = catalog::survival_mining_duration_ms(
-        &current,
-        catalog::tool_spec_for_item(
-            player
-                .inventory
-                .selected_hotbar_stack(player.selected_hotbar_slot),
-        ),
-    )
-    .unwrap_or(50);
+    let current = current.ok_or_else(|| "missing block after mining validation".to_string())?;
+    let duration_ms = content
+        .survival_mining_duration_ms(
+            &current,
+            content.tool_spec_for_item(
+                player
+                    .inventory
+                    .selected_hotbar_stack(player.selected_hotbar_slot),
+            ),
+        )
+        .unwrap_or(50);
     host.begin_mining(player_id, position, duration_ms)
 }
 
@@ -227,6 +244,7 @@ fn place_block(
     face: Option<mc_core::BlockFace>,
     held_item: Option<&ItemStack>,
 ) -> Result<(), String> {
+    let content = canonical_content();
     let Some(face) = face else {
         return Ok(());
     };
@@ -244,18 +262,23 @@ fn place_block(
     if held_item.is_some_and(|held_item| held_item != &selected_stack) {
         return place_rejection(host, player_id, hand, place_pos, &player);
     }
-    let Some(block) = catalog::placeable_block_state_from_item_key(selected_stack.key.as_str())
-    else {
+    let Some(block) = placeable_block_state_from_item_key(selected_stack.key.as_str()) else {
         return place_rejection(host, player_id, hand, place_pos, &player);
     };
+    let target_block = host.read_block_state(position)?;
+    let place_block = host.read_block_state(place_pos)?;
     if !host.can_edit_block(player_id, place_pos)?
-        || host.read_block_state(position)?.is_air()
-        || !host.read_block_state(place_pos)?.is_air()
+        || target_block
+            .as_ref()
+            .is_none_or(|block| content.is_air_block(block))
+        || !place_block
+            .as_ref()
+            .is_none_or(|block| content.is_air_block(block))
     {
         return place_rejection(host, player_id, hand, place_pos, &player);
     }
     host.clear_mining(player_id)?;
-    host.set_block(place_pos, block)?;
+    host.set_block(place_pos, Some(block))?;
     if host.read_world_meta()?.game_mode != 1 {
         host.set_inventory_slot(
             player_id,
@@ -274,8 +297,13 @@ fn use_block(
     face: Option<mc_core::BlockFace>,
     held_item: Option<&ItemStack>,
 ) -> Result<(), String> {
+    let content = canonical_content();
     let target_block = host.read_block_state(position)?;
-    if target_block.key.as_str() == catalog::CHEST {
+    if target_block
+        .as_ref()
+        .and_then(|block| content.container_kind_for_block(block))
+        .is_some()
+    {
         if !host.can_edit_block(player_id, position)? {
             return host.emit_event(TargetedEvent {
                 target: EventTarget::Player(player_id),
@@ -286,33 +314,7 @@ fn use_block(
             });
         }
         host.clear_mining(player_id)?;
-        return host.open_chest(player_id, position);
-    }
-    if target_block.key.as_str() == catalog::FURNACE {
-        if !host.can_edit_block(player_id, position)? {
-            return host.emit_event(TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::BlockChanged {
-                    position,
-                    block: target_block,
-                },
-            });
-        }
-        host.clear_mining(player_id)?;
-        return host.open_furnace(player_id, position);
-    }
-    if target_block.key.as_str() == catalog::CRAFTING_TABLE {
-        if !host.can_edit_block(player_id, position)? {
-            return host.emit_event(TargetedEvent {
-                target: EventTarget::Player(player_id),
-                event: CoreEvent::BlockChanged {
-                    position,
-                    block: target_block,
-                },
-            });
-        }
-        host.clear_mining(player_id)?;
-        return host.open_crafting_table(player_id);
+        return host.open_container_at(player_id, position);
     }
     place_block(host, player_id, hand, position, face, held_item)
 }
@@ -327,7 +329,7 @@ fn reject_inventory_slot_events(
         target: EventTarget::Player(player_id),
         event: CoreEvent::InventorySlotChanged {
             window_id: 0,
-            container: InventoryContainer::Player,
+            container: player_container_kind(),
             slot,
             stack: player.inventory.get_slot(slot).cloned(),
         },
@@ -368,7 +370,7 @@ fn place_inventory_correction(
         target: EventTarget::Player(player_id),
         event: CoreEvent::InventorySlotChanged {
             window_id: 0,
-            container: InventoryContainer::Player,
+            container: player_container_kind(),
             slot: selected_slot,
             stack: player.inventory.get_slot(selected_slot).cloned(),
         },

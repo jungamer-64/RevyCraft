@@ -94,6 +94,7 @@ pub(super) fn default_player(
     player_id: PlayerId,
     username: String,
     spawn: BlockPos,
+    inventory: PlayerInventory,
 ) -> PlayerSnapshot {
     PlayerSnapshot {
         id: player_id,
@@ -110,7 +111,7 @@ pub(super) fn default_player(
         health: 20.0,
         food: 20,
         food_saturation: 5.0,
-        inventory: PlayerInventory::creative_starter(),
+        inventory,
         selected_hotbar_slot: 0,
     }
 }

@@ -1,4 +1,3 @@
-use crate::catalog;
 use crate::{
     AUXILIARY_SLOT_COUNT, HOTBAR_SLOT_COUNT, HOTBAR_START_SLOT, MAIN_INVENTORY_SLOT_COUNT,
     PLAYER_INVENTORY_SLOT_COUNT,
@@ -41,16 +40,6 @@ impl ItemStack {
     pub fn unsupported(count: u8, damage: u16) -> Self {
         Self::new("minecraft:unsupported", count, damage)
     }
-
-    #[must_use]
-    pub fn is_supported_placeable(&self) -> bool {
-        catalog::is_supported_placeable_item(self.key.as_str())
-    }
-
-    #[must_use]
-    pub fn is_supported_inventory_item(&self) -> bool {
-        catalog::is_supported_inventory_item(self.key.as_str())
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,17 +62,6 @@ impl PlayerInventory {
             slots: vec![None; PLAYER_INVENTORY_SLOT_COUNT],
             offhand: None,
         }
-    }
-
-    #[must_use]
-    pub fn creative_starter() -> Self {
-        let mut inventory = Self::new_empty();
-        for (slot, key) in (HOTBAR_START_SLOT..HOTBAR_START_SLOT + HOTBAR_SLOT_COUNT)
-            .zip(catalog::starter_hotbar_item_keys())
-        {
-            let _ = inventory.set(slot, Some(ItemStack::new(key, 64, 0)));
-        }
-        inventory
     }
 
     #[must_use]
@@ -125,7 +103,6 @@ impl PlayerInventory {
                 self.offhand = stack;
                 true
             }
-            InventorySlot::Container(_) => false,
             _ => slot
                 .legacy_window_index()
                 .is_some_and(|legacy_slot| self.set(legacy_slot, stack)),
@@ -135,7 +112,6 @@ impl PlayerInventory {
     pub fn get_slot_mut(&mut self, slot: InventorySlot) -> Option<&mut Option<ItemStack>> {
         match slot {
             InventorySlot::Offhand => Some(&mut self.offhand),
-            InventorySlot::Container(_) => None,
             _ => slot
                 .legacy_window_index()
                 .and_then(|legacy_slot| self.slots.get_mut(usize::from(legacy_slot))),
@@ -174,17 +150,8 @@ impl PlayerInventory {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InventoryContainer {
-    Player,
-    CraftingTable,
-    Chest,
-    Furnace,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InventorySlot {
-    Auxiliary(u8),
-    Container(u8),
+    WindowLocal(u16),
     MainInventory(u8),
     Hotbar(u8),
     Offhand,
@@ -193,13 +160,13 @@ pub enum InventorySlot {
 impl InventorySlot {
     #[must_use]
     pub const fn crafting_result() -> Self {
-        Self::Auxiliary(0)
+        Self::WindowLocal(0)
     }
 
     #[must_use]
     pub const fn crafting_input(index: u8) -> Option<Self> {
         if index < 4 {
-            Some(Self::Auxiliary(index + 1))
+            Some(Self::WindowLocal((index + 1) as u16))
         } else {
             None
         }
@@ -207,13 +174,13 @@ impl InventorySlot {
 
     #[must_use]
     pub const fn container(index: u8) -> Self {
-        Self::Container(index)
+        Self::WindowLocal(index as u16)
     }
 
     #[must_use]
     pub(crate) const fn legacy_window_index(self) -> Option<u8> {
         match self {
-            Self::Auxiliary(index) if index < AUXILIARY_SLOT_COUNT => Some(index),
+            Self::WindowLocal(index) if index < AUXILIARY_SLOT_COUNT as u16 => Some(index as u8),
             Self::MainInventory(index) if index < MAIN_INVENTORY_SLOT_COUNT => {
                 Some(AUXILIARY_SLOT_COUNT + index)
             }
@@ -233,35 +200,35 @@ impl InventorySlot {
     #[must_use]
     pub const fn container_index(self) -> Option<u8> {
         match self {
-            Self::Container(index) => Some(index),
+            Self::WindowLocal(index) if index <= u8::MAX as u16 => Some(index as u8),
             _ => None,
         }
     }
 
     #[must_use]
     pub const fn is_crafting_result(self) -> bool {
-        matches!(self, Self::Auxiliary(0))
+        matches!(self, Self::WindowLocal(0))
     }
 
     #[must_use]
     pub const fn crafting_input_index(self) -> Option<u8> {
         match self {
-            Self::Auxiliary(index) if index >= 1 && index <= 4 => Some(index - 1),
+            Self::WindowLocal(index) if index >= 1 && index <= 4 => Some(index as u8 - 1),
             _ => None,
         }
     }
 
     #[must_use]
     pub const fn is_reserved_auxiliary(self) -> bool {
-        matches!(self, Self::Auxiliary(5..=8))
+        matches!(self, Self::WindowLocal(5..=8))
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InventoryWindowContents {
     pub player_inventory: PlayerInventory,
-    #[serde(default)]
-    pub container_slots: Vec<Option<ItemStack>>,
+    #[serde(default, alias = "container_slots")]
+    pub local_slots: Vec<Option<ItemStack>>,
 }
 
 impl InventoryWindowContents {
@@ -269,7 +236,18 @@ impl InventoryWindowContents {
     pub fn player(player_inventory: PlayerInventory) -> Self {
         Self {
             player_inventory,
-            container_slots: Vec::new(),
+            local_slots: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_local_slots(
+        player_inventory: PlayerInventory,
+        local_slots: Vec<Option<ItemStack>>,
+    ) -> Self {
+        Self {
+            player_inventory,
+            local_slots,
         }
     }
 
@@ -278,17 +256,17 @@ impl InventoryWindowContents {
         player_inventory: PlayerInventory,
         container_slots: Vec<Option<ItemStack>>,
     ) -> Self {
-        Self {
-            player_inventory,
-            container_slots,
-        }
+        Self::with_local_slots(player_inventory, container_slots)
     }
 
     #[must_use]
     pub fn get_slot(&self, slot: InventorySlot) -> Option<&ItemStack> {
         match slot {
-            InventorySlot::Container(index) => self
-                .container_slots
+            InventorySlot::WindowLocal(_index) if self.local_slots.is_empty() => {
+                self.player_inventory.get_slot(slot)
+            }
+            InventorySlot::WindowLocal(index) => self
+                .local_slots
                 .get(usize::from(index))
                 .and_then(std::option::Option::as_ref),
             _ => self.player_inventory.get_slot(slot),

@@ -31,10 +31,10 @@ use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
 use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, ChunkPos, CoreCommand, CoreEvent, DroppedItemSnapshot,
-    EntityId, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
-    InventoryContainer, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
-    ItemStack, PlayerId, PlayerInventory, RuntimeCommand,
+    BlockPos, BlockState, ChunkColumn, ChunkPos, ContainerKindId, ContainerPropertyKey,
+    CoreCommand, CoreEvent, DroppedItemSnapshot, EntityId, InventoryClickButton,
+    InventoryClickTarget, InventoryClickValidation, InventorySlot, InventoryTransactionContext,
+    InventoryWindowContents, ItemStack, PlayerId, PlayerInventory, RuntimeCommand,
 };
 use mc_proto_be_common::__version_support::world::bedrock_actor_id;
 use mc_proto_common::{
@@ -118,6 +118,18 @@ trait TestPlaySyncAdapterExt: PlaySyncAdapter {
 
 impl<T: PlaySyncAdapter + ?Sized> TestPlaySyncAdapterExt for T {}
 
+fn chest_container() -> ContainerKindId {
+    ContainerKindId::new("canonical:chest_27")
+}
+
+fn crafting_table_container() -> ContainerKindId {
+    ContainerKindId::new("canonical:crafting_table")
+}
+
+fn furnace_burn_max_property() -> ContainerPropertyKey {
+    ContainerPropertyKey::new("canonical:furnace.burn_max")
+}
+
 #[test]
 fn request_network_settings_maps_to_login_request() {
     let adapter = Bedrock924Adapter::new();
@@ -196,43 +208,43 @@ fn probe_matches_raknet_datagram() {
 #[test]
 fn supported_block_runtime_ids_match_bedrock_1_26_0_palette() {
     assert_eq!(
-        block_runtime_id(&BlockState::stone()),
+        block_runtime_id(&BlockState::new("minecraft:stone")),
         BEDROCK_26_3_RUNTIME_ID_STONE
     );
     assert_eq!(
-        block_runtime_id(&BlockState::cobblestone()),
+        block_runtime_id(&BlockState::new("minecraft:cobblestone")),
         BEDROCK_26_3_RUNTIME_ID_COBBLESTONE
     );
     assert_eq!(
-        block_runtime_id(&BlockState::sand()),
+        block_runtime_id(&BlockState::new("minecraft:sand")),
         BEDROCK_26_3_RUNTIME_ID_SAND
     );
     assert_eq!(
-        block_runtime_id(&BlockState::bricks()),
+        block_runtime_id(&BlockState::new("minecraft:bricks")),
         BEDROCK_26_3_RUNTIME_ID_BRICKS
     );
     assert_eq!(
-        block_runtime_id(&BlockState::dirt()),
+        block_runtime_id(&BlockState::new("minecraft:dirt")),
         BEDROCK_26_3_RUNTIME_ID_DIRT
     );
     assert_eq!(
-        block_runtime_id(&BlockState::grass_block()),
+        block_runtime_id(&BlockState::new("minecraft:grass_block")),
         BEDROCK_26_3_RUNTIME_ID_GRASS_BLOCK
     );
     assert_eq!(
-        block_runtime_id(&BlockState::glass()),
+        block_runtime_id(&BlockState::new("minecraft:glass")),
         BEDROCK_26_3_RUNTIME_ID_GLASS
     );
     assert_eq!(
-        block_runtime_id(&BlockState::air()),
+        block_runtime_id(&BlockState::new("minecraft:air")),
         BEDROCK_26_3_RUNTIME_ID_AIR
     );
     assert_eq!(
-        block_runtime_id(&BlockState::bedrock()),
+        block_runtime_id(&BlockState::new("minecraft:bedrock")),
         BEDROCK_26_3_RUNTIME_ID_BEDROCK
     );
     assert_eq!(
-        block_runtime_id(&BlockState::oak_planks()),
+        block_runtime_id(&BlockState::new("minecraft:oak_planks")),
         BEDROCK_26_3_RUNTIME_ID_OAK_PLANKS
     );
 }
@@ -241,7 +253,7 @@ fn supported_block_runtime_ids_match_bedrock_1_26_0_palette() {
 fn encodes_chunk_and_block_packets() {
     let adapter = Bedrock924Adapter::new();
     let mut chunk = ChunkColumn::new(ChunkPos::new(0, 0));
-    chunk.set_block(1, 4, 2, BlockState::bricks());
+    chunk.set_block(1, 4, 2, Some(BlockState::new("minecraft:bricks")));
 
     let frames = adapter
         .encode_play_event_for(
@@ -266,7 +278,7 @@ fn encodes_chunk_and_block_packets() {
         .encode_play_event_for(
             &CoreEvent::BlockChanged {
                 position: BlockPos::new(2, 3, 4),
-                block: BlockState::glass(),
+                block: Some(BlockState::new("minecraft:glass")),
             },
             &play_context(),
         )
@@ -280,7 +292,7 @@ fn encodes_chunk_and_block_packets() {
             assert_eq!(packet.block_position.z, 4);
             assert_eq!(
                 packet.block_runtime_id,
-                block_runtime_id(&BlockState::glass())
+                block_runtime_id(&BlockState::new("minecraft:glass"))
             );
         }
         other => panic!("unexpected block packets: {other:?}"),
@@ -290,7 +302,7 @@ fn encodes_chunk_and_block_packets() {
 #[test]
 fn encodes_inventory_and_container_packets() {
     let adapter = Bedrock924Adapter::new();
-    let mut inventory = PlayerInventory::creative_starter();
+    let mut inventory = PlayerInventory::new_empty();
     let _ = inventory.set_slot(InventorySlot::Offhand, Some(item("minecraft:stick", 1)));
     let contents = InventoryWindowContents::with_container(
         inventory,
@@ -301,7 +313,7 @@ fn encodes_inventory_and_container_packets() {
         .encode_play_event_for(
             &CoreEvent::InventoryContents {
                 window_id: 2,
-                container: InventoryContainer::Chest,
+                container: chest_container(),
                 contents,
             },
             &play_context(),
@@ -335,8 +347,8 @@ fn encodes_inventory_and_container_packets() {
         .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 2,
-                container: InventoryContainer::Chest,
-                slot: InventorySlot::Container(0),
+                container: chest_container(),
+                slot: InventorySlot::WindowLocal(0),
                 stack: Some(item("minecraft:chest", 1)),
             },
             &play_context(),
@@ -369,7 +381,7 @@ fn encodes_inventory_and_container_packets() {
         .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 2,
-                container: InventoryContainer::CraftingTable,
+                container: crafting_table_container(),
                 title: "Crafting".to_string(),
             },
             &play_context(),
@@ -401,7 +413,7 @@ fn encodes_inventory_and_container_packets() {
         .encode_play_event_for(
             &CoreEvent::ContainerPropertyChanged {
                 window_id: 2,
-                property_id: 1,
+                property: furnace_burn_max_property(),
                 value: 200,
             },
             &play_context(),
@@ -455,8 +467,8 @@ fn inventory_slot_packets_encode_crafting_table_and_furnace_items() {
             .encode_play_event_for(
                 &CoreEvent::InventorySlotChanged {
                     window_id: 2,
-                    container: InventoryContainer::Chest,
-                    slot: InventorySlot::Container(0),
+                    container: chest_container(),
+                    slot: InventorySlot::WindowLocal(0),
                     stack: Some(stack),
                 },
                 &play_context(),

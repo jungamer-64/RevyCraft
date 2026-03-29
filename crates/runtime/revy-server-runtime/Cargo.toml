@@ -19,6 +19,7 @@ bedrockrs_network.workspace = true
 bedrockrs_proto.workspace = true
 bytes.workspace = true
 libloading.workspace = true
+mc-content-canonical = { path = "../../content/mc-content-canonical" }
 mc-core = { path = "../../core/mc-core" }
 mc-plugin-api = { path = "../../plugin/mc-plugin-api" }
 mc-plugin-host = { path = "../../plugin/mc-plugin-host" }

@@ -9,24 +9,21 @@ mod tick;
 pub(crate) mod transaction;
 mod world;
 
-use crate::catalog::MiningToolSpec;
 use crate::events::PlayerSummary;
 use crate::events::{CoreEvent, EventTarget, TargetedEvent};
-use crate::inventory::{InventoryContainer, InventoryWindowContents};
-use crate::inventory::{ItemStack, PlayerInventory};
+use crate::inventory::{InventoryWindowContents, ItemStack, PlayerInventory};
 use crate::player::PlayerSnapshot;
 use crate::world::{
-    BlockEntityState, BlockPos, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot, WorldMeta,
-    required_chunks,
+    BlockEntityState, BlockPos, ChunkColumn, ChunkPos, ContainerBlockEntityState, DimensionId,
+    DroppedItemSnapshot, WorldMeta, required_chunks,
 };
 use crate::{DEFAULT_KEEPALIVE_INTERVAL_MS, DEFAULT_KEEPALIVE_TIMEOUT_MS, EntityId, PlayerId};
+use mc_content_api::{BlockEntityKindId, ContainerKindId, ContainerSpec, MiningToolSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
-pub use self::inventory::{
-    ChestWindowBinding, ChestWindowState, ContainerDescriptor, FurnaceWindowBinding,
-    FurnaceWindowState, OpenInventoryWindow, OpenInventoryWindowState,
-};
+pub use self::inventory::{ContainerBinding, OpenContainerState, OpenInventoryWindow};
 use self::state_backend::CoreStateMut;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,8 +94,14 @@ pub struct WorldStore {
     pub(super) world_meta: WorldMeta,
     pub(super) chunks: BTreeMap<ChunkPos, ChunkColumn>,
     pub(super) block_entities: BTreeMap<BlockPos, BlockEntityState>,
-    pub(super) chest_viewers: BTreeMap<BlockPos, BTreeMap<PlayerId, u8>>,
+    pub(super) container_viewers: BTreeMap<BlockPos, WorldContainerViewers>,
     pub(super) saved_players: BTreeMap<PlayerId, PlayerSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorldContainerViewers {
+    pub kind: ContainerKindId,
+    pub viewers: BTreeMap<PlayerId, u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,8 +169,72 @@ pub(super) struct SessionStore {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemScheduler;
 
+pub trait ContentBehavior: std::fmt::Debug + Send + Sync + 'static {
+    fn generate_chunk(&self, meta: &WorldMeta, chunk_pos: ChunkPos) -> ChunkColumn;
+
+    fn player_container_kind(&self) -> ContainerKindId;
+
+    fn container_spec(&self, kind: &ContainerKindId) -> Option<ContainerSpec>;
+
+    fn container_title(&self, kind: &ContainerKindId) -> String;
+
+    fn container_kind_for_block(&self, block: &crate::BlockState) -> Option<ContainerKindId>;
+
+    fn default_block_entity_for_block(
+        &self,
+        block: &crate::BlockState,
+    ) -> Option<ContainerBlockEntityState>;
+
+    fn default_block_entity_for_kind(
+        &self,
+        kind: &BlockEntityKindId,
+    ) -> Option<ContainerBlockEntityState>;
+
+    fn block_entity_kind_for_container(&self, kind: &ContainerKindId) -> Option<BlockEntityKindId>;
+
+    fn container_kind_for_block_entity(
+        &self,
+        entity: &ContainerBlockEntityState,
+    ) -> Option<ContainerKindId>;
+
+    fn is_air_block(&self, block: &crate::BlockState) -> bool;
+
+    fn is_unbreakable_block(&self, block: &crate::BlockState) -> bool;
+
+    fn placeable_block_state_from_item_key(&self, key: &str) -> Option<crate::BlockState>;
+
+    fn is_supported_inventory_item(&self, key: &str) -> bool;
+
+    fn starter_inventory(&self) -> PlayerInventory;
+
+    fn tool_spec_for_item(&self, item: Option<&ItemStack>) -> Option<MiningToolSpec>;
+
+    fn survival_mining_duration_ms(
+        &self,
+        block: &crate::BlockState,
+        tool: Option<MiningToolSpec>,
+    ) -> Option<u64>;
+
+    fn survival_drop_for_block(&self, block: &crate::BlockState) -> Option<ItemStack>;
+
+    fn normalize_container(&self, state: &mut OpenContainerState);
+
+    fn normalize_player_inventory(&self, inventory: &mut PlayerInventory);
+
+    fn try_take_output(
+        &self,
+        kind: &ContainerKindId,
+        local_slots: &mut Vec<Option<ItemStack>>,
+        cursor: &mut Option<ItemStack>,
+        button: crate::InventoryClickButton,
+    ) -> bool;
+
+    fn tick_container(&self, state: &mut OpenContainerState);
+}
+
 #[derive(Clone, Debug)]
 pub struct ServerCore {
+    pub(super) content_behavior: Arc<dyn ContentBehavior>,
     pub(super) world: WorldStore,
     pub(super) entities: EntityStore,
     pub(super) sessions: SessionStore,
@@ -203,7 +270,7 @@ pub struct CoreRuntimeStateBlob {
     pub snapshot: crate::WorldSnapshot,
     pub online_players: BTreeMap<PlayerId, OnlinePlayerRuntimeState>,
     pub dropped_items: BTreeMap<EntityId, DroppedItemState>,
-    pub chest_viewers: BTreeMap<BlockPos, BTreeMap<PlayerId, u8>>,
+    pub container_viewers: BTreeMap<BlockPos, WorldContainerViewers>,
     pub next_entity_id: i32,
     pub next_keep_alive_id: i32,
     pub keepalive_interval_ms: u64,
@@ -212,7 +279,7 @@ pub struct CoreRuntimeStateBlob {
 
 impl ServerCore {
     #[must_use]
-    pub fn new(config: CoreConfig) -> Self {
+    pub fn new(config: CoreConfig, content_behavior: Arc<dyn ContentBehavior>) -> Self {
         let world_meta = WorldMeta {
             level_name: config.level_name.clone(),
             seed: config.seed,
@@ -226,12 +293,13 @@ impl ServerCore {
             max_players: config.max_players,
         };
         Self {
+            content_behavior,
             world: WorldStore {
                 config,
                 world_meta,
                 chunks: BTreeMap::new(),
                 block_entities: BTreeMap::new(),
-                chest_viewers: BTreeMap::new(),
+                container_viewers: BTreeMap::new(),
                 saved_players: BTreeMap::new(),
             },
             entities: EntityStore {
@@ -257,8 +325,12 @@ impl ServerCore {
     }
 
     #[must_use]
-    pub fn from_snapshot(config: CoreConfig, snapshot: crate::WorldSnapshot) -> Self {
-        let mut core = Self::new(config);
+    pub fn from_snapshot(
+        config: CoreConfig,
+        snapshot: crate::WorldSnapshot,
+        content_behavior: Arc<dyn ContentBehavior>,
+    ) -> Self {
+        let mut core = Self::new(config, content_behavior);
         core.world.world_meta = snapshot.meta;
         core.world.chunks = snapshot.chunks;
         core.world.block_entities = snapshot.block_entities;
@@ -311,7 +383,7 @@ impl ServerCore {
             snapshot: self.snapshot(),
             online_players,
             dropped_items: self.entities.dropped_items.clone(),
-            chest_viewers: self.world.chest_viewers.clone(),
+            container_viewers: self.world.container_viewers.clone(),
             next_entity_id: self.entities.next_entity_id,
             next_keep_alive_id: self.sessions.next_keep_alive_id,
             keepalive_interval_ms: self.sessions.keepalive_interval_ms,
@@ -320,9 +392,13 @@ impl ServerCore {
     }
 
     #[must_use]
-    pub fn from_runtime_state(config: CoreConfig, blob: CoreRuntimeStateBlob) -> Self {
-        let mut core = Self::from_snapshot(config, blob.snapshot);
-        core.world.chest_viewers = blob.chest_viewers;
+    pub fn from_runtime_state(
+        config: CoreConfig,
+        blob: CoreRuntimeStateBlob,
+        content_behavior: Arc<dyn ContentBehavior>,
+    ) -> Self {
+        let mut core = Self::from_snapshot(config, blob.snapshot, content_behavior);
+        core.world.container_viewers = blob.container_viewers;
         core.entities.dropped_items = blob.dropped_items;
         core.entities.next_entity_id = blob.next_entity_id;
         core.sessions.next_keep_alive_id = blob.next_keep_alive_id;
@@ -363,6 +439,11 @@ impl ServerCore {
         }
 
         core
+    }
+
+    #[must_use]
+    pub fn content_behavior(&self) -> &Arc<dyn ContentBehavior> {
+        &self.content_behavior
     }
 
     #[must_use]
@@ -463,7 +544,7 @@ impl ServerCore {
                 target: EventTarget::Player(player_id),
                 event: CoreEvent::InventoryContents {
                     window_id: window.window_id,
-                    container: window.container,
+                    container: window.container.kind.clone(),
                     contents: window.contents(inventory),
                 },
             }];
@@ -471,11 +552,11 @@ impl ServerCore {
                 window
                     .property_entries()
                     .into_iter()
-                    .map(|(property_id, value)| TargetedEvent {
+                    .map(|(property, value)| TargetedEvent {
                         target: EventTarget::Player(player_id),
                         event: CoreEvent::ContainerPropertyChanged {
                             window_id: window.window_id,
-                            property_id,
+                            property,
                             value,
                         },
                     }),
@@ -486,7 +567,7 @@ impl ServerCore {
                 target: EventTarget::Player(player_id),
                 event: CoreEvent::InventoryContents {
                     window_id: 0,
-                    container: InventoryContainer::Player,
+                    container: self.content_behavior.player_container_kind(),
                     contents: InventoryWindowContents::player(inventory.clone()),
                 },
             }]

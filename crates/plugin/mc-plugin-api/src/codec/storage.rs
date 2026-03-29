@@ -199,7 +199,10 @@ mod tests {
     use uuid::Uuid;
 
     fn sample_snapshot() -> mc_core::WorldSnapshot {
-        let mut core = ServerCore::new(CoreConfig::default());
+        let mut core = ServerCore::new(
+            CoreConfig::default(),
+            mc_content_canonical::canonical_content(),
+        );
         let _ = core.apply_command(
             CoreCommand::LoginStart {
                 connection_id: mc_core::ConnectionId(1),

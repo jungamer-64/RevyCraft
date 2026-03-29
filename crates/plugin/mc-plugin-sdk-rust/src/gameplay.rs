@@ -8,7 +8,10 @@ pub trait GameplayHost {
 
     fn read_world_meta(&self) -> Result<WorldMeta, String>;
 
-    fn read_block_state(&self, position: mc_core::BlockPos) -> Result<mc_core::BlockState, String>;
+    fn read_block_state(
+        &self,
+        position: mc_core::BlockPos,
+    ) -> Result<Option<mc_core::BlockState>, String>;
 
     fn read_block_entity(
         &self,
@@ -48,16 +51,22 @@ pub trait GameplayHost {
         duration_ms: u64,
     ) -> Result<(), String>;
 
-    fn open_chest(&self, player_id: PlayerId, position: mc_core::BlockPos) -> Result<(), String>;
+    fn open_container_at(
+        &self,
+        player_id: PlayerId,
+        position: mc_core::BlockPos,
+    ) -> Result<(), String>;
 
-    fn open_furnace(&self, player_id: PlayerId, position: mc_core::BlockPos) -> Result<(), String>;
-
-    fn open_crafting_table(&self, player_id: PlayerId) -> Result<(), String>;
+    fn open_virtual_container(
+        &self,
+        player_id: PlayerId,
+        kind: &mc_core::ContainerKindId,
+    ) -> Result<(), String>;
 
     fn set_block(
         &self,
         position: mc_core::BlockPos,
-        block: mc_core::BlockState,
+        block: Option<mc_core::BlockState>,
     ) -> Result<(), String>;
 
     fn spawn_dropped_item(

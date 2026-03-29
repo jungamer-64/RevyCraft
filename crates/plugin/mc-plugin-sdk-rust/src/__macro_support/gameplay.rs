@@ -4,8 +4,8 @@ use mc_plugin_api::abi::{ByteSlice, OwnedBuffer, PluginErrorCode, Utf8Slice};
 use mc_plugin_api::codec::gameplay::host_blob::{
     decode_block_entity, decode_block_state, decode_player_snapshot, decode_targeted_event_blob,
     decode_world_meta, encode_begin_mining, encode_block_pos, encode_can_edit_block_key,
-    encode_clear_mining, encode_inventory_slot_update, encode_open_chest,
-    encode_open_crafting_table, encode_open_furnace, encode_player_id, encode_player_pose_update,
+    encode_clear_mining, encode_inventory_slot_update, encode_open_container_at,
+    encode_open_virtual_container, encode_player_id, encode_player_pose_update,
     encode_selected_hotbar_slot_update, encode_set_block, encode_spawn_dropped_item,
     encode_targeted_event_blob,
 };
@@ -50,7 +50,10 @@ impl GameplayHost for SdkGameplayHost {
         decode_world_meta(&bytes).map_err(|error| error.to_string())
     }
 
-    fn read_block_state(&self, position: mc_core::BlockPos) -> Result<mc_core::BlockState, String> {
+    fn read_block_state(
+        &self,
+        position: mc_core::BlockPos,
+    ) -> Result<Option<mc_core::BlockState>, String> {
         let Some(callback) = self.api.read_block_state else {
             return Err("gameplay host did not provide read_block_state".to_string());
         };
@@ -141,39 +144,39 @@ impl GameplayHost for SdkGameplayHost {
         call_host_mutation(self.api.context, &payload, callback)
     }
 
-    fn open_chest(&self, player_id: PlayerId, position: mc_core::BlockPos) -> Result<(), String> {
-        let Some(callback) = self.api.open_chest else {
-            return Err("gameplay host did not provide open_chest".to_string());
+    fn open_container_at(
+        &self,
+        player_id: PlayerId,
+        position: mc_core::BlockPos,
+    ) -> Result<(), String> {
+        let Some(callback) = self.api.open_container_at else {
+            return Err("gameplay host did not provide open_container_at".to_string());
         };
-        let payload = encode_open_chest(player_id, position);
+        let payload = encode_open_container_at(player_id, position);
         call_host_mutation(self.api.context, &payload, callback)
     }
 
-    fn open_furnace(&self, player_id: PlayerId, position: mc_core::BlockPos) -> Result<(), String> {
-        let Some(callback) = self.api.open_furnace else {
-            return Err("gameplay host did not provide open_furnace".to_string());
+    fn open_virtual_container(
+        &self,
+        player_id: PlayerId,
+        kind: &mc_core::ContainerKindId,
+    ) -> Result<(), String> {
+        let Some(callback) = self.api.open_virtual_container else {
+            return Err("gameplay host did not provide open_virtual_container".to_string());
         };
-        let payload = encode_open_furnace(player_id, position);
-        call_host_mutation(self.api.context, &payload, callback)
-    }
-
-    fn open_crafting_table(&self, player_id: PlayerId) -> Result<(), String> {
-        let Some(callback) = self.api.open_crafting_table else {
-            return Err("gameplay host did not provide open_crafting_table".to_string());
-        };
-        let payload = encode_open_crafting_table(player_id);
+        let payload = encode_open_virtual_container(player_id, kind);
         call_host_mutation(self.api.context, &payload, callback)
     }
 
     fn set_block(
         &self,
         position: mc_core::BlockPos,
-        block: mc_core::BlockState,
+        block: Option<mc_core::BlockState>,
     ) -> Result<(), String> {
         let Some(callback) = self.api.set_block else {
             return Err("gameplay host did not provide set_block".to_string());
         };
-        let payload = encode_set_block(position, &block).map_err(|e| e.to_string())?;
+        let payload = encode_set_block(position, block.as_ref()).map_err(|e| e.to_string())?;
         call_host_mutation(self.api.context, &payload, callback)
     }
 

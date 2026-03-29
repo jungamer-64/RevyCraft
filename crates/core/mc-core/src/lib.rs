@@ -1,7 +1,8 @@
 #![allow(clippy::multiple_crate_versions)]
-pub mod catalog;
 pub mod inventory;
 
+#[cfg(test)]
+mod catalog;
 pub(crate) mod core;
 pub(crate) mod events;
 pub(crate) mod player;
@@ -17,10 +18,9 @@ pub use self::core::transaction::{
     GameplayJournal, GameplayJournalApplyResult, GameplayTransaction,
 };
 pub use self::core::{
-    ActiveMiningState, ChestWindowBinding, ChestWindowState, ClientView, ContainerDescriptor,
-    CoreConfig, CoreRuntimeStateBlob, DroppedItemState, FurnaceWindowBinding, FurnaceWindowState,
-    OnlinePlayerRuntimeState, OpenInventoryWindow, OpenInventoryWindowState, PlayerSessionState,
-    ServerCore,
+    ActiveMiningState, ClientView, ContainerBinding, ContentBehavior, CoreConfig,
+    CoreRuntimeStateBlob, DroppedItemState, OnlinePlayerRuntimeState, OpenContainerState,
+    OpenInventoryWindow, PlayerSessionState, ServerCore, WorldContainerViewers,
 };
 pub use self::events::{
     CoreCommand, CoreEvent, EventTarget, GameplayCommand, InventoryClickButton,
@@ -28,13 +28,17 @@ pub use self::events::{
     RuntimeCommand, SessionCommand, TargetedEvent,
 };
 pub use self::inventory::{
-    InventoryContainer, InventorySlot, InventoryWindowContents, ItemKey, ItemStack, PlayerInventory,
+    InventorySlot, InventoryWindowContents, ItemKey, ItemStack, PlayerInventory,
 };
 pub use self::player::{InteractionHand, PlayerSnapshot};
 pub use self::world::{
     BlockEntityState, BlockFace, BlockKey, BlockPos, BlockState, ChunkColumn, ChunkDelta, ChunkPos,
-    ChunkSection, DimensionId, DroppedItemSnapshot, SectionBlockIndex, SectionPos, Vec3, WorldMeta,
-    WorldSnapshot, expand_block_index,
+    ChunkSection, ContainerBlockEntityState, DimensionId, DroppedItemSnapshot, SectionBlockIndex,
+    SectionPos, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
+};
+pub use mc_content_api::{
+    BlockDescriptor, BlockEntityKindId, ContainerKindId, ContainerPropertyKey, ContainerSlotRole,
+    ContainerSpec, ItemDescriptor, MiningToolSpec, ToolClass,
 };
 
 #[cfg(test)]

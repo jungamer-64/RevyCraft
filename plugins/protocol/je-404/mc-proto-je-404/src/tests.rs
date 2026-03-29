@@ -1,9 +1,9 @@
 use super::{JE_404_ADAPTER_ID, Je404Adapter, PROTOCOL_VERSION_1_13_2, VERSION_NAME_1_13_2};
 use mc_core::{
     BlockPos, CoreCommand, CoreEvent, DimensionId, DroppedItemSnapshot, EntityId, InteractionHand,
-    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventoryContainer,
-    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId,
-    PlayerInventory, PlayerSnapshot, RuntimeCommand, SessionCommand, Vec3,
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId, PlayerInventory,
+    PlayerSnapshot, RuntimeCommand, SessionCommand, Vec3,
 };
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter,
@@ -14,6 +14,32 @@ use mc_proto_je_common::__version_support::{
     blocks::flattened_block_state_id_1_13_2, inventory::read_slot,
 };
 use uuid::Uuid;
+
+fn player_container() -> mc_core::ContainerKindId {
+    mc_core::ContainerKindId::new("canonical:player")
+}
+
+fn crafting_table_container() -> mc_core::ContainerKindId {
+    mc_core::ContainerKindId::new("canonical:crafting_table")
+}
+
+fn chest_container() -> mc_core::ContainerKindId {
+    mc_core::ContainerKindId::new("canonical:chest_27")
+}
+
+fn furnace_container() -> mc_core::ContainerKindId {
+    mc_core::ContainerKindId::new("canonical:furnace")
+}
+
+fn furnace_property(id: u8) -> mc_core::ContainerPropertyKey {
+    match id {
+        0 => mc_core::ContainerPropertyKey::new("canonical:furnace.burn_left"),
+        1 => mc_core::ContainerPropertyKey::new("canonical:furnace.burn_max"),
+        2 => mc_core::ContainerPropertyKey::new("canonical:furnace.cook_progress"),
+        3 => mc_core::ContainerPropertyKey::new("canonical:furnace.cook_total"),
+        _ => panic!("unsupported furnace property id {id}"),
+    }
+}
 
 fn player_snapshot(name: &str) -> PlayerSnapshot {
     PlayerSnapshot {
@@ -27,7 +53,7 @@ fn player_snapshot(name: &str) -> PlayerSnapshot {
         health: 20.0,
         food: 20,
         food_saturation: 5.0,
-        inventory: PlayerInventory::creative_starter(),
+        inventory: mc_content_canonical::creative_starter_inventory(),
         selected_hotbar_slot: 0,
     }
 }
@@ -147,7 +173,7 @@ fn encodes_status_and_offhand_inventory_events() {
         .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 0,
-                container: InventoryContainer::Player,
+                container: player_container(),
                 slot: InventorySlot::Offhand,
                 stack: Some(ItemStack::new("minecraft:glass", 1, 0)),
             },
@@ -348,7 +374,7 @@ fn encodes_block_change_packets() {
         .encode_play_event_for(
             &CoreEvent::BlockChanged {
                 position: mc_core::BlockPos::new(2, 3, 4),
-                block: mc_core::BlockState::glass(),
+                block: Some(mc_core::BlockState::new("minecraft:glass")),
             },
             &PlayEncodingContext {
                 player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"block-change-1122")),
@@ -365,7 +391,7 @@ fn encodes_block_change_packets() {
     );
     assert_eq!(
         reader.read_varint().expect("state id should decode"),
-        flattened_block_state_id_1_13_2(&mc_core::BlockState::glass())
+        flattened_block_state_id_1_13_2(&mc_core::BlockState::new("minecraft:glass"))
     );
 }
 
@@ -378,7 +404,7 @@ fn encodes_and_decodes_container_window_packets() {
         .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 2,
-                container: InventoryContainer::CraftingTable,
+                container: crafting_table_container(),
                 title: "Crafting".to_string(),
             },
             &PlayEncodingContext {
@@ -442,7 +468,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
         .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 4,
-                container: InventoryContainer::Chest,
+                container: chest_container(),
                 title: "Chest".to_string(),
             },
             &context,
@@ -465,7 +491,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
         .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 4,
-                container: InventoryContainer::Chest,
+                container: chest_container(),
                 slot: InventorySlot::MainInventory(0),
                 stack: Some(ItemStack::new("minecraft:glass", 1, 0)),
             },
@@ -481,7 +507,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
         .encode_play_event_for(
             &CoreEvent::InventorySlotChanged {
                 window_id: 4,
-                container: InventoryContainer::Chest,
+                container: chest_container(),
                 slot: InventorySlot::Hotbar(0),
                 stack: Some(ItemStack::new("minecraft:glass", 1, 0)),
             },
@@ -507,7 +533,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
         .encode_play_event_for(
             &CoreEvent::ContainerOpened {
                 window_id: 3,
-                container: InventoryContainer::Furnace,
+                container: furnace_container(),
                 title: "Furnace".to_string(),
             },
             &context,
@@ -530,7 +556,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
         .encode_play_event_for(
             &CoreEvent::InventoryContents {
                 window_id: 3,
-                container: InventoryContainer::Furnace,
+                container: furnace_container(),
                 contents: InventoryWindowContents::with_container(
                     PlayerInventory::new_empty(),
                     vec![
@@ -549,7 +575,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
     assert_eq!(reader.read_i16().expect("slot count should decode"), 39);
 
     for expected_slot in [
-        InventorySlot::Container(2),
+        InventorySlot::WindowLocal(2),
         InventorySlot::MainInventory(0),
         InventorySlot::Hotbar(0),
     ] {
@@ -557,7 +583,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
             .encode_play_event_for(
                 &CoreEvent::InventorySlotChanged {
                     window_id: 3,
-                    container: InventoryContainer::Furnace,
+                    container: furnace_container(),
                     slot: expected_slot,
                     stack: Some(ItemStack::new("minecraft:glass", 1, 0)),
                 },
@@ -569,7 +595,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
         assert_eq!(reader.read_i8().expect("window id should decode"), 3);
         let raw_slot = reader.read_i16().expect("slot should decode");
         let expected_raw_slot = match expected_slot {
-            InventorySlot::Container(2) => 2,
+            InventorySlot::WindowLocal(2) => 2,
             InventorySlot::MainInventory(0) => 3,
             InventorySlot::Hotbar(0) => 30,
             _ => unreachable!(),
@@ -581,7 +607,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
         .encode_play_event_for(
             &CoreEvent::ContainerPropertyChanged {
                 window_id: 3,
-                property_id: 2,
+                property: furnace_property(2),
                 value: 123,
             },
             &context,

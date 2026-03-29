@@ -360,10 +360,16 @@ impl RuntimeServer {
         candidate_selection: &ResolvedRuntimeSelection,
     ) -> Result<(mc_core::ServerCore, bool, CoreReloadRollbackState), CoreReloadPlanFailure> {
         let exported = self.kernel.export_core_runtime_state().await;
-        let rollback_core =
-            mc_core::ServerCore::from_runtime_state(rollback_core_config, exported.blob.clone());
-        let candidate_core =
-            mc_core::ServerCore::from_runtime_state(candidate_core_config, exported.blob);
+        let rollback_core = mc_core::ServerCore::from_runtime_state(
+            rollback_core_config,
+            exported.blob.clone(),
+            SelectionResolver::content_behavior(),
+        );
+        let candidate_core = mc_core::ServerCore::from_runtime_state(
+            candidate_core_config,
+            exported.blob,
+            SelectionResolver::content_behavior(),
+        );
         let records = self.sessions.play_reattach_records().await;
         let rollback = CoreReloadRollbackState {
             rollback_core,

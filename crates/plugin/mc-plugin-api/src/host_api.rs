@@ -43,12 +43,11 @@ pub struct GameplayHostApiV2 {
     pub set_inventory_slot: Option<GameplayHostMutationFn>,
     pub clear_mining: Option<GameplayHostMutationFn>,
     pub begin_mining: Option<GameplayHostMutationFn>,
-    pub open_chest: Option<GameplayHostMutationFn>,
-    pub open_furnace: Option<GameplayHostMutationFn>,
+    pub open_container_at: Option<GameplayHostMutationFn>,
+    pub open_virtual_container: Option<GameplayHostMutationFn>,
     pub set_block: Option<GameplayHostMutationFn>,
     pub spawn_dropped_item: Option<GameplayHostMutationFn>,
     pub emit_event: Option<GameplayHostMutationFn>,
-    pub open_crafting_table: Option<GameplayHostMutationFn>,
 }
 
 unsafe impl Send for GameplayHostApiV2 {}

@@ -33,8 +33,8 @@ use bedrockrs_proto::v898::packets::ResourcePackStackPacket;
 use bedrockrs_proto::v924::packets::StartGamePacket;
 use bedrockrs_proto::v924::types::LevelSettings;
 use mc_core::{
-    BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, EntityId, InventoryContainer,
-    InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
+    BlockPos, BlockState, ChunkColumn, ContainerKindId, ContainerPropertyKey, DroppedItemSnapshot,
+    EntityId, InventorySlot, InventoryWindowContents, ItemStack, PlayerSnapshot, WorldMeta,
 };
 use mc_proto_be_common::__version_support::world::{
     bedrock_actor_id, block_pos_to_network, vec3_to_bedrock,
@@ -315,7 +315,7 @@ pub(crate) fn encode_block_breaking_progress_packets(
 
 pub(crate) fn encode_inventory_contents_packets(
     window_id: u8,
-    container: InventoryContainer,
+    container: &ContainerKindId,
     contents: &InventoryWindowContents,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
     encode_bedrock_inventory_contents_packets(window_id, container, contents)
@@ -323,7 +323,7 @@ pub(crate) fn encode_inventory_contents_packets(
 
 pub(crate) fn encode_container_opened_packets(
     window_id: u8,
-    container: InventoryContainer,
+    container: &ContainerKindId,
     _title: &str,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
     encode_bedrock_container_opened_packets(window_id, container)
@@ -337,7 +337,7 @@ pub(crate) fn encode_container_closed_packets(
 
 pub(crate) fn encode_container_property_changed_packets(
     window_id: u8,
-    property_id: u8,
+    property_id: &ContainerPropertyKey,
     value: i16,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
     encode_bedrock_container_property_changed_packets(window_id, property_id, value)
@@ -345,7 +345,7 @@ pub(crate) fn encode_container_property_changed_packets(
 
 pub(crate) fn encode_inventory_slot_changed_packets(
     window_id: u8,
-    container: InventoryContainer,
+    container: &ContainerKindId,
     slot: InventorySlot,
     stack: Option<&ItemStack>,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {

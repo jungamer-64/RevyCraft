@@ -11,6 +11,7 @@ description = "Shared Java Edition protocol helpers for version-specific adapter
 
 [dependencies]
 flate2.workspace = true
+mc-content-canonical = { path = "../../content/mc-content-canonical" }
 mc-core = { path = "../../core/mc-core" }
 mc-proto-common = { path = "../mc-proto-common" }
 num-traits.workspace = true

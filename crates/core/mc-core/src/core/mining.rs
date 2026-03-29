@@ -3,8 +3,7 @@ use super::canonical::{
     BeginMiningDelta, ClearMiningDelta, CompleteMiningDelta, MiningProgressDelta,
 };
 use super::state_backend::{CoreStateMut, CoreStateRead};
-use crate::catalog;
-use crate::world::{BlockPos, BlockState, Vec3};
+use crate::world::{BlockPos, Vec3};
 use crate::{EntityId, PlayerId};
 
 pub(super) fn state_begin_mining(
@@ -37,8 +36,9 @@ pub(super) fn state_begin_mining(
             cleared: Some(cleared),
         });
     };
-    let tool_context =
-        catalog::tool_spec_for_item(inventory.selected_hotbar_stack(selected_hotbar_slot));
+    let tool_context = state
+        .content_behavior()
+        .tool_spec_for_item(inventory.selected_hotbar_stack(selected_hotbar_slot));
     state.set_player_active_mining(
         entity_id,
         Some(ActiveMiningState {
@@ -216,30 +216,36 @@ pub(super) fn state_complete_survival_mining(
 
     let current = state.block_state(position);
     if !state.can_edit_block_for_snapshot(&player, position)
-        || current.is_air()
-        || current.key.as_str() == catalog::BEDROCK
-        || (matches!(current.key.as_str(), catalog::CHEST | catalog::FURNACE)
-            && state
-                .block_entity(position)
-                .is_some_and(|entity| entity.has_inventory_contents()))
+        || current
+            .as_ref()
+            .is_none_or(|block| state.content_behavior().is_air_block(block))
+        || current
+            .as_ref()
+            .is_some_and(|block| state.content_behavior().is_unbreakable_block(block))
+        || state
+            .block_entity(position)
+            .is_some_and(|entity| entity.has_inventory_contents())
     {
         return state_clear_active_mining(state, player_id).map(CompleteMiningDelta::Cleared);
     }
 
-    let block = super::mutation::state_set_block(state, position, BlockState::air());
-    let spawned_item = catalog::survival_drop_for_block(&current).and_then(|item| {
-        super::mutation::state_spawn_dropped_item(
-            state,
-            None,
-            Vec3::new(
-                f64::from(position.x) + 0.5,
-                f64::from(position.y) + 0.5,
-                f64::from(position.z) + 0.5,
-            ),
-            item,
-            now_ms,
-        )
-    });
+    let block = super::mutation::state_set_block(state, position, None);
+    let spawned_item = state
+        .content_behavior()
+        .survival_drop_for_block(current.as_ref()?)
+        .and_then(|item| {
+            super::mutation::state_spawn_dropped_item(
+                state,
+                None,
+                Vec3::new(
+                    f64::from(position.x) + 0.5,
+                    f64::from(position.y) + 0.5,
+                    f64::from(position.z) + 0.5,
+                ),
+                item,
+                now_ms,
+            )
+        });
     Some(CompleteMiningDelta::Completed {
         block,
         spawned_item,

@@ -4,6 +4,7 @@ use mc_core::{
     ItemStack, PlayerId, ServerCore,
 };
 use mc_proto_common::StorageAdapter;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -11,7 +12,10 @@ use uuid::Uuid;
 #[test]
 fn snapshot_round_trip_through_anvil_and_nbt() {
     let temp_dir = tempdir().expect("temp dir should exist");
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = ServerCore::new(
+        CoreConfig::default(),
+        mc_content_canonical::canonical_content(),
+    );
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"storage-roundtrip"));
     let _ = core.apply_command(
         mc_core::CoreCommand::LoginStart {
@@ -23,18 +27,19 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
     );
     let mut snapshot = core.snapshot();
     let mut custom_chunk = ChunkColumn::new(ChunkPos::new(4, 5));
-    custom_chunk.set_block(0, 0, 0, mc_core::BlockState::bedrock());
+    custom_chunk.set_block(0, 0, 0, Some(mc_core::BlockState::new("minecraft:bedrock")));
     snapshot.chunks.insert(custom_chunk.pos, custom_chunk);
     let chest_pos = BlockPos::new(64, 4, 80);
     snapshot
         .chunks
         .entry(chest_pos.chunk_pos())
         .or_insert_with(|| ChunkColumn::new(chest_pos.chunk_pos()))
-        .set_block(0, 4, 0, BlockState::chest());
+        .set_block(0, 4, 0, Some(BlockState::new("minecraft:chest")));
     snapshot.block_entities.insert(
         chest_pos,
-        BlockEntityState::Chest {
-            slots: vec![
+        BlockEntityState::container(
+            mc_content_canonical::ids::CHEST_BLOCK_ENTITY,
+            vec![
                 Some(ItemStack::new("minecraft:glass", 3, 0)),
                 Some(ItemStack::new("minecraft:chest", 1, 0)),
                 None,
@@ -63,25 +68,49 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
                 None,
                 None,
             ],
-        },
+            BTreeMap::new(),
+        ),
     );
     let furnace_pos = BlockPos::new(65, 4, 80);
     snapshot
         .chunks
         .entry(furnace_pos.chunk_pos())
         .or_insert_with(|| ChunkColumn::new(furnace_pos.chunk_pos()))
-        .set_block(1, 4, 0, BlockState::furnace());
+        .set_block(1, 4, 0, Some(BlockState::new("minecraft:furnace")));
     snapshot.block_entities.insert(
         furnace_pos,
-        BlockEntityState::Furnace {
-            input: Some(ItemStack::new("minecraft:sand", 1, 0)),
-            fuel: Some(ItemStack::new("minecraft:oak_planks", 2, 0)),
-            output: Some(ItemStack::new("minecraft:glass", 3, 0)),
-            burn_left: 120,
-            burn_max: 300,
-            cook_progress: 42,
-            cook_total: 200,
-        },
+        BlockEntityState::container(
+            mc_content_canonical::ids::FURNACE_BLOCK_ENTITY,
+            vec![
+                Some(ItemStack::new("minecraft:sand", 1, 0)),
+                Some(ItemStack::new("minecraft:oak_planks", 2, 0)),
+                Some(ItemStack::new("minecraft:glass", 3, 0)),
+            ],
+            BTreeMap::from([
+                (
+                    mc_core::ContainerPropertyKey::new(
+                        mc_content_canonical::ids::FURNACE_BURN_LEFT,
+                    ),
+                    120,
+                ),
+                (
+                    mc_core::ContainerPropertyKey::new(mc_content_canonical::ids::FURNACE_BURN_MAX),
+                    300,
+                ),
+                (
+                    mc_core::ContainerPropertyKey::new(
+                        mc_content_canonical::ids::FURNACE_COOK_PROGRESS,
+                    ),
+                    42,
+                ),
+                (
+                    mc_core::ContainerPropertyKey::new(
+                        mc_content_canonical::ids::FURNACE_COOK_TOTAL,
+                    ),
+                    200,
+                ),
+            ]),
+        ),
     );
     snapshot
         .players
@@ -121,6 +150,7 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
             .get(&ChunkPos::new(4, 5))
             .expect("custom chunk should exist")
             .get_block(0, 0, 0)
+            .expect("custom chunk block should exist")
             .key
             .as_str(),
         "minecraft:bedrock"

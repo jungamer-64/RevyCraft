@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::{BlockState, ItemStack};
 use serde::{Deserialize, Serialize};
 
@@ -54,18 +56,18 @@ pub const fn starter_hotbar_item_keys() -> [&'static str; 9] {
 #[must_use]
 pub fn placeable_block_state_from_item_key(key: &str) -> Option<BlockState> {
     match key {
-        STONE => Some(BlockState::stone()),
-        DIRT => Some(BlockState::dirt()),
-        GRASS_BLOCK => Some(BlockState::grass_block()),
-        COBBLESTONE => Some(BlockState::cobblestone()),
-        OAK_PLANKS => Some(BlockState::oak_planks()),
-        SAND => Some(BlockState::sand()),
-        SANDSTONE => Some(BlockState::sandstone()),
-        GLASS => Some(BlockState::glass()),
-        BRICKS => Some(BlockState::bricks()),
-        CRAFTING_TABLE => Some(BlockState::crafting_table()),
-        CHEST => Some(BlockState::chest()),
-        FURNACE => Some(BlockState::furnace()),
+        STONE => Some(BlockState::new(STONE)),
+        DIRT => Some(BlockState::new(DIRT)),
+        GRASS_BLOCK => Some(BlockState::new(GRASS_BLOCK)),
+        COBBLESTONE => Some(BlockState::new(COBBLESTONE)),
+        OAK_PLANKS => Some(BlockState::new(OAK_PLANKS)),
+        SAND => Some(BlockState::new(SAND)),
+        SANDSTONE => Some(BlockState::new(SANDSTONE)),
+        GLASS => Some(BlockState::new(GLASS)),
+        BRICKS => Some(BlockState::new(BRICKS)),
+        CRAFTING_TABLE => Some(BlockState::new(CRAFTING_TABLE)),
+        CHEST => Some(BlockState::new(CHEST)),
+        FURNACE => Some(BlockState::new(FURNACE)),
         _ => None,
     }
 }

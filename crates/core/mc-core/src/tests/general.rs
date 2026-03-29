@@ -4,13 +4,14 @@ fn block_change_count<F>(events: &[TargetedEvent], position: BlockPos, predicate
 where
     F: Fn(&BlockState) -> bool,
 {
+    let air = BlockState::air();
     events
         .iter()
         .filter(|event| match &event.event {
             CoreEvent::BlockChanged {
                 position: event_position,
                 block,
-            } if *event_position == position => predicate(block),
+            } if *event_position == position => predicate(block.as_ref().unwrap_or(&air)),
             _ => false,
         })
         .count()
@@ -53,6 +54,7 @@ fn snapshot_block(core: &ServerCore, position: BlockPos) -> BlockState {
                     .expect("snapshot block z should fit into u8"),
             )
         })
+        .flatten()
         .unwrap_or_else(BlockState::air)
 }
 
@@ -71,7 +73,7 @@ fn dropped_item_entity_id(events: &[TargetedEvent], player_id: PlayerId) -> Enti
 
 #[test]
 fn runtime_state_round_trips_live_session_state() {
-    let mut core = ServerCore::new(CoreConfig {
+    let mut core = new_server_core(CoreConfig {
         view_distance: 2,
         ..CoreConfig::default()
     });
@@ -90,7 +92,13 @@ fn runtime_state_round_trips_live_session_state() {
         .expect("dropped item should exist");
     let spawned_item = dropped_item_snapshot(&core, dropped_item_id);
 
-    let _ = core.open_crafting_table(player_id, 7, "Workbench");
+    let _ = open_virtual_container_for_test(
+        &mut core,
+        player_id,
+        7,
+        InventoryContainer::CraftingTable,
+        0,
+    );
     {
         let session = core
             .player_session_mut(player_id)
@@ -116,7 +124,7 @@ fn runtime_state_round_trips_live_session_state() {
     );
 
     let blob = core.export_runtime_state();
-    let restored = ServerCore::from_runtime_state(
+    let restored = restore_server_core_from_runtime_state(
         CoreConfig {
             max_players: 40,
             ..CoreConfig::default()
@@ -135,9 +143,9 @@ fn runtime_state_round_trips_live_session_state() {
         restored_player.active_container,
         Some(crate::core::OpenInventoryWindow {
             window_id: 7,
-            container: InventoryContainer::CraftingTable,
+            container,
             ..
-        })
+        }) if container.kind == container_kind(InventoryContainer::CraftingTable)
     ));
     assert!(restored_player.active_mining.is_some());
     assert_eq!(restored_session.pending_keep_alive_id, Some(91));
@@ -152,7 +160,7 @@ fn runtime_state_round_trips_live_session_state() {
 
 #[test]
 fn session_resync_events_cover_live_play_state_without_login_success() {
-    let mut core = ServerCore::new(CoreConfig {
+    let mut core = new_server_core(CoreConfig {
         view_distance: 1,
         ..CoreConfig::default()
     });
@@ -167,7 +175,8 @@ fn session_resync_events_cover_live_play_state_without_login_success() {
         item("minecraft:diamond", 1),
         0,
     );
-    let _ = core.open_crafting_table(first, 7, "Workbench");
+    let _ =
+        open_virtual_container_for_test(&mut core, first, 7, InventoryContainer::CraftingTable, 0);
     core.player_session_mut(first)
         .expect("first player session should exist")
         .cursor = Some(item("minecraft:stone", 2));
@@ -231,13 +240,17 @@ fn session_resync_events_cover_live_play_state_without_login_success() {
 #[test]
 fn chunk_column_stores_semantic_states() {
     let mut column = ChunkColumn::new(ChunkPos::new(0, 0));
-    column.set_block(1, 12, 2, BlockState::grass_block());
+    column.set_block(1, 12, 2, Some(BlockState::grass_block()));
 
     assert_eq!(
-        column.get_block(1, 12, 2).key.as_str(),
+        column
+            .get_block(1, 12, 2)
+            .expect("block should exist")
+            .key
+            .as_str(),
         "minecraft:grass_block"
     );
-    assert!(column.get_block(1, 32, 2).is_air());
+    assert!(column.get_block(1, 32, 2).is_none());
 }
 
 #[test]
@@ -255,7 +268,7 @@ fn block_index_helpers_round_trip_section_local_coordinates() {
 
 #[test]
 fn login_emits_initial_chunks_and_existing_entities() {
-    let mut core = ServerCore::new(CoreConfig {
+    let mut core = new_server_core(CoreConfig {
         view_distance: 1,
         ..CoreConfig::default()
     });
@@ -285,7 +298,7 @@ fn login_emits_initial_chunks_and_existing_entities() {
 
 #[test]
 fn moving_player_updates_other_clients_and_view() {
-    let mut core = ServerCore::new(CoreConfig {
+    let mut core = new_server_core(CoreConfig {
         view_distance: 1,
         ..CoreConfig::default()
     });
@@ -577,7 +590,7 @@ fn gameplay_transaction_keepalive_preview_uses_overlay_counter_and_writeback() {
 
 #[test]
 fn gameplay_move_direct_path_matches_manual_transaction_commit() {
-    let mut direct = ServerCore::new(CoreConfig {
+    let mut direct = new_server_core(CoreConfig {
         view_distance: 1,
         ..CoreConfig::default()
     });
@@ -666,7 +679,9 @@ fn gameplay_begin_mining_direct_path_matches_manual_transaction_commit() {
             .player_snapshot(player_id)
             .expect("player should be online during mining parity test");
         let duration_ms = crate::catalog::survival_mining_duration_ms(
-            &tx.block_state(position),
+            tx.block_state(position)
+                .as_ref()
+                .expect("mined block should exist"),
             crate::catalog::tool_spec_for_item(
                 player
                     .inventory
@@ -717,14 +732,12 @@ fn gameplay_clear_mining_direct_path_matches_manual_transaction_commit() {
 #[test]
 fn tick_emits_scheduler_phases_in_canonical_order() {
     let (mut core, player_id) = logged_in_core(CoreConfig::default(), 1, "tick-order");
-    let _ = core.open_furnace(player_id, 3, "Furnace");
+    let _ =
+        open_virtual_container_for_test(&mut core, player_id, 3, InventoryContainer::Furnace, 0);
     {
-        let window = active_container_mut(&mut core, player_id);
-        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
-            panic!("expected furnace state");
-        };
-        furnace.input = Some(item("minecraft:sand", 1));
-        furnace.fuel = Some(item("minecraft:oak_planks", 1));
+        let furnace = furnace_state_mut(active_container_mut(&mut core, player_id));
+        furnace.local_slots[0] = Some(item("minecraft:sand", 1));
+        furnace.local_slots[1] = Some(item("minecraft:oak_planks", 1));
     }
     let player_position = core
         .compose_player_snapshot(player_id)
@@ -819,6 +832,7 @@ fn world_snapshot_roundtrip_uses_semantic_types() {
             .next()
             .expect("generated chunk should exist")
             .get_block(0, 3, 0)
+            .expect("generated chunk block should exist")
             .key
             .as_str(),
         "minecraft:grass_block"
@@ -874,7 +888,7 @@ fn inventory_commands_update_selected_slot_and_slots() {
 
 #[test]
 fn update_client_view_clamps_to_server_distance() {
-    let mut core = ServerCore::new(CoreConfig {
+    let mut core = new_server_core(CoreConfig {
         view_distance: 2,
         ..CoreConfig::default()
     });
@@ -905,7 +919,7 @@ fn update_client_view_clamps_to_server_distance() {
 
 #[test]
 fn creative_place_and_break_emit_authoritative_corrections() {
-    let mut creative = ServerCore::new(CoreConfig {
+    let mut creative = new_server_core(CoreConfig {
         game_mode: 1,
         ..CoreConfig::default()
     });
@@ -967,7 +981,7 @@ fn use_block_places_opens_closes_and_roundtrips_world_backed_chest() {
         core.snapshot()
             .block_entities
             .get(&chest_pos)
-            .and_then(BlockEntityState::chest_slots)
+            .and_then(block_entity_slots)
             .map(<[_]>::len),
         Some(27)
     );
@@ -1007,7 +1021,7 @@ fn use_block_places_opens_closes_and_roundtrips_world_backed_chest() {
     assert_container_opened(&reopen_events, first, 2, InventoryContainer::Chest);
 
     let snapshot = core.snapshot();
-    let restored = ServerCore::from_snapshot(
+    let restored = restore_server_core_from_snapshot(
         CoreConfig {
             game_mode: 1,
             ..CoreConfig::default()
@@ -1081,7 +1095,7 @@ fn use_block_places_and_opens_crafting_table() {
 
 #[test]
 fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
-    let mut core = ServerCore::new(CoreConfig {
+    let mut core = new_server_core(CoreConfig {
         game_mode: 1,
         ..CoreConfig::default()
     });
@@ -1122,6 +1136,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
                 u8::try_from(chest_pos.z.rem_euclid(CHUNK_WIDTH))
                     .expect("local z should fit into u8"),
             )
+            .expect("chest block should exist")
             .key
             .as_str(),
         "minecraft:chest"
@@ -1156,11 +1171,13 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
     assert_container_opened(&first_open, first, 1, InventoryContainer::Chest);
     assert_container_opened(&second_open, second, 1, InventoryContainer::Chest);
     let stale_viewer = player_id("stale-chest-viewer");
-    core.world
-        .chest_viewers
-        .entry(chest_pos)
-        .or_default()
-        .insert(stale_viewer, 1);
+    insert_container_viewer(
+        &mut core,
+        chest_pos,
+        InventoryContainer::Chest,
+        stale_viewer,
+        1,
+    );
 
     let pickup_events = click_slot(
         &mut core,
@@ -1178,7 +1195,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
         first,
         1,
         2,
-        InventorySlot::Container(0),
+        container_slot(0),
         InventoryClickButton::Left,
         Some(item("minecraft:stone", 2)),
     );
@@ -1187,23 +1204,17 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
         &place_events,
         first,
         1,
-        InventorySlot::Container(0),
+        container_slot(0),
         Some(("minecraft:stone", 2)),
     );
     assert_inventory_slot_changed_in_window_to(
         &place_events,
         second,
         1,
-        InventorySlot::Container(0),
+        container_slot(0),
         Some(("minecraft:stone", 2)),
     );
-    assert!(
-        !core
-            .world
-            .chest_viewers
-            .get(&chest_pos)
-            .is_some_and(|viewers| viewers.contains_key(&stale_viewer))
-    );
+    assert!(!container_has_viewer(&core, chest_pos, stale_viewer));
     let actor_tx_index = place_events
         .iter()
         .position(|event| {
@@ -1232,7 +1243,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
                     EventTarget::Player(event_player_id),
                     CoreEvent::InventorySlotChanged {
                         window_id: 1,
-                        slot: InventorySlot::Container(0),
+                        slot: InventorySlot::WindowLocal(0),
                         stack,
                         ..
                     }
@@ -1250,7 +1261,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
                     EventTarget::Player(event_player_id),
                     CoreEvent::InventorySlotChanged {
                         window_id: 1,
-                        slot: InventorySlot::Container(0),
+                        slot: InventorySlot::WindowLocal(0),
                         stack,
                         ..
                     }
@@ -1279,7 +1290,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
         core.snapshot()
             .block_entities
             .get(&chest_pos)
-            .and_then(BlockEntityState::chest_slots)
+            .and_then(block_entity_slots)
             .and_then(|slots: &[Option<ItemStack>]| slots.first())
             .and_then(Option::as_ref)
             .map(stack_summary),
@@ -1291,7 +1302,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
         first,
         1,
         3,
-        InventorySlot::Container(0),
+        container_slot(0),
         InventoryClickButton::Left,
         None,
     );
@@ -1300,7 +1311,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
         &take_back_events,
         second,
         1,
-        InventorySlot::Container(0),
+        container_slot(0),
         None,
     );
 
@@ -1349,7 +1360,7 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
                     CoreEvent::BlockChanged { position, block }
                 ) if *event_player_id == first
                     && *position == chest_pos
-                    && block.is_air()
+                    && block.as_ref().is_none_or(BlockState::is_air)
             )
         })
         .expect("player block change event should be present after chest removal");
@@ -1387,7 +1398,7 @@ fn disconnecting_world_backed_chest_writes_back_contents_and_unregisters_viewer(
         core.snapshot()
             .block_entities
             .get(&chest_pos)
-            .and_then(BlockEntityState::chest_slots)
+            .and_then(block_entity_slots)
             .map(<[_]>::len),
         Some(27)
     );
@@ -1423,7 +1434,7 @@ fn disconnecting_world_backed_chest_writes_back_contents_and_unregisters_viewer(
         first,
         1,
         2,
-        InventorySlot::Container(0),
+        container_slot(0),
         InventoryClickButton::Left,
         Some(item("minecraft:stone", 3)),
     );
@@ -1444,13 +1455,13 @@ fn disconnecting_world_backed_chest_writes_back_contents_and_unregisters_viewer(
         core.snapshot()
             .block_entities
             .get(&chest_pos)
-            .and_then(BlockEntityState::chest_slots)
+            .and_then(block_entity_slots)
             .and_then(|slots| slots.first())
             .and_then(Option::as_ref)
             .map(stack_summary),
         Some(("minecraft:stone", 3))
     );
-    assert!(!core.world.chest_viewers.contains_key(&chest_pos));
+    assert!(!core.world.container_viewers.contains_key(&chest_pos));
 }
 
 #[test]
@@ -1481,7 +1492,7 @@ fn use_block_places_ticks_closes_and_roundtrips_world_backed_furnace() {
     );
     assert_eq!(
         core.snapshot().block_entities.get(&furnace_pos),
-        Some(&BlockEntityState::furnace())
+        Some(&default_furnace_block_entity())
     );
 
     let open_events = core.apply_command(
@@ -1502,12 +1513,9 @@ fn use_block_places_ticks_closes_and_roundtrips_world_backed_furnace() {
     assert_container_property_changed(&open_events, first, 1, 3, 200);
 
     {
-        let window = active_container_mut(&mut core, first);
-        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
-            panic!("expected furnace state");
-        };
-        furnace.input = Some(item("minecraft:sand", 1));
-        furnace.fuel = Some(item("minecraft:oak_planks", 1));
+        let furnace = furnace_state_mut(active_container_mut(&mut core, first));
+        furnace.local_slots[0] = Some(item("minecraft:sand", 1));
+        furnace.local_slots[1] = Some(item("minecraft:oak_planks", 1));
     }
 
     let tick_events = core.tick(50);
@@ -1516,15 +1524,15 @@ fn use_block_places_ticks_closes_and_roundtrips_world_backed_furnace() {
     assert_container_property_changed(&tick_events, first, 1, 2, 1);
     assert_eq!(
         core.snapshot().block_entities.get(&furnace_pos),
-        Some(&BlockEntityState::Furnace {
-            input: Some(item("minecraft:sand", 1)),
-            fuel: None,
-            output: None,
-            burn_left: 300,
-            burn_max: 300,
-            cook_progress: 1,
-            cook_total: 200,
-        })
+        Some(&furnace_block_entity(
+            Some(item("minecraft:sand", 1)),
+            None,
+            None,
+            300,
+            300,
+            1,
+            200,
+        ))
     );
 
     let close_events = core.apply_command(
@@ -1537,15 +1545,15 @@ fn use_block_places_ticks_closes_and_roundtrips_world_backed_furnace() {
     assert_container_closed(&close_events, first, 1);
     assert_eq!(
         core.snapshot().block_entities.get(&furnace_pos),
-        Some(&BlockEntityState::Furnace {
-            input: Some(item("minecraft:sand", 1)),
-            fuel: None,
-            output: None,
-            burn_left: 300,
-            burn_max: 300,
-            cook_progress: 1,
-            cook_total: 200,
-        })
+        Some(&furnace_block_entity(
+            Some(item("minecraft:sand", 1)),
+            None,
+            None,
+            300,
+            300,
+            1,
+            200,
+        ))
     );
 
     let reopen_events = core.apply_command(
@@ -1561,7 +1569,7 @@ fn use_block_places_ticks_closes_and_roundtrips_world_backed_furnace() {
     assert_container_opened(&reopen_events, first, 2, InventoryContainer::Furnace);
 
     let snapshot = core.snapshot();
-    let restored = ServerCore::from_snapshot(
+    let restored = restore_server_core_from_snapshot(
         CoreConfig {
             game_mode: 1,
             ..CoreConfig::default()
@@ -1604,11 +1612,8 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
     );
     assert_container_opened(&open_events, first, 1, InventoryContainer::Furnace);
     {
-        let window = active_container_mut(&mut core, first);
-        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
-            panic!("expected furnace state");
-        };
-        furnace.output = Some(item("minecraft:glass", 1));
+        furnace_state_mut(active_container_mut(&mut core, first)).local_slots[2] =
+            Some(item("minecraft:glass", 1));
     }
     let _ = core.tick(0);
 
@@ -1627,23 +1632,19 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
     );
     assert_eq!(
         core.snapshot().block_entities.get(&furnace_pos),
-        Some(&BlockEntityState::Furnace {
-            input: None,
-            fuel: None,
-            output: Some(item("minecraft:glass", 1)),
-            burn_left: 0,
-            burn_max: 0,
-            cook_progress: 0,
-            cook_total: 200,
-        })
+        Some(&furnace_block_entity(
+            None,
+            None,
+            Some(item("minecraft:glass", 1)),
+            0,
+            0,
+            0,
+            200,
+        ))
     );
 
     {
-        let window = active_container_mut(&mut core, first);
-        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
-            panic!("expected furnace state");
-        };
-        furnace.output = None;
+        furnace_state_mut(active_container_mut(&mut core, first)).local_slots[2] = None;
     }
     let _ = core.tick(100);
 
@@ -1680,7 +1681,7 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
                     CoreEvent::BlockChanged { position, block }
                 ) if *event_player_id == first
                     && *position == furnace_pos
-                    && block.is_air()
+                    && block.as_ref().is_none_or(BlockState::is_air)
             )
         })
         .expect("furnace removal block change should be present");
@@ -1763,7 +1764,7 @@ fn survival_break_spawns_drop_and_snapshot_roundtrip_omits_active_drops() {
     assert_eq!(snapshot_block(&core, break_pos), BlockState::air());
 
     let snapshot = core.snapshot();
-    let mut restored = ServerCore::from_snapshot(CoreConfig::default(), snapshot);
+    let mut restored = restore_server_core_from_snapshot(CoreConfig::default(), snapshot);
     let (_late, login_events) = login_player(&mut restored, 2, "late");
     assert_eq!(
         login_events
@@ -1955,7 +1956,7 @@ fn survival_successful_place_and_external_block_change_clear_active_mining() {
 
 #[test]
 fn survival_multiple_players_do_not_share_mining_progress() {
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = new_server_core(CoreConfig::default());
     let (first, _) = login_player(&mut core, 1, "first-miner");
     let (second, _) = login_player(&mut core, 2, "second-miner");
     let position = BlockPos::new(2, 1, 0);
@@ -2001,7 +2002,7 @@ fn active_mining_is_not_persisted_in_snapshots() {
     );
 
     let snapshot = core.snapshot();
-    let mut restored = ServerCore::from_snapshot(CoreConfig::default(), snapshot);
+    let mut restored = restore_server_core_from_snapshot(CoreConfig::default(), snapshot);
     let (_player, _) = login_player(&mut restored, 2, "snapshot-miner");
     let events = restored.tick(3_000);
     assert_eq!(
@@ -2016,7 +2017,7 @@ fn active_mining_is_not_persisted_in_snapshots() {
 
 #[test]
 fn survival_pickup_delay_and_nearest_player_pickup_work() {
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = new_server_core(CoreConfig::default());
     let (first, _) = login_player(&mut core, 1, "near");
     let (second, _) = login_player(&mut core, 2, "far");
 
@@ -2088,7 +2089,7 @@ fn survival_pickup_delay_and_nearest_player_pickup_work() {
 
 #[test]
 fn survival_high_fall_drop_becomes_pickable_after_settling() {
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = new_server_core(CoreConfig::default());
     let (player, _) = login_player(&mut core, 1, "high-fall");
 
     let _ = core.apply_command(
@@ -2243,7 +2244,7 @@ fn survival_pickup_prefers_leftmost_hotbar_slot_before_main_inventory() {
 
 #[test]
 fn player_entity_and_session_indexes_stay_in_sync() {
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = new_server_core(CoreConfig::default());
     let (player_id, _) = login_player(&mut core, 1, "ecs-sync");
 
     let session = core
@@ -2335,7 +2336,7 @@ fn gameplay_transaction_overlay_reads_surface_player_and_block_changes_before_co
             InventorySlot::Hotbar(0),
             Some(item("minecraft:glass", 12)),
         );
-        tx.set_block(position, BlockState::chest());
+        tx.set_block(position, Some(BlockState::chest()));
 
         let player = tx
             .player_snapshot(player_id)
@@ -2350,10 +2351,13 @@ fn gameplay_transaction_overlay_reads_surface_player_and_block_changes_before_co
                 .map(stack_summary),
             Some(("minecraft:glass", 12)),
         );
-        assert_eq!(tx.block_state(position), BlockState::chest());
+        assert_eq!(tx.block_state(position), Some(BlockState::chest()));
         assert_eq!(
-            tx.block_entity(position)
-                .and_then(|block_entity| block_entity.chest_slots().map(<[_]>::len)),
+            tx.block_entity(position).and_then(|block_entity| {
+                block_entity
+                    .container_state()
+                    .map(|container| container.slots.len())
+            }),
             Some(27),
         );
     }
@@ -2374,9 +2378,9 @@ fn gameplay_transaction_commit_materializes_previewed_state() {
             InventorySlot::Hotbar(0),
             Some(item("minecraft:glass", 12)),
         );
-        tx.set_block(block_pos, BlockState::chest());
+        tx.set_block(block_pos, Some(BlockState::chest()));
         tx.spawn_dropped_item(drop_pos, item("minecraft:cobblestone", 4));
-        assert_eq!(tx.block_state(block_pos), BlockState::chest());
+        assert_eq!(tx.block_state(block_pos), Some(BlockState::chest()));
     });
 
     let player = core
@@ -2449,7 +2453,7 @@ fn gameplay_transaction_commit_preserves_previewed_drop_entity_id_and_allocator_
 
 #[test]
 fn gameplay_transaction_prepare_login_is_overlay_only_until_finalize() {
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = new_server_core(CoreConfig::default());
     let joining = player_id("prepared-only");
 
     let events = {
@@ -2474,7 +2478,7 @@ fn gameplay_transaction_prepare_login_is_overlay_only_until_finalize() {
 
 #[test]
 fn gameplay_transaction_finalize_uses_overlay_player_state_without_leaking_player_events() {
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = new_server_core(CoreConfig::default());
     let joining = player_id("overlay-join");
     let events = {
         let mut tx = core.begin_gameplay_transaction(0);
@@ -2516,7 +2520,7 @@ fn gameplay_transaction_finalize_uses_overlay_player_state_without_leaking_playe
 
 #[test]
 fn gameplay_transaction_finalize_includes_pre_finalize_drops_in_connection_sync() {
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = new_server_core(CoreConfig::default());
     let joining = player_id("join-with-drop");
     let events = {
         let mut tx = core.begin_gameplay_transaction(0);
@@ -2547,7 +2551,7 @@ fn gameplay_transaction_commit_preserves_emit_event_order() {
             EventTarget::Player(player_id),
             CoreEvent::BlockChanged {
                 position: marker_pos,
-                block: BlockState::glass(),
+                block: Some(BlockState::glass()),
             },
         );
         tx.set_inventory_slot(
@@ -2579,7 +2583,9 @@ fn gameplay_transaction_commit_preserves_emit_event_order() {
                     CoreEvent::BlockChanged { position, block }
                 ) if *event_player_id == player_id
                     && *position == marker_pos
-                    && block.key.as_str() == "minecraft:glass"
+                    && block
+                        .as_ref()
+                        .is_some_and(|block| block.key.as_str() == "minecraft:glass")
             )
         })
         .expect("marker event should be present");
@@ -2605,21 +2611,21 @@ fn gameplay_transaction_commit_preserves_emit_event_order() {
 
 #[test]
 fn gameplay_journal_apply_matches_direct_transaction_commit() {
-    let mut direct_core = ServerCore::new(CoreConfig::default());
+    let mut direct_core = new_server_core(CoreConfig::default());
     let mut journal_core = direct_core.clone();
     let position = BlockPos::new(2, 4, 0);
 
     let direct_events = {
         let mut tx = direct_core.begin_gameplay_transaction(0);
-        assert_eq!(tx.block_state(position), BlockState::air());
-        tx.set_block(position, BlockState::glass());
+        assert_eq!(tx.block_state(position), None);
+        tx.set_block(position, Some(BlockState::glass()));
         tx.commit()
     };
 
     let journal = {
         let mut tx = GameplayTransaction::detached(journal_core.clone(), 0);
-        assert_eq!(tx.block_state(position), BlockState::air());
-        tx.set_block(position, BlockState::glass());
+        assert_eq!(tx.block_state(position), None);
+        tx.set_block(position, Some(BlockState::glass()));
         tx.into_journal()
     };
     let journal_events = match journal_core.validate_and_apply_gameplay_journal(journal) {
@@ -2635,13 +2641,13 @@ fn gameplay_journal_apply_matches_direct_transaction_commit() {
 
 #[test]
 fn gameplay_journal_apply_survives_unrelated_live_change() {
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = new_server_core(CoreConfig::default());
     let position = BlockPos::new(1, 4, 0);
     let unrelated_position = BlockPos::new(5, 4, 0);
     let journal = {
         let mut tx = GameplayTransaction::detached(core.clone(), 0);
-        assert_eq!(tx.block_state(position), BlockState::air());
-        tx.set_block(position, BlockState::glass());
+        assert_eq!(tx.block_state(position), None);
+        tx.set_block(position, Some(BlockState::glass()));
         tx.into_journal()
     };
 
@@ -2703,7 +2709,7 @@ fn gameplay_journal_conflict_drops_partial_mutation_when_player_snapshot_changes
 
 #[test]
 fn gameplay_journal_login_conflict_leaves_single_authoritative_player() {
-    let mut core = ServerCore::new(CoreConfig::default());
+    let mut core = new_server_core(CoreConfig::default());
     let joining = player_id("journal-login");
     let journal = {
         let mut tx = GameplayTransaction::detached(core.clone(), 0);

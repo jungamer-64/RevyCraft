@@ -18,6 +18,7 @@ in-process-testing = ["mc-plugin-sdk-rust/in-process-testing"]
 
 [dependencies]
 flate2.workspace = true
+mc-content-canonical = { path = "../../../crates/content/mc-content-canonical" }
 mc-core = { path = "../../../crates/core/mc-core" }
 mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }

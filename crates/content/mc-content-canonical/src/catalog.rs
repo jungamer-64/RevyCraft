@@ -1,0 +1,16 @@
+pub const AIR: &str = "minecraft:air";
+pub const STONE: &str = "minecraft:stone";
+pub const DIRT: &str = "minecraft:dirt";
+pub const GRASS_BLOCK: &str = "minecraft:grass_block";
+pub const COBBLESTONE: &str = "minecraft:cobblestone";
+pub const OAK_PLANKS: &str = "minecraft:oak_planks";
+pub const BEDROCK: &str = "minecraft:bedrock";
+pub const SAND: &str = "minecraft:sand";
+pub const SANDSTONE: &str = "minecraft:sandstone";
+pub const GLASS: &str = "minecraft:glass";
+pub const BRICKS: &str = "minecraft:bricks";
+pub const OAK_LOG: &str = "minecraft:oak_log";
+pub const STICK: &str = "minecraft:stick";
+pub const CRAFTING_TABLE: &str = "minecraft:crafting_table";
+pub const CHEST: &str = "minecraft:chest";
+pub const FURNACE: &str = "minecraft:furnace";

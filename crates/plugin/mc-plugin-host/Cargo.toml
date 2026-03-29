@@ -25,6 +25,7 @@ toml.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+mc-content-canonical = { path = "../../content/mc-content-canonical" }
 mc-plugin-admin-console = { path = "../../../plugins/admin/mc-plugin-admin-console", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gameplay-canonical", features = ["disable-exported-symbols", "in-process-testing"] }

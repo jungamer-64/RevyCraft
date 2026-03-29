@@ -123,16 +123,33 @@ impl WindowZeroSession {
     }
 
     fn open_crafting_table(&mut self, window_id: u8) -> Vec<TargetedEvent> {
-        self.core
-            .open_crafting_table(self.player, window_id, "Crafting")
+        open_virtual_container_for_test(
+            &mut self.core,
+            self.player,
+            window_id,
+            InventoryContainer::CraftingTable,
+            self.now_ms,
+        )
     }
 
     fn open_chest(&mut self, window_id: u8) -> Vec<TargetedEvent> {
-        self.core.open_chest(self.player, window_id, "Chest")
+        open_virtual_container_for_test(
+            &mut self.core,
+            self.player,
+            window_id,
+            InventoryContainer::Chest,
+            self.now_ms,
+        )
     }
 
     fn open_furnace(&mut self, window_id: u8) -> Vec<TargetedEvent> {
-        self.core.open_furnace(self.player, window_id, "Furnace")
+        open_virtual_container_for_test(
+            &mut self.core,
+            self.player,
+            window_id,
+            InventoryContainer::Furnace,
+            self.now_ms,
+        )
     }
 
     fn close_window(&mut self, window_id: u8) -> Vec<TargetedEvent> {
@@ -175,7 +192,7 @@ impl WindowZeroSession {
     ) -> (i16, Vec<TargetedEvent>) {
         fn player_window_slot(raw_slot: u8) -> Option<InventorySlot> {
             match raw_slot {
-                0..=8 => Some(InventorySlot::Auxiliary(raw_slot)),
+                0..=8 => Some(player_window_local(raw_slot)),
                 9..=35 => Some(InventorySlot::MainInventory(raw_slot - 9)),
                 36..=44 => Some(InventorySlot::Hotbar(raw_slot - 36)),
                 _ => None,
@@ -189,19 +206,19 @@ impl WindowZeroSession {
             match container {
                 InventoryContainer::Player => player_window_slot(raw_slot),
                 InventoryContainer::CraftingTable => match raw_slot {
-                    0..=9 => Some(InventorySlot::Container(raw_slot)),
+                    0..=9 => Some(container_slot(raw_slot)),
                     10..=36 => Some(InventorySlot::MainInventory(raw_slot - 10)),
                     37..=45 => Some(InventorySlot::Hotbar(raw_slot - 37)),
                     _ => None,
                 },
                 InventoryContainer::Chest => match raw_slot {
-                    0..=26 => Some(InventorySlot::Container(raw_slot)),
+                    0..=26 => Some(container_slot(raw_slot)),
                     27..=53 => Some(InventorySlot::MainInventory(raw_slot - 27)),
                     54..=62 => Some(InventorySlot::Hotbar(raw_slot - 54)),
                     _ => None,
                 },
                 InventoryContainer::Furnace => match raw_slot {
-                    0..=2 => Some(InventorySlot::Container(raw_slot)),
+                    0..=2 => Some(container_slot(raw_slot)),
                     3..=29 => Some(InventorySlot::MainInventory(raw_slot - 3)),
                     30..=38 => Some(InventorySlot::Hotbar(raw_slot - 30)),
                     _ => None,
@@ -224,7 +241,10 @@ impl WindowZeroSession {
                         .active_container
                         .as_ref()
                         .filter(|window| window.window_id == window_id)
-                        .and_then(|window| non_player_window_slot(window.container, raw_slot))
+                        .and_then(|window| {
+                            container_from_kind(&window.container.kind)
+                                .and_then(|container| non_player_window_slot(container, raw_slot))
+                        })
                 };
                 slot.map(InventoryClickTarget::Slot)
                     .unwrap_or(InventoryClickTarget::Unsupported)
@@ -582,7 +602,10 @@ fn opening_crafting_table_window_emits_open_and_contents_events() {
         .as_ref()
         .expect("crafting table should stay open");
     assert_eq!(window.window_id, 2);
-    assert_eq!(window.container, InventoryContainer::CraftingTable);
+    assert_eq!(
+        window.container.kind,
+        container_kind(InventoryContainer::CraftingTable)
+    );
 }
 
 #[test]
@@ -613,31 +636,26 @@ fn crafting_table_window_clicks_use_window_local_slots_and_cursor_sync() {
         &place_events,
         session.player,
         2,
-        InventorySlot::Container(1),
+        container_slot(1),
         Some(("minecraft:oak_log", 1)),
     );
     assert_inventory_slot_changed_in_window_to(
         &place_events,
         session.player,
         2,
-        InventorySlot::Container(0),
+        container_slot(0),
         Some(("minecraft:oak_planks", 4)),
     );
 
     let (result_action, result_events) =
         session.click_window_raw_slot(2, 0, InventoryClickButton::Left, None);
     assert_transaction_processed(&result_events, session.player, 2, result_action, true);
-    assert_inventory_slot_changed_in_window(
-        &result_events,
-        session.player,
-        2,
-        InventorySlot::Container(0),
-    );
+    assert_inventory_slot_changed_in_window(&result_events, session.player, 2, container_slot(0));
     assert_inventory_slot_changed_in_window_to(
         &result_events,
         session.player,
         2,
-        InventorySlot::Container(1),
+        container_slot(1),
         None,
     );
     assert_cursor_changed_to(&result_events, session.player, "minecraft:oak_planks", 4);
@@ -647,17 +665,8 @@ fn crafting_table_window_clicks_use_window_local_slots_and_cursor_sync() {
         .active_container
         .as_ref()
         .expect("crafting table should stay open");
-    match &window.state {
-        crate::core::OpenInventoryWindowState::CraftingTable { slots } => {
-            assert!(slots[0].is_none());
-        }
-        crate::core::OpenInventoryWindowState::Chest(_) => {
-            panic!("crafting table test should not open a chest")
-        }
-        crate::core::OpenInventoryWindowState::Furnace(_) => {
-            panic!("crafting table test should not open a furnace")
-        }
-    }
+    let slots = &crafting_table_state(window).local_slots;
+    assert!(slots[0].is_none());
     assert_eq!(
         online.cursor.as_ref().map(stack_summary),
         Some(("minecraft:oak_planks", 4))
@@ -682,7 +691,7 @@ fn crafting_table_window_supports_three_by_three_chest_recipe() {
     assert_eq!(
         window
             .contents(&session.online().snapshot.inventory)
-            .get_slot(InventorySlot::Container(0))
+            .get_slot(container_slot(0))
             .map(stack_summary),
         Some(("minecraft:chest", 1))
     );
@@ -696,11 +705,12 @@ fn crafting_table_window_supports_three_by_three_chest_recipe() {
         .online()
         .active_container
         .expect("crafting table should stay open");
-    if let crate::core::OpenInventoryWindowState::CraftingTable { slots } = &window.state {
-        assert!(slots.iter().all(Option::is_none));
-    } else {
-        panic!("expected crafting table state");
-    }
+    assert!(
+        crafting_table_state(&window)
+            .local_slots
+            .iter()
+            .all(Option::is_none)
+    );
 }
 
 #[test]
@@ -715,7 +725,7 @@ fn crafting_table_window_supports_shifted_two_by_two_crafting_table_recipe() {
     assert_eq!(
         window
             .contents(&session.online().snapshot.inventory)
-            .get_slot(InventorySlot::Container(0))
+            .get_slot(container_slot(0))
             .map(stack_summary),
         Some(("minecraft:crafting_table", 1))
     );
@@ -738,7 +748,7 @@ fn crafting_table_window_supports_three_by_three_furnace_recipe() {
     assert_eq!(
         window
             .contents(&session.online().snapshot.inventory)
-            .get_slot(InventorySlot::Container(0))
+            .get_slot(container_slot(0))
             .map(stack_summary),
         Some(("minecraft:furnace", 1))
     );
@@ -840,7 +850,10 @@ fn opening_chest_window_emits_open_and_contents_events() {
         .as_ref()
         .expect("chest should stay open");
     assert_eq!(window.window_id, 4);
-    assert_eq!(window.container, InventoryContainer::Chest);
+    assert_eq!(
+        window.container.kind,
+        container_kind(InventoryContainer::Chest)
+    );
 }
 
 #[test]
@@ -872,7 +885,7 @@ fn chest_window_clicks_use_window_local_slots_and_cursor_sync() {
         &place_events,
         session.player,
         4,
-        InventorySlot::Container(0),
+        container_slot(0),
         Some(("minecraft:stone", 2)),
     );
     assert_player_event(
@@ -886,11 +899,10 @@ fn chest_window_clicks_use_window_local_slots_and_cursor_sync() {
         .active_container
         .as_ref()
         .expect("chest should stay open");
-    let crate::core::OpenInventoryWindowState::Chest(chest) = &window.state else {
-        panic!("expected chest state");
-    };
     assert_eq!(
-        chest.slots[0].as_ref().map(stack_summary),
+        chest_state(window).local_slots[0]
+            .as_ref()
+            .map(stack_summary),
         Some(("minecraft:stone", 2))
     );
     assert!(session.online().cursor.is_none());
@@ -901,11 +913,8 @@ fn closing_chest_window_folds_contents_back_into_player_inventory() {
     let mut session = WindowZeroSession::new("ch-close");
     let _ = session.open_chest(4);
     {
-        let window = session.active_container_mut();
-        let crate::core::OpenInventoryWindowState::Chest(chest) = &mut window.state else {
-            panic!("expected chest state");
-        };
-        chest.slots[0] = Some(item("minecraft:oak_log", 1));
+        chest_state_mut(session.active_container_mut()).local_slots[0] =
+            Some(item("minecraft:oak_log", 1));
     }
 
     let events = session.close_window(4);
@@ -946,11 +955,8 @@ fn disconnect_folds_open_chest_back_into_persistent_inventory() {
     let mut session = WindowZeroSession::new("ch-disc");
     let _ = session.open_chest(4);
     {
-        let window = session.active_container_mut();
-        let crate::core::OpenInventoryWindowState::Chest(chest) = &mut window.state else {
-            panic!("expected chest state");
-        };
-        chest.slots[0] = Some(item("minecraft:stone", 8));
+        chest_state_mut(session.active_container_mut()).local_slots[0] =
+            Some(item("minecraft:stone", 8));
     }
     let _ = session.core.apply_command(
         CoreCommand::Disconnect {
@@ -1007,10 +1013,11 @@ fn opening_furnace_window_orders_open_before_contents_before_properties() {
                     EventTarget::Player(player_id),
                     CoreEvent::ContainerOpened {
                         window_id: 3,
-                        container: InventoryContainer::Furnace,
+                        container,
                         ..
                     }
                 ) if *player_id == session.player
+                    && *container == container_kind(InventoryContainer::Furnace)
             )
         })
         .expect("open event should be present");
@@ -1023,10 +1030,11 @@ fn opening_furnace_window_orders_open_before_contents_before_properties() {
                     EventTarget::Player(player_id),
                     CoreEvent::InventoryContents {
                         window_id: 3,
-                        container: InventoryContainer::Furnace,
+                        container,
                         ..
                     }
                 ) if *player_id == session.player
+                    && *container == container_kind(InventoryContainer::Furnace)
             )
         })
         .expect("contents event should be present");
@@ -1108,7 +1116,7 @@ fn furnace_window_smelts_sand_into_glass_and_emits_property_updates() {
         &first_tick,
         session.player,
         3,
-        InventorySlot::Container(1),
+        container_slot(1),
         None,
     );
 
@@ -1121,14 +1129,14 @@ fn furnace_window_smelts_sand_into_glass_and_emits_property_updates() {
         &final_tick,
         session.player,
         3,
-        InventorySlot::Container(0),
+        container_slot(0),
         None,
     );
     assert_inventory_slot_changed_in_window_to(
         &final_tick,
         session.player,
         3,
-        InventorySlot::Container(2),
+        container_slot(2),
         Some(("minecraft:glass", 1)),
     );
     assert_container_property_changed(&final_tick, session.player, 3, 2, 0);
@@ -1139,12 +1147,9 @@ fn invalid_fuel_does_not_start_furnace_progress() {
     let mut session = WindowZeroSession::new("fur-badfuel");
     let _ = session.open_furnace(3);
     {
-        let window = session.active_container_mut();
-        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
-            panic!("expected furnace state");
-        };
-        furnace.input = Some(item("minecraft:sand", 1));
-        furnace.fuel = Some(item("minecraft:glass", 1));
+        let furnace = furnace_state_mut(session.active_container_mut());
+        furnace.local_slots[0] = Some(item("minecraft:sand", 1));
+        furnace.local_slots[1] = Some(item("minecraft:glass", 1));
     }
 
     let events = session.tick();
@@ -1154,12 +1159,24 @@ fn invalid_fuel_does_not_start_furnace_progress() {
         .active_container
         .as_ref()
         .expect("furnace should stay open");
-    let crate::core::OpenInventoryWindowState::Furnace(furnace) = &window.state else {
-        panic!("expected furnace state");
-    };
-    assert_eq!(furnace.burn_left, 0);
-    assert_eq!(furnace.cook_progress, 0);
-    assert_eq!(furnace.output.as_ref().map(stack_summary), None);
+    let furnace = furnace_state(window);
+    assert_eq!(
+        furnace
+            .properties
+            .get(&furnace_property_key(0))
+            .copied()
+            .unwrap_or_default(),
+        0
+    );
+    assert_eq!(
+        furnace
+            .properties
+            .get(&furnace_property_key(2))
+            .copied()
+            .unwrap_or_default(),
+        0
+    );
+    assert_eq!(furnace.local_slots[2].as_ref().map(stack_summary), None);
 }
 
 #[test]
@@ -1186,13 +1203,10 @@ fn furnace_output_stacks_existing_matching_items() {
     let mut session = WindowZeroSession::new("fur-stack");
     let _ = session.open_furnace(3);
     {
-        let window = session.active_container_mut();
-        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
-            panic!("expected furnace state");
-        };
-        furnace.input = Some(item("minecraft:sand", 1));
-        furnace.fuel = Some(item("minecraft:oak_planks", 1));
-        furnace.output = Some(item("minecraft:glass", 1));
+        let furnace = furnace_state_mut(session.active_container_mut());
+        furnace.local_slots[0] = Some(item("minecraft:sand", 1));
+        furnace.local_slots[1] = Some(item("minecraft:oak_planks", 1));
+        furnace.local_slots[2] = Some(item("minecraft:glass", 1));
     }
 
     for _ in 0..200 {
@@ -1204,11 +1218,10 @@ fn furnace_output_stacks_existing_matching_items() {
         .active_container
         .as_ref()
         .expect("furnace should stay open");
-    let crate::core::OpenInventoryWindowState::Furnace(furnace) = &window.state else {
-        panic!("expected furnace state");
-    };
     assert_eq!(
-        furnace.output.as_ref().map(stack_summary),
+        furnace_state(window).local_slots[2]
+            .as_ref()
+            .map(stack_summary),
         Some(("minecraft:glass", 2))
     );
 }
@@ -1218,13 +1231,10 @@ fn closing_furnace_window_folds_contents_back_into_player_inventory() {
     let mut session = WindowZeroSession::new("furnace-close");
     let _ = session.open_furnace(3);
     {
-        let window = session.active_container_mut();
-        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
-            panic!("expected furnace state");
-        };
-        furnace.input = Some(item("minecraft:sand", 1));
-        furnace.fuel = Some(item("minecraft:oak_planks", 1));
-        furnace.output = Some(item("minecraft:glass", 1));
+        let furnace = furnace_state_mut(session.active_container_mut());
+        furnace.local_slots[0] = Some(item("minecraft:sand", 1));
+        furnace.local_slots[1] = Some(item("minecraft:oak_planks", 1));
+        furnace.local_slots[2] = Some(item("minecraft:glass", 1));
     }
 
     let events = session.close_window(3);
@@ -1280,10 +1290,11 @@ fn closing_furnace_window_orders_close_before_player_contents() {
                     EventTarget::Player(player_id),
                     CoreEvent::InventoryContents {
                         window_id: 0,
-                        container: InventoryContainer::Player,
+                        container,
                         ..
                     }
                 ) if *player_id == session.player
+                    && *container == container_kind(InventoryContainer::Player)
             )
         })
         .expect("player contents event should be present");
@@ -1311,12 +1322,9 @@ fn disconnect_folds_open_furnace_back_into_persistent_inventory() {
     let mut session = WindowZeroSession::new("furnace-disc");
     let _ = session.open_furnace(3);
     {
-        let window = session.active_container_mut();
-        let crate::core::OpenInventoryWindowState::Furnace(furnace) = &mut window.state else {
-            panic!("expected furnace state");
-        };
-        furnace.input = Some(item("minecraft:sand", 1));
-        furnace.output = Some(item("minecraft:glass", 1));
+        let furnace = furnace_state_mut(session.active_container_mut());
+        furnace.local_slots[0] = Some(item("minecraft:sand", 1));
+        furnace.local_slots[2] = Some(item("minecraft:glass", 1));
     }
     let _ = session.core.apply_command(
         CoreCommand::Disconnect {
