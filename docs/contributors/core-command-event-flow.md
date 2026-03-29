@@ -14,6 +14,12 @@ client packet
   -> protocol plugin decode
   -> CoreCommand
   -> runtime dispatch
+     -> CoreCommand::LoginStart
+        -> GameplayTransaction::begin_login(...)
+        -> gameplay plugin HandlePlayerJoin
+        -> GameplayTransaction::finalize_login(...)
+        -> detached journal validate/apply
+        -> Vec<TargetedEvent>
      -> direct-core command
         -> ServerCore::apply_command(...)
         -> Vec<TargetedEvent>
@@ -23,22 +29,22 @@ client packet
         -> gameplay plugin callback
         -> validate_and_apply_gameplay_journal(...)
         -> Vec<TargetedEvent>
-  -> runtime dispatch
+  -> TargetedEvent dispatch
   -> protocol plugin encode
   -> wire packets
 ```
 
-login は gameplay transaction の special-case です。
+### login special-case の補足
 
 ```text
-login/auth flow
-  -> CoreCommand::LoginStart
-  -> GameplayTransaction::begin_login(...)
-  -> gameplay plugin HandlePlayerJoin
-  -> GameplayTransaction::finalize_login(...)
-  -> detached journal validate/apply
-  -> CoreEvent 群
+LoginStart accepted
+  -> connection-targeted LoginAccepted を queue
+  -> session task が login success packet を write
+  -> player_id / entity_id / phase / session_capabilities を commit
+  -> pending login route を閉じて Play session へ進める
 ```
+
+login は gameplay transaction の special-case ですが、`LoginAccepted` を emit した瞬間に shared session state が `Play` へ進むわけではありません。session task が login success packet を write した時点で commit されるため、この短い window だけ `SessionRegistry` の pending login route が `EventTarget::Player` 配送を bridge します。
 
 ## 型の役割
 

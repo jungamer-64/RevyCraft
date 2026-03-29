@@ -233,12 +233,14 @@ gameplay plugin は callback ごとに host から `GameplayHost` を受け取�
 
 authoring code が semantic capability / id を参照するときは `mc_plugin_sdk_rust` crate root を使います。`revy_voxel_core` 直参照は engine internal 依存なので避けます。
 
-- `mc_plugin_sdk_rust::__macro_support`
-- `mc_plugin_host::__test_hooks`
-- `mc_proto_je_common::__version_support`
-- `mc_proto_be_common::__version_support`
+リストだけ読まれても次の入口が分かるように、各項目の代替をここで固定します。
 
-これらは公開 authoring surface ではありません。
+| 避ける path | 理由 | 代わりに使うもの |
+| --- | --- | --- |
+| `mc_plugin_sdk_rust::__macro_support` | macro 展開用の内部 module で、authoring surface ではない | `mc_plugin_sdk_rust::manifest`、`mc_plugin_sdk_rust::capabilities`、`mc_plugin_sdk_rust::{protocol, gameplay, storage, auth, admin_surface}` |
+| `mc_plugin_host::__test_hooks` | host 内部の test support で、production authoring からは見せない前提 | 通常の authoring は `mc_plugin_api` / `mc_plugin_sdk_rust` の公開 API を使い、workspace 内 test では `crates/testing/mc-plugin-test-support` と `crates/testing/mc-plugin-host-test-support` を使う |
+| `mc_proto_je_common::__version_support` | Java 版ごとの codec helper をまとめた内部 module | versioned Java protocol crate の公開 adapter / codec API を使う。例: `mc_proto_je_47::Je47Adapter` |
+| `mc_proto_be_common::__version_support` | Bedrock 版ごとの codec helper をまとめた内部 module | versioned Bedrock protocol crate の公開 adapter / codec API を使う。例: `mc_proto_be_924` の公開 surface |
 
 ## packaging まで含めた確認項目
 

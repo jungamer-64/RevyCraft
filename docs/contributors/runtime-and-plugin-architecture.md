@@ -216,20 +216,12 @@ cargo run -p xtask -- check-boundaries
 
 この check は `cargo metadata` から direct workspace dependency を読み、forbidden edge を検出し、`tools/xtask/boundary-check.toml` の explicit allowlist と tracked duplicate symbol を照合します。いま全部 clean であることよりも、新しい drift を増やさないことを目的に使います。
 
-## 移行前の baseline
-
-2026-03-29 に `cargo test -p revy-server-runtime --lib --quiet` を再実行した local baseline では、次の 5 件が failure しました。
-
-- `runtime::tests::gameplay::container_windows::world_backed_crafting_table_opens_and_crafts_chest_via_protocol`
-- `runtime::tests::gameplay::furnace::world_backed_furnace_opens_smelts_and_closes_via_protocol`
-- `runtime::tests::gameplay::furnace::world_backed_furnace_output_persists_across_restart`
-- `runtime::tests::gameplay::world_chest::world_backed_chest_place_open_and_persist_across_restart`
-- `runtime::tests::gameplay::world_chest::world_backed_chest_syncs_slot_updates_to_other_viewers`
-
-boundary redesign の code motion は、この baseline を green に戻すか、明示的に quarantine してから始める前提です。
+local baseline と既知の failing test は、鮮度管理を分離するため [`known-issues.md`](known-issues.md) に切り出して追跡します。boundary redesign の code motion は、その文書にある baseline を green に戻すか、明示的に quarantine してから始める前提です。
 
 ## 関連文書
 
+- current baseline、既知の failing test、quarantine 前提
+  [`known-issues.md`](known-issues.md)
 - reload の意味論、`consistency_gate`、`core` migration
   [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
 - play / login の command / event flow

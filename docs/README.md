@@ -7,7 +7,7 @@
 | 読者 | 最初に読む文書 | 続けて読む文書 | 詳細仕様 |
 | --- | --- | --- | --- |
 | 運用者 | [`operators/getting-started.md`](operators/getting-started.md) | [`operators/operational-playbook.md`](operators/operational-playbook.md) | [`operators/configuration-and-reload.md`](operators/configuration-and-reload.md) |
-| 実装 contributors | [`contributors/repository-overview.md`](contributors/repository-overview.md) | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md) | [`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md) |
+| 実装 contributors | [`contributors/repository-overview.md`](contributors/repository-overview.md) | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md) | [`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md) / [`contributors/known-issues.md`](contributors/known-issues.md) |
 | plugin 作者 | [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md) | 同じ文書の Rust 実装・packaging 節 | 同じ文書の manifest / descriptor 節 |
 
 ## やりたいこと別入口
@@ -34,6 +34,8 @@
   [`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md)
 - `CoreCommand` / `GameplayCommand` / `GameplayTransaction` / `CoreEvent` の流れを追いたい
   [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md)
+- boundary redesign 前の failing baseline や既知課題を確認したい
+  [`contributors/known-issues.md`](contributors/known-issues.md)
 
 ## 正本一覧
 
@@ -47,6 +49,7 @@
 | contributor | [`contributors/runtime-and-plugin-architecture.md`](contributors/runtime-and-plugin-architecture.md) |
 | contributor | [`contributors/core-reload-runtime-design.md`](contributors/core-reload-runtime-design.md) |
 | contributor deep dive | [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md) |
+| contributor reference | [`contributors/known-issues.md`](contributors/known-issues.md) |
 
 ## 共通用語
 

@@ -107,3 +107,5 @@ cargo run -p xtask -- check-boundaries
 ```
 
 この command は `tools/xtask/boundary-check.toml` を読み、forbidden dependency edge と canonical symbol owner / tracked duplicate symbol を検証します。
+
+current local baseline と既知の failing test は [`known-issues.md`](known-issues.md) で追跡します。architecture 文書ではなくこちらに寄せることで、設計の主正本と一時的な failure list を分離します。
