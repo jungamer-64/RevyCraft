@@ -11,14 +11,6 @@ fn assert_server_config_error_contains(
                 "unexpected config error: {message}"
             );
         }
-        crate::config::ServerConfigError::PluginHost(mc_plugin_host::PluginHostError::Config(
-            message,
-        )) => {
-            assert!(
-                message.contains(expected_fragment),
-                "unexpected plugin-host config error: {message}"
-            );
-        }
         other => panic!("unexpected config error: {other:?}"),
     }
 }
@@ -615,8 +607,8 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
     config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 0 };
     config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 1 };
 
-    let bootstrap = config.plugin_host_bootstrap_config();
-    let runtime_selection = config.plugin_host_runtime_selection_config();
+    let bootstrap = plugin_host_bootstrap_test_config(&config);
+    let runtime_selection = plugin_host_runtime_selection_test_config(&config);
 
     assert_eq!(bootstrap.storage_profile, config.bootstrap.storage_profile);
     assert_eq!(bootstrap.plugins_dir, config.bootstrap.plugins_dir);
@@ -640,8 +632,32 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
     assert_eq!(runtime_selection.admin_surfaces.len(), 2);
     assert_eq!(runtime_selection.plugin_allowlist, config.plugins.allowlist);
     assert_eq!(
-        runtime_selection.buffer_limits,
-        config.plugins.buffer_limits
+        runtime_selection.buffer_limits.protocol_response_bytes,
+        config.plugins.buffer_limits.protocol_response_bytes
+    );
+    assert_eq!(
+        runtime_selection.buffer_limits.gameplay_response_bytes,
+        config.plugins.buffer_limits.gameplay_response_bytes
+    );
+    assert_eq!(
+        runtime_selection.buffer_limits.storage_response_bytes,
+        config.plugins.buffer_limits.storage_response_bytes
+    );
+    assert_eq!(
+        runtime_selection.buffer_limits.auth_response_bytes,
+        config.plugins.buffer_limits.auth_response_bytes
+    );
+    assert_eq!(
+        runtime_selection.buffer_limits.admin_surface_response_bytes,
+        config.plugins.buffer_limits.admin_surface_response_bytes
+    );
+    assert_eq!(
+        runtime_selection.buffer_limits.callback_payload_bytes,
+        config.plugins.buffer_limits.callback_payload_bytes
+    );
+    assert_eq!(
+        runtime_selection.buffer_limits.metadata_bytes,
+        config.plugins.buffer_limits.metadata_bytes
     );
     assert_eq!(
         runtime_selection.plugin_failure_policy_protocol,

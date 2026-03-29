@@ -114,3 +114,4 @@ profile id を新しく増やす plugin は、manifest / descriptor / config の
   `console-v1` admin surface plugin の例
 
 Rust からの実装方法、`StaticPluginManifest`、macro、ABI `5.0` の詳細は [`rust-sdk-and-manifest.md`](rust-sdk-and-manifest.md) を参照してください。
+plugin authoring code が capability や id を import するときは `mc_plugin_sdk_rust` crate root を使い、`revy_voxel_core` は engine internal として扱います。

@@ -13,7 +13,7 @@ description = "Shared Java Edition protocol helpers for version-specific adapter
 flate2.workspace = true
 revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
 mc-content-canonical = { path = "../../content/mc-content-canonical" }
-revy-voxel-core = { path = "../../core/revy-voxel-core" }
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 revy-voxel-model = { path = "../../model/revy-voxel-model" }
 mc-proto-common = { path = "../mc-proto-common" }
 num-traits.workspace = true

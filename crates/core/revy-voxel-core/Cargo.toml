@@ -11,6 +11,7 @@ description = "Version-agnostic voxel world, player, event, and server-core type
 
 [dependencies]
 revy-core = { path = "../revy-core" }
+revy-voxel-semantic = { path = "../revy-voxel-semantic" }
 revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
 revy-voxel-model = { path = "../../model/revy-voxel-model" }
 num-traits.workspace = true

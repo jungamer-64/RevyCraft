@@ -1,5 +1,5 @@
 use super::Je1710StorageAdapter;
-use mc_proto_common::StorageAdapter;
+use mc_storage_common::StorageAdapter;
 use revy_voxel_core::{CoreConfig, PlayerId, ServerCore};
 use revy_voxel_model::{BlockPos, BlockState, ChunkColumn, ChunkPos, InventorySlot, ItemStack};
 use revy_voxel_rules::{BlockEntityState, ContainerPropertyKey};
@@ -159,10 +159,10 @@ fn snapshot_round_trip_through_anvil_and_nbt() {
 }
 
 fn tempdir() -> std::io::Result<tempfile::TempDir> {
-    let base_dir = workspace_test_temp_root().join("mc-proto-je-5");
+    let base_dir = workspace_test_temp_root().join("mc-storage-je-anvil-1_7_10");
     fs::create_dir_all(&base_dir)?;
     tempfile::Builder::new()
-        .prefix("mc-proto-je-5-")
+        .prefix("mc-storage-je-anvil-1_7_10-")
         .tempdir_in(base_dir)
 }
 
@@ -181,7 +181,7 @@ fn workspace_test_temp_root() -> PathBuf {
         }
     }
     panic!(
-        "mc-proto-je-5 tests should run under the workspace root: {}",
+        "mc-storage-je-anvil-1_7_10 tests should run under the workspace root: {}",
         manifest_dir.display()
     );
 }

@@ -27,6 +27,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  boundaries:
+    name: boundaries / linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run -p xtask -- check-boundaries
+
   fmt:
     name: fmt / linux
     runs-on: ubuntu-latest

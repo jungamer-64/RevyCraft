@@ -1,8 +1,5 @@
 use super::{GenerationId, RunningServer, RuntimeServer, now_ms};
-use crate::{
-    ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot,
-    RuntimeUpgradeStateView,
-};
+use crate::{ListenerBinding, PluginHostStatusSnapshot, RuntimeUpgradeStateView};
 use mc_proto_common::{ConnectionPhase, TransportKind};
 use revy_voxel_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use serde::{Deserialize, Serialize};
@@ -257,18 +254,12 @@ fn generation_status_snapshot(
 }
 
 fn summarize_plugin_host_status(
-    snapshot: mc_plugin_host::host::PluginHostStatusSnapshot,
+    snapshot: mc_plugin_host::host::PluginHostInventoryStatusSnapshot,
 ) -> PluginHostStatusSnapshot {
     let active_quarantine_count = snapshot.active_quarantine_count();
     let artifact_quarantine_count = snapshot.artifact_quarantine_count();
     PluginHostStatusSnapshot {
-        failure_matrix: PluginFailureMatrix {
-            protocol: map_failure_action(snapshot.failure_matrix.protocol),
-            gameplay: map_failure_action(snapshot.failure_matrix.gameplay),
-            storage: map_failure_action(snapshot.failure_matrix.storage),
-            auth: map_failure_action(snapshot.failure_matrix.auth),
-            admin_surface: map_failure_action(snapshot.failure_matrix.admin_surface),
-        },
+        failure_matrix: snapshot.failure_matrix,
         pending_fatal_error: snapshot.pending_fatal_error,
         protocol_count: snapshot.protocols.len(),
         gameplay_count: snapshot.gameplay.len(),
@@ -277,16 +268,6 @@ fn summarize_plugin_host_status(
         admin_surface_count: snapshot.admin_surface.len(),
         active_quarantine_count,
         artifact_quarantine_count,
-    }
-}
-
-const fn map_failure_action(
-    action: mc_plugin_host::host::PluginFailureAction,
-) -> PluginFailureAction {
-    match action {
-        mc_plugin_host::host::PluginFailureAction::Quarantine => PluginFailureAction::Quarantine,
-        mc_plugin_host::host::PluginFailureAction::Skip => PluginFailureAction::Skip,
-        mc_plugin_host::host::PluginFailureAction::FailFast => PluginFailureAction::FailFast,
     }
 }
 

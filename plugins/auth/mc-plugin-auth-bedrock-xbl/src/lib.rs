@@ -10,8 +10,8 @@ use mc_plugin_sdk_rust::auth::RustAuthPlugin;
 use mc_plugin_sdk_rust::capabilities::auth_capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
-use p384::ecdsa::{Signature as EcdsaSignature, VerifyingKey, signature::Verifier};
 use mc_plugin_sdk_rust::{AuthCapability, AuthCapabilitySet, PlayerId};
+use p384::ecdsa::{Signature as EcdsaSignature, VerifyingKey, signature::Verifier};
 use serde_json::Value;
 use uuid::Uuid;
 

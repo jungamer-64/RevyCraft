@@ -14,6 +14,16 @@ use super::{
     encode_protocol_request, encode_storage_request, take_owned_buffer,
 };
 use crate::config::PluginBufferLimits;
+#[cfg(any(test, feature = "in-process-testing"))]
+use mc_plugin_sdk_rust::test_support::{
+    AdminSurfacePluginHandler, AuthPluginHandler, GameplayPluginHandler, ProtocolPluginHandler,
+    StoragePluginHandler,
+};
+use mc_plugin_api::codec::admin_surface::encode_admin_surface_response;
+use mc_plugin_api::codec::auth::encode_auth_response;
+use mc_plugin_api::codec::gameplay::encode_gameplay_response;
+use mc_plugin_api::codec::protocol::encode_protocol_response;
+use mc_plugin_api::codec::storage::encode_storage_response;
 
 #[derive(Default)]
 pub(crate) struct GenerationManager {
@@ -33,6 +43,71 @@ impl GenerationManager {
 }
 
 #[derive(Clone)]
+pub(crate) enum ProtocolInvocationBackend {
+    Dynamic {
+        invoke: PluginInvokeFn,
+        free_buffer: PluginFreeBufferFn,
+        _library_guard: Option<Arc<Mutex<Library>>>,
+    },
+    #[cfg(any(test, feature = "in-process-testing"))]
+    InProcess {
+        handler: Arc<dyn ProtocolPluginHandler>,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) enum GameplayInvocationBackend {
+    Dynamic {
+        invoke: GameplayPluginInvokeV3Fn,
+        free_buffer: PluginFreeBufferFn,
+        _library_guard: Option<Arc<Mutex<Library>>>,
+    },
+    #[cfg(any(test, feature = "in-process-testing"))]
+    InProcess {
+        handler: Arc<dyn GameplayPluginHandler>,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) enum StorageInvocationBackend {
+    Dynamic {
+        invoke: PluginInvokeFn,
+        free_buffer: PluginFreeBufferFn,
+        _library_guard: Option<Arc<Mutex<Library>>>,
+    },
+    #[cfg(any(test, feature = "in-process-testing"))]
+    InProcess {
+        handler: Arc<dyn StoragePluginHandler>,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) enum AuthInvocationBackend {
+    Dynamic {
+        invoke: PluginInvokeFn,
+        free_buffer: PluginFreeBufferFn,
+        _library_guard: Option<Arc<Mutex<Library>>>,
+    },
+    #[cfg(any(test, feature = "in-process-testing"))]
+    InProcess {
+        handler: Arc<dyn AuthPluginHandler>,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) enum AdminSurfaceInvocationBackend {
+    Dynamic {
+        invoke: AdminSurfacePluginInvokeV1Fn,
+        free_buffer: PluginFreeBufferFn,
+        _library_guard: Option<Arc<Mutex<Library>>>,
+    },
+    #[cfg(any(test, feature = "in-process-testing"))]
+    InProcess {
+        handler: Arc<dyn AdminSurfacePluginHandler>,
+    },
+}
+
+#[derive(Clone)]
 pub(crate) struct ProtocolGeneration {
     pub(crate) generation_id: PluginGenerationId,
     pub(crate) plugin_id: String,
@@ -41,9 +116,7 @@ pub(crate) struct ProtocolGeneration {
     pub(crate) capabilities: ProtocolCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) invoke: PluginInvokeFn,
-    pub(crate) free_buffer: PluginFreeBufferFn,
-    pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
+    pub(crate) backend: ProtocolInvocationBackend,
 }
 
 pub(crate) fn decode_plugin_error(
@@ -81,44 +154,88 @@ pub(crate) fn write_owned_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
     }
 }
 
+fn ensure_direct_response_fits(
+    byte_len: usize,
+    max_bytes: usize,
+    what: &str,
+) -> Result<(), String> {
+    if byte_len > max_bytes {
+        return Err(format!(
+            "{what} exceeded configured limit: {byte_len} bytes > {max_bytes} bytes"
+        ));
+    }
+    Ok(())
+}
+
+impl ProtocolInvocationBackend {
+    pub(crate) fn invoke(
+        &self,
+        plugin_id: &str,
+        request: &ProtocolRequest,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<ProtocolResponse, String> {
+        match self {
+            Self::Dynamic {
+                invoke,
+                free_buffer,
+                ..
+            } => {
+                let request_bytes =
+                    encode_protocol_request(request).map_err(|error| error.to_string())?;
+                let mut output = OwnedBuffer::empty();
+                let mut error = OwnedBuffer::empty();
+                let status = unsafe {
+                    (invoke)(
+                        ByteSlice {
+                            ptr: request_bytes.as_ptr(),
+                            len: request_bytes.len(),
+                        },
+                        &raw mut output,
+                        &raw mut error,
+                    )
+                };
+                if status != PluginErrorCode::Ok {
+                    return Err(decode_plugin_error(
+                        plugin_id,
+                        status,
+                        *free_buffer,
+                        error,
+                        buffer_limits.metadata_bytes,
+                    ));
+                }
+
+                let response_bytes = take_owned_buffer(
+                    *free_buffer,
+                    output,
+                    buffer_limits.protocol_response_bytes,
+                    "protocol response buffer",
+                )?;
+                decode_protocol_response(request, &response_bytes).map_err(|error| error.to_string())
+            }
+            #[cfg(any(test, feature = "in-process-testing"))]
+            Self::InProcess { handler } => {
+                let response = handler.handle(request.clone())?;
+                let bytes =
+                    encode_protocol_response(request, &response).map_err(|error| error.to_string())?;
+                ensure_direct_response_fits(
+                    bytes.len(),
+                    buffer_limits.protocol_response_bytes,
+                    "protocol response buffer",
+                )?;
+                Ok(response)
+            }
+        }
+    }
+}
+
 impl ProtocolGeneration {
     pub(crate) fn invoke(
         &self,
         request: &ProtocolRequest,
     ) -> Result<ProtocolResponse, ProtocolError> {
-        let request_bytes = encode_protocol_request(request)
-            .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
-        let mut output = OwnedBuffer::empty();
-        let mut error = OwnedBuffer::empty();
-        let status = unsafe {
-            (self.invoke)(
-                ByteSlice {
-                    ptr: request_bytes.as_ptr(),
-                    len: request_bytes.len(),
-                },
-                &raw mut output,
-                &raw mut error,
-            )
-        };
-        if status != PluginErrorCode::Ok {
-            return Err(ProtocolError::Plugin(decode_plugin_error(
-                &self.plugin_id,
-                status,
-                self.free_buffer,
-                error,
-                self.buffer_limits.metadata_bytes,
-            )));
-        }
-
-        let response_bytes = take_owned_buffer(
-            self.free_buffer,
-            output,
-            self.buffer_limits.protocol_response_bytes,
-            "protocol response buffer",
-        )
-        .map_err(ProtocolError::Plugin)?;
-        decode_protocol_response(request, &response_bytes)
-            .map_err(|error| ProtocolError::Plugin(error.to_string()))
+        self.backend
+            .invoke(&self.plugin_id, request, self.buffer_limits)
+            .map_err(ProtocolError::Plugin)
     }
 }
 
@@ -130,44 +247,80 @@ pub(crate) struct GameplayGeneration {
     pub(crate) capabilities: GameplayCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) invoke: GameplayPluginInvokeV3Fn,
-    pub(crate) free_buffer: PluginFreeBufferFn,
-    pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
+    pub(crate) backend: GameplayInvocationBackend,
+}
+
+impl GameplayInvocationBackend {
+    pub(crate) fn invoke(
+        &self,
+        plugin_id: &str,
+        request: &GameplayRequest,
+        buffer_limits: PluginBufferLimits,
+        host_api: mc_plugin_api::host_api::GameplayHostApiV2,
+    ) -> Result<GameplayResponse, String> {
+        match self {
+            Self::Dynamic {
+                invoke,
+                free_buffer,
+                ..
+            } => {
+                let request_bytes =
+                    encode_gameplay_request(request).map_err(|error| error.to_string())?;
+                let mut output = OwnedBuffer::empty();
+                let mut error = OwnedBuffer::empty();
+                let status = unsafe {
+                    (invoke)(
+                        ByteSlice {
+                            ptr: request_bytes.as_ptr(),
+                            len: request_bytes.len(),
+                        },
+                        &raw const host_api,
+                        &raw mut output,
+                        &raw mut error,
+                    )
+                };
+                if status != PluginErrorCode::Ok {
+                    return Err(decode_plugin_error(
+                        plugin_id,
+                        status,
+                        *free_buffer,
+                        error,
+                        buffer_limits.metadata_bytes,
+                    ));
+                }
+                let response_bytes = take_owned_buffer(
+                    *free_buffer,
+                    output,
+                    buffer_limits.gameplay_response_bytes,
+                    "gameplay response buffer",
+                )?;
+                decode_gameplay_response(request, &response_bytes)
+                    .map_err(|error| error.to_string())
+            }
+            #[cfg(any(test, feature = "in-process-testing"))]
+            Self::InProcess { handler } => {
+                let response = handler.handle(request.clone(), Some(host_api))?;
+                let bytes =
+                    encode_gameplay_response(request, &response).map_err(|error| error.to_string())?;
+                ensure_direct_response_fits(
+                    bytes.len(),
+                    buffer_limits.gameplay_response_bytes,
+                    "gameplay response buffer",
+                )?;
+                Ok(response)
+            }
+        }
+    }
 }
 
 impl GameplayGeneration {
     pub(crate) fn invoke(&self, request: &GameplayRequest) -> Result<GameplayResponse, String> {
-        let request_bytes = encode_gameplay_request(request).map_err(|error| error.to_string())?;
-        let mut output = OwnedBuffer::empty();
-        let mut error = OwnedBuffer::empty();
-        let host_api = super::gameplay_host_api();
-        let status = unsafe {
-            (self.invoke)(
-                ByteSlice {
-                    ptr: request_bytes.as_ptr(),
-                    len: request_bytes.len(),
-                },
-                &raw const host_api,
-                &raw mut output,
-                &raw mut error,
-            )
-        };
-        if status != PluginErrorCode::Ok {
-            return Err(decode_plugin_error(
-                &self.plugin_id,
-                status,
-                self.free_buffer,
-                error,
-                self.buffer_limits.metadata_bytes,
-            ));
-        }
-        let response_bytes = take_owned_buffer(
-            self.free_buffer,
-            output,
-            self.buffer_limits.gameplay_response_bytes,
-            "gameplay response buffer",
-        )?;
-        decode_gameplay_response(request, &response_bytes).map_err(|error| error.to_string())
+        self.backend.invoke(
+            &self.plugin_id,
+            request,
+            self.buffer_limits,
+            super::gameplay_host_api(),
+        )
     }
 }
 
@@ -179,45 +332,75 @@ pub(crate) struct StorageGeneration {
     pub(crate) capabilities: StorageCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) invoke: PluginInvokeFn,
-    pub(crate) free_buffer: PluginFreeBufferFn,
-    pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
+    pub(crate) backend: StorageInvocationBackend,
+}
+
+impl StorageInvocationBackend {
+    pub(crate) fn invoke(
+        &self,
+        plugin_id: &str,
+        request: &StorageRequest,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<StorageResponse, String> {
+        match self {
+            Self::Dynamic {
+                invoke,
+                free_buffer,
+                ..
+            } => {
+                let request_bytes =
+                    encode_storage_request(request).map_err(|error| error.to_string())?;
+                let mut output = OwnedBuffer::empty();
+                let mut error = OwnedBuffer::empty();
+                let status = unsafe {
+                    (invoke)(
+                        ByteSlice {
+                            ptr: request_bytes.as_ptr(),
+                            len: request_bytes.len(),
+                        },
+                        &raw mut output,
+                        &raw mut error,
+                    )
+                };
+                if status != PluginErrorCode::Ok {
+                    return Err(decode_plugin_error(
+                        plugin_id,
+                        status,
+                        *free_buffer,
+                        error,
+                        buffer_limits.metadata_bytes,
+                    ));
+                }
+                let response_bytes = take_owned_buffer(
+                    *free_buffer,
+                    output,
+                    buffer_limits.storage_response_bytes,
+                    "storage response buffer",
+                )?;
+                decode_storage_response(request, &response_bytes)
+                    .map_err(|error| error.to_string())
+            }
+            #[cfg(any(test, feature = "in-process-testing"))]
+            Self::InProcess { handler } => {
+                let response = handler.handle(request.clone())?;
+                let bytes =
+                    encode_storage_response(request, &response).map_err(|error| error.to_string())?;
+                ensure_direct_response_fits(
+                    bytes.len(),
+                    buffer_limits.storage_response_bytes,
+                    "storage response buffer",
+                )?;
+                Ok(response)
+            }
+        }
+    }
 }
 
 impl StorageGeneration {
     pub(crate) fn invoke(&self, request: &StorageRequest) -> Result<StorageResponse, StorageError> {
-        let request_bytes = encode_storage_request(request)
-            .map_err(|error| StorageError::Plugin(error.to_string()))?;
-        let mut output = OwnedBuffer::empty();
-        let mut error = OwnedBuffer::empty();
-        let status = unsafe {
-            (self.invoke)(
-                ByteSlice {
-                    ptr: request_bytes.as_ptr(),
-                    len: request_bytes.len(),
-                },
-                &raw mut output,
-                &raw mut error,
-            )
-        };
-        if status != PluginErrorCode::Ok {
-            return Err(StorageError::Plugin(decode_plugin_error(
-                &self.plugin_id,
-                status,
-                self.free_buffer,
-                error,
-                self.buffer_limits.metadata_bytes,
-            )));
-        }
-        let response_bytes = take_owned_buffer(
-            self.free_buffer,
-            output,
-            self.buffer_limits.storage_response_bytes,
-            "storage response buffer",
-        )
-        .map_err(StorageError::Plugin)?;
-        decode_storage_response(request, &response_bytes)
-            .map_err(|error| StorageError::Plugin(error.to_string()))
+        self.backend
+            .invoke(&self.plugin_id, request, self.buffer_limits)
+            .map_err(StorageError::Plugin)
     }
 }
 
@@ -230,9 +413,7 @@ pub(crate) struct AuthGeneration {
     pub(crate) capabilities: AuthCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) invoke: PluginInvokeFn,
-    pub(crate) free_buffer: PluginFreeBufferFn,
-    pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
+    pub(crate) backend: AuthInvocationBackend,
 }
 
 #[derive(Clone)]
@@ -243,42 +424,137 @@ pub(crate) struct AdminSurfaceGeneration {
     pub(crate) capabilities: AdminSurfaceCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) invoke: AdminSurfacePluginInvokeV1Fn,
-    pub(crate) free_buffer: PluginFreeBufferFn,
-    pub(crate) _library_guard: Option<Arc<Mutex<Library>>>,
+    pub(crate) backend: AdminSurfaceInvocationBackend,
+}
+
+impl AuthInvocationBackend {
+    pub(crate) fn invoke(
+        &self,
+        plugin_id: &str,
+        request: &AuthRequest,
+        buffer_limits: PluginBufferLimits,
+    ) -> Result<AuthResponse, String> {
+        match self {
+            Self::Dynamic {
+                invoke,
+                free_buffer,
+                ..
+            } => {
+                let request_bytes =
+                    encode_auth_request(request).map_err(|error| error.to_string())?;
+                let mut output = OwnedBuffer::empty();
+                let mut error = OwnedBuffer::empty();
+                let status = unsafe {
+                    (invoke)(
+                        ByteSlice {
+                            ptr: request_bytes.as_ptr(),
+                            len: request_bytes.len(),
+                        },
+                        &raw mut output,
+                        &raw mut error,
+                    )
+                };
+                if status != PluginErrorCode::Ok {
+                    return Err(decode_plugin_error(
+                        plugin_id,
+                        status,
+                        *free_buffer,
+                        error,
+                        buffer_limits.metadata_bytes,
+                    ));
+                }
+
+                let response_bytes = take_owned_buffer(
+                    *free_buffer,
+                    output,
+                    buffer_limits.auth_response_bytes,
+                    "auth response buffer",
+                )?;
+                decode_auth_response(request, &response_bytes).map_err(|error| error.to_string())
+            }
+            #[cfg(any(test, feature = "in-process-testing"))]
+            Self::InProcess { handler } => {
+                let response = handler.handle(request.clone())?;
+                let bytes =
+                    encode_auth_response(request, &response).map_err(|error| error.to_string())?;
+                ensure_direct_response_fits(
+                    bytes.len(),
+                    buffer_limits.auth_response_bytes,
+                    "auth response buffer",
+                )?;
+                Ok(response)
+            }
+        }
+    }
+}
+
+impl AdminSurfaceInvocationBackend {
+    pub(crate) fn invoke(
+        &self,
+        plugin_id: &str,
+        request: &AdminSurfaceRequest,
+        buffer_limits: PluginBufferLimits,
+        host_api: AdminSurfaceHostApiV1,
+    ) -> Result<AdminSurfaceResponse, String> {
+        match self {
+            Self::Dynamic {
+                invoke,
+                free_buffer,
+                ..
+            } => {
+                let request_bytes =
+                    encode_admin_surface_request(request).map_err(|error| error.to_string())?;
+                let mut output = OwnedBuffer::empty();
+                let mut error = OwnedBuffer::empty();
+                let status = unsafe {
+                    (invoke)(
+                        ByteSlice {
+                            ptr: request_bytes.as_ptr(),
+                            len: request_bytes.len(),
+                        },
+                        &raw const host_api,
+                        &raw mut output,
+                        &raw mut error,
+                    )
+                };
+                if status != PluginErrorCode::Ok {
+                    return Err(decode_plugin_error(
+                        plugin_id,
+                        status,
+                        *free_buffer,
+                        error,
+                        buffer_limits.metadata_bytes,
+                    ));
+                }
+
+                let response_bytes = take_owned_buffer(
+                    *free_buffer,
+                    output,
+                    buffer_limits.admin_surface_response_bytes,
+                    "admin-surface response buffer",
+                )?;
+                decode_admin_surface_response(request, &response_bytes)
+                    .map_err(|error| error.to_string())
+            }
+            #[cfg(any(test, feature = "in-process-testing"))]
+            Self::InProcess { handler } => {
+                let response = handler.handle(request.clone(), Some(host_api))?;
+                let bytes = encode_admin_surface_response(request, &response)
+                    .map_err(|error| error.to_string())?;
+                ensure_direct_response_fits(
+                    bytes.len(),
+                    buffer_limits.admin_surface_response_bytes,
+                    "admin-surface response buffer",
+                )?;
+                Ok(response)
+            }
+        }
+    }
 }
 
 impl AuthGeneration {
     fn invoke(&self, request: &AuthRequest) -> Result<AuthResponse, String> {
-        let request_bytes = encode_auth_request(request).map_err(|error| error.to_string())?;
-        let mut output = OwnedBuffer::empty();
-        let mut error = OwnedBuffer::empty();
-        let status = unsafe {
-            (self.invoke)(
-                ByteSlice {
-                    ptr: request_bytes.as_ptr(),
-                    len: request_bytes.len(),
-                },
-                &raw mut output,
-                &raw mut error,
-            )
-        };
-        if status != PluginErrorCode::Ok {
-            return Err(decode_plugin_error(
-                &self.plugin_id,
-                status,
-                self.free_buffer,
-                error,
-                self.buffer_limits.metadata_bytes,
-            ));
-        }
-        let response_bytes = take_owned_buffer(
-            self.free_buffer,
-            output,
-            self.buffer_limits.auth_response_bytes,
-            "auth response buffer",
-        )?;
-        decode_auth_response(request, &response_bytes).map_err(|error| error.to_string())
+        self.backend.invoke(&self.plugin_id, request, self.buffer_limits)
     }
 
     pub(crate) const fn mode(&self) -> AuthMode {
@@ -361,38 +637,8 @@ impl AdminSurfaceGeneration {
         request: &AdminSurfaceRequest,
         host_api: AdminSurfaceHostApiV1,
     ) -> Result<AdminSurfaceResponse, String> {
-        let request_bytes =
-            encode_admin_surface_request(request).map_err(|error| error.to_string())?;
-        let mut output = OwnedBuffer::empty();
-        let mut error = OwnedBuffer::empty();
-        let status = unsafe {
-            (self.invoke)(
-                ByteSlice {
-                    ptr: request_bytes.as_ptr(),
-                    len: request_bytes.len(),
-                },
-                &raw const host_api,
-                &raw mut output,
-                &raw mut error,
-            )
-        };
-        if status != PluginErrorCode::Ok {
-            return Err(decode_plugin_error(
-                &self.plugin_id,
-                status,
-                self.free_buffer,
-                error,
-                self.buffer_limits.metadata_bytes,
-            ));
-        }
-
-        let response_bytes = take_owned_buffer(
-            self.free_buffer,
-            output,
-            self.buffer_limits.admin_surface_response_bytes,
-            "admin-surface response buffer",
-        )?;
-        decode_admin_surface_response(request, &response_bytes).map_err(|error| error.to_string())
+        self.backend
+            .invoke(&self.plugin_id, request, self.buffer_limits, host_api)
     }
 
     pub(crate) fn declare_instance(

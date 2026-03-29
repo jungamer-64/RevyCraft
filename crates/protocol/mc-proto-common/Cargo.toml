@@ -11,7 +11,8 @@ description = "Shared protocol adapter traits, wire codec primitives, and errors
 
 [dependencies]
 bytes.workspace = true
-revy-voxel-core = { path = "../../core/revy-voxel-core" }
+mc-storage-common = { path = "../../storage/mc-storage-common" }
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 serde.workspace = true
 thiserror.workspace = true
 

@@ -1,9 +1,14 @@
 use super::{AdminPermission, OnlineAuthKeys};
 use crate::RuntimeError;
-use crate::config::ServerConfig;
+use crate::config::{PluginBufferLimits, ServerConfig};
 use mc_content_canonical::canonical_content;
 use mc_plugin_api::codec::auth::AuthMode;
 use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+use mc_plugin_host::config::{
+    AdminSurfaceSelectionConfig as PluginHostAdminSurfaceSelectionConfig,
+    BootstrapConfig as PluginHostBootstrapConfig, PluginBufferLimits as PluginHostBufferLimits,
+    RuntimeSelectionConfig as PluginHostRuntimeSelectionConfig,
+};
 use mc_plugin_host::registry::LoadedPluginSet;
 use mc_plugin_host::runtime::{
     AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
@@ -13,6 +18,60 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock as AsyncRwLock;
+
+pub(crate) fn plugin_host_bootstrap_config(config: &ServerConfig) -> PluginHostBootstrapConfig {
+    PluginHostBootstrapConfig {
+        storage_profile: config.bootstrap.storage_profile.clone(),
+        plugins_dir: config.bootstrap.plugins_dir.clone(),
+        plugin_abi_min: config.bootstrap.plugin_abi_min,
+        plugin_abi_max: config.bootstrap.plugin_abi_max,
+    }
+}
+
+pub(crate) fn plugin_host_runtime_selection_config(
+    config: &ServerConfig,
+) -> PluginHostRuntimeSelectionConfig {
+    let mut admin_surfaces = config
+        .admin
+        .surfaces
+        .iter()
+        .map(
+            |(instance_id, surface)| PluginHostAdminSurfaceSelectionConfig {
+                instance_id: instance_id.clone(),
+                profile: surface.profile.clone(),
+                config_path: surface.config.clone(),
+            },
+        )
+        .collect::<Vec<_>>();
+    admin_surfaces.sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
+    PluginHostRuntimeSelectionConfig {
+        be_enabled: config.topology.be_enabled,
+        auth_profile: config.profiles.auth.clone(),
+        bedrock_auth_profile: config.profiles.bedrock_auth.clone(),
+        default_gameplay_profile: config.profiles.default_gameplay.clone(),
+        gameplay_profile_map: config.profiles.gameplay_map.clone(),
+        admin_surfaces,
+        plugin_allowlist: config.plugins.allowlist.clone(),
+        buffer_limits: plugin_host_buffer_limits(config.plugins.buffer_limits),
+        plugin_failure_policy_protocol: config.plugins.failure_policy.protocol,
+        plugin_failure_policy_gameplay: config.plugins.failure_policy.gameplay,
+        plugin_failure_policy_storage: config.plugins.failure_policy.storage,
+        plugin_failure_policy_auth: config.plugins.failure_policy.auth,
+        plugin_failure_policy_admin_surface: config.plugins.failure_policy.admin_surface,
+    }
+}
+
+const fn plugin_host_buffer_limits(buffer_limits: PluginBufferLimits) -> PluginHostBufferLimits {
+    PluginHostBufferLimits {
+        protocol_response_bytes: buffer_limits.protocol_response_bytes,
+        gameplay_response_bytes: buffer_limits.gameplay_response_bytes,
+        storage_response_bytes: buffer_limits.storage_response_bytes,
+        auth_response_bytes: buffer_limits.auth_response_bytes,
+        admin_surface_response_bytes: buffer_limits.admin_surface_response_bytes,
+        callback_payload_bytes: buffer_limits.callback_payload_bytes,
+        metadata_bytes: buffer_limits.metadata_bytes,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RemoteAdminPrincipal {
@@ -258,15 +317,7 @@ impl SelectionResolver {
             .map(|(principal_id, principal)| {
                 (
                     principal_id.clone(),
-                    RemoteAdminPrincipal::new(
-                        principal_id.clone(),
-                        principal
-                            .permissions
-                            .iter()
-                            .copied()
-                            .map(runtime_permission_from_config)
-                            .collect(),
-                    ),
+                    RemoteAdminPrincipal::new(principal_id.clone(), principal.permissions.clone()),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -276,11 +327,7 @@ impl SelectionResolver {
                 .declare_instance(&surface.instance_id, surface.surface_config_path.as_deref())
                 .map_err(|error| RuntimeError::Config(error.to_string()))?;
             for principal in declaration.principals {
-                let permissions = principal
-                    .permissions
-                    .into_iter()
-                    .map(runtime_permission_from_plugin)
-                    .collect::<Vec<_>>();
+                let permissions = principal.permissions;
                 match principals.get(&principal.principal_id) {
                     Some(existing) if existing.permissions != permissions => {
                         return Err(RuntimeError::Config(format!(
@@ -357,33 +404,5 @@ impl SelectionResolver {
                     config.bootstrap.storage_profile.as_str()
                 ))
             })
-    }
-}
-
-const fn runtime_permission_from_config(
-    permission: crate::config::AdminPermission,
-) -> AdminPermission {
-    match permission {
-        crate::config::AdminPermission::Status => AdminPermission::Status,
-        crate::config::AdminPermission::Sessions => AdminPermission::Sessions,
-        crate::config::AdminPermission::ReloadRuntime => AdminPermission::ReloadRuntime,
-        crate::config::AdminPermission::UpgradeRuntime => AdminPermission::UpgradeRuntime,
-        crate::config::AdminPermission::Shutdown => AdminPermission::Shutdown,
-    }
-}
-
-const fn runtime_permission_from_plugin(
-    permission: mc_plugin_api::codec::admin::AdminPermission,
-) -> AdminPermission {
-    match permission {
-        mc_plugin_api::codec::admin::AdminPermission::Status => AdminPermission::Status,
-        mc_plugin_api::codec::admin::AdminPermission::Sessions => AdminPermission::Sessions,
-        mc_plugin_api::codec::admin::AdminPermission::ReloadRuntime => {
-            AdminPermission::ReloadRuntime
-        }
-        mc_plugin_api::codec::admin::AdminPermission::UpgradeRuntime => {
-            AdminPermission::UpgradeRuntime
-        }
-        mc_plugin_api::codec::admin::AdminPermission::Shutdown => AdminPermission::Shutdown,
     }
 }

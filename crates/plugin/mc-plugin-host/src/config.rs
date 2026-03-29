@@ -1,8 +1,8 @@
-use crate::host::{PluginFailureAction, PluginFailureMatrix};
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use mc_plugin_api::{
     AdapterId, AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
 };
+use revy_server_types::{PluginFailureAction, PluginFailureMatrix};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;

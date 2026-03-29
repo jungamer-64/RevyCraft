@@ -1,0 +1,27 @@
+[package]
+name = "mc-storage-je-anvil-1_7_10"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Minecraft Java Edition 1.7.10 Anvil storage adapter for RevyCraft."
+
+[dependencies]
+flate2.workspace = true
+mc-content-canonical = { path = "../../content/mc-content-canonical" }
+mc-storage-common = { path = "../mc-storage-common" }
+mc-proto-je-common = { path = "../../protocol/mc-proto-je-common" }
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
+revy-voxel-model = { path = "../../model/revy-voxel-model" }
+revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
+uuid.workspace = true
+
+[dev-dependencies]
+revy-voxel-core = { path = "../../core/revy-voxel-core" }
+tempfile.workspace = true
+
+[lints]
+workspace = true

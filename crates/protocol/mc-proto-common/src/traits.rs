@@ -1,14 +1,12 @@
-use crate::errors::{ProtocolError, StorageError};
+use crate::errors::ProtocolError;
 use crate::types::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, LoginRequest, PlayEncodingContext,
     ProtocolDescriptor, ProtocolSessionSnapshot, ServerListStatus, StatusRequest, TransportKind,
 };
 use bytes::BytesMut;
-use revy_voxel_core::{
+use revy_voxel_semantic::{
     CoreEvent, PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet, RuntimeCommand,
-    WorldSnapshot,
 };
-use std::path::Path;
 
 pub trait WireCodec: Send + Sync {
     /// # Errors
@@ -22,21 +20,6 @@ pub trait WireCodec: Send + Sync {
     /// Returns [`ProtocolError`] when the buffered bytes are malformed for the
     /// wire format. Returns `Ok(None)` when a full frame is not available yet.
     fn try_decode_frame(&self, buffer: &mut BytesMut) -> Result<Option<Vec<u8>>, ProtocolError>;
-}
-
-pub trait StorageAdapter: Send + Sync {
-    /// # Errors
-    ///
-    /// Returns [`StorageError`] when the snapshot backend cannot be read or
-    /// when persisted data is invalid.
-    fn load_snapshot(&self, world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError>;
-
-    /// # Errors
-    ///
-    /// Returns [`StorageError`] when the snapshot cannot be serialized or
-    /// written to the backing store.
-    fn save_snapshot(&self, world_dir: &Path, snapshot: &WorldSnapshot)
-    -> Result<(), StorageError>;
 }
 
 pub trait HandshakeProbe: Send + Sync {

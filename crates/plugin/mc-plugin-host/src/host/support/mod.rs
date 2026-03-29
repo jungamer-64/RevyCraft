@@ -35,9 +35,6 @@ pub(super) use self::describe::{
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
 };
-pub(super) use self::invoke::{
-    invoke_admin_surface, invoke_auth, invoke_gameplay, invoke_protocol, invoke_storage,
-};
 pub(super) use self::manifest::{
     DecodedManifest, ManifestCapabilities, decode_manifest, decode_utf8_slice,
 };

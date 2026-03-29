@@ -662,15 +662,19 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
 
     let result_preview = {
         write_packet(&mut legacy, &codec, &held_item_change(4)).await?;
-        let held_item = read_until_java_packet(
+        let held_item = read_until_held_item_change(
             &mut legacy,
             &codec,
             &mut legacy_buffer,
             TestJavaProtocol::Je5,
-            TestJavaPacket::HeldItemChange,
+            4,
+            16,
         )
         .await?;
-        assert_eq!(held_item_from_packet(&held_item)?, 4);
+        assert_eq!(
+            held_item_from_packet_for_protocol(TestJavaProtocol::Je5, &held_item)?,
+            4
+        );
 
         write_packet(
             &mut modern,

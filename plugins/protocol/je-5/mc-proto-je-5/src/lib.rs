@@ -1,7 +1,6 @@
 #![allow(clippy::multiple_crate_versions)]
 mod decoding;
 mod encoding;
-mod storage;
 
 #[cfg(test)]
 mod tests;
@@ -33,12 +32,9 @@ use revy_voxel_model::{
 };
 use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 
-pub use self::storage::Je1710StorageAdapter;
-
 const PROTOCOL_VERSION_1_7_10: i32 = 5;
 const VERSION_NAME_1_7_10: &str = "1.7.10";
 pub const JE_5_ADAPTER_ID: &str = "je-5";
-pub const JE_1_7_10_STORAGE_PROFILE_ID: &str = "je-anvil-1_7_10";
 pub(crate) const INVENTORY_SPEC: InventoryProtocolSpec = JE_1_7_10_INVENTORY_SPEC;
 
 fn container_property_id(property: &ContainerPropertyKey) -> Option<u8> {

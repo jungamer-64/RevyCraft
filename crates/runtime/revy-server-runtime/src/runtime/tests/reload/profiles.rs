@@ -534,15 +534,19 @@ async fn auth_reload_updates_generation_for_new_logins_only() -> Result<(), Runt
     );
 
     write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
-    let held_item = read_until_java_packet(
+    let held_item = read_until_held_item_change(
         &mut alpha,
         &codec,
         &mut alpha_buffer,
         TestJavaProtocol::Je5,
-        TestJavaPacket::HeldItemChange,
+        4,
+        16,
     )
     .await?;
-    assert_eq!(held_item_from_packet(&held_item)?, 4);
+    assert_eq!(
+        held_item_from_packet_for_protocol(TestJavaProtocol::Je5, &held_item)?,
+        4
+    );
 
     let mut beta = connect_tcp(addr).await?;
     write_packet(

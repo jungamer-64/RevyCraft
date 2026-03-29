@@ -167,7 +167,8 @@ async fn craft_log_into_planks(
         decode_set_slot(protocol, &craft_input)?,
         (0, 1, Some((17, 1, 0)))
     );
-    let cursor_cleared = read_until_set_slot(stream, codec, buffer, protocol, -1, -1, 16).await?;
+    let cursor_cleared =
+        read_until_set_slot_item(stream, codec, buffer, protocol, -1, -1, None, 16).await?;
     assert_eq!(decode_set_slot(protocol, &cursor_cleared)?, (-1, -1, None));
 
     write_packet(stream, codec, &click_window(protocol, 0, 0, 3, None)).await?;
@@ -181,7 +182,9 @@ async fn craft_log_into_planks(
     assert_eq!(decode_set_slot(protocol, &result_taken)?, (0, 0, None));
     let input_consumed = read_until_set_slot(stream, codec, buffer, protocol, 0, 1, 16).await?;
     assert_eq!(decode_set_slot(protocol, &input_consumed)?, (0, 1, None));
-    let cursor_result = read_until_set_slot(stream, codec, buffer, protocol, -1, -1, 16).await?;
+    let cursor_result =
+        read_until_set_slot_item(stream, codec, buffer, protocol, -1, -1, Some((5, 4, 0)), 16)
+            .await?;
     assert_eq!(
         decode_set_slot(protocol, &cursor_result)?,
         (-1, -1, Some((5, 4, 0)))
@@ -216,9 +219,16 @@ async fn read_click_transcript_and_ack_reject_if_needed(
     assert_eq!(decoded.1, action_number);
 
     if !decoded.2 {
-        let resync =
-            read_until_java_packet(stream, codec, buffer, protocol, TestJavaPacket::WindowItems)
-                .await?;
+        let resync = read_until_window_items_slot_item(
+            stream,
+            codec,
+            buffer,
+            protocol,
+            synced_slot,
+            expected_slot_item,
+            16,
+        )
+        .await?;
         assert_eq!(
             window_items_slot(
                 protocol,
@@ -229,13 +239,14 @@ async fn read_click_transcript_and_ack_reject_if_needed(
         );
     }
 
-    let slot_update = read_until_set_slot(
+    let slot_update = read_until_set_slot_item(
         stream,
         codec,
         buffer,
         protocol,
         i8::try_from(window_id).expect("window ids used in tests should fit into i8"),
         synced_slot,
+        expected_slot_item,
         16,
     )
     .await?;
@@ -251,21 +262,32 @@ async fn read_click_transcript_and_ack_reject_if_needed(
     if let Some(expected_held_slot) = expected_held_slot
         && !decoded.2
     {
-        let held_item = read_until_java_packet(
+        let held_item = read_until_held_item_change(
             stream,
             codec,
             buffer,
             protocol,
-            TestJavaPacket::HeldItemChange,
+            i8::try_from(expected_held_slot).expect("test held slot should fit into i8"),
+            16,
         )
         .await?;
         assert_eq!(
-            held_item_from_packet(&held_item)?,
+            held_item_from_packet_for_protocol(protocol, &held_item)?,
             i8::try_from(expected_held_slot).expect("test held slot should fit into i8")
         );
     }
 
-    let cursor_update = read_until_set_slot(stream, codec, buffer, protocol, -1, -1, 16).await?;
+    let cursor_update = read_until_set_slot_item(
+        stream,
+        codec,
+        buffer,
+        protocol,
+        -1,
+        -1,
+        expected_cursor_item,
+        16,
+    )
+    .await?;
     assert_eq!(
         decode_set_slot(protocol, &cursor_update)?,
         (-1, -1, expected_cursor_item)

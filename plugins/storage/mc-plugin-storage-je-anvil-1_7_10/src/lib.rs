@@ -4,9 +4,9 @@ use mc_plugin_sdk_rust::capabilities::{build_tag_contains, storage_capabilities}
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::storage::RustStoragePlugin;
-use mc_proto_common::{StorageAdapter, StorageError};
-use mc_proto_je_5::{JE_1_7_10_STORAGE_PROFILE_ID, Je1710StorageAdapter};
 use mc_plugin_sdk_rust::{StorageCapability, StorageCapabilitySet};
+use mc_storage_common::{StorageAdapter, StorageError};
+use mc_storage_je_anvil_1_7_10::{JE_1_7_10_STORAGE_PROFILE_ID, Je1710StorageAdapter};
 use std::path::Path;
 
 pub const JE_1_7_10_STORAGE_PLUGIN_ID: &str = "storage-je-anvil-1_7_10";

@@ -1,0 +1,149 @@
+[[allowed_dependency_edge]]
+from = "revy-voxel-semantic"
+to = "revy-core"
+reason = "`revy-core` は engine ではなく、semantic capability/id の基盤 crate。"
+
+[[allowed_dependency_edge]]
+from = "mc-plugin-host"
+to = "revy-voxel-core"
+reason = "plugin host は runtime/core engine boundary の一部として engine internals 利用を許容する。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminPermission"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "RuntimeReloadMode"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "RuntimeUpgradeRole"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "RuntimeUpgradePhase"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "RuntimeUpgradeStateView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminRequest"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminListenerBindingView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminSessionTransportCountView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminPhaseCountView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminGenerationCountView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminNamedCountView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminSessionSummaryView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminPluginHostView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminStatusView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminSessionView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminSessionsView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminArtifactsReloadView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminTopologyReloadView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminCoreReloadView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminFullReloadView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminRuntimeReloadDetail"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminRuntimeReloadView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminUpgradeRuntimeView"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "AdminResponse"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "ListenerBinding"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "PluginFailureAction"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "PluginFailureMatrix"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"
+
+[[canonical_symbol_owner]]
+symbol = "PluginHostStatusSnapshot"
+path = "crates/runtime/revy-server-types/src/lib.rs"
+reason = "`revy-server-types` が canonical owner。"

@@ -1,5 +1,5 @@
 use mc_proto_common::{PacketWriter, ProtocolError};
-use revy_voxel_core::PlayerSnapshot;
+use revy_voxel_semantic::PlayerSnapshot;
 
 pub fn encode_player_info_add(
     packet_id: i32,

@@ -1,7 +1,7 @@
 use crate::PluginHostError;
 use crate::config::RuntimeSelectionConfig;
 use crate::host::PreparedProtocolTopology;
-use crate::host::{PluginFailureAction, PluginHostStatusSnapshot};
+use crate::host::{PluginFailureAction, PluginHostInventoryStatusSnapshot};
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_api::codec::admin_surface::{
@@ -13,11 +13,11 @@ use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_api::host_api::AdminSurfaceHostApiV1;
 use mc_plugin_api::{
     AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapabilitySet, ConnectionId,
-    GameplayCapabilitySet, GameplayCommand, GameplayJournal, GameplayJournalApplyResult,
-    GameplayProfileId, PlayerId, PluginGenerationId, ServerCore, SessionCapabilitySet,
-    StorageCapabilitySet, TargetedEvent, WorldSnapshot,
+    GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId, PluginGenerationId,
+    SessionCapabilitySet, StorageCapabilitySet, TargetedEvent, WorldSnapshot,
 };
-use mc_proto_common::StorageError;
+use mc_storage_common::StorageError;
+use revy_voxel_core::{GameplayJournal, GameplayJournalApplyResult, ServerCore};
 use std::any::Any;
 use std::path::Path;
 use std::path::PathBuf;
@@ -508,5 +508,5 @@ pub trait RuntimePluginHost: Send + Sync {
 
     fn managed_protocol_ids(&self) -> Vec<String>;
 
-    fn status(&self) -> PluginHostStatusSnapshot;
+    fn status(&self) -> PluginHostInventoryStatusSnapshot;
 }

@@ -26,7 +26,10 @@ impl RustAuthPlugin for BedrockOfflineAuthPlugin {
         auth_capabilities(&[AuthCapability::RuntimeReload])
     }
 
-    fn authenticate_offline(&self, _username: &str) -> Result<mc_plugin_sdk_rust::PlayerId, String> {
+    fn authenticate_offline(
+        &self,
+        _username: &str,
+    ) -> Result<mc_plugin_sdk_rust::PlayerId, String> {
         Err("bedrock offline auth plugin only handles bedrock auth requests".to_string())
     }
 

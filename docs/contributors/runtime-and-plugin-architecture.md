@@ -2,6 +2,8 @@
 
 この文書は、runtime / plugin host / session lifecycle の責務境界をまとめた正本です。ここでは `reload runtime <mode>` を前提に、`core` を reloadable boundary の内側へ移した現在の architecture を説明します。operator 向けの config key や command surface は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)、reload の内部意味論は [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)、`core` migration の詳細は [`core-reload-runtime-design.md`](core-reload-runtime-design.md) を参照してください。
 
+この文書は current implementation の説明です。target crate graph と boundary migration の正本は [`adr-boundary-redesign.md`](adr-boundary-redesign.md) を参照してください。
+
 ## レイヤー構成
 
 1. `apps/revy-server`

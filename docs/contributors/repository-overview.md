@@ -13,6 +13,8 @@
 
 この順で「どこが入口で、何が package 済み前提で、どこまでが公開 API か」を先に掴むと読みやすくなります。
 
+現在の実装形と、これから寄せる target crate graph は同じではありません。next-step の boundary redesign と migration guardrail は [`adr-boundary-redesign.md`](adr-boundary-redesign.md) を正本として扱ってください。
+
 ## workspace map
 
 | パス | 役割 |
@@ -88,6 +90,8 @@
   [`core-command-event-flow.md`](core-command-event-flow.md)
 - reload の意味論と failure policy
   [`reload-semantics-and-boundaries.md`](reload-semantics-and-boundaries.md)
+- target crate graph と boundary migration guardrail
+  [`adr-boundary-redesign.md`](adr-boundary-redesign.md)
 
 ## テストの入口
 
@@ -99,3 +103,13 @@
   `crates/testing/mc-proto-test-support`
 
 packaged integration では `xtask package-all-plugins` 系の成果物を source of truth とし、in-process fixture は `mc-plugin-host-test-support` 側に寄せています。
+
+## Boundary Guardrail
+
+boundary redesign の current debt と新規 drift を固定する check は次です。
+
+```bash
+cargo run -p xtask -- check-boundaries
+```
+
+この command は `tools/xtask/boundary-check.toml` を読み、forbidden dependency edge と canonical symbol owner / tracked duplicate symbol を検証します。大きな crate split や type move の前後では、`cargo check` より先にこれを見ると安全です。

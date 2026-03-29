@@ -7,27 +7,27 @@ fn in_process_admin_surface_profile_declares_console_resources() -> Result<(), R
         .gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-canonical".to_string(),
             manifest: canonical_gameplay_entrypoints().manifest,
-            api: canonical_gameplay_entrypoints().api,
+            factory: canonical_gameplay_entrypoints().factory,
         })
         .gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-readonly".to_string(),
             manifest: readonly_gameplay_entrypoints().manifest,
-            api: readonly_gameplay_entrypoints().api,
+            factory: readonly_gameplay_entrypoints().factory,
         })
         .storage_raw(InProcessStoragePlugin {
             plugin_id: "storage-je-anvil-1_7_10".to_string(),
             manifest: storage_entrypoints().manifest,
-            api: storage_entrypoints().api,
+            factory: storage_entrypoints().factory,
         })
         .auth_raw(InProcessAuthPlugin {
             plugin_id: "auth-offline".to_string(),
             manifest: offline_auth_entrypoints().manifest,
-            api: offline_auth_entrypoints().api,
+            factory: offline_auth_entrypoints().factory,
         })
         .admin_surface_raw(InProcessAdminSurfacePlugin {
             plugin_id: "admin-console".to_string(),
             manifest: console_admin_surface_entrypoints().manifest,
-            api: console_admin_surface_entrypoints().api,
+            factory: console_admin_surface_entrypoints().factory,
         })
         .build();
     let runtime_selection = RuntimeSelectionConfig {

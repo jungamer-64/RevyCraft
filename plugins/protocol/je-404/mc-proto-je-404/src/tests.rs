@@ -1,14 +1,13 @@
 use super::{JE_404_ADAPTER_ID, Je404Adapter, PROTOCOL_VERSION_1_13_2, VERSION_NAME_1_13_2};
 use mc_proto_common::{
-    ConnectionPhase, Edition, HandshakeProbe, LoginRequest, PacketReader, PacketWriter,
-    PlayEncodingContext, PlaySyncAdapter, ProtocolDescriptor, ProtocolSessionSnapshot,
-    ServerListStatus, SessionAdapter, StatusRequest, TransportKind, WireFormatKind,
+    ConnectionId, ConnectionPhase, CoreCommand, CoreEvent, Edition, EntityId, HandshakeProbe,
+    LoginRequest, PacketReader, PacketWriter, PlayEncodingContext, PlaySyncAdapter, PlayerId,
+    PlayerSnapshot, ProtocolDescriptor, ProtocolSessionSnapshot, RuntimeCommand,
+    ServerListStatus, SessionAdapter, SessionCommand, StatusRequest, TransportKind,
+    WireFormatKind,
 };
 use mc_proto_je_common::__version_support::{
     blocks::flattened_block_state_id_1_13_2, inventory::read_slot,
-};
-use revy_voxel_core::{
-    CoreCommand, CoreEvent, EntityId, PlayerId, PlayerSnapshot, RuntimeCommand, SessionCommand,
 };
 use revy_voxel_model::{
     BlockPos, DimensionId, DroppedItemSnapshot, InteractionHand, InventoryClickButton,
@@ -63,7 +62,7 @@ fn player_snapshot(name: &str) -> PlayerSnapshot {
 
 fn decode_session(player_id: PlayerId) -> ProtocolSessionSnapshot {
     ProtocolSessionSnapshot {
-        connection_id: revy_voxel_core::ConnectionId(1),
+        connection_id: ConnectionId(1),
         phase: ConnectionPhase::Play,
         player_id: Some(player_id),
         entity_id: None,
@@ -72,7 +71,7 @@ fn decode_session(player_id: PlayerId) -> ProtocolSessionSnapshot {
 
 fn encode_session(context: &PlayEncodingContext) -> ProtocolSessionSnapshot {
     ProtocolSessionSnapshot {
-        connection_id: revy_voxel_core::ConnectionId(1),
+        connection_id: ConnectionId(1),
         phase: ConnectionPhase::Play,
         player_id: Some(context.player_id),
         entity_id: Some(context.entity_id),
@@ -182,7 +181,7 @@ fn encodes_status_and_offhand_inventory_events() {
             },
             &PlayEncodingContext {
                 player_id: player.id,
-                entity_id: revy_voxel_core::EntityId(1),
+                entity_id: EntityId(1),
             },
         )
         .expect("offhand update should encode");
@@ -225,12 +224,12 @@ fn encodes_player_spawn_with_player_info() {
     let packets = adapter
         .encode_play_event_for(
             &CoreEvent::EntitySpawned {
-                entity_id: revy_voxel_core::EntityId(7),
+                entity_id: EntityId(7),
                 player: player.clone(),
             },
             &PlayEncodingContext {
                 player_id: player.id,
-                entity_id: revy_voxel_core::EntityId(7),
+                entity_id: EntityId(7),
             },
         )
         .expect("spawn should encode");
@@ -336,7 +335,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
             },
             &PlayEncodingContext {
                 player_id,
-                entity_id: revy_voxel_core::EntityId(1),
+                entity_id: EntityId(1),
             },
         )
         .expect("confirm transaction should encode");
@@ -353,7 +352,7 @@ fn decodes_window_zero_clicks_and_encodes_cursor_sync() {
             },
             &PlayEncodingContext {
                 player_id,
-                entity_id: revy_voxel_core::EntityId(1),
+                entity_id: EntityId(1),
             },
         )
         .expect("cursor update should encode");
@@ -381,7 +380,7 @@ fn encodes_block_change_packets() {
             },
             &PlayEncodingContext {
                 player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"block-change-1122")),
-                entity_id: revy_voxel_core::EntityId(1),
+                entity_id: EntityId(1),
             },
         )
         .expect("block change should encode");
@@ -412,7 +411,7 @@ fn encodes_and_decodes_container_window_packets() {
             },
             &PlayEncodingContext {
                 player_id,
-                entity_id: revy_voxel_core::EntityId(1),
+                entity_id: EntityId(1),
             },
         )
         .expect("open window should encode");
@@ -434,7 +433,7 @@ fn encodes_and_decodes_container_window_packets() {
             &CoreEvent::ContainerClosed { window_id: 2 },
             &PlayEncodingContext {
                 player_id,
-                entity_id: revy_voxel_core::EntityId(1),
+                entity_id: EntityId(1),
             },
         )
         .expect("close window should encode");
@@ -464,7 +463,7 @@ fn chest_packets_use_expected_window_type_and_slot_mapping() {
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"chest-1122"));
     let context = PlayEncodingContext {
         player_id,
-        entity_id: revy_voxel_core::EntityId(1),
+        entity_id: EntityId(1),
     };
 
     let packets = adapter
@@ -529,7 +528,7 @@ fn furnace_packets_use_expected_window_type_slot_mapping_and_properties() {
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"furnace-1122"));
     let context = PlayEncodingContext {
         player_id,
-        entity_id: revy_voxel_core::EntityId(1),
+        entity_id: EntityId(1),
     };
 
     let packets = adapter

@@ -69,8 +69,14 @@ pub(crate) async fn connect_and_login_java_client_until(
     .await?;
     write_packet(&mut stream, codec, &login_start(username)).await?;
     let mut buffer = BytesMut::new();
-    let packet =
-        read_until_java_packet(&mut stream, codec, &mut buffer, protocol, wanted_packet).await?;
+    let packet = read_until_java_packet_preserving_nonmatching(
+        &mut stream,
+        codec,
+        &mut buffer,
+        protocol,
+        wanted_packet,
+    )
+    .await?;
     Ok((stream, buffer, packet))
 }
 
@@ -111,7 +117,6 @@ pub(crate) async fn read_packet(
 enum PacketWaitObservation {
     Matched,
     Related(String),
-    Unrelated,
 }
 
 fn packet_wait_timeout_from_attempts(max_attempts: usize) -> Duration {
@@ -153,7 +158,7 @@ async fn read_until_matching_packet_until<F>(
     buffer: &mut BytesMut,
     deadline: Instant,
     target: &str,
-    preserve_related_packets: bool,
+    preserve_nonmatching_packets: bool,
     mut classify: F,
 ) -> Result<Vec<u8>, RuntimeError>
 where
@@ -185,11 +190,10 @@ where
             }
             PacketWaitObservation::Related(summary) => {
                 last_related = Some(summary);
-                if preserve_related_packets {
+                if preserve_nonmatching_packets {
                     preserved_related_packets.push(packet);
                 }
             }
-            PacketWaitObservation::Unrelated => {}
         }
     }
 }
@@ -201,6 +205,25 @@ async fn read_until_packet_id_with_timeout(
     wanted_packet_id: i32,
     timeout: Duration,
 ) -> Result<Vec<u8>, RuntimeError> {
+    read_until_packet_id_with_timeout_and_policy(
+        stream,
+        codec,
+        buffer,
+        wanted_packet_id,
+        timeout,
+        false,
+    )
+    .await
+}
+
+async fn read_until_packet_id_with_timeout_and_policy(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    wanted_packet_id: i32,
+    timeout: Duration,
+    preserve_nonmatching_packets: bool,
+) -> Result<Vec<u8>, RuntimeError> {
     let target = format!("packet id 0x{wanted_packet_id:02x}");
     read_until_matching_packet_until(
         stream,
@@ -208,7 +231,7 @@ async fn read_until_packet_id_with_timeout(
         buffer,
         Instant::now() + timeout,
         &target,
-        false,
+        preserve_nonmatching_packets,
         |packet| {
             let observed_packet_id = packet_id(packet);
             if observed_packet_id == wanted_packet_id {
@@ -251,6 +274,27 @@ pub(crate) async fn read_until_java_packet(
     read_until_packet_id(stream, codec, buffer, wanted_packet_id, 1).await
 }
 
+pub(crate) async fn read_until_java_packet_preserving_nonmatching(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    packet: TestJavaPacket,
+) -> Result<Vec<u8>, RuntimeError> {
+    let wanted_packet_id = protocol
+        .clientbound_packet_id(packet)
+        .ok_or_else(|| RuntimeError::Config(format!("packet {packet:?} is unsupported")))?;
+    read_until_packet_id_with_timeout_and_policy(
+        stream,
+        codec,
+        buffer,
+        wanted_packet_id,
+        packet_wait_timeout_from_attempts(1),
+        true,
+    )
+    .await
+}
+
 pub(crate) async fn read_until_set_slot(
     stream: &mut tokio::net::TcpStream,
     codec: &MinecraftWireCodec,
@@ -270,6 +314,84 @@ pub(crate) async fn read_until_set_slot(
         packet_wait_timeout_from_attempts(max_attempts),
     )
     .await
+}
+
+pub(crate) async fn read_until_set_slot_item(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    wanted_window_id: i8,
+    wanted_slot: i16,
+    wanted_item: Option<(i16, u8, i16)>,
+    max_attempts: usize,
+) -> Result<Vec<u8>, RuntimeError> {
+    let deadline = Instant::now() + packet_wait_timeout_from_attempts(max_attempts);
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(RuntimeError::Config(format!(
+                "deadline expired waiting for set slot window {wanted_window_id} slot {wanted_slot} item {wanted_item:?}"
+            )));
+        };
+        let packet = read_until_set_slot_with_timeout(
+            stream,
+            codec,
+            buffer,
+            protocol,
+            wanted_window_id,
+            wanted_slot,
+            remaining,
+        )
+        .await?;
+        let (_, _, item) = decode_set_slot(protocol, &packet)?;
+        if item == wanted_item {
+            return Ok(packet);
+        }
+    }
+}
+
+pub(crate) async fn read_until_window_items_slot_item(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    wanted_slot: i16,
+    wanted_item: Option<(i16, u8, i16)>,
+    max_attempts: usize,
+) -> Result<Vec<u8>, RuntimeError> {
+    let deadline = Instant::now() + packet_wait_timeout_from_attempts(max_attempts);
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(RuntimeError::Config(format!(
+                "deadline expired waiting for window items slot {wanted_slot} item {wanted_item:?}"
+            )));
+        };
+        let packet = read_until_packet_id_with_timeout_and_policy(
+            stream,
+            codec,
+            buffer,
+            protocol
+                .clientbound_packet_id(TestJavaPacket::WindowItems)
+                .ok_or_else(|| {
+                    RuntimeError::Config("window items packet is unsupported".to_string())
+                })?,
+            remaining,
+            true,
+        )
+        .await?;
+        let slot_item = window_items_slot(
+            protocol,
+            &packet,
+            usize::try_from(wanted_slot).map_err(|_| {
+                RuntimeError::Config(format!(
+                    "window items slot {wanted_slot} should be non-negative"
+                ))
+            })?,
+        )?;
+        if slot_item == wanted_item {
+            return Ok(packet);
+        }
+    }
 }
 
 pub(crate) async fn read_until_set_slot_with_timeout(
@@ -298,10 +420,45 @@ pub(crate) async fn read_until_set_slot_with_timeout(
             Ok((window_id, slot, item)) => PacketWaitObservation::Related(format!(
                 "set slot window {window_id} slot {slot} item {item:?}"
             )),
-            Err(_) => PacketWaitObservation::Unrelated,
+            Err(_) => {
+                PacketWaitObservation::Related(format!("packet id 0x{:02x}", packet_id(packet)))
+            }
         },
     )
     .await
+}
+
+pub(crate) async fn read_until_held_item_change(
+    stream: &mut tokio::net::TcpStream,
+    codec: &MinecraftWireCodec,
+    buffer: &mut BytesMut,
+    protocol: TestJavaProtocol,
+    wanted_slot: i8,
+    max_attempts: usize,
+) -> Result<Vec<u8>, RuntimeError> {
+    let deadline = Instant::now() + packet_wait_timeout_from_attempts(max_attempts);
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Err(RuntimeError::Config(format!(
+                "deadline expired waiting for held item change slot {wanted_slot}"
+            )));
+        };
+        let packet = read_until_packet_id_with_timeout(
+            stream,
+            codec,
+            buffer,
+            protocol
+                .clientbound_packet_id(TestJavaPacket::HeldItemChange)
+                .ok_or_else(|| {
+                    RuntimeError::Config("held item change packet is unsupported".to_string())
+                })?,
+            remaining,
+        )
+        .await?;
+        if held_item_from_packet_for_protocol(protocol, &packet)? == wanted_slot {
+            return Ok(packet);
+        }
+    }
 }
 
 pub(crate) async fn read_until_confirm_transaction(
@@ -313,28 +470,31 @@ pub(crate) async fn read_until_confirm_transaction(
     wanted_action_number: i16,
     max_attempts: usize,
 ) -> Result<Vec<u8>, RuntimeError> {
-    let max_attempts = max_attempts.max(64);
-    for _ in 0..max_attempts {
-        let packet = tokio::time::timeout(
-            Duration::from_millis(250),
-            read_packet(stream, codec, buffer),
-        )
-        .await
-        .map_err(|_| {
-            RuntimeError::Config(format!(
-                "timed out waiting for confirm transaction window {wanted_window_id} action {wanted_action_number}"
-            ))
-        })??;
-        if let Ok((window_id, action_number, _)) = decode_confirm_transaction(protocol, &packet)
-            && window_id == wanted_window_id
-            && action_number == wanted_action_number
-        {
-            return Ok(packet);
-        }
-    }
-    Err(RuntimeError::Config(format!(
-        "did not receive confirm transaction window {wanted_window_id} action {wanted_action_number}"
-    )))
+    let timeout = packet_wait_timeout_from_attempts(max_attempts.max(64));
+    let target =
+        format!("confirm transaction window {wanted_window_id} action {wanted_action_number}");
+    read_until_matching_packet_until(
+        stream,
+        codec,
+        buffer,
+        Instant::now() + timeout,
+        &target,
+        true,
+        |packet| match decode_confirm_transaction(protocol, packet) {
+            Ok((window_id, action_number, _))
+                if window_id == wanted_window_id && action_number == wanted_action_number =>
+            {
+                PacketWaitObservation::Matched
+            }
+            Ok((window_id, action_number, accepted)) => PacketWaitObservation::Related(format!(
+                "confirm transaction window {window_id} action {action_number} accepted {accepted}"
+            )),
+            Err(_) => {
+                PacketWaitObservation::Related(format!("packet id 0x{:02x}", packet_id(packet)))
+            }
+        },
+    )
+    .await
 }
 
 pub(crate) async fn read_until_window_property(
@@ -384,7 +544,9 @@ pub(crate) async fn read_until_window_property_with_timeout(
             Ok((window_id, property_id, value)) => PacketWaitObservation::Related(format!(
                 "window property window {window_id} property {property_id} value {value}"
             )),
-            Err(_) => PacketWaitObservation::Unrelated,
+            Err(_) => {
+                PacketWaitObservation::Related(format!("packet id 0x{:02x}", packet_id(packet)))
+            }
         },
     )
     .await
@@ -990,4 +1152,236 @@ pub(crate) async fn perform_online_login(
     let response = login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
     write_packet(stream, codec, &response).await?;
     Ok((TestClientEncryptionState::new(shared_secret), buffer))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_proto_common::PacketWriter;
+
+    fn encode_je340_set_slot(window_id: i8, slot: i16, item: Option<(i16, u8, i16)>) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(TestJavaProtocol::Je340.set_slot_packet_id());
+        writer.write_i8(window_id);
+        writer.write_i16(slot);
+        match item {
+            Some((item_id, count, damage)) => {
+                writer.write_i16(item_id);
+                writer.write_u8(count);
+                writer.write_i16(damage);
+                writer.write_u8(0);
+            }
+            None => writer.write_i16(-1),
+        }
+        writer.into_inner()
+    }
+
+    fn encode_je340_window_property(window_id: u8, property_id: i16, value: i16) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(
+            TestJavaProtocol::Je340
+                .clientbound_packet_id(TestJavaPacket::WindowProperty)
+                .expect("window property should be supported for JE340"),
+        );
+        writer.write_u8(window_id);
+        writer.write_i16(property_id);
+        writer.write_i16(value);
+        writer.into_inner()
+    }
+
+    fn encode_je340_confirm_transaction(
+        window_id: u8,
+        action_number: i16,
+        accepted: bool,
+    ) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(TestJavaProtocol::Je340.confirm_transaction_packet_id());
+        writer.write_u8(window_id);
+        writer.write_i16(action_number);
+        writer.write_bool(accepted);
+        writer.into_inner()
+    }
+
+    fn encode_je340_window_items(
+        window_id: u8,
+        slots: &[Option<(i16, u8, i16)>],
+    ) -> Vec<u8> {
+        let mut writer = PacketWriter::default();
+        writer.write_varint(
+            TestJavaProtocol::Je340
+                .clientbound_packet_id(TestJavaPacket::WindowItems)
+                .expect("window items should be supported for JE340"),
+        );
+        writer.write_u8(window_id);
+        writer.write_i16(i16::try_from(slots.len()).expect("test slots should fit"));
+        for slot in slots {
+            match slot {
+                Some((item_id, count, damage)) => {
+                    writer.write_i16(*item_id);
+                    writer.write_u8(*count);
+                    writer.write_i16(*damage);
+                    writer.write_u8(0);
+                }
+                None => writer.write_i16(-1),
+            }
+        }
+        writer.into_inner()
+    }
+
+    async fn connect_loopback_with_packets(
+        codec: &MinecraftWireCodec,
+        packets: Vec<Vec<u8>>,
+    ) -> Result<(tokio::net::TcpStream, BytesMut), RuntimeError> {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let addr = listener.local_addr()?;
+        let frames = packets
+            .into_iter()
+            .map(|packet| codec.encode_frame(&packet))
+            .collect::<Result<Vec<_>, _>>()?;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await?;
+            for frame in frames {
+                socket.write_all(&frame).await?;
+            }
+            socket.shutdown().await
+        });
+        let stream = tokio::net::TcpStream::connect(addr).await?;
+        server.await.map_err(|error| {
+            RuntimeError::Config(format!("test packet server join failed: {error}"))
+        })??;
+        Ok((stream, BytesMut::new()))
+    }
+
+    #[tokio::test]
+    async fn confirm_transaction_wait_preserves_earlier_set_slot_packets()
+    -> Result<(), RuntimeError> {
+        let codec = MinecraftWireCodec;
+        let (mut stream, mut buffer) = connect_loopback_with_packets(
+            &codec,
+            vec![
+                encode_je340_set_slot(1, 0, Some((20, 1, 0))),
+                encode_je340_confirm_transaction(1, 2, true),
+            ],
+        )
+        .await?;
+
+        let confirm = read_until_confirm_transaction(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            1,
+            2,
+            4,
+        )
+        .await?;
+        assert_eq!(
+            decode_confirm_transaction(TestJavaProtocol::Je340, &confirm)?,
+            (1, 2, true)
+        );
+
+        let set_slot = read_until_set_slot(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            1,
+            0,
+            4,
+        )
+        .await?;
+        assert_eq!(
+            decode_set_slot(TestJavaProtocol::Je340, &set_slot)?,
+            (1, 0, Some((20, 1, 0)))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_property_wait_preserves_earlier_set_slot_packets() -> Result<(), RuntimeError> {
+        let codec = MinecraftWireCodec;
+        let (mut stream, mut buffer) = connect_loopback_with_packets(
+            &codec,
+            vec![
+                encode_je340_set_slot(1, 0, Some((20, 1, 0))),
+                encode_je340_window_property(1, 0, 300),
+            ],
+        )
+        .await?;
+
+        let property = read_until_window_property_with_timeout(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            1,
+            0,
+            Duration::from_millis(250),
+        )
+        .await?;
+        assert_eq!(
+            decode_window_property(TestJavaProtocol::Je340, &property)?,
+            (1, 0, 300)
+        );
+
+        let set_slot = read_until_set_slot_with_timeout(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            1,
+            0,
+            Duration::from_millis(250),
+        )
+        .await?;
+        assert_eq!(
+            decode_set_slot(TestJavaProtocol::Je340, &set_slot)?,
+            (1, 0, Some((20, 1, 0)))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_items_wait_preserves_earlier_set_slot_packets() -> Result<(), RuntimeError> {
+        let codec = MinecraftWireCodec;
+        let (mut stream, mut buffer) = connect_loopback_with_packets(
+            &codec,
+            vec![
+                encode_je340_set_slot(1, 5, Some((20, 1, 0))),
+                encode_je340_window_items(1, &[None, Some((5, 1, 0))]),
+            ],
+        )
+        .await?;
+
+        let window_items = read_until_window_items_slot_item(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            1,
+            Some((5, 1, 0)),
+            4,
+        )
+        .await?;
+        assert_eq!(
+            window_items_slot(TestJavaProtocol::Je340, &window_items, 1)?,
+            Some((5, 1, 0))
+        );
+
+        let set_slot = read_until_set_slot(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je340,
+            1,
+            5,
+            4,
+        )
+        .await?;
+        assert_eq!(
+            decode_set_slot(TestJavaProtocol::Je340, &set_slot)?,
+            (1, 5, Some((20, 1, 0)))
+        );
+        Ok(())
+    }
 }

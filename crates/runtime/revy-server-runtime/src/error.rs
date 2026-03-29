@@ -12,7 +12,7 @@ pub enum RuntimeError {
     #[error("protocol error: {0}")]
     Protocol(#[from] ProtocolError),
     #[error("storage error: {0}")]
-    Storage(#[from] mc_proto_common::StorageError),
+    Storage(#[from] mc_storage_common::StorageError),
     #[error("auth error: {0}")]
     Auth(String),
     #[error("unsupported configuration: {0}")]
@@ -42,7 +42,6 @@ impl From<revy_server_config::ServerConfigError> for RuntimeError {
     fn from(value: revy_server_config::ServerConfigError) -> Self {
         match value {
             revy_server_config::ServerConfigError::Io(error) => Self::Io(error),
-            revy_server_config::ServerConfigError::PluginHost(error) => Self::from(error),
             revy_server_config::ServerConfigError::Unsupported(message) => {
                 Self::Unsupported(message)
             }

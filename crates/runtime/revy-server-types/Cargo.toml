@@ -1,0 +1,18 @@
+[package]
+name = "revy-server-types"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Canonical operator-facing runtime/admin DTOs for the RevyCraft workspace."
+
+[dependencies]
+mc-proto-common = { path = "../../protocol/mc-proto-common" }
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
+serde.workspace = true
+
+[lints]
+workspace = true

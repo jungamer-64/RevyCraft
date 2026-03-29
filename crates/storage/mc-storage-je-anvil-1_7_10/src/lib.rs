@@ -7,13 +7,15 @@ mod region;
 #[cfg(test)]
 mod tests;
 
-use mc_proto_common::{StorageAdapter, StorageError, WorldSnapshot};
+use mc_storage_common::{StorageAdapter, StorageError};
+use revy_voxel_semantic::WorldSnapshot;
 use std::fs;
 use std::path::Path;
 
 const LEVEL_DAT: &str = "level.dat";
 const PLAYERDATA_DIR: &str = "playerdata";
 const REGION_DIR: &str = "region";
+pub const JE_1_7_10_STORAGE_PROFILE_ID: &str = "je-anvil-1_7_10";
 
 #[derive(Default)]
 pub struct Je1710StorageAdapter;

@@ -188,15 +188,19 @@ async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
         decode_set_slot(TestJavaProtocol::Je5, &slot_resync)?,
         (0, 36, None)
     );
-    let held_slot = read_until_java_packet(
+    let held_slot = read_until_held_item_change(
         &mut stream,
         &codec,
         &mut buffer,
         TestJavaProtocol::Je5,
-        TestJavaPacket::HeldItemChange,
+        0,
+        16,
     )
     .await?;
-    assert_eq!(held_item_from_packet(&held_slot)?, 0);
+    assert_eq!(
+        held_item_from_packet_for_protocol(TestJavaProtocol::Je5, &held_slot)?,
+        0
+    );
     let cursor_resync = read_until_set_slot(
         &mut stream,
         &codec,

@@ -12,7 +12,7 @@ pub enum PluginHostError {
     #[error("protocol error: {0}")]
     Protocol(#[from] ProtocolError),
     #[error("storage error: {0}")]
-    Storage(#[from] mc_proto_common::StorageError),
+    Storage(#[from] mc_storage_common::StorageError),
     #[error("auth error: {0}")]
     Auth(String),
     #[error("unsupported configuration: {0}")]

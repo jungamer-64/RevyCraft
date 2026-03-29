@@ -370,7 +370,7 @@ impl RuntimeKernel {
                 self.set_dirty(false).await;
                 Ok(())
             }
-            Err(mc_proto_common::StorageError::Plugin(message)) => {
+            Err(mc_storage_common::StorageError::Plugin(message)) => {
                 let action = reload_host.map_or(PluginFailureAction::FailFast, |reload_host| {
                     reload_host.handle_runtime_failure(
                         PluginKind::Storage,
@@ -392,7 +392,7 @@ impl RuntimeKernel {
                         self.storage_profile.plugin_id()
                     ))),
                     PluginFailureAction::Quarantine => Err(RuntimeError::Storage(
-                        mc_proto_common::StorageError::Plugin(message),
+                        mc_storage_common::StorageError::Plugin(message),
                     )),
                 }
             }
@@ -547,7 +547,7 @@ mod tests {
     use super::*;
     use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
     use mc_plugin_host::PluginHostError;
-    use mc_proto_common::StorageError;
+    use mc_storage_common::StorageError;
     use revy_voxel_core::{
         ConnectionId, CoreConfig, EntityId, EventTarget, GameplayCapabilitySet, GameplayCommand,
         GameplayJournal, GameplayProfileId, GameplayTransaction, PlayerId, ProtocolCapabilitySet,

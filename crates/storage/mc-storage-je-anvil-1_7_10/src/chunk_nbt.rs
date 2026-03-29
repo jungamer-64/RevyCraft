@@ -2,11 +2,11 @@ use super::nbt::{
     NbtTag, as_compound, byte_array_field, byte_field, compound_field, int_field, list_field,
     short_field, string_field,
 };
-use mc_proto_common::StorageError;
 use mc_proto_je_common::__version_support::{
     blocks::{legacy_block, legacy_item, semantic_block, semantic_item},
     chunks::get_nibble,
 };
+use mc_storage_common::StorageError;
 use revy_voxel_model::{BlockPos, ChunkColumn, ChunkPos, ItemStack, expand_block_index};
 use revy_voxel_rules::{
     BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,

@@ -11,9 +11,10 @@ description = "Stable C ABI and binary envelope contract for RevyCraft runtime p
 
 [dependencies]
 revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
-revy-voxel-core = { path = "../../core/revy-voxel-core" }
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 revy-voxel-model = { path = "../../model/revy-voxel-model" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
+revy-server-types = { path = "../../runtime/revy-server-types" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

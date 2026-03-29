@@ -1700,9 +1700,10 @@ version = "0.1.0"
 dependencies = [
  "mc-content-canonical",
  "mc-proto-common",
- "revy-voxel-core",
+ "revy-server-types",
  "revy-voxel-model",
  "revy-voxel-rules",
+ "revy-voxel-semantic",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1811,6 +1812,8 @@ dependencies = [
  "mc-proto-je-404",
  "mc-proto-je-47",
  "mc-proto-je-5",
+ "mc-storage-common",
+ "revy-server-types",
  "revy-voxel-core",
  "serde",
  "tempfile",
@@ -1909,6 +1912,7 @@ dependencies = [
  "bytes",
  "mc-plugin-api",
  "mc-proto-common",
+ "mc-storage-common",
  "revy-voxel-model",
  "revy-voxel-rules",
  "serde",
@@ -1923,7 +1927,7 @@ dependencies = [
  "mc-content-canonical",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
- "mc-proto-common",
+ "mc-storage-common",
  "revy-voxel-model",
  "revy-voxel-rules",
  "tempfile",
@@ -1936,8 +1940,8 @@ version = "0.1.0"
 dependencies = [
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
- "mc-proto-common",
- "mc-proto-je-5",
+ "mc-storage-common",
+ "mc-storage-je-anvil-1_7_10",
 ]
 
 [[package]]
@@ -1960,7 +1964,6 @@ dependencies = [
  "mc-proto-be-common",
  "mc-proto-common",
  "nbtx",
- "revy-voxel-core",
  "revy-voxel-model",
  "revy-voxel-rules",
  "serde",
@@ -1978,9 +1981,9 @@ dependencies = [
  "mc-content-canonical",
  "mc-proto-common",
  "num-traits",
- "revy-voxel-core",
  "revy-voxel-model",
  "revy-voxel-rules",
+ "revy-voxel-semantic",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1999,7 +2002,8 @@ name = "mc-proto-common"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "revy-voxel-core",
+ "mc-storage-common",
+ "revy-voxel-semantic",
  "serde",
  "thiserror 2.0.18",
 ]
@@ -2012,7 +2016,6 @@ dependencies = [
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
- "revy-voxel-core",
  "revy-voxel-model",
  "revy-voxel-rules",
  "uuid",
@@ -2026,7 +2029,6 @@ dependencies = [
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
- "revy-voxel-core",
  "revy-voxel-model",
  "revy-voxel-rules",
  "uuid",
@@ -2040,7 +2042,6 @@ dependencies = [
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
- "revy-voxel-core",
  "revy-voxel-model",
  "revy-voxel-rules",
  "uuid",
@@ -2055,7 +2056,6 @@ dependencies = [
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
- "revy-voxel-core",
  "revy-voxel-model",
  "revy-voxel-rules",
  "tempfile",
@@ -2070,9 +2070,9 @@ dependencies = [
  "mc-content-canonical",
  "mc-proto-common",
  "num-traits",
- "revy-voxel-core",
  "revy-voxel-model",
  "revy-voxel-rules",
+ "revy-voxel-semantic",
  "serde",
  "serde_json",
 ]
@@ -2083,6 +2083,30 @@ version = "0.1.0"
 dependencies = [
  "mc-proto-common",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "mc-storage-common"
+version = "0.1.0"
+dependencies = [
+ "revy-voxel-semantic",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "mc-storage-je-anvil-1_7_10"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "mc-content-canonical",
+ "mc-proto-je-common",
+ "mc-storage-common",
+ "revy-voxel-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
+ "revy-voxel-semantic",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -3007,7 +3031,7 @@ name = "revy-server-config"
 version = "0.1.0"
 dependencies = [
  "mc-plugin-api",
- "mc-plugin-host",
+ "revy-server-types",
  "serde",
  "thiserror 2.0.18",
  "toml",
@@ -3055,9 +3079,12 @@ dependencies = [
  "mc-proto-je-5",
  "mc-proto-je-common",
  "mc-proto-test-support",
+ "mc-storage-common",
+ "mc-storage-je-anvil-1_7_10",
  "num-bigint",
  "rak-rs",
  "revy-server-config",
+ "revy-server-types",
  "revy-voxel-core",
  "revy-voxel-model",
  "revy-voxel-rules",
@@ -3076,6 +3103,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "revy-server-types"
+version = "0.1.0"
+dependencies = [
+ "mc-proto-common",
+ "revy-voxel-semantic",
+ "serde",
+]
+
+[[package]]
 name = "revy-voxel-core"
 version = "0.1.0"
 dependencies = [
@@ -3084,6 +3120,7 @@ dependencies = [
  "revy-core",
  "revy-voxel-model",
  "revy-voxel-rules",
+ "revy-voxel-semantic",
  "serde",
  "serde_json",
  "uuid",
@@ -3102,6 +3139,16 @@ name = "revy-voxel-rules"
 version = "0.1.0"
 dependencies = [
  "revy-voxel-model",
+ "serde",
+]
+
+[[package]]
+name = "revy-voxel-semantic"
+version = "0.1.0"
+dependencies = [
+ "revy-core",
+ "revy-voxel-model",
+ "revy-voxel-rules",
  "serde",
 ]
 

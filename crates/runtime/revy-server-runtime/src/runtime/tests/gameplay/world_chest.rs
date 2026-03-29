@@ -61,7 +61,7 @@ async fn world_backed_chest_place_open_and_persist_across_restart() -> Result<()
     )
     .await?;
 
-    let open_window = read_until_java_packet(
+    let open_window = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,
@@ -171,7 +171,7 @@ async fn world_backed_chest_place_open_and_persist_across_restart() -> Result<()
         &player_block_placement_1_12(2, 4, 0, 1, 0),
     )
     .await?;
-    let open_window = read_until_java_packet(
+    let open_window = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,

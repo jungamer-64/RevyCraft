@@ -89,7 +89,7 @@ pub struct AdminSurfacePluginStatusSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PluginHostStatusSnapshot {
+pub struct PluginHostInventoryStatusSnapshot {
     pub failure_matrix: PluginFailureMatrix,
     pub pending_fatal_error: Option<String>,
     pub protocols: Vec<ProtocolPluginStatusSnapshot>,
@@ -99,7 +99,7 @@ pub struct PluginHostStatusSnapshot {
     pub admin_surface: Vec<AdminSurfacePluginStatusSnapshot>,
 }
 
-impl PluginHostStatusSnapshot {
+impl PluginHostInventoryStatusSnapshot {
     #[must_use]
     pub fn active_quarantine_count(&self) -> usize {
         self.protocols
@@ -176,7 +176,7 @@ fn artifact_quarantine_status_snapshot(
 
 impl PluginHost {
     #[must_use]
-    pub fn status(&self) -> PluginHostStatusSnapshot {
+    pub fn status(&self) -> PluginHostInventoryStatusSnapshot {
         let mut protocols = self
             .protocols
             .lock()
@@ -340,7 +340,7 @@ impl PluginHost {
             .collect::<Vec<_>>();
         admin_surface.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
 
-        PluginHostStatusSnapshot {
+        PluginHostInventoryStatusSnapshot {
             failure_matrix: self.failures.matrix(),
             pending_fatal_error: self.failures.pending_fatal_message(),
             protocols,

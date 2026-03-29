@@ -148,15 +148,19 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
     assert_java_set_slot(TestJavaProtocol::Je5, &set_slot, 36, Some((20, 64, 0)))?;
 
     write_packet(&mut stream, &codec, &held_item_change(4)).await?;
-    let held_slot_packet = read_until_java_packet(
+    let held_slot_packet = read_until_held_item_change(
         &mut stream,
         &codec,
         &mut buffer,
         TestJavaProtocol::Je5,
-        TestJavaPacket::HeldItemChange,
+        4,
+        16,
     )
     .await?;
-    assert_eq!(held_item_from_packet(&held_slot_packet)?, 4);
+    assert_eq!(
+        held_item_from_packet_for_protocol(TestJavaProtocol::Je5, &held_slot_packet)?,
+        4
+    );
 
     server.shutdown().await?;
 
@@ -167,12 +171,13 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
     .await?;
     let addr = listener_addr(&restarted);
     let (mut stream, mut buffer, window_items) = login_legacy(addr, "alpha").await?;
-    let held_item = read_until_java_packet(
+    let held_item = read_until_held_item_change(
         &mut stream,
         &codec,
         &mut buffer,
         TestJavaProtocol::Je5,
-        TestJavaPacket::HeldItemChange,
+        4,
+        16,
     )
     .await?;
 
@@ -180,7 +185,10 @@ async fn creative_inventory_and_selected_slot_persist_across_restart() -> Result
         window_items_slot(TestJavaProtocol::Je5, &window_items, 36)?,
         Some((20, 64, 0))
     );
-    assert_eq!(held_item_from_packet(&held_item)?, 4);
+    assert_eq!(
+        held_item_from_packet_for_protocol(TestJavaProtocol::Je5, &held_item)?,
+        4
+    );
 
     restarted.shutdown().await
 }
@@ -623,15 +631,8 @@ async fn two_players_can_see_movement_and_restart_persists_position() -> Result<
         &player_position_look(32.5, 4.0, 0.5, 90.0, 0.0),
     )
     .await?;
-    let mut saw_teleport = false;
-    for _ in 0..4 {
-        let packet = read_packet(&mut first, &codec, &mut first_buffer).await?;
-        if packet_id(&packet) == 0x18 {
-            saw_teleport = true;
-            break;
-        }
-    }
-    assert!(saw_teleport);
+    let teleport = read_until_packet_id(&mut first, &codec, &mut first_buffer, 0x18, 16).await?;
+    assert_eq!(packet_id(&teleport), 0x18);
     second.shutdown().await.ok();
     first.shutdown().await.ok();
     server.shutdown().await?;

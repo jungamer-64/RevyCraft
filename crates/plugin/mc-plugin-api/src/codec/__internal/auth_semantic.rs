@@ -6,7 +6,7 @@ use crate::codec::__internal::shared::{
 use crate::codec::auth::{
     AuthDescriptor, AuthMode, AuthOpCode, AuthRequest, AuthResponse, BedrockAuthResult,
 };
-use revy_voxel_core::AuthProfileId;
+use revy_voxel_semantic::AuthProfileId;
 
 pub(crate) fn encode_auth_request_payload(
     encoder: &mut Encoder,

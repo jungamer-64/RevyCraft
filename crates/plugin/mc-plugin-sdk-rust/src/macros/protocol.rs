@@ -150,8 +150,7 @@ macro_rules! delegate_protocol_adapter {
                 &self,
                 session: &mc_proto_common::ProtocolSessionSnapshot,
                 frame: &[u8],
-            ) -> Result<Option<$crate::RuntimeCommand>, mc_proto_common::ProtocolError>
-            {
+            ) -> Result<Option<$crate::RuntimeCommand>, mc_proto_common::ProtocolError> {
                 self.$field.decode_play(session, frame)
             }
 

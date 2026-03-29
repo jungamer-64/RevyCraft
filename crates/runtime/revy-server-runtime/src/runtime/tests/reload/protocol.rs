@@ -50,15 +50,19 @@ async fn protocol_reload_updates_generation_and_preserves_live_sessions() -> Res
     );
 
     write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
-    let held_item = read_until_java_packet(
+    let held_item = read_until_held_item_change(
         &mut alpha,
         &codec,
         &mut alpha_buffer,
         TestJavaProtocol::Je5,
-        TestJavaPacket::HeldItemChange,
+        4,
+        16,
     )
     .await?;
-    assert_eq!(held_item_from_packet(&held_item)?, 4);
+    assert_eq!(
+        held_item_from_packet_for_protocol(TestJavaProtocol::Je5, &held_item)?,
+        4
+    );
 
     server.shutdown().await
 }
@@ -167,16 +171,17 @@ async fn artifacts_reload_staging_does_not_block_live_session_commands() -> Resu
     );
 
     write_packet(&mut alpha, &codec, &held_item_change(5)).await?;
-    let held_item = read_until_java_packet(
+    let held_item = read_until_held_item_change(
         &mut alpha,
         &codec,
         &mut alpha_buffer,
         TestJavaProtocol::Je5,
-        TestJavaPacket::HeldItemChange,
+        5,
+        16,
     )
     .await?;
     assert_eq!(
-        held_item_from_packet(&held_item)?,
+        held_item_from_packet_for_protocol(TestJavaProtocol::Je5, &held_item)?,
         5,
         "live session commands should continue while reload staging is paused outside the consistency gate"
     );
@@ -233,15 +238,19 @@ async fn consistency_gate_write_lock_blocks_session_commands() -> Result<(), Run
     .await?;
     drop(consistency_guard);
 
-    let held_item = read_until_java_packet(
+    let held_item = read_until_held_item_change(
         &mut alpha,
         &codec,
         &mut alpha_buffer,
         TestJavaProtocol::Je5,
-        TestJavaPacket::HeldItemChange,
+        4,
+        16,
     )
     .await?;
-    assert_eq!(held_item_from_packet(&held_item)?, 4);
+    assert_eq!(
+        held_item_from_packet_for_protocol(TestJavaProtocol::Je5, &held_item)?,
+        4
+    );
 
     server.shutdown().await
 }
@@ -293,15 +302,19 @@ async fn protocol_reload_failure_keeps_existing_generation() -> Result<(), Runti
     );
 
     write_packet(&mut alpha, &codec, &held_item_change(6)).await?;
-    let held_item = read_until_java_packet(
+    let held_item = read_until_held_item_change(
         &mut alpha,
         &codec,
         &mut alpha_buffer,
         TestJavaProtocol::Je5,
-        TestJavaPacket::HeldItemChange,
+        6,
+        16,
     )
     .await?;
-    assert_eq!(held_item_from_packet(&held_item)?, 6);
+    assert_eq!(
+        held_item_from_packet_for_protocol(TestJavaProtocol::Je5, &held_item)?,
+        6
+    );
 
     server.shutdown().await
 }

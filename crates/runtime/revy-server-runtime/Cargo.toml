@@ -22,11 +22,13 @@ libloading.workspace = true
 revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
 mc-content-canonical = { path = "../../content/mc-content-canonical" }
 revy-voxel-core = { path = "../../core/revy-voxel-core" }
+mc-storage-common = { path = "../../storage/mc-storage-common" }
 mc-plugin-api = { path = "../../plugin/mc-plugin-api" }
 mc-plugin-host = { path = "../../plugin/mc-plugin-host" }
 mc-proto-be-common = { path = "../../protocol/mc-proto-be-common" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
 revy-server-config = { path = "../revy-server-config" }
+revy-server-types = { path = "../revy-server-types" }
 num-bigint.workspace = true
 rsa.workspace = true
 serde.workspace = true
@@ -52,6 +54,7 @@ mc-plugin-proto-je-340 = { path = "../../../plugins/protocol/je-340/mc-plugin-pr
 mc-plugin-proto-je-404 = { path = "../../../plugins/protocol/je-404/mc-plugin-proto-je-404", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-plugin-proto-je-5", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-plugin-proto-je-47", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-storage-je-anvil-1_7_10 = { path = "../../storage/mc-storage-je-anvil-1_7_10" }
 mc-plugin-storage-je-anvil-1_18_2 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_18_2", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-test-support = { path = "../../testing/mc-plugin-test-support" }

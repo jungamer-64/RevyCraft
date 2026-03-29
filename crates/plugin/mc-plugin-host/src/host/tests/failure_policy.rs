@@ -19,7 +19,7 @@ fn protocol_runtime_failure_policy_matrix_controls_quarantine_and_fatal_behavior
             TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
                 plugin_id: failing_protocol_plugin::PLUGIN_ID.to_string(),
                 manifest: entrypoints.manifest,
-                api: entrypoints.api,
+                factory: entrypoints.factory,
             }),
             PluginAbiRange::default(),
             PluginFailureMatrix {
@@ -76,7 +76,7 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
             TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
                 plugin_id: "gameplay-failing".to_string(),
                 manifest: entrypoints.manifest,
-                api: entrypoints.api,
+                factory: entrypoints.factory,
             }),
             PluginAbiRange::default(),
             PluginFailureMatrix {
@@ -171,7 +171,7 @@ fn auth_runtime_failure_policy_matrix_controls_fatal_behavior() {
             TestPluginHostBuilder::new().auth_raw(InProcessAuthPlugin {
                 plugin_id: "auth-failing".to_string(),
                 manifest: entrypoints.manifest,
-                api: entrypoints.api,
+                factory: entrypoints.factory,
             }),
             PluginAbiRange::default(),
             PluginFailureMatrix {

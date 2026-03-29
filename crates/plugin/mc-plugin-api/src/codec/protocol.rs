@@ -14,7 +14,7 @@ use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, LoginRequest, PlayEncodingContext,
     ProtocolDescriptor, ServerListStatus, StatusRequest,
 };
-use revy_voxel_core::{
+use revy_voxel_semantic::{
     CapabilityAnnouncement, CoreEvent, PlayerSnapshot, ProtocolCapability, RuntimeCommand,
 };
 
@@ -301,16 +301,16 @@ mod tests {
         LoginRequest, PlayEncodingContext, ProtocolDescriptor, ServerListStatus, StatusRequest,
         TransportKind, WireFormatKind,
     };
-    use revy_voxel_core::{
-        CapabilityAnnouncement, ConnectionId, CoreCommand, CoreEvent, EntityId,
-        GameplayCapabilitySet, GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId,
-        ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet,
-    };
     use revy_voxel_model::{
         BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, InventorySlot, ItemStack,
         PlayerInventory, Vec3, WorldMeta,
     };
     use revy_voxel_rules::ContainerKindId;
+    use revy_voxel_semantic::{
+        CapabilityAnnouncement, ConnectionId, CoreCommand, CoreEvent, EntityId,
+        GameplayCapabilitySet, GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId,
+        ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet,
+    };
     use uuid::Uuid;
 
     fn sample_player_id() -> PlayerId {

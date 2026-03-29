@@ -7,7 +7,7 @@ fn in_process_protocol_plugin_swaps_generation() {
         TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
             plugin_id: "je-5".to_string(),
             manifest: entrypoints.manifest,
-            api: entrypoints.api,
+            factory: entrypoints.factory,
         }),
         PluginAbiRange::default(),
         PluginFailureMatrix {
@@ -31,7 +31,7 @@ fn in_process_protocol_plugin_swaps_generation() {
         .replace_in_process_protocol_plugin(InProcessProtocolPlugin {
             plugin_id: "je-5".to_string(),
             manifest: entrypoints.manifest,
-            api: entrypoints.api,
+            factory: entrypoints.factory,
         })
         .expect("replacing in-process plugin should succeed");
 
@@ -41,6 +41,84 @@ fn in_process_protocol_plugin_swaps_generation() {
         .expect("registered plugin adapter should resolve");
     assert_eq!(adapter.plugin_generation_id(), Some(next_generation));
     assert_ne!(first_generation, next_generation);
+}
+
+#[test]
+fn in_process_protocol_plugins_get_fresh_instances_per_host() {
+    let entrypoints = fresh_instance_protocol_plugin::in_process_plugin_entrypoints();
+    let build_host = || {
+        build_test_plugin_host(
+            TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
+                plugin_id: fresh_instance_protocol_plugin::PLUGIN_ID.to_string(),
+                manifest: entrypoints.manifest,
+                factory: entrypoints.factory,
+            }),
+            PluginAbiRange::default(),
+            PluginFailureMatrix::default(),
+        )
+    };
+
+    let host_a = build_host();
+    let host_b = build_host();
+    let registries_a = host_a
+        .load_protocol_plugin_set()
+        .expect("fresh-instance protocol plugin should load for host A");
+    let registries_b = host_b
+        .load_protocol_plugin_set()
+        .expect("fresh-instance protocol plugin should load for host B");
+
+    let version_a = registries_a
+        .protocols()
+        .resolve_adapter(fresh_instance_protocol_plugin::PLUGIN_ID)
+        .expect("protocol adapter should resolve for host A")
+        .descriptor()
+        .version_name;
+    let version_b = registries_b
+        .protocols()
+        .resolve_adapter(fresh_instance_protocol_plugin::PLUGIN_ID)
+        .expect("protocol adapter should resolve for host B")
+        .descriptor()
+        .version_name;
+
+    assert_ne!(version_a, version_b);
+}
+
+#[test]
+fn replacing_in_process_protocol_plugin_creates_a_fresh_instance() {
+    let entrypoints = fresh_instance_protocol_plugin::in_process_plugin_entrypoints();
+    let host = build_test_plugin_host(
+        TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
+            plugin_id: fresh_instance_protocol_plugin::PLUGIN_ID.to_string(),
+            manifest: entrypoints.manifest,
+            factory: entrypoints.factory,
+        }),
+        PluginAbiRange::default(),
+        PluginFailureMatrix::default(),
+    );
+    let registries = host
+        .load_protocol_plugin_set()
+        .expect("fresh-instance protocol plugin should load");
+
+    let adapter = registries
+        .protocols()
+        .resolve_adapter(fresh_instance_protocol_plugin::PLUGIN_ID)
+        .expect("protocol adapter should resolve");
+    let first_version = adapter.descriptor().version_name;
+
+    let next_generation = host
+        .replace_in_process_protocol_plugin(InProcessProtocolPlugin {
+            plugin_id: fresh_instance_protocol_plugin::PLUGIN_ID.to_string(),
+            manifest: entrypoints.manifest,
+            factory: entrypoints.factory,
+        })
+        .expect("replacing fresh-instance plugin should succeed");
+
+    let adapter = registries
+        .protocols()
+        .resolve_adapter(fresh_instance_protocol_plugin::PLUGIN_ID)
+        .expect("protocol adapter should resolve after replace");
+    assert_eq!(adapter.plugin_generation_id(), Some(next_generation));
+    assert_ne!(adapter.descriptor().version_name, first_version);
 }
 
 #[test]
@@ -84,7 +162,7 @@ fn all_protocol_plugins_register_and_resolve() {
         builder = builder.protocol_raw(InProcessProtocolPlugin {
             plugin_id: plugin_id.to_string(),
             manifest: entrypoints.manifest,
-            api: entrypoints.api,
+            factory: entrypoints.factory,
         });
     }
 
@@ -135,7 +213,7 @@ fn protocol_plugins_preserve_wire_format_and_optional_bedrock_listener_metadata(
         builder = builder.protocol_raw(InProcessProtocolPlugin {
             plugin_id: plugin_id.to_string(),
             manifest: entrypoints.manifest,
-            api: entrypoints.api,
+            factory: entrypoints.factory,
         });
     }
 
@@ -191,7 +269,7 @@ fn protocol_plugins_can_override_host_wire_codec_framing() {
         TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
             plugin_id: "protocol-custom-wire".to_string(),
             manifest: entrypoints.manifest,
-            api: entrypoints.api,
+            factory: entrypoints.factory,
         }),
         PluginAbiRange::default(),
         PluginFailureMatrix {
@@ -240,12 +318,12 @@ fn colliding_protocol_routes_keep_one_adapter_and_quarantine_the_other() {
             .protocol_raw(InProcessProtocolPlugin {
                 plugin_id: "je-5".to_string(),
                 manifest: primary.manifest,
-                api: primary.api,
+                factory: primary.factory,
             })
             .protocol_raw(InProcessProtocolPlugin {
                 plugin_id: "je-5-collision".to_string(),
                 manifest: collision.manifest,
-                api: collision.api,
+                factory: collision.factory,
             }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
@@ -291,22 +369,22 @@ fn oversized_protocol_describe_response_respects_buffer_limits() {
             .protocol_raw(InProcessProtocolPlugin {
                 plugin_id: "protocol-oversized-response".to_string(),
                 manifest: protocol.manifest,
-                api: protocol.api,
+                factory: protocol.factory,
             })
             .gameplay_raw(InProcessGameplayPlugin {
                 plugin_id: "gameplay-canonical".to_string(),
                 manifest: gameplay.manifest,
-                api: gameplay.api,
+                factory: gameplay.factory,
             })
             .storage_raw(InProcessStoragePlugin {
                 plugin_id: "storage-je-anvil-1_7_10".to_string(),
                 manifest: storage.manifest,
-                api: storage.api,
+                factory: storage.factory,
             })
             .auth_raw(InProcessAuthPlugin {
                 plugin_id: "auth-offline".to_string(),
                 manifest: auth.manifest,
-                api: auth.api,
+                factory: auth.factory,
             }),
         PluginAbiRange::default(),
         PluginFailureMatrix {
@@ -335,7 +413,7 @@ fn abi_mismatch_is_rejected_before_registration() {
         TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
             plugin_id: "je-5".to_string(),
             manifest: manifest_with_abi("je-5", PluginAbiVersion { major: 9, minor: 0 }),
-            api: entrypoints.api,
+            factory: entrypoints.factory,
         }),
         PluginAbiRange::default(),
         PluginFailureMatrix {
@@ -360,7 +438,7 @@ fn protocol_plugins_require_reload_manifest_capability() {
         TestPluginHostBuilder::new().protocol_raw(InProcessProtocolPlugin {
             plugin_id: "je-5".to_string(),
             manifest: manifest_without_reload_capability("je-5"),
-            api: entrypoints.api,
+            factory: entrypoints.factory,
         }),
         PluginAbiRange::default(),
         PluginFailureMatrix {

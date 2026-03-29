@@ -1,6 +1,6 @@
 use crate::storage::RustStoragePlugin;
 use mc_plugin_api::codec::storage::{StorageRequest, StorageResponse};
-use mc_proto_common::StorageError;
+use mc_storage_common::StorageError;
 use std::path::Path;
 
 pub fn handle_storage_request<P: RustStoragePlugin>(

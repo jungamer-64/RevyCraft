@@ -75,7 +75,7 @@ async fn world_backed_furnace_opens_smelts_and_closes_via_protocol() -> Result<(
     )
     .await?;
 
-    let open_window = read_until_java_packet(
+    let open_window = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,

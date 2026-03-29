@@ -6,7 +6,7 @@ async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
-        plugin_test_registries_all()?,
+        in_process_default_registries(ALL_PROTOCOL_PLUGIN_IDS)?,
     )
     .await?;
     let addr = listener_addr(&server);
@@ -45,7 +45,7 @@ async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<
 
     open_test_crafting_table(&server, player_id, 2, "Crafting").await?;
 
-    let open_window = read_until_java_packet(
+    let open_window = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,
@@ -64,7 +64,7 @@ async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<
         )
     );
 
-    let open_contents = read_until_java_packet(
+    let open_contents = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,
@@ -149,6 +149,23 @@ async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<
         )?,
         (2, 1, Some((17, 1, 0)))
     );
+    assert_eq!(
+        decode_set_slot(
+            TestJavaProtocol::Je340,
+            &read_until_set_slot_item(
+                &mut stream,
+                &codec,
+                &mut buffer,
+                TestJavaProtocol::Je340,
+                -1,
+                -1,
+                None,
+                16,
+            )
+            .await?,
+        )?,
+        (-1, -1, None)
+    );
 
     write_packet(
         &mut stream,
@@ -205,13 +222,14 @@ async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<
     assert_eq!(
         decode_set_slot(
             TestJavaProtocol::Je340,
-            &read_until_set_slot(
+            &read_until_set_slot_item(
                 &mut stream,
                 &codec,
                 &mut buffer,
                 TestJavaProtocol::Je340,
                 -1,
                 -1,
+                Some((5, 4, 0)),
                 16,
             )
             .await?,
@@ -239,7 +257,7 @@ async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<
         2
     );
 
-    let player_contents = read_until_java_packet(
+    let player_contents = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,
@@ -261,13 +279,15 @@ async fn world_backed_crafting_table_opens_and_crafts_chest_via_protocol()
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
-        plugin_test_registries_all()?,
+        in_process_default_registries(ALL_PROTOCOL_PLUGIN_IDS)?,
     )
     .await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
 
-    let (mut stream, mut buffer, _) = login_modern_1_12(addr, "crafting-world").await?;
+    let (mut stream, mut buffer, _) = login_modern_1_12(addr, "crafting-world")
+        .await
+        .map_err(|error| RuntimeError::Config(format!("crafting table login: {error}")))?;
     write_packet(
         &mut stream,
         &codec,
@@ -338,7 +358,7 @@ async fn world_backed_crafting_table_opens_and_crafts_chest_via_protocol()
     )
     .await?;
 
-    let open_window = read_until_java_packet(
+    let open_window = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,
@@ -357,14 +377,15 @@ async fn world_backed_crafting_table_opens_and_crafts_chest_via_protocol()
         )
     );
 
-    let open_contents = read_until_java_packet(
+    let open_contents = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,
         TestJavaProtocol::Je340,
         TestJavaPacket::WindowItems,
     )
-    .await?;
+    .await
+    .map_err(|error| RuntimeError::Config(format!("world crafting table open contents: {error}")))?;
     assert_eq!(
         window_items_slot(TestJavaProtocol::Je340, &open_contents, 38)?,
         Some((5, 8, 0))
@@ -565,7 +586,7 @@ async fn world_backed_chest_moves_items_and_resyncs_player_inventory_on_close()
     )
     .await?;
 
-    let open_window = read_until_java_packet(
+    let open_window = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,
@@ -584,7 +605,7 @@ async fn world_backed_chest_moves_items_and_resyncs_player_inventory_on_close()
         )
     );
 
-    let open_contents = read_until_java_packet(
+    let open_contents = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,
@@ -695,14 +716,15 @@ async fn world_backed_chest_moves_items_and_resyncs_player_inventory_on_close()
         1
     );
 
-    let player_contents = read_until_java_packet(
+    let player_contents = read_until_java_packet_preserving_nonmatching(
         &mut stream,
         &codec,
         &mut buffer,
         TestJavaProtocol::Je340,
         TestJavaPacket::WindowItems,
     )
-    .await?;
+    .await
+    .map_err(|error| RuntimeError::Config(format!("world crafting table close contents: {error}")))?;
     assert_eq!(
         window_items_slot(TestJavaProtocol::Je340, &player_contents, 36)?,
         Some((54, 1, 0))

@@ -46,7 +46,7 @@ impl TestPluginHost {
     }
 
     #[must_use]
-    pub fn status(&self) -> mc_plugin_host::host::PluginHostStatusSnapshot {
+    pub fn status(&self) -> mc_plugin_host::host::PluginHostInventoryStatusSnapshot {
         status(&self.inner)
     }
 
@@ -267,10 +267,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn je_1_7_10_protocol_plugin() -> InProcessProtocolPlugin {
+        let entrypoints = je_1_7_10_entrypoints();
         InProcessProtocolPlugin {
             plugin_id: JE_5_ADAPTER_ID.to_string(),
-            manifest: je_1_7_10_entrypoints().manifest,
-            api: je_1_7_10_entrypoints().api,
+            manifest: entrypoints.manifest,
+            factory: entrypoints.factory,
         }
     }
 

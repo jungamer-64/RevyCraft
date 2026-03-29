@@ -45,15 +45,16 @@ use mc_plugin_api::{
     AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapability,
     AuthCapabilitySet, AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
     GameplayProfileId, PlayerId, PluginBuildTag, PluginGenerationId, ProtocolCapability,
-    ProtocolCapabilitySet, ServerCore, SessionCapabilitySet, StorageCapability,
-    StorageCapabilitySet, StorageProfileId, WorldSnapshot,
+    ProtocolCapabilitySet, SessionCapabilitySet, StorageCapability, StorageCapabilitySet,
+    StorageProfileId, WorldSnapshot,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
     LoginRequest, PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
-    ServerListStatus, StatusRequest, StorageAdapter, StorageError, TransportKind, WireCodec,
-    WireFormatKind,
+    ServerListStatus, StatusRequest, TransportKind, WireCodec, WireFormatKind,
 };
+use mc_storage_common::{StorageAdapter, StorageError};
+use revy_voxel_core::ServerCore;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -91,10 +92,11 @@ pub use self::catalog::{
 pub(crate) use self::failure::{
     ArtifactQuarantineRecord, PluginFailureDispatch, PluginFailureStage,
 };
-pub use self::failure::{PluginFailureAction, PluginFailureMatrix};
 pub(crate) use self::generation::{
-    AdminSurfaceGeneration, AuthGeneration, GameplayGeneration, GenerationManager,
-    ProtocolGeneration, StorageGeneration, decode_plugin_error, write_owned_buffer,
+    AdminSurfaceGeneration, AdminSurfaceInvocationBackend, AuthGeneration,
+    AuthInvocationBackend, GameplayGeneration, GameplayInvocationBackend, GenerationManager,
+    ProtocolGeneration, ProtocolInvocationBackend, StorageGeneration,
+    StorageInvocationBackend, decode_plugin_error, write_owned_buffer,
 };
 pub(crate) use self::loader::PluginLoader;
 pub(crate) use self::profiles::{
@@ -104,7 +106,7 @@ pub(crate) use self::profiles::{
 };
 pub use self::status::{
     AdminSurfacePluginStatusSnapshot, AuthPluginStatusSnapshot, GameplayPluginStatusSnapshot,
-    PluginArtifactStatusSnapshot, PluginHostStatusSnapshot, ProtocolPluginStatusSnapshot,
+    PluginArtifactStatusSnapshot, PluginHostInventoryStatusSnapshot, ProtocolPluginStatusSnapshot,
     StoragePluginStatusSnapshot,
 };
 use self::support::{
@@ -114,11 +116,11 @@ use self::support::{
     expect_gameplay_capabilities, expect_gameplay_descriptor,
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
-    import_storage_runtime_state, invoke_admin_surface, invoke_auth, invoke_gameplay,
-    invoke_protocol, invoke_storage, protocol_reload_compatible, read_byte_slice,
-    take_owned_buffer, validate_gameplay_session_migration, validate_protocol_session_migration,
+    import_storage_runtime_state, protocol_reload_compatible, read_byte_slice, take_owned_buffer,
+    validate_gameplay_session_migration, validate_protocol_session_migration,
 };
 pub(crate) use self::topology::PreparedProtocolTopology;
+pub use revy_server_types::{PluginFailureAction, PluginFailureMatrix};
 
 const PLUGIN_RELOAD_POLL_INTERVAL_MS: u64 = 1_000;
 
@@ -451,7 +453,7 @@ impl RuntimePluginHost for PluginHost {
         Self::managed_protocol_ids(self)
     }
 
-    fn status(&self) -> PluginHostStatusSnapshot {
+    fn status(&self) -> PluginHostInventoryStatusSnapshot {
         Self::status(self)
     }
 }

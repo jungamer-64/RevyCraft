@@ -11,17 +11,25 @@ macro_rules! __export_plugin_non_gameplay {
         $encode:path,
         $api_symbol:ident,
         $panic_decode:literal,
-        $panic_handle:literal $(,)?
+        $panic_handle:literal,
+        $handler_trait:ident,
+        $entrypoints_ty:ident,
+        $request_ty:path,
+        $response_ty:path $(,)?
     ) => {
+        #[allow(dead_code)]
         static MC_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> = std::sync::OnceLock::new();
         static MC_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
+        #[allow(dead_code)]
         static MC_PLUGIN_API: std::sync::OnceLock<$api_ty> = std::sync::OnceLock::new();
 
+        #[allow(dead_code)]
         fn mc_plugin_instance() -> &'static $plugin_ty {
             MC_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
         }
 
+        #[allow(dead_code)]
         unsafe extern "C" fn mc_plugin_invoke(
             request: mc_plugin_api::abi::ByteSlice,
             output: *mut mc_plugin_api::abi::OwnedBuffer,
@@ -81,6 +89,7 @@ macro_rules! __export_plugin_non_gameplay {
             }
         }
 
+        #[allow(dead_code)]
         unsafe extern "C" fn mc_plugin_free_buffer(buffer: mc_plugin_api::abi::OwnedBuffer) {
             unsafe {
                 $crate::__macro_support::buffers::free_owned_buffer(buffer);
@@ -103,17 +112,33 @@ macro_rules! __export_plugin_non_gameplay {
             all(not(test), not(feature = "disable-exported-symbols")),
             unsafe(no_mangle)
         )]
+        #[allow(dead_code)]
         pub extern "C" fn $api_symbol() -> *const $api_ty {
             std::ptr::from_ref(MC_PLUGIN_API.get_or_init(|| $api_init))
         }
 
         #[cfg(any(test, feature = "in-process-testing"))]
+        struct McInProcessPluginHandler($plugin_ty);
+
+        #[cfg(any(test, feature = "in-process-testing"))]
+        impl $crate::test_support::$handler_trait for McInProcessPluginHandler {
+            fn handle(&self, request: $request_ty) -> Result<$response_ty, String> {
+                $handle(&self.0, request)
+            }
+        }
+
+        #[cfg(any(test, feature = "in-process-testing"))]
+        fn mc_in_process_plugin_factory() -> Box<dyn $crate::test_support::$handler_trait> {
+            Box::new(McInProcessPluginHandler(<$plugin_ty>::default()))
+        }
+
+        #[cfg(any(test, feature = "in-process-testing"))]
         #[must_use]
         pub fn in_process_plugin_entrypoints()
-        -> $crate::test_support::InProcessPluginEntrypoints<$api_ty> {
-            $crate::test_support::InProcessPluginEntrypoints::new(
+        -> $crate::test_support::$entrypoints_ty {
+            $crate::test_support::$entrypoints_ty::new(
                 unsafe { &*mc_plugin_manifest_v1() },
-                unsafe { &*$api_symbol() },
+                mc_in_process_plugin_factory,
             )
         }
     };
@@ -123,17 +148,21 @@ macro_rules! __export_plugin_non_gameplay {
 #[macro_export]
 macro_rules! __export_plugin_gameplay {
     ($plugin_ty:ty, $manifest:expr $(,)?) => {
+        #[allow(dead_code)]
         static MC_GAMEPLAY_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
             std::sync::OnceLock::new();
         static MC_GAMEPLAY_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
+        #[allow(dead_code)]
         static MC_GAMEPLAY_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::host_api::GameplayPluginApiV3> =
             std::sync::OnceLock::new();
 
+        #[allow(dead_code)]
         fn mc_gameplay_plugin_instance() -> &'static $plugin_ty {
             MC_GAMEPLAY_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
         }
 
+        #[allow(dead_code)]
         unsafe extern "C" fn mc_gameplay_plugin_invoke_v3(
             request: mc_plugin_api::abi::ByteSlice,
             host_api: *const mc_plugin_api::host_api::GameplayHostApiV2,
@@ -217,6 +246,7 @@ macro_rules! __export_plugin_gameplay {
             }
         }
 
+        #[allow(dead_code)]
         unsafe extern "C" fn mc_gameplay_plugin_free_buffer(
             buffer: mc_plugin_api::abi::OwnedBuffer,
         ) {
@@ -241,6 +271,7 @@ macro_rules! __export_plugin_gameplay {
             all(not(test), not(feature = "disable-exported-symbols")),
             unsafe(no_mangle)
         )]
+        #[allow(dead_code)]
         pub extern "C" fn mc_plugin_gameplay_api_v3() -> *const mc_plugin_api::host_api::GameplayPluginApiV3 {
             std::ptr::from_ref(MC_GAMEPLAY_PLUGIN_API.get_or_init(|| {
                 mc_plugin_api::host_api::GameplayPluginApiV3 {
@@ -251,13 +282,35 @@ macro_rules! __export_plugin_gameplay {
         }
 
         #[cfg(any(test, feature = "in-process-testing"))]
+        struct McInProcessGameplayPluginHandler($plugin_ty);
+
+        #[cfg(any(test, feature = "in-process-testing"))]
+        impl $crate::test_support::GameplayPluginHandler for McInProcessGameplayPluginHandler {
+            fn handle(
+                &self,
+                request: mc_plugin_api::codec::gameplay::GameplayRequest,
+                host_api: Option<mc_plugin_api::host_api::GameplayHostApiV2>,
+            ) -> Result<mc_plugin_api::codec::gameplay::GameplayResponse, String> {
+                $crate::__macro_support::handle_gameplay_request_with_host_api(
+                    &self.0, request, host_api,
+                )
+            }
+        }
+
+        #[cfg(any(test, feature = "in-process-testing"))]
+        fn mc_in_process_gameplay_plugin_factory(
+        ) -> Box<dyn $crate::test_support::GameplayPluginHandler> {
+            Box::new(McInProcessGameplayPluginHandler(<$plugin_ty>::default()))
+        }
+
+        #[cfg(any(test, feature = "in-process-testing"))]
         #[must_use]
         pub fn in_process_plugin_entrypoints()
-        -> $crate::test_support::InProcessPluginEntrypoints<mc_plugin_api::host_api::GameplayPluginApiV3>
+        -> $crate::test_support::InProcessGameplayPluginEntrypoints
         {
-            $crate::test_support::InProcessPluginEntrypoints::new(
+            $crate::test_support::InProcessGameplayPluginEntrypoints::new(
                 unsafe { &*mc_plugin_manifest_v1() },
-                unsafe { &*mc_plugin_gameplay_api_v3() },
+                mc_in_process_gameplay_plugin_factory,
             )
         }
     };
@@ -267,17 +320,21 @@ macro_rules! __export_plugin_gameplay {
 #[macro_export]
 macro_rules! __export_plugin_admin_surface {
     ($plugin_ty:ty, $manifest:expr $(,)?) => {
+        #[allow(dead_code)]
         static MC_ADMIN_SURFACE_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
             std::sync::OnceLock::new();
         static MC_ADMIN_SURFACE_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
+        #[allow(dead_code)]
         static MC_ADMIN_SURFACE_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::host_api::AdminSurfacePluginApiV1> =
             std::sync::OnceLock::new();
 
+        #[allow(dead_code)]
         fn mc_admin_surface_plugin_instance() -> &'static $plugin_ty {
             MC_ADMIN_SURFACE_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
         }
 
+        #[allow(dead_code)]
         unsafe extern "C" fn mc_admin_surface_plugin_invoke_v1(
             request: mc_plugin_api::abi::ByteSlice,
             host_api: *const mc_plugin_api::host_api::AdminSurfaceHostApiV1,
@@ -363,6 +420,7 @@ macro_rules! __export_plugin_admin_surface {
             }
         }
 
+        #[allow(dead_code)]
         unsafe extern "C" fn mc_admin_surface_plugin_free_buffer(
             buffer: mc_plugin_api::abi::OwnedBuffer,
         ) {
@@ -387,6 +445,7 @@ macro_rules! __export_plugin_admin_surface {
             all(not(test), not(feature = "disable-exported-symbols")),
             unsafe(no_mangle)
         )]
+        #[allow(dead_code)]
         pub extern "C" fn mc_plugin_admin_surface_api_v1() -> *const mc_plugin_api::host_api::AdminSurfacePluginApiV1 {
             std::ptr::from_ref(MC_ADMIN_SURFACE_PLUGIN_API.get_or_init(|| {
                 mc_plugin_api::host_api::AdminSurfacePluginApiV1 {
@@ -397,13 +456,37 @@ macro_rules! __export_plugin_admin_surface {
         }
 
         #[cfg(any(test, feature = "in-process-testing"))]
+        struct McInProcessAdminSurfacePluginHandler($plugin_ty);
+
+        #[cfg(any(test, feature = "in-process-testing"))]
+        impl $crate::test_support::AdminSurfacePluginHandler
+            for McInProcessAdminSurfacePluginHandler
+        {
+            fn handle(
+                &self,
+                request: mc_plugin_api::codec::admin_surface::AdminSurfaceRequest,
+                host_api: Option<mc_plugin_api::host_api::AdminSurfaceHostApiV1>,
+            ) -> Result<mc_plugin_api::codec::admin_surface::AdminSurfaceResponse, String> {
+                $crate::__macro_support::handle_admin_surface_request_with_host_api(
+                    &self.0, request, host_api,
+                )
+            }
+        }
+
+        #[cfg(any(test, feature = "in-process-testing"))]
+        fn mc_in_process_admin_surface_plugin_factory(
+        ) -> Box<dyn $crate::test_support::AdminSurfacePluginHandler> {
+            Box::new(McInProcessAdminSurfacePluginHandler(<$plugin_ty>::default()))
+        }
+
+        #[cfg(any(test, feature = "in-process-testing"))]
         #[must_use]
         pub fn in_process_plugin_entrypoints()
-        -> $crate::test_support::InProcessPluginEntrypoints<mc_plugin_api::host_api::AdminSurfacePluginApiV1>
+        -> $crate::test_support::InProcessAdminSurfacePluginEntrypoints
         {
-            $crate::test_support::InProcessPluginEntrypoints::new(
+            $crate::test_support::InProcessAdminSurfacePluginEntrypoints::new(
                 unsafe { &*mc_plugin_manifest_v1() },
-                unsafe { &*mc_plugin_admin_surface_api_v1() },
+                mc_in_process_admin_surface_plugin_factory,
             )
         }
     };
@@ -426,6 +509,10 @@ macro_rules! export_plugin {
             mc_plugin_protocol_api_v3,
             "protocol plugin panicked while decoding request",
             "protocol plugin panicked while handling request",
+            ProtocolPluginHandler,
+            InProcessProtocolPluginEntrypoints,
+            mc_plugin_api::codec::protocol::ProtocolRequest,
+            mc_plugin_api::codec::protocol::ProtocolResponse,
         );
     };
     (storage, $plugin_ty:ty, $manifest:expr $(,)?) => {
@@ -443,6 +530,10 @@ macro_rules! export_plugin {
             mc_plugin_storage_api_v1,
             "storage plugin panicked while decoding request",
             "storage plugin panicked while handling request",
+            StoragePluginHandler,
+            InProcessStoragePluginEntrypoints,
+            mc_plugin_api::codec::storage::StorageRequest,
+            mc_plugin_api::codec::storage::StorageResponse,
         );
     };
     (auth, $plugin_ty:ty, $manifest:expr $(,)?) => {
@@ -460,6 +551,10 @@ macro_rules! export_plugin {
             mc_plugin_auth_api_v1,
             "auth plugin panicked while decoding request",
             "auth plugin panicked while handling request",
+            AuthPluginHandler,
+            InProcessAuthPluginEntrypoints,
+            mc_plugin_api::codec::auth::AuthRequest,
+            mc_plugin_api::codec::auth::AuthResponse,
         );
     };
     (gameplay, $plugin_ty:ty, $manifest:expr $(,)?) => {

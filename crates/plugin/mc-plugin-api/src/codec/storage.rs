@@ -7,7 +7,9 @@ use crate::codec::__internal::storage_semantic::{
     decode_storage_request_payload, decode_storage_response_payload,
     encode_storage_request_payload, encode_storage_response_payload,
 };
-use revy_voxel_core::{CapabilityAnnouncement, StorageCapability, StorageProfileId, WorldSnapshot};
+use revy_voxel_semantic::{
+    CapabilityAnnouncement, StorageCapability, StorageProfileId, WorldSnapshot,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -195,26 +197,49 @@ mod tests {
         StorageDescriptor, StorageRequest, StorageResponse, decode_storage_request,
         decode_storage_response, encode_storage_request, encode_storage_response,
     };
-    use revy_voxel_core::{CoreCommand, CoreConfig, PlayerId, ServerCore};
-    use revy_voxel_model::BlockPos;
+    use revy_voxel_model::{BlockPos, ChunkPos, DimensionId, Vec3, WorldMeta};
+    use revy_voxel_semantic::{PlayerId, PlayerSnapshot, WorldSnapshot};
+    use std::collections::BTreeMap;
     use uuid::Uuid;
 
-    fn sample_snapshot() -> revy_voxel_core::WorldSnapshot {
-        let mut core = ServerCore::new(
-            CoreConfig::default(),
-            mc_content_canonical::canonical_content(),
-        );
-        let _ = core.apply_command(
-            CoreCommand::LoginStart {
-                connection_id: revy_voxel_core::ConnectionId(1),
-                username: "alice".to_string(),
-                player_id: PlayerId(Uuid::from_u128(7)),
+    fn sample_snapshot() -> WorldSnapshot {
+        let player_id = PlayerId(Uuid::from_u128(7));
+        WorldSnapshot {
+            meta: WorldMeta {
+                level_name: "codec-storage".to_string(),
+                seed: 7,
+                spawn: BlockPos::new(1, 5, -2),
+                dimension: DimensionId::Overworld,
+                age: 42,
+                time: 6000,
+                level_type: "FLAT".to_string(),
+                game_mode: 1,
+                difficulty: 1,
+                max_players: 20,
             },
-            0,
-        );
-        let mut snapshot = core.snapshot();
-        snapshot.meta.spawn = BlockPos::new(1, 5, -2);
-        snapshot
+            chunks: BTreeMap::from([(
+                ChunkPos::new(0, 0),
+                revy_voxel_model::ChunkColumn::new(ChunkPos::new(0, 0)),
+            )]),
+            block_entities: BTreeMap::new(),
+            players: BTreeMap::from([(
+                player_id,
+                PlayerSnapshot {
+                    id: player_id,
+                    username: "alice".to_string(),
+                    position: Vec3::new(0.5, 4.0, 0.5),
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    on_ground: true,
+                    dimension: DimensionId::Overworld,
+                    health: 20.0,
+                    food: 20,
+                    food_saturation: 5.0,
+                    inventory: mc_content_canonical::creative_starter_inventory(),
+                    selected_hotbar_slot: 0,
+                },
+            )]),
+        }
     }
 
     #[test]

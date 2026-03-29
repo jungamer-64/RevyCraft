@@ -1,12 +1,12 @@
 use crate::PluginHostError as RuntimeError;
 use mc_plugin_api::abi::PluginKind;
 #[cfg(any(test, feature = "in-process-testing"))]
-use mc_plugin_api::host_api::{
-    AdminSurfacePluginApiV1, AuthPluginApiV1, GameplayPluginApiV3, ProtocolPluginApiV3,
-    StoragePluginApiV1,
-};
-#[cfg(any(test, feature = "in-process-testing"))]
 use mc_plugin_api::manifest::PluginManifestV1;
+#[cfg(any(test, feature = "in-process-testing"))]
+use mc_plugin_sdk_rust::test_support::{
+    AdminSurfacePluginFactory, AuthPluginFactory, GameplayPluginFactory, ProtocolPluginFactory,
+    StoragePluginFactory,
+};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -24,7 +24,7 @@ pub(crate) struct ArtifactIdentity {
 pub struct InProcessProtocolPlugin {
     pub plugin_id: String,
     pub manifest: &'static PluginManifestV1,
-    pub api: &'static ProtocolPluginApiV3,
+    pub factory: ProtocolPluginFactory,
 }
 
 #[cfg(any(test, feature = "in-process-testing"))]
@@ -32,7 +32,7 @@ pub struct InProcessProtocolPlugin {
 pub struct InProcessGameplayPlugin {
     pub plugin_id: String,
     pub manifest: &'static PluginManifestV1,
-    pub api: &'static GameplayPluginApiV3,
+    pub factory: GameplayPluginFactory,
 }
 
 #[cfg(any(test, feature = "in-process-testing"))]
@@ -40,7 +40,7 @@ pub struct InProcessGameplayPlugin {
 pub struct InProcessStoragePlugin {
     pub plugin_id: String,
     pub manifest: &'static PluginManifestV1,
-    pub api: &'static StoragePluginApiV1,
+    pub factory: StoragePluginFactory,
 }
 
 #[cfg(any(test, feature = "in-process-testing"))]
@@ -48,7 +48,7 @@ pub struct InProcessStoragePlugin {
 pub struct InProcessAuthPlugin {
     pub plugin_id: String,
     pub manifest: &'static PluginManifestV1,
-    pub api: &'static AuthPluginApiV1,
+    pub factory: AuthPluginFactory,
 }
 
 #[cfg(any(test, feature = "in-process-testing"))]
@@ -57,7 +57,7 @@ pub struct InProcessAuthPlugin {
 pub struct InProcessAdminSurfacePlugin {
     pub plugin_id: String,
     pub manifest: &'static PluginManifestV1,
-    pub api: &'static AdminSurfacePluginApiV1,
+    pub factory: AdminSurfacePluginFactory,
 }
 
 #[derive(Clone, Debug)]

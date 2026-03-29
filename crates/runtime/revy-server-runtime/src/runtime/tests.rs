@@ -37,11 +37,12 @@ use mc_proto_common::{
     Edition, MinecraftWireCodec, PacketReader, PacketWriter, ProtocolError, TransportKind,
     WireCodec, WireFormatKind,
 };
-use mc_proto_je_5::{JE_1_7_10_STORAGE_PROFILE_ID, JE_5_ADAPTER_ID};
+use mc_proto_je_5::JE_5_ADAPTER_ID;
 use mc_proto_je_47::JE_47_ADAPTER_ID;
 use mc_proto_je_340::JE_340_ADAPTER_ID;
 use mc_proto_je_404::JE_404_ADAPTER_ID;
 use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol, TestJavaProtocolError};
+use mc_storage_je_anvil_1_7_10::JE_1_7_10_STORAGE_PROFILE_ID;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 use std::collections::HashMap;

@@ -4,15 +4,15 @@ use mc_plugin_sdk_rust::capabilities::{build_tag_contains, protocol_capabilities
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::protocol::RustProtocolPlugin;
+use mc_plugin_sdk_rust::{
+    CoreEvent, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
+};
 use mc_proto_common::{
     BedrockListenerDescriptor, HandshakeIntent, HandshakeProbe, LoginRequest, PlayEncodingContext,
     PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus,
     SessionAdapter, StatusRequest, TransportKind, WireCodec,
 };
 use mc_proto_je_5::{JE_5_ADAPTER_ID, Je5Adapter};
-use mc_plugin_sdk_rust::{
-    CoreEvent, PlayerSnapshot, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
-};
 
 #[derive(Default)]
 pub struct Je5ReloadTestProtocolPlugin {

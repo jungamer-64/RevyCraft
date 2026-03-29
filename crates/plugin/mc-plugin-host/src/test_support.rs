@@ -1,7 +1,7 @@
 use crate::__test_hooks as hooks;
 use crate::PluginHostError;
 use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
-use crate::host::PluginHostStatusSnapshot;
+use crate::host::PluginHostInventoryStatusSnapshot;
 use crate::registry::LoadedPluginSet;
 use crate::runtime::{
     AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimeReloadContext,
@@ -30,7 +30,7 @@ impl TestPluginHost {
     }
 
     #[must_use]
-    pub fn status(&self) -> PluginHostStatusSnapshot {
+    pub fn status(&self) -> PluginHostInventoryStatusSnapshot {
         hooks::status(&self.inner)
     }
 

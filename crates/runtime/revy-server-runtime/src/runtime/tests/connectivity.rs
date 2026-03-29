@@ -336,15 +336,9 @@ async fn frozen_sessions_do_not_consume_tcp_bytes_until_resumed() -> Result<(), 
         .runtime
         .resume_frozen_live_sessions_after_upgrade_rollback(frozen)
         .await?;
-    let held_item = read_until_java_packet(
-        &mut alpha,
-        &codec,
-        &mut alpha_buffer,
-        protocol,
-        TestJavaPacket::HeldItemChange,
-    )
-    .await?;
-    assert_eq!(held_item_from_packet(&held_item)?, 7);
+    let held_item =
+        read_until_held_item_change(&mut alpha, &codec, &mut alpha_buffer, protocol, 7, 16).await?;
+    assert_eq!(held_item_from_packet_for_protocol(protocol, &held_item)?, 7);
 
     server.shutdown().await
 }

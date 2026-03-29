@@ -5,7 +5,7 @@ use super::nbt::{
     NbtTag, as_compound, byte_field, int_field, list_field, short_field, string_field,
 };
 use mc_content_canonical::catalog;
-use mc_proto_common::StorageError;
+use mc_storage_common::StorageError;
 use revy_voxel_model::{
     BlockPos, BlockState, ChunkColumn, ChunkPos, ChunkSection, ItemStack, expand_block_index,
 };

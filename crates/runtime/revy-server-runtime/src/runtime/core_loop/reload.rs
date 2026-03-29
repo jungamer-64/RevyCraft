@@ -1,5 +1,7 @@
 use crate::RuntimeError;
-use crate::runtime::selection::{ResolvedRuntimeSelection, SelectionResolver};
+use crate::runtime::selection::{
+    ResolvedRuntimeSelection, SelectionResolver, plugin_host_runtime_selection_config,
+};
 use crate::runtime::topology_manager::PreparedTopologyReload;
 use crate::runtime::{
     ArtifactsReloadResult, CoreReloadResult, FullReloadResult, RuntimeReloadContext,
@@ -142,8 +144,9 @@ impl RuntimeServer {
         previous_selection: ResolvedRuntimeSelection,
         full_reload_plan: &crate::config::FullReloadPlan,
     ) -> Result<StagedSelectionReload, RuntimeError> {
-        let staged_selection =
-            reload_host.stage_runtime_selection(&full_reload_plan.plugin_host_selection)?;
+        let staged_selection = reload_host.stage_runtime_selection(
+            &plugin_host_runtime_selection_config(&full_reload_plan.next_active_config),
+        )?;
         let prepared_topology = self
             .topology
             .prepare_generation_reload(

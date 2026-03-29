@@ -2,7 +2,9 @@ use super::*;
 use crate::runtime::RunningServer;
 use rsa::rand_core::{OsRng, RngCore};
 
-fn plugin_host_status(server: &RunningServer) -> mc_plugin_host::host::PluginHostStatusSnapshot {
+fn plugin_host_status(
+    server: &RunningServer,
+) -> mc_plugin_host::host::PluginHostInventoryStatusSnapshot {
     server
         .runtime
         .reload

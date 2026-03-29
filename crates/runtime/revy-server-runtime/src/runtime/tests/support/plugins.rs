@@ -5,7 +5,7 @@ pub(crate) mod failing_storage_plugin {
     use mc_plugin_sdk_rust::export_plugin;
     use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
     use mc_plugin_sdk_rust::storage::RustStoragePlugin;
-    use mc_proto_common::StorageError;
+    use mc_storage_common::StorageError;
     use revy_voxel_core::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
     use std::path::Path;
 
@@ -195,36 +195,54 @@ pub(crate) fn register_in_process_protocol_adapter(
     adapter_id: &str,
 ) -> Result<TestPluginHostBuilder, RuntimeError> {
     let plugin = match adapter_id {
-        JE_5_ADAPTER_ID => InProcessProtocolPlugin {
+        JE_5_ADAPTER_ID => {
+            let entrypoints = je_1_7_10_entrypoints();
+            InProcessProtocolPlugin {
             plugin_id: JE_5_ADAPTER_ID.to_string(),
-            manifest: je_1_7_10_entrypoints().manifest,
-            api: je_1_7_10_entrypoints().api,
-        },
-        JE_47_ADAPTER_ID => InProcessProtocolPlugin {
+                manifest: entrypoints.manifest,
+                factory: entrypoints.factory,
+            }
+        }
+        JE_47_ADAPTER_ID => {
+            let entrypoints = je_1_8_x_entrypoints();
+            InProcessProtocolPlugin {
             plugin_id: JE_47_ADAPTER_ID.to_string(),
-            manifest: je_1_8_x_entrypoints().manifest,
-            api: je_1_8_x_entrypoints().api,
-        },
-        JE_340_ADAPTER_ID => InProcessProtocolPlugin {
+                manifest: entrypoints.manifest,
+                factory: entrypoints.factory,
+            }
+        }
+        JE_340_ADAPTER_ID => {
+            let entrypoints = je_1_12_2_entrypoints();
+            InProcessProtocolPlugin {
             plugin_id: JE_340_ADAPTER_ID.to_string(),
-            manifest: je_1_12_2_entrypoints().manifest,
-            api: je_1_12_2_entrypoints().api,
-        },
-        JE_404_ADAPTER_ID => InProcessProtocolPlugin {
+                manifest: entrypoints.manifest,
+                factory: entrypoints.factory,
+            }
+        }
+        JE_404_ADAPTER_ID => {
+            let entrypoints = je_1_13_2_entrypoints();
+            InProcessProtocolPlugin {
             plugin_id: JE_404_ADAPTER_ID.to_string(),
-            manifest: je_1_13_2_entrypoints().manifest,
-            api: je_1_13_2_entrypoints().api,
-        },
-        BE_924_ADAPTER_ID => InProcessProtocolPlugin {
+                manifest: entrypoints.manifest,
+                factory: entrypoints.factory,
+            }
+        }
+        BE_924_ADAPTER_ID => {
+            let entrypoints = be_26_3_entrypoints();
+            InProcessProtocolPlugin {
             plugin_id: BE_924_ADAPTER_ID.to_string(),
-            manifest: be_26_3_entrypoints().manifest,
-            api: be_26_3_entrypoints().api,
-        },
-        BE_PLACEHOLDER_ADAPTER_ID => InProcessProtocolPlugin {
+                manifest: entrypoints.manifest,
+                factory: entrypoints.factory,
+            }
+        }
+        BE_PLACEHOLDER_ADAPTER_ID => {
+            let entrypoints = be_placeholder_entrypoints();
+            InProcessProtocolPlugin {
             plugin_id: BE_PLACEHOLDER_ADAPTER_ID.to_string(),
-            manifest: be_placeholder_entrypoints().manifest,
-            api: be_placeholder_entrypoints().api,
-        },
+                manifest: entrypoints.manifest,
+                factory: entrypoints.factory,
+            }
+        }
         other => {
             return Err(RuntimeError::Config(format!(
                 "unknown in-process adapter `{other}`"
@@ -237,26 +255,60 @@ pub(crate) fn register_in_process_protocol_adapter(
 pub(crate) fn register_in_process_supporting_plugins(
     builder: TestPluginHostBuilder,
 ) -> TestPluginHostBuilder {
+    let canonical = canonical_gameplay_entrypoints();
+    let readonly = readonly_gameplay_entrypoints();
+    let storage = storage_entrypoints();
+    let online_auth = online_stub_auth_entrypoints();
     builder
         .gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-canonical".to_string(),
-            manifest: canonical_gameplay_entrypoints().manifest,
-            api: canonical_gameplay_entrypoints().api,
+            manifest: canonical.manifest,
+            factory: canonical.factory,
         })
         .gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-readonly".to_string(),
-            manifest: readonly_gameplay_entrypoints().manifest,
-            api: readonly_gameplay_entrypoints().api,
+            manifest: readonly.manifest,
+            factory: readonly.factory,
         })
         .storage_raw(InProcessStoragePlugin {
             plugin_id: "storage-je-anvil-1_7_10".to_string(),
-            manifest: storage_entrypoints().manifest,
-            api: storage_entrypoints().api,
+            manifest: storage.manifest,
+            factory: storage.factory,
         })
         .auth_raw(InProcessAuthPlugin {
             plugin_id: ONLINE_STUB_AUTH_PLUGIN_ID.to_string(),
-            manifest: online_stub_auth_entrypoints().manifest,
-            api: online_stub_auth_entrypoints().api,
+            manifest: online_auth.manifest,
+            factory: online_auth.factory,
+        })
+}
+
+pub(crate) fn register_in_process_default_supporting_plugins(
+    builder: TestPluginHostBuilder,
+) -> TestPluginHostBuilder {
+    let canonical = canonical_gameplay_entrypoints();
+    let readonly = readonly_gameplay_entrypoints();
+    let storage = storage_entrypoints();
+    let offline_auth = offline_auth_entrypoints();
+    builder
+        .gameplay_raw(InProcessGameplayPlugin {
+            plugin_id: "gameplay-canonical".to_string(),
+            manifest: canonical.manifest,
+            factory: canonical.factory,
+        })
+        .gameplay_raw(InProcessGameplayPlugin {
+            plugin_id: "gameplay-readonly".to_string(),
+            manifest: readonly.manifest,
+            factory: readonly.factory,
+        })
+        .storage_raw(InProcessStoragePlugin {
+            plugin_id: "storage-je-anvil-1_7_10".to_string(),
+            manifest: storage.manifest,
+            factory: storage.factory,
+        })
+        .auth_raw(InProcessAuthPlugin {
+            plugin_id: "auth-offline".to_string(),
+            manifest: offline_auth.manifest,
+            factory: offline_auth.factory,
         })
 }
 
@@ -280,31 +332,54 @@ pub(crate) fn in_process_online_auth_registries(
     })
 }
 
+pub(crate) fn in_process_default_registries(
+    allowlist: &[&str],
+) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
+    let mut builder = TestPluginHostBuilder::new();
+    for adapter_id in allowlist {
+        builder = register_in_process_protocol_adapter(builder, adapter_id)?;
+    }
+    let plugin_host = register_in_process_default_supporting_plugins(builder)
+        .abi_range(PluginAbiRange::default())
+        .failure_matrix(PluginFailureMatrix::default())
+        .build();
+    let config = ServerConfig::default();
+    let runtime_selection = plugin_host_runtime_selection_test_config(&config);
+    Ok(LoadedPluginTestEnvironment {
+        loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
+        plugin_host: Some(plugin_host),
+    })
+}
+
 pub(crate) fn in_process_failing_storage_registries(
     failure_action: PluginFailureAction,
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
     let builder =
         register_in_process_protocol_adapter(TestPluginHostBuilder::new(), JE_5_ADAPTER_ID)?;
+    let canonical = canonical_gameplay_entrypoints();
+    let readonly = readonly_gameplay_entrypoints();
+    let failing_storage = failing_storage_plugin::in_process_plugin_entrypoints();
+    let offline_auth = offline_auth_entrypoints();
     let plugin_host = builder
         .gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-canonical".to_string(),
-            manifest: canonical_gameplay_entrypoints().manifest,
-            api: canonical_gameplay_entrypoints().api,
+            manifest: canonical.manifest,
+            factory: canonical.factory,
         })
         .gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-readonly".to_string(),
-            manifest: readonly_gameplay_entrypoints().manifest,
-            api: readonly_gameplay_entrypoints().api,
+            manifest: readonly.manifest,
+            factory: readonly.factory,
         })
         .storage_raw(InProcessStoragePlugin {
             plugin_id: failing_storage_plugin::PLUGIN_ID.to_string(),
-            manifest: failing_storage_plugin::in_process_plugin_entrypoints().manifest,
-            api: failing_storage_plugin::in_process_plugin_entrypoints().api,
+            manifest: failing_storage.manifest,
+            factory: failing_storage.factory,
         })
         .auth_raw(InProcessAuthPlugin {
             plugin_id: "auth-offline".to_string(),
-            manifest: offline_auth_entrypoints().manifest,
-            api: offline_auth_entrypoints().api,
+            manifest: offline_auth.manifest,
+            factory: offline_auth.factory,
         })
         .bootstrap_config(mc_plugin_host::config::BootstrapConfig {
             storage_profile: failing_storage_plugin::PROFILE_ID.into(),

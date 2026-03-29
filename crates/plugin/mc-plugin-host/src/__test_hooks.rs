@@ -5,8 +5,8 @@ pub use crate::host::{
     InProcessProtocolPlugin, InProcessStoragePlugin,
 };
 use crate::host::{
-    PluginAbiRange, PluginCatalog, PluginFailureMatrix, PluginHost, PluginHostStatusSnapshot,
-    plugin_host_from_config,
+    PluginAbiRange, PluginCatalog, PluginFailureMatrix, PluginHost,
+    PluginHostInventoryStatusSnapshot, plugin_host_from_config,
 };
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
 use crate::runtime::{
@@ -74,7 +74,7 @@ pub fn runtime_host(host: &BuiltTestHost) -> Arc<dyn RuntimePluginHost> {
 }
 
 #[must_use]
-pub fn status(host: &BuiltTestHost) -> PluginHostStatusSnapshot {
+pub fn status(host: &BuiltTestHost) -> PluginHostInventoryStatusSnapshot {
     host.inner.status()
 }
 

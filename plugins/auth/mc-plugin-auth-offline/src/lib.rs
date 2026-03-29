@@ -4,8 +4,8 @@ use mc_plugin_sdk_rust::auth::RustAuthPlugin;
 use mc_plugin_sdk_rust::capabilities::auth_capabilities;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
-use md5::{Digest, Md5};
 use mc_plugin_sdk_rust::{AuthCapability, AuthCapabilitySet, PlayerId};
+use md5::{Digest, Md5};
 use uuid::Uuid;
 
 pub const OFFLINE_AUTH_PROFILE_ID: &str = "offline-v1";

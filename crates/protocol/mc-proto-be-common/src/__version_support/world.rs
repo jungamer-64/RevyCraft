@@ -1,7 +1,7 @@
 use crate::world;
 use mc_proto_common::ProtocolError;
-use revy_voxel_core::EntityId;
 use revy_voxel_model::{BlockFace, BlockPos, Vec3 as ModelVec3};
+use revy_voxel_semantic::EntityId;
 use vek::Vec3;
 
 pub fn bedrock_actor_id(entity_id: EntityId) -> u64 {

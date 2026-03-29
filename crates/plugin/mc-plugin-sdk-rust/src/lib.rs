@@ -9,7 +9,8 @@ use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_api::codec::storage::StorageDescriptor;
 use mc_plugin_api::manifest::PluginManifestV1;
-use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError, StorageError};
+use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError};
+use mc_storage_common::StorageError;
 use revy_voxel_model::WorldMeta;
 use std::path::Path;
 
@@ -30,11 +31,11 @@ pub mod test_support;
 mod tests;
 
 pub use mc_plugin_api::{
-    AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapability,
-    AuthCapabilitySet, AuthProfileId, CapabilityAnnouncement, ClosedCapabilitySet, ConnectionId,
-    CoreCommand, CoreConfig, CoreEvent, EntityId, EventTarget, GameplayCapability,
-    GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId, PlayerSnapshot,
-    PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
-    ServerCore, SessionCommand, StorageCapability, StorageCapabilitySet, StorageProfileId,
-    TargetedEvent, WorldSnapshot,
+    AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,
+    AuthCapability, AuthCapabilitySet, AuthProfileId, CapabilityAnnouncement,
+    ClosedCapabilitySet, ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, EventTarget,
+    GameplayCapability, GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId,
+    PlayerSnapshot, PluginBuildTag, PluginGenerationId, ProtocolCapability,
+    ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet, SessionCommand,
+    StorageCapability, StorageCapabilitySet, StorageProfileId, TargetedEvent, WorldSnapshot,
 };

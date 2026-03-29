@@ -1,28 +1,26 @@
 use super::{__macro_support, admin_surface, capabilities, gameplay, manifest, protocol};
+use crate::{
+    CapabilityAnnouncement, CoreEvent, GameplayCapability, GameplayProfileId, PlayerId,
+    PlayerSnapshot, PluginBuildTag, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
+};
 use bytes::BytesMut;
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
 use mc_plugin_api::codec::admin::AdminPermission;
 use mc_plugin_api::codec::admin_surface::{
     AdminSurfaceDescriptor, AdminSurfaceEndpointView, AdminSurfaceInstanceDeclaration,
     AdminSurfacePauseView, AdminSurfaceRequest, AdminSurfaceResponse, AdminSurfaceStatusView,
-    decode_admin_surface_response, encode_admin_surface_request,
+    encode_admin_surface_request,
 };
 use mc_plugin_api::codec::gameplay::{
     GameplayDescriptor, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
-    decode_gameplay_response, encode_gameplay_request, host_blob::encode_world_meta,
+    encode_gameplay_request, host_blob::encode_world_meta,
 };
 use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse, WireFrameDecodeResult};
-use mc_plugin_api::host_api::{
-    AdminSurfaceHostApiV1, AdminSurfacePluginApiV1, GameplayHostApiV2, GameplayPluginApiV3,
-};
+use mc_plugin_api::host_api::{AdminSurfaceHostApiV1, GameplayHostApiV2};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest, PlayEncodingContext,
     ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
     StatusRequest, TransportKind, WireCodec, WireFormatKind,
-};
-use crate::{
-    CapabilityAnnouncement, CoreEvent, GameplayCapability, GameplayProfileId, PlayerId,
-    PlayerSnapshot, PluginBuildTag, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
 };
 use revy_voxel_model::{BlockPos, DimensionId, WorldMeta};
 use std::ffi::c_void;
@@ -373,10 +371,7 @@ fn capability_helpers_add_build_tags_without_changing_base_names() {
     assert!(announcement.contains(ProtocolCapability::RuntimeReload));
     assert!(announcement.contains(ProtocolCapability::Je));
     assert_eq!(
-        announcement
-            .build_tag
-            .as_ref()
-            .map(PluginBuildTag::as_str),
+        announcement.build_tag.as_ref().map(PluginBuildTag::as_str),
         Some("protocol-reload-v2")
     );
 }
@@ -720,81 +715,158 @@ mod declared_protocol_plugin {
     );
 }
 
-unsafe fn invoke_gameplay(
-    api: &GameplayPluginApiV3,
-    host_api: Option<&GameplayHostApiV2>,
-    request: &GameplayRequest,
-) -> GameplayResponse {
-    let payload = encode_gameplay_request(request).expect("gameplay request should encode");
-    let mut output = OwnedBuffer::empty();
-    let mut error = OwnedBuffer::empty();
-    let status = unsafe {
-        (api.invoke)(
-            ByteSlice {
-                ptr: payload.as_ptr(),
-                len: payload.len(),
-            },
-            host_api.map_or(std::ptr::null(), std::ptr::from_ref),
-            &raw mut output,
-            &raw mut error,
-        )
+#[allow(unexpected_cfgs)]
+mod doc_style_protocol_plugin {
+    use super::TestProtocolWireCodec;
+    use crate::ProtocolCapability;
+    use crate::protocol::declare_protocol_plugin;
+    use mc_proto_common::{
+        ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest,
+        PlayEncodingContext, PlaySyncAdapter, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
+        ProtocolSessionSnapshot, RuntimeCommand, ServerListStatus, SessionAdapter, StatusRequest,
+        TransportKind, WireCodec, WireFormatKind,
     };
-    if status != PluginErrorCode::Ok {
-        let message = if error.ptr.is_null() {
-            format!("invoke failed with status {status:?}")
-        } else {
-            let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
-            unsafe {
-                (api.free_buffer)(error);
+
+    #[derive(Default)]
+    pub struct DocStyleProtocolAdapter;
+
+    impl HandshakeProbe for DocStyleProtocolAdapter {
+        fn transport_kind(&self) -> TransportKind {
+            TransportKind::Tcp
+        }
+
+        fn try_route(&self, _frame: &[u8]) -> Result<Option<HandshakeIntent>, ProtocolError> {
+            Ok(None)
+        }
+    }
+
+    impl SessionAdapter for DocStyleProtocolAdapter {
+        fn wire_codec(&self) -> &dyn WireCodec {
+            static CODEC: TestProtocolWireCodec = TestProtocolWireCodec;
+            &CODEC
+        }
+
+        fn decode_status(&self, _frame: &[u8]) -> Result<StatusRequest, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+        }
+
+        fn decode_login(&self, _frame: &[u8]) -> Result<LoginRequest, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+        }
+
+        fn encode_status_response(
+            &self,
+            _status: &ServerListStatus,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+        }
+
+        fn encode_status_pong(&self, _payload: i64) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+        }
+
+        fn encode_disconnect(
+            &self,
+            _phase: ConnectionPhase,
+            _reason: &str,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+        }
+
+        fn encode_encryption_request(
+            &self,
+            _server_id: &str,
+            _public_key_der: &[u8],
+            _verify_token: &[u8],
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+        }
+
+        fn encode_network_settings(
+            &self,
+            _compression_threshold: u16,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+        }
+
+        fn encode_login_success(
+            &self,
+            _player: &crate::PlayerSnapshot,
+        ) -> Result<Vec<u8>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+        }
+    }
+
+    impl PlaySyncAdapter for DocStyleProtocolAdapter {
+        fn decode_play(
+            &self,
+            _session: &ProtocolSessionSnapshot,
+            _frame: &[u8],
+        ) -> Result<Option<RuntimeCommand>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+        }
+
+        fn encode_play_event(
+            &self,
+            _event: &crate::CoreEvent,
+            _session: &ProtocolSessionSnapshot,
+            _context: &PlayEncodingContext,
+        ) -> Result<Vec<Vec<u8>>, ProtocolError> {
+            Err(ProtocolError::InvalidPacket("unused doc-style protocol method"))
+        }
+    }
+
+    impl ProtocolAdapter for DocStyleProtocolAdapter {
+        fn descriptor(&self) -> ProtocolDescriptor {
+            ProtocolDescriptor {
+                adapter_id: "doc-style-probe".to_string(),
+                transport: TransportKind::Tcp,
+                wire_format: WireFormatKind::MinecraftFramed,
+                edition: Edition::Je,
+                version_name: "docs".to_string(),
+                protocol_number: 0,
             }
-            String::from_utf8(bytes).expect("plugin error should be utf-8")
-        };
-        panic!("{message}");
+        }
     }
-    let bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
-    unsafe {
-        (api.free_buffer)(output);
-    }
-    decode_gameplay_response(request, &bytes).expect("gameplay response should decode")
+
+    declare_protocol_plugin!(
+        DocStyleProtocolPlugin,
+        DocStyleProtocolAdapter,
+        "doc-style-probe",
+        "Doc Style Protocol Plugin",
+        &[
+            ProtocolCapability::RuntimeReload,
+            ProtocolCapability::Je,
+        ],
+    );
 }
 
-unsafe fn invoke_admin_surface(
-    api: &AdminSurfacePluginApiV1,
-    host_api: Option<&AdminSurfaceHostApiV1>,
-    request: &AdminSurfaceRequest,
-) -> AdminSurfaceResponse {
-    let payload =
-        encode_admin_surface_request(request).expect("admin-surface request should encode");
-    let mut output = OwnedBuffer::empty();
-    let mut error = OwnedBuffer::empty();
-    let status = unsafe {
-        (api.invoke)(
-            ByteSlice {
-                ptr: payload.as_ptr(),
-                len: payload.len(),
-            },
-            host_api.map_or(std::ptr::null(), std::ptr::from_ref),
-            &raw mut output,
-            &raw mut error,
-        )
-    };
-    if status != PluginErrorCode::Ok {
-        let message = if error.ptr.is_null() {
-            format!("invoke failed with status {status:?}")
-        } else {
-            let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
-            unsafe {
-                (api.free_buffer)(error);
-            }
-            String::from_utf8(bytes).expect("plugin error should be utf-8")
-        };
-        panic!("{message}");
+#[allow(unexpected_cfgs)]
+mod doc_style_gameplay_plugin {
+    use crate::{GameplayCapability, GameplayCapabilitySet};
+    use crate::capabilities::gameplay_capabilities;
+    use crate::export_plugin;
+    use crate::gameplay::{RustGameplayPlugin, gameplay_descriptor};
+    use crate::manifest::StaticPluginManifest;
+    use mc_plugin_api::codec::gameplay::GameplayDescriptor;
+
+    #[derive(Default)]
+    pub struct DocStyleGameplayPlugin;
+
+    impl RustGameplayPlugin for DocStyleGameplayPlugin {
+        fn descriptor(&self) -> GameplayDescriptor {
+            gameplay_descriptor("doc-style")
+        }
+
+        fn capability_set(&self) -> GameplayCapabilitySet {
+            gameplay_capabilities(&[GameplayCapability::RuntimeReload])
+        }
     }
-    let bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
-    unsafe {
-        (api.free_buffer)(output);
-    }
-    decode_admin_surface_response(request, &bytes).expect("admin-surface response should decode")
+
+    const MANIFEST: StaticPluginManifest =
+        StaticPluginManifest::gameplay("doc-style-gameplay", "Doc Style Gameplay Plugin", "doc-style");
+
+    export_plugin!(gameplay, DocStyleGameplayPlugin, MANIFEST);
 }
 
 #[test]
@@ -821,11 +893,15 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
     };
 
     assert_eq!(
-        unsafe { invoke_gameplay(entrypoints_a.api, Some(&host_api_a), &request_a) },
+        (entrypoints_a.factory)()
+            .handle(request_a, Some(host_api_a))
+            .expect("in-process gameplay handler should succeed"),
         GameplayResponse::Empty
     );
     assert_eq!(
-        unsafe { invoke_gameplay(entrypoints_b.api, Some(&host_api_b), &request_b) },
+        (entrypoints_b.factory)()
+            .handle(request_b, Some(host_api_b))
+            .expect("in-process gameplay handler should succeed"),
         GameplayResponse::Empty
     );
     assert_eq!(
@@ -840,7 +916,7 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
 
 #[test]
 fn exported_gameplay_plugins_reject_null_host_api() {
-    let entrypoints = plugin_a::in_process_plugin_entrypoints();
+    let api = unsafe { &*plugin_a::mc_plugin_gameplay_api_v3() };
     let request = GameplayRequest::HandleTick {
         session: gameplay_session("plugin-a", Some(test_player_id())),
         now_ms: 3,
@@ -849,7 +925,7 @@ fn exported_gameplay_plugins_reject_null_host_api() {
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
-        (entrypoints.api.invoke)(
+        (api.invoke)(
             ByteSlice {
                 ptr: payload.as_ptr(),
                 len: payload.len(),
@@ -862,7 +938,7 @@ fn exported_gameplay_plugins_reject_null_host_api() {
     assert_eq!(status, PluginErrorCode::InvalidInput);
     let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
     unsafe {
-        (entrypoints.api.free_buffer)(error);
+        (api.free_buffer)(error);
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
@@ -877,7 +953,7 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     };
     let mut host_api = gameplay_host_api_for(&context);
     host_api.abi = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
-    let entrypoints = plugin_a::in_process_plugin_entrypoints();
+    let api = unsafe { &*plugin_a::mc_plugin_gameplay_api_v3() };
     let request = GameplayRequest::HandleTick {
         session: gameplay_session("plugin-a", Some(test_player_id())),
         now_ms: 4,
@@ -886,7 +962,7 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
-        (entrypoints.api.invoke)(
+        (api.invoke)(
             ByteSlice {
                 ptr: payload.as_ptr(),
                 len: payload.len(),
@@ -899,7 +975,7 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     assert_eq!(status, PluginErrorCode::AbiMismatch);
     let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
     unsafe {
-        (entrypoints.api.free_buffer)(error);
+        (api.free_buffer)(error);
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
@@ -921,18 +997,18 @@ fn exported_admin_surface_plugins_start_round_trip_uses_host_api_callbacks() {
     let host_api_a = admin_surface_host_api_for(&context_a);
     let host_api_b = admin_surface_host_api_for(&context_b);
     let entrypoints = test_admin_surface_plugin::in_process_plugin_entrypoints();
+    let handler = (entrypoints.factory)();
 
     assert_eq!(
-        unsafe {
-            invoke_admin_surface(
-                entrypoints.api,
-                Some(&host_api_a),
-                &AdminSurfaceRequest::Start {
+        handler
+            .handle(
+                AdminSurfaceRequest::Start {
                     instance_id: "console-a".to_string(),
                     surface_config_path: None,
                 },
+                Some(host_api_a),
             )
-        },
+            .expect("in-process admin-surface handler should succeed"),
         AdminSurfaceResponse::Started(AdminSurfaceStatusView {
             endpoints: vec![AdminSurfaceEndpointView {
                 surface: "console-a".to_string(),
@@ -941,16 +1017,15 @@ fn exported_admin_surface_plugins_start_round_trip_uses_host_api_callbacks() {
         })
     );
     assert_eq!(
-        unsafe {
-            invoke_admin_surface(
-                entrypoints.api,
-                Some(&host_api_b),
-                &AdminSurfaceRequest::Start {
+        handler
+            .handle(
+                AdminSurfaceRequest::Start {
                     instance_id: "console-b".to_string(),
                     surface_config_path: None,
                 },
+                Some(host_api_b),
             )
-        },
+            .expect("in-process admin-surface handler should succeed"),
         AdminSurfaceResponse::Started(AdminSurfaceStatusView {
             endpoints: vec![AdminSurfaceEndpointView {
                 surface: "console-b".to_string(),
@@ -962,7 +1037,7 @@ fn exported_admin_surface_plugins_start_round_trip_uses_host_api_callbacks() {
 
 #[test]
 fn exported_admin_surface_plugins_reject_null_host_api() {
-    let entrypoints = test_admin_surface_plugin::in_process_plugin_entrypoints();
+    let api = unsafe { &*test_admin_surface_plugin::mc_plugin_admin_surface_api_v1() };
     let request = AdminSurfaceRequest::Start {
         instance_id: "console".to_string(),
         surface_config_path: None,
@@ -972,7 +1047,7 @@ fn exported_admin_surface_plugins_reject_null_host_api() {
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
-        (entrypoints.api.invoke)(
+        (api.invoke)(
             ByteSlice {
                 ptr: payload.as_ptr(),
                 len: payload.len(),
@@ -985,7 +1060,7 @@ fn exported_admin_surface_plugins_reject_null_host_api() {
     assert_eq!(status, PluginErrorCode::InvalidInput);
     let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
     unsafe {
-        (entrypoints.api.free_buffer)(error);
+        (api.free_buffer)(error);
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
@@ -1000,7 +1075,7 @@ fn exported_admin_surface_plugins_reject_mismatched_host_api_abi() {
     };
     let mut host_api = admin_surface_host_api_for(&context);
     host_api.abi = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
-    let entrypoints = test_admin_surface_plugin::in_process_plugin_entrypoints();
+    let api = unsafe { &*test_admin_surface_plugin::mc_plugin_admin_surface_api_v1() };
     let request = AdminSurfaceRequest::Start {
         instance_id: "console".to_string(),
         surface_config_path: None,
@@ -1010,7 +1085,7 @@ fn exported_admin_surface_plugins_reject_mismatched_host_api_abi() {
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
-        (entrypoints.api.invoke)(
+        (api.invoke)(
             ByteSlice {
                 ptr: payload.as_ptr(),
                 len: payload.len(),
@@ -1023,7 +1098,7 @@ fn exported_admin_surface_plugins_reject_mismatched_host_api_abi() {
     assert_eq!(status, PluginErrorCode::AbiMismatch);
     let bytes = unsafe { std::slice::from_raw_parts(error.ptr, error.len) }.to_vec();
     unsafe {
-        (entrypoints.api.free_buffer)(error);
+        (api.free_buffer)(error);
     }
     assert_eq!(
         String::from_utf8(bytes).expect("plugin error should be utf-8"),
@@ -1064,4 +1139,45 @@ fn declared_protocol_plugins_delegate_wire_codec_and_keep_manifest_capabilities(
     let entrypoints = declared_protocol_plugin::in_process_plugin_entrypoints();
     let capabilities = manifest_capability_names(entrypoints.manifest);
     assert_eq!(capabilities, vec!["runtime.reload.protocol".to_string()]);
+}
+
+#[test]
+fn sdk_root_reexports_cover_authoring_semantic_surface() {
+    let adapter_id: crate::AdapterId = "je-47".into();
+    assert_eq!(adapter_id.as_str(), "je-47");
+
+    let capabilities = crate::SessionCapabilitySet {
+        protocol: ProtocolCapabilitySet::new(),
+        gameplay: crate::GameplayCapabilitySet::new(),
+        gameplay_profile: GameplayProfileId::new("canonical"),
+        entity_id: Some(crate::EntityId(7)),
+        protocol_generation: None,
+        gameplay_generation: None,
+    };
+    assert_eq!(capabilities.entity_id, Some(crate::EntityId(7)));
+}
+
+#[test]
+fn doc_style_protocol_plugin_snippet_compiles_with_sdk_root_imports() {
+    let entrypoints = doc_style_protocol_plugin::in_process_plugin_entrypoints();
+    let capabilities = manifest_capability_names(entrypoints.manifest);
+    assert_eq!(
+        capabilities,
+        vec![
+            "runtime.reload.protocol".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn doc_style_gameplay_plugin_snippet_compiles_with_sdk_root_imports() {
+    let entrypoints = doc_style_gameplay_plugin::in_process_plugin_entrypoints();
+    let capabilities = manifest_capability_names(entrypoints.manifest);
+    assert_eq!(
+        capabilities,
+        vec![
+            "gameplay.profile:doc-style".to_string(),
+            "runtime.reload.gameplay".to_string(),
+        ]
+    );
 }

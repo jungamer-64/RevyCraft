@@ -1,116 +1,13 @@
-use super::{
-    ArtifactIdentity, Deserialize, HashMap, Mutex, PluginKind, RuntimeError, Serialize,
-    system_time_ms,
-};
+use super::{ArtifactIdentity, HashMap, Mutex, PluginKind, RuntimeError, system_time_ms};
+use revy_server_types::{PluginFailureAction, PluginFailureMatrix};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PluginFailureAction {
-    Quarantine,
-    Skip,
-    FailFast,
-}
-
-impl PluginFailureAction {
-    fn parse_with_allowed(value: &str, key: &str, allowed: &[Self]) -> Result<Self, RuntimeError> {
-        let action = if value.eq_ignore_ascii_case("quarantine") {
-            Self::Quarantine
-        } else if value.eq_ignore_ascii_case("skip") {
-            Self::Skip
-        } else if value.eq_ignore_ascii_case("fail-fast") {
-            Self::FailFast
-        } else {
-            return Err(RuntimeError::Config(format!("unsupported {key} `{value}`")));
-        };
-        if allowed.contains(&action) {
-            Ok(action)
-        } else {
-            Err(RuntimeError::Config(format!("unsupported {key} `{value}`")))
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PluginFailureMatrix {
-    pub protocol: PluginFailureAction,
-    pub gameplay: PluginFailureAction,
-    pub storage: PluginFailureAction,
-    pub auth: PluginFailureAction,
-    pub admin_surface: PluginFailureAction,
-}
-
-impl Default for PluginFailureMatrix {
-    fn default() -> Self {
-        Self {
-            protocol: PluginFailureAction::Quarantine,
-            gameplay: PluginFailureAction::Quarantine,
-            storage: PluginFailureAction::FailFast,
-            auth: PluginFailureAction::Skip,
-            admin_surface: PluginFailureAction::Skip,
-        }
-    }
-}
-
-impl PluginFailureMatrix {
-    pub fn parse_protocol(value: &str) -> Result<PluginFailureAction, RuntimeError> {
-        PluginFailureAction::parse_with_allowed(
-            value,
-            "plugin-failure-policy-protocol",
-            &[
-                PluginFailureAction::Quarantine,
-                PluginFailureAction::Skip,
-                PluginFailureAction::FailFast,
-            ],
-        )
-    }
-
-    pub fn parse_gameplay(value: &str) -> Result<PluginFailureAction, RuntimeError> {
-        PluginFailureAction::parse_with_allowed(
-            value,
-            "plugin-failure-policy-gameplay",
-            &[
-                PluginFailureAction::Quarantine,
-                PluginFailureAction::Skip,
-                PluginFailureAction::FailFast,
-            ],
-        )
-    }
-
-    pub fn parse_storage(value: &str) -> Result<PluginFailureAction, RuntimeError> {
-        PluginFailureAction::parse_with_allowed(
-            value,
-            "plugin-failure-policy-storage",
-            &[PluginFailureAction::Skip, PluginFailureAction::FailFast],
-        )
-    }
-
-    pub fn parse_auth(value: &str) -> Result<PluginFailureAction, RuntimeError> {
-        PluginFailureAction::parse_with_allowed(
-            value,
-            "plugin-failure-policy-auth",
-            &[PluginFailureAction::Skip, PluginFailureAction::FailFast],
-        )
-    }
-
-    pub fn parse_admin_surface(value: &str) -> Result<PluginFailureAction, RuntimeError> {
-        PluginFailureAction::parse_with_allowed(
-            value,
-            "plugin-failure-policy-admin-surface",
-            &[
-                PluginFailureAction::Quarantine,
-                PluginFailureAction::Skip,
-                PluginFailureAction::FailFast,
-            ],
-        )
-    }
-
-    pub(crate) const fn action_for_kind(self, kind: PluginKind) -> PluginFailureAction {
-        match kind {
-            PluginKind::Protocol => self.protocol,
-            PluginKind::Gameplay => self.gameplay,
-            PluginKind::Storage => self.storage,
-            PluginKind::Auth => self.auth,
-            PluginKind::AdminSurface => self.admin_surface,
-        }
+const fn action_for_kind(matrix: PluginFailureMatrix, kind: PluginKind) -> PluginFailureAction {
+    match kind {
+        PluginKind::Protocol => matrix.protocol,
+        PluginKind::Gameplay => matrix.gameplay,
+        PluginKind::Storage => matrix.storage,
+        PluginKind::Auth => matrix.auth,
+        PluginKind::AdminSurface => matrix.admin_surface,
     }
 }
 
@@ -266,10 +163,13 @@ impl PluginFailureDispatch {
     }
 
     pub(crate) fn action_for_kind(&self, kind: PluginKind) -> PluginFailureAction {
-        self.matrix
-            .lock()
-            .expect("failure matrix mutex should not be poisoned")
-            .action_for_kind(kind)
+        action_for_kind(
+            *self
+                .matrix
+                .lock()
+                .expect("failure matrix mutex should not be poisoned"),
+            kind,
+        )
     }
 
     pub(crate) fn matrix(&self) -> PluginFailureMatrix {

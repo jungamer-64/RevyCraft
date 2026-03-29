@@ -23,7 +23,7 @@ mc-content-canonical = { path = "../../../crates/content/mc-content-canonical" }
 revy-voxel-model = { path = "../../../crates/model/revy-voxel-model" }
 mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
-mc-proto-common = { path = "../../../crates/protocol/mc-proto-common" }
+mc-storage-common = { path = "../../../crates/storage/mc-storage-common" }
 uuid.workspace = true
 
 [dev-dependencies]

@@ -3,12 +3,7 @@ use mc_plugin_api::{
     AdapterId, AdminSurfaceProfileId, AuthProfileId, CoreConfig, GameplayProfileId,
     StorageProfileId,
 };
-use mc_plugin_host::config::{
-    AdminSurfaceSelectionConfig as PluginHostAdminSurfaceSelectionConfig,
-    BootstrapConfig as PluginHostBootstrapConfig, PluginBufferLimits as PluginHostBufferLimits,
-    RuntimeSelectionConfig as PluginHostRuntimeSelectionConfig,
-};
-use mc_plugin_host::host::{PluginAbiRange, PluginFailureAction, PluginFailureMatrix};
+pub use revy_server_types::{AdminPermission, PluginFailureAction, PluginFailureMatrix};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -25,8 +20,6 @@ pub const DEFAULT_TOPOLOGY_DRAIN_GRACE_SECS: u64 = 30;
 pub enum ServerConfigError {
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("plugin-host config error: {0}")]
-    PluginHost(#[from] mc_plugin_host::PluginHostError),
     #[error("unsupported configuration: {0}")]
     Unsupported(String),
     #[error("configuration error: {0}")]
@@ -51,28 +44,6 @@ impl ServerConfigSource {
                 Ok(config)
             }
             Self::Toml(path) => ServerConfig::from_toml(path),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum AdminPermission {
-    Status,
-    Sessions,
-    ReloadRuntime,
-    UpgradeRuntime,
-    Shutdown,
-}
-
-impl AdminPermission {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Status => "status",
-            Self::Sessions => "sessions",
-            Self::ReloadRuntime => "reload-runtime",
-            Self::UpgradeRuntime => "upgrade-runtime",
-            Self::Shutdown => "shutdown",
         }
     }
 }
@@ -171,11 +142,38 @@ impl Default for TopologyConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginBufferLimits {
+    pub protocol_response_bytes: usize,
+    pub gameplay_response_bytes: usize,
+    pub storage_response_bytes: usize,
+    pub auth_response_bytes: usize,
+    pub admin_surface_response_bytes: usize,
+    pub callback_payload_bytes: usize,
+    pub metadata_bytes: usize,
+}
+
+impl Default for PluginBufferLimits {
+    fn default() -> Self {
+        const KIB: usize = 1024;
+        const MIB: usize = 1024 * KIB;
+        Self {
+            protocol_response_bytes: 4 * MIB,
+            gameplay_response_bytes: 1 * MIB,
+            storage_response_bytes: 32 * MIB,
+            auth_response_bytes: 256 * KIB,
+            admin_surface_response_bytes: 1 * MIB,
+            callback_payload_bytes: 1 * MIB,
+            metadata_bytes: 64 * KIB,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginsConfig {
     pub allowlist: Option<Vec<String>>,
     pub reload_watch: bool,
-    pub buffer_limits: PluginHostBufferLimits,
+    pub buffer_limits: PluginBufferLimits,
     pub failure_policy: PluginFailureMatrix,
 }
 
@@ -184,7 +182,7 @@ impl Default for PluginsConfig {
         Self {
             allowlist: None,
             reload_watch: false,
-            buffer_limits: PluginHostBufferLimits::default(),
+            buffer_limits: PluginBufferLimits::default(),
             failure_policy: PluginFailureMatrix::default(),
         }
     }
@@ -298,7 +296,6 @@ pub struct CoreReloadPlan {
 pub struct FullReloadPlan {
     pub next_active_config: ServerConfig,
     pub core_config: CoreConfig,
-    pub plugin_host_selection: PluginHostRuntimeSelectionConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -326,18 +323,6 @@ impl From<ServerConfig> for NormalizedServerConfig {
 }
 
 impl NormalizedServerConfig {
-    fn effective_admin_surface_configs(&self) -> Vec<(String, AdminSurfaceConfig)> {
-        let mut entries = self
-            .server
-            .admin
-            .surfaces
-            .iter()
-            .map(|(instance_id, config)| (instance_id.clone(), config.clone()))
-            .collect::<Vec<_>>();
-        entries.sort_by(|left, right| left.0.cmp(&right.0));
-        entries
-    }
-
     fn into_validated(self) -> Result<ServerConfig, ServerConfigError> {
         self.server.validate()?;
         Ok(self.server)
@@ -356,44 +341,6 @@ impl NormalizedServerConfig {
             plugins: self.server.plugins.clone(),
             profiles: self.server.profiles.clone(),
             admin: self.server.admin.clone(),
-        }
-    }
-
-    fn plugin_host_bootstrap_config(&self) -> PluginHostBootstrapConfig {
-        PluginHostBootstrapConfig {
-            storage_profile: self.server.bootstrap.storage_profile.clone(),
-            plugins_dir: self.server.bootstrap.plugins_dir.clone(),
-            plugin_abi_min: self.server.bootstrap.plugin_abi_min,
-            plugin_abi_max: self.server.bootstrap.plugin_abi_max,
-        }
-    }
-
-    fn plugin_host_runtime_selection_config(&self) -> PluginHostRuntimeSelectionConfig {
-        let admin_surfaces = self
-            .effective_admin_surface_configs()
-            .into_iter()
-            .map(
-                |(instance_id, surface)| PluginHostAdminSurfaceSelectionConfig {
-                    instance_id,
-                    profile: surface.profile,
-                    config_path: surface.config,
-                },
-            )
-            .collect();
-        PluginHostRuntimeSelectionConfig {
-            be_enabled: self.server.topology.be_enabled,
-            auth_profile: self.server.profiles.auth.clone(),
-            bedrock_auth_profile: self.server.profiles.bedrock_auth.clone(),
-            default_gameplay_profile: self.server.profiles.default_gameplay.clone(),
-            gameplay_profile_map: self.server.profiles.gameplay_map.clone(),
-            admin_surfaces,
-            plugin_allowlist: self.server.plugins.allowlist.clone(),
-            buffer_limits: self.server.plugins.buffer_limits,
-            plugin_failure_policy_protocol: self.server.plugins.failure_policy.protocol,
-            plugin_failure_policy_gameplay: self.server.plugins.failure_policy.gameplay,
-            plugin_failure_policy_storage: self.server.plugins.failure_policy.storage,
-            plugin_failure_policy_auth: self.server.plugins.failure_policy.auth,
-            plugin_failure_policy_admin_surface: self.server.plugins.failure_policy.admin_surface,
         }
     }
 }
@@ -445,16 +392,6 @@ impl ServerConfig {
         NormalizedServerConfig::from(self.clone()).static_config()
     }
 
-    #[must_use]
-    pub fn plugin_host_bootstrap_config(&self) -> PluginHostBootstrapConfig {
-        NormalizedServerConfig::from(self.clone()).plugin_host_bootstrap_config()
-    }
-
-    #[must_use]
-    pub fn plugin_host_runtime_selection_config(&self) -> PluginHostRuntimeSelectionConfig {
-        NormalizedServerConfig::from(self.clone()).plugin_host_runtime_selection_config()
-    }
-
     /// # Errors
     ///
     /// Returns [`ServerConfigError`] when the candidate changes restart-only state.
@@ -504,7 +441,6 @@ impl ServerConfig {
         Ok(FullReloadPlan {
             next_active_config: candidate.clone(),
             core_config: runtime_core_config(candidate),
-            plugin_host_selection: candidate.plugin_host_runtime_selection_config(),
         })
     }
 
@@ -757,27 +693,27 @@ impl ServerConfigDocument {
                 failure_policy: PluginFailureMatrix {
                     protocol: parse_failure_policy(
                         self.live.plugins.failure_policy.protocol.as_deref(),
-                        PluginFailureMatrix::parse_protocol,
+                        parse_protocol_failure_policy,
                         PluginFailureMatrix::default().protocol,
                     )?,
                     gameplay: parse_failure_policy(
                         self.live.plugins.failure_policy.gameplay.as_deref(),
-                        PluginFailureMatrix::parse_gameplay,
+                        parse_gameplay_failure_policy,
                         PluginFailureMatrix::default().gameplay,
                     )?,
                     storage: parse_failure_policy(
                         self.live.plugins.failure_policy.storage.as_deref(),
-                        PluginFailureMatrix::parse_storage,
+                        parse_storage_failure_policy,
                         PluginFailureMatrix::default().storage,
                     )?,
                     auth: parse_failure_policy(
                         self.live.plugins.failure_policy.auth.as_deref(),
-                        PluginFailureMatrix::parse_auth,
+                        parse_auth_failure_policy,
                         PluginFailureMatrix::default().auth,
                     )?,
                     admin_surface: parse_failure_policy(
                         self.live.plugins.failure_policy.admin_surface.as_deref(),
-                        PluginFailureMatrix::parse_admin_surface,
+                        parse_admin_surface_failure_policy,
                         PluginFailureMatrix::default().admin_surface,
                     )?,
                 },
@@ -889,9 +825,9 @@ fn normalize_optional_vec<T>(values: Option<Vec<T>>) -> Option<Vec<T>> {
     }
 }
 
-fn parse_plugin_buffer_limits(document: PluginBufferLimitsDocument) -> PluginHostBufferLimits {
-    let defaults = PluginHostBufferLimits::default();
-    PluginHostBufferLimits {
+fn parse_plugin_buffer_limits(document: PluginBufferLimitsDocument) -> PluginBufferLimits {
+    let defaults = PluginBufferLimits::default();
+    PluginBufferLimits {
         protocol_response_bytes: document
             .protocol_response_bytes
             .unwrap_or(defaults.protocol_response_bytes),
@@ -1002,6 +938,85 @@ where
     }
 }
 
+fn parse_failure_action_with_allowed(
+    value: &str,
+    key: &str,
+    allowed: &[PluginFailureAction],
+) -> Result<PluginFailureAction, ServerConfigError> {
+    let action = if value.eq_ignore_ascii_case("quarantine") {
+        PluginFailureAction::Quarantine
+    } else if value.eq_ignore_ascii_case("skip") {
+        PluginFailureAction::Skip
+    } else if value.eq_ignore_ascii_case("fail-fast") {
+        PluginFailureAction::FailFast
+    } else {
+        return Err(ServerConfigError::Config(format!(
+            "unsupported {key} `{value}`"
+        )));
+    };
+    if allowed.contains(&action) {
+        Ok(action)
+    } else {
+        Err(ServerConfigError::Config(format!(
+            "unsupported {key} `{value}`"
+        )))
+    }
+}
+
+fn parse_protocol_failure_policy(value: &str) -> Result<PluginFailureAction, ServerConfigError> {
+    parse_failure_action_with_allowed(
+        value,
+        "plugin-failure-policy-protocol",
+        &[
+            PluginFailureAction::Quarantine,
+            PluginFailureAction::Skip,
+            PluginFailureAction::FailFast,
+        ],
+    )
+}
+
+fn parse_gameplay_failure_policy(value: &str) -> Result<PluginFailureAction, ServerConfigError> {
+    parse_failure_action_with_allowed(
+        value,
+        "plugin-failure-policy-gameplay",
+        &[
+            PluginFailureAction::Quarantine,
+            PluginFailureAction::Skip,
+            PluginFailureAction::FailFast,
+        ],
+    )
+}
+
+fn parse_storage_failure_policy(value: &str) -> Result<PluginFailureAction, ServerConfigError> {
+    parse_failure_action_with_allowed(
+        value,
+        "plugin-failure-policy-storage",
+        &[PluginFailureAction::Skip, PluginFailureAction::FailFast],
+    )
+}
+
+fn parse_auth_failure_policy(value: &str) -> Result<PluginFailureAction, ServerConfigError> {
+    parse_failure_action_with_allowed(
+        value,
+        "plugin-failure-policy-auth",
+        &[PluginFailureAction::Skip, PluginFailureAction::FailFast],
+    )
+}
+
+fn parse_admin_surface_failure_policy(
+    value: &str,
+) -> Result<PluginFailureAction, ServerConfigError> {
+    parse_failure_action_with_allowed(
+        value,
+        "plugin-failure-policy-admin-surface",
+        &[
+            PluginFailureAction::Quarantine,
+            PluginFailureAction::Skip,
+            PluginFailureAction::FailFast,
+        ],
+    )
+}
+
 fn parse_admin_permissions(
     values: Option<Vec<String>>,
     key: &str,
@@ -1051,11 +1066,23 @@ fn parse_plugin_abi(
     key: &str,
 ) -> Result<Option<PluginAbiVersion>, ServerConfigError> {
     value
-        .map(|value| {
-            PluginAbiRange::parse_version(value)
-                .map_err(|_| ServerConfigError::Config(format!("invalid {key} `{value}`")))
-        })
+        .map(|value| parse_plugin_abi_version(value, key))
         .transpose()
+}
+
+fn parse_plugin_abi_version(value: &str, key: &str) -> Result<PluginAbiVersion, ServerConfigError> {
+    let Some((major, minor)) = value.split_once('.') else {
+        return Err(ServerConfigError::Config(format!(
+            "invalid {key} `{value}`"
+        )));
+    };
+    let major = major
+        .parse()
+        .map_err(|_| ServerConfigError::Config(format!("invalid {key} `{value}`")))?;
+    let minor = minor
+        .parse()
+        .map_err(|_| ServerConfigError::Config(format!("invalid {key} `{value}`")))?;
+    Ok(PluginAbiVersion { major, minor })
 }
 
 #[cfg(test)]
@@ -1267,7 +1294,7 @@ mod tests {
     }
 
     #[test]
-    fn full_reload_plan_adopts_candidate_config_and_selection() -> Result<(), ServerConfigError> {
+    fn full_reload_plan_adopts_candidate_config() -> Result<(), ServerConfigError> {
         let active = configured_server_config();
         let mut candidate = active.clone();
         candidate.bootstrap.level_name = "candidate-world".to_string();
@@ -1294,10 +1321,6 @@ mod tests {
         assert_eq!(plan.core_config.difficulty, 3);
         assert_eq!(plan.core_config.view_distance, 5);
         assert_eq!(plan.core_config.max_players, 31);
-        assert_eq!(
-            plan.plugin_host_selection,
-            candidate.plugin_host_runtime_selection_config()
-        );
         Ok(())
     }
 
@@ -1382,8 +1405,7 @@ config = "admin/grpc.toml"
             })
         );
 
-        let runtime_selection = parsed.plugin_host_runtime_selection_config();
-        assert_eq!(runtime_selection.admin_surfaces.len(), 2);
+        assert_eq!(parsed.admin.surfaces.len(), 2);
         Ok(())
     }
 

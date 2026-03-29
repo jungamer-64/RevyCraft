@@ -1,14 +1,15 @@
 #![allow(clippy::multiple_crate_versions)]
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 const SERVER_BINARY_PACKAGE: &str = "revy-server";
 const SERVER_BINARY_NAME: &str = "server-bootstrap";
+const DEFAULT_BOUNDARY_CHECK_CONFIG_PATH: &str = "tools/xtask/boundary-check.toml";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PluginSpec {
@@ -37,11 +38,19 @@ struct CargoPackage {
     name: String,
     manifest_path: PathBuf,
     targets: Vec<CargoTarget>,
+    #[serde(default)]
+    dependencies: Vec<CargoDependency>,
 }
 
 #[derive(Debug, Deserialize)]
 struct CargoTarget {
     kind: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoDependency {
+    name: String,
+    kind: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +66,50 @@ struct ReleaseBundleArgs {
     config_path: PathBuf,
     include_example_config: bool,
     targets: Vec<BuildTarget>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BoundaryCheckArgs {
+    config_path: PathBuf,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct BoundaryCheckConfig {
+    #[serde(default, rename = "allowed_dependency_edge")]
+    allowed_dependency_edges: Vec<AllowedDependencyEdge>,
+    #[serde(default, rename = "canonical_symbol_owner")]
+    canonical_symbol_owners: Vec<CanonicalSymbolOwner>,
+    #[serde(default, rename = "tracked_duplicate_symbol")]
+    tracked_duplicate_symbols: Vec<TrackedDuplicateSymbol>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+struct AllowedDependencyEdge {
+    from: String,
+    to: String,
+    reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+struct CanonicalSymbolOwner {
+    symbol: String,
+    path: PathBuf,
+    reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+struct TrackedDuplicateSymbol {
+    symbol: String,
+    paths: Vec<PathBuf>,
+    reason: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DependencyBoundaryRule {
+    ConfigNoPluginHost,
+    StorageNoVersionedProtocol,
+    SurfaceNoEngine,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -139,6 +192,7 @@ fn main() -> Result<(), String> {
         "package-plugins" => package_plugins(&args.collect::<Vec<_>>()),
         "package-all-plugins" => package_all_plugins(&args.collect::<Vec<_>>()),
         "build-release-bundles" => build_release_bundles(&args.collect::<Vec<_>>()),
+        "check-boundaries" => check_boundaries(&args.collect::<Vec<_>>()),
         _ => Err(help()),
     }
 }
@@ -149,6 +203,7 @@ fn help() -> String {
         "  cargo run -p xtask -- package-plugins [--release] [--dist-dir <path>] [--config <path>]",
         "  cargo run -p xtask -- package-all-plugins [--release] [--dist-dir <path>]",
         "  cargo run -p xtask -- build-release-bundles --target <triple>... [--output-dir <path>] [--config <path>]",
+        "  cargo run -p xtask -- check-boundaries [--config <path>]",
     ]
     .join("\n")
 }
@@ -209,6 +264,38 @@ fn build_release_bundles(args: &[String]) -> Result<(), String> {
             release_args.include_example_config,
         )
     })
+}
+
+fn check_boundaries(args: &[String]) -> Result<(), String> {
+    let boundary_args = parse_boundary_check_args(args)?;
+    let workspace_root = workspace_root()?;
+    let config_path = resolve_boundary_check_config_path(
+        &workspace_root,
+        Some(boundary_args.config_path.as_path()),
+    )?;
+    let config = load_boundary_check_config(&config_path)?;
+    validate_boundary_check_config(&config)?;
+    let metadata = cargo_metadata(&workspace_root)?;
+    let violations = collect_boundary_violations(&workspace_root, &metadata, &config)?;
+    if !violations.is_empty() {
+        return Err(format!(
+            "boundary check failed:\n{}",
+            violations
+                .into_iter()
+                .map(|violation| format!("  - {violation}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
+    println!(
+        "boundary check passed using {} ({} allowed dependency edges, {} canonical symbol owners, {} tracked duplicate symbols)",
+        config_path.display(),
+        config.allowed_dependency_edges.len(),
+        config.canonical_symbol_owners.len(),
+        config.tracked_duplicate_symbols.len(),
+    );
+    Ok(())
 }
 
 fn parse_package_args(args: &[String]) -> Result<PackageArgs, String> {
@@ -301,6 +388,26 @@ fn parse_release_bundle_args(
         config_path: resolved_config,
         targets,
     })
+}
+
+fn parse_boundary_check_args(args: &[String]) -> Result<BoundaryCheckArgs, String> {
+    let mut config_path = PathBuf::from(DEFAULT_BOUNDARY_CHECK_CONFIG_PATH);
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--config" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("--config requires a value".to_string());
+                };
+                config_path = PathBuf::from(value);
+                index += 2;
+            }
+            unknown => {
+                return Err(format!("unknown xtask option `{unknown}`"));
+            }
+        }
+    }
+    Ok(BoundaryCheckArgs { config_path })
 }
 
 fn package_plugin_specs(
@@ -535,6 +642,27 @@ fn workspace_root() -> Result<PathBuf, String> {
     ))
 }
 
+fn resolve_boundary_check_config_path(
+    workspace_root: &Path,
+    explicit_path: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let path = explicit_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_BOUNDARY_CHECK_CONFIG_PATH));
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        workspace_root.join(path)
+    };
+    if resolved.is_file() {
+        return Ok(resolved);
+    }
+    Err(format!(
+        "boundary check config {} does not exist",
+        resolved.display()
+    ))
+}
+
 fn find_workspace_root(start: &Path) -> Result<Option<PathBuf>, String> {
     for ancestor in start.ancestors() {
         let manifest = ancestor.join("Cargo.toml");
@@ -617,6 +745,19 @@ fn resolve_release_bundle_config_path(
 }
 
 fn discover_plugins(workspace_root: &Path) -> Result<Vec<PluginSpec>, String> {
+    let metadata = cargo_metadata(workspace_root)?;
+    let plugins_root = workspace_root.join("plugins");
+    let mut plugins = metadata
+        .packages
+        .into_iter()
+        .filter(|package| is_plugin_package(package, &plugins_root))
+        .map(|package| plugin_spec_from_package_name(&package.name))
+        .collect::<Result<Vec<_>, _>>()?;
+    plugins.sort_by(|left, right| left.cargo_package.cmp(&right.cargo_package));
+    Ok(plugins)
+}
+
+fn cargo_metadata(workspace_root: &Path) -> Result<CargoMetadata, String> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let output = Command::new(cargo)
         .current_dir(workspace_root)
@@ -630,18 +771,352 @@ fn discover_plugins(workspace_root: &Path) -> Result<Vec<PluginSpec>, String> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("cargo metadata failed: {stderr}"));
     }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("failed to parse cargo metadata: {error}"))
+}
 
-    let metadata: CargoMetadata = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("failed to parse cargo metadata: {error}"))?;
-    let plugins_root = workspace_root.join("plugins");
-    let mut plugins = metadata
+fn load_boundary_check_config(config_path: &Path) -> Result<BoundaryCheckConfig, String> {
+    let contents = fs::read_to_string(config_path).map_err(|error| {
+        format!(
+            "failed to read boundary check config {}: {error}",
+            config_path.display()
+        )
+    })?;
+    toml::from_str(&contents).map_err(|error| {
+        format!(
+            "failed to parse boundary check config {}: {error}",
+            config_path.display()
+        )
+    })
+}
+
+fn validate_boundary_check_config(config: &BoundaryCheckConfig) -> Result<(), String> {
+    let mut allowed_edges = BTreeSet::new();
+    for edge in &config.allowed_dependency_edges {
+        if !allowed_edges.insert((edge.from.clone(), edge.to.clone())) {
+            return Err(format!(
+                "duplicate allowed dependency edge `{}` -> `{}` in boundary check config",
+                edge.from, edge.to
+            ));
+        }
+    }
+
+    let mut canonical_symbols = BTreeSet::new();
+    for owner in &config.canonical_symbol_owners {
+        if !canonical_symbols.insert(owner.symbol.clone()) {
+            return Err(format!(
+                "duplicate canonical symbol owner `{}` in boundary check config",
+                owner.symbol
+            ));
+        }
+    }
+
+    let mut tracked_symbols = BTreeSet::new();
+    for duplicate in &config.tracked_duplicate_symbols {
+        if !tracked_symbols.insert(duplicate.symbol.clone()) {
+            return Err(format!(
+                "duplicate tracked symbol `{}` in boundary check config",
+                duplicate.symbol
+            ));
+        }
+        if canonical_symbols.contains(&duplicate.symbol) {
+            return Err(format!(
+                "symbol `{}` cannot be both a canonical owner and a tracked duplicate",
+                duplicate.symbol
+            ));
+        }
+        let normalized_paths = duplicate
+            .paths
+            .iter()
+            .map(|path| normalize_relative_path(path.as_path()))
+            .collect::<BTreeSet<_>>();
+        if normalized_paths.len() < 2 {
+            return Err(format!(
+                "tracked duplicate symbol `{}` must list at least two distinct paths",
+                duplicate.symbol
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn collect_boundary_violations(
+    workspace_root: &Path,
+    metadata: &CargoMetadata,
+    config: &BoundaryCheckConfig,
+) -> Result<Vec<String>, String> {
+    let mut violations = Vec::new();
+    let workspace_packages = metadata
         .packages
+        .iter()
+        .map(|package| package.name.clone())
+        .collect::<BTreeSet<_>>();
+    let allowed_edges = config
+        .allowed_dependency_edges
+        .iter()
+        .map(|edge| ((edge.from.clone(), edge.to.clone()), edge.reason.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut allowed_edge_hits = BTreeSet::new();
+
+    for package in &metadata.packages {
+        for dependency in package.dependencies.iter().filter(|dependency| {
+            dependency.kind.is_none() && workspace_packages.contains(&dependency.name)
+        }) {
+            let matched_rules = matching_dependency_rules(&package.name, &dependency.name);
+            if matched_rules.is_empty() {
+                continue;
+            }
+
+            let edge = (package.name.clone(), dependency.name.clone());
+            if allowed_edges.contains_key(&edge) {
+                allowed_edge_hits.insert(edge);
+                continue;
+            }
+
+            for rule in matched_rules {
+                violations.push(format!(
+                    "dependency edge `{}` -> `{}` violates `{}`: {}",
+                    package.name,
+                    dependency.name,
+                    rule.code(),
+                    rule.description()
+                ));
+            }
+        }
+    }
+
+    for edge in &config.allowed_dependency_edges {
+        if !allowed_edge_hits.contains(&(edge.from.clone(), edge.to.clone())) {
+            violations.push(format!(
+                "allowed dependency edge `{}` -> `{}` is stale: {}",
+                edge.from, edge.to, edge.reason
+            ));
+        }
+    }
+
+    let tracked_symbols = config
+        .canonical_symbol_owners
+        .iter()
+        .map(|owner| owner.symbol.clone())
+        .chain(
+            config
+                .tracked_duplicate_symbols
+                .iter()
+                .map(|duplicate| duplicate.symbol.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    let symbol_occurrences = tracked_symbol_occurrences(workspace_root, &tracked_symbols)?;
+    for owner in &config.canonical_symbol_owners {
+        let expected = vec![normalize_relative_path(owner.path.as_path())];
+        let actual = symbol_occurrences
+            .get(&owner.symbol)
+            .cloned()
+            .unwrap_or_default();
+        if actual != expected {
+            violations.push(format!(
+                "canonical symbol owner `{}` drifted: expected [{}], found [{}] ({})",
+                owner.symbol,
+                expected.join(", "),
+                actual.join(", "),
+                owner.reason
+            ));
+        }
+    }
+
+    for duplicate in &config.tracked_duplicate_symbols {
+        let mut expected = duplicate
+            .paths
+            .iter()
+            .map(|path| normalize_relative_path(path.as_path()))
+            .collect::<Vec<_>>();
+        expected.sort();
+        let actual = symbol_occurrences
+            .get(&duplicate.symbol)
+            .cloned()
+            .unwrap_or_default();
+        if actual != expected {
+            violations.push(format!(
+                "tracked duplicate symbol `{}` drifted: expected [{}], found [{}] ({})",
+                duplicate.symbol,
+                expected.join(", "),
+                actual.join(", "),
+                duplicate.reason
+            ));
+        }
+    }
+
+    Ok(violations)
+}
+
+fn tracked_symbol_occurrences(
+    workspace_root: &Path,
+    tracked_symbols: &BTreeSet<String>,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
+    let mut source_files = Vec::new();
+    for root in ["apps", "crates", "plugins"] {
+        collect_rust_files(&workspace_root.join(root), &mut source_files)?;
+    }
+
+    let mut occurrences = tracked_symbols
+        .iter()
+        .cloned()
+        .map(|symbol| (symbol, BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    for source_file in source_files {
+        let contents = fs::read_to_string(&source_file).map_err(|error| {
+            format!(
+                "failed to read source file {} while checking boundary symbols: {error}",
+                source_file.display()
+            )
+        })?;
+        let relative_path = workspace_relative_path(workspace_root, &source_file)?;
+        for line in contents.lines() {
+            let trimmed = line.trim_start();
+            for symbol in tracked_symbols {
+                if is_symbol_definition_line(trimmed, symbol) {
+                    if let Some(paths) = occurrences.get_mut(symbol) {
+                        paths.insert(relative_path.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(occurrences
         .into_iter()
-        .filter(|package| is_plugin_package(package, &plugins_root))
-        .map(|package| plugin_spec_from_package_name(&package.name))
-        .collect::<Result<Vec<_>, _>>()?;
-    plugins.sort_by(|left, right| left.cargo_package.cmp(&right.cargo_package));
-    Ok(plugins)
+        .map(|(symbol, paths)| (symbol, paths.into_iter().collect::<Vec<_>>()))
+        .collect())
+}
+
+fn collect_rust_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    if !directory.exists() {
+        return Ok(());
+    }
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("failed to read directory {}: {error}", directory.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to read directory entry under {}: {error}",
+                directory.display()
+            )
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rust_files(&path, files)?;
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(())
+}
+
+fn workspace_relative_path(workspace_root: &Path, path: &Path) -> Result<String, String> {
+    let relative = path.strip_prefix(workspace_root).map_err(|error| {
+        format!(
+            "failed to strip workspace root {} from {}: {error}",
+            workspace_root.display(),
+            path.display()
+        )
+    })?;
+    Ok(normalize_relative_path(relative))
+}
+
+fn normalize_relative_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::CurDir => None,
+            Component::Normal(segment) => Some(segment.to_string_lossy().into_owned()),
+            Component::ParentDir => Some("..".to_string()),
+            Component::RootDir | Component::Prefix(_) => {
+                Some(component.as_os_str().to_string_lossy().into_owned())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn matching_dependency_rules(from: &str, to: &str) -> Vec<DependencyBoundaryRule> {
+    let mut rules = Vec::new();
+    if from == "revy-server-config" && to == "mc-plugin-host" {
+        rules.push(DependencyBoundaryRule::ConfigNoPluginHost);
+    }
+    if is_storage_surface_crate(from) && is_versioned_protocol_crate(to) {
+        rules.push(DependencyBoundaryRule::StorageNoVersionedProtocol);
+    }
+    if is_boundary_surface_crate(from) && matches!(to, "revy-core" | "revy-voxel-core") {
+        rules.push(DependencyBoundaryRule::SurfaceNoEngine);
+    }
+    rules
+}
+
+fn is_storage_surface_crate(package_name: &str) -> bool {
+    package_name.starts_with("mc-plugin-storage-") || package_name.starts_with("mc-storage-")
+}
+
+fn is_versioned_protocol_crate(package_name: &str) -> bool {
+    ((package_name.starts_with("mc-proto-je-") && package_name != "mc-proto-je-common")
+        || (package_name.starts_with("mc-proto-be-") && package_name != "mc-proto-be-common"))
+        && package_name != "mc-proto-common"
+}
+
+fn is_boundary_surface_crate(package_name: &str) -> bool {
+    !matches!(
+        package_name,
+        "revy-core"
+            | "revy-voxel-core"
+            | "revy-server-runtime"
+            | "revy-voxel-model"
+            | "revy-voxel-rules"
+            | "mc-content-canonical"
+            | "xtask"
+    ) && !package_name.contains("test-support")
+}
+
+fn is_symbol_definition_line(line: &str, symbol: &str) -> bool {
+    const PREFIXES: [&str; 6] = [
+        "pub struct ",
+        "pub enum ",
+        "pub(crate) struct ",
+        "pub(crate) enum ",
+        "struct ",
+        "enum ",
+    ];
+    PREFIXES.iter().any(|prefix| {
+        let Some(rest) = line.strip_prefix(prefix) else {
+            return false;
+        };
+        if !rest.starts_with(symbol) {
+            return false;
+        }
+        let next = rest[symbol.len()..].chars().next();
+        next.is_none() || next.is_some_and(|ch| ch.is_whitespace() || matches!(ch, '{' | '<' | '('))
+    })
+}
+
+impl DependencyBoundaryRule {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::ConfigNoPluginHost => "config-no-plugin-host",
+            Self::StorageNoVersionedProtocol => "storage-no-versioned-protocol",
+            Self::SurfaceNoEngine => "surface-no-engine",
+        }
+    }
+
+    const fn description(self) -> &'static str {
+        match self {
+            Self::ConfigNoPluginHost => {
+                "validated config should not depend on plugin-host translation internals"
+            }
+            Self::StorageNoVersionedProtocol => {
+                "storage crates should not depend on versioned protocol crates"
+            }
+            Self::SurfaceNoEngine => {
+                "non-engine public surface crates should not depend on engine internals"
+            }
+        }
+    }
 }
 
 fn plugin_allowlist_from_toml(config_path: &Path) -> Result<Vec<String>, String> {
@@ -1027,11 +1502,14 @@ fn sanitize_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildTarget, PackageArgs, PluginSpec, filter_plugins_by_ids, find_workspace_root,
-        package_plugin_from_source, packaged_artifact_name_with_tag, parse_package_args,
+        BoundaryCheckArgs, BoundaryCheckConfig, BuildTarget, CanonicalSymbolOwner,
+        DependencyBoundaryRule, PackageArgs, PluginSpec, TrackedDuplicateSymbol,
+        filter_plugins_by_ids, find_workspace_root, is_symbol_definition_line,
+        is_versioned_protocol_crate, matching_dependency_rules, package_plugin_from_source,
+        packaged_artifact_name_with_tag, parse_boundary_check_args, parse_package_args,
         parse_release_bundle_args, plugin_allowlist_from_toml, plugin_spec_from_package_name,
         reconcile_packaged_plugins, resolve_package_config_path, run_release_bundle_jobs,
-        stage_release_bundle,
+        stage_release_bundle, validate_boundary_check_config,
     };
     use std::collections::BTreeSet;
     use std::fs;
@@ -1221,6 +1699,97 @@ mod tests {
                     .expect("darwin target should parse"),
             ]
         );
+    }
+
+    #[test]
+    fn parse_boundary_check_args_defaults_to_workspace_config() {
+        assert_eq!(
+            parse_boundary_check_args(&[]).expect("boundary check args should parse"),
+            BoundaryCheckArgs {
+                config_path: PathBuf::from("tools/xtask/boundary-check.toml"),
+            }
+        );
+    }
+
+    #[test]
+    fn matching_dependency_rules_flags_intended_boundaries() {
+        assert_eq!(
+            matching_dependency_rules("revy-server-config", "mc-plugin-host"),
+            vec![DependencyBoundaryRule::ConfigNoPluginHost]
+        );
+        assert_eq!(
+            matching_dependency_rules("mc-plugin-storage-je-anvil-1_7_10", "mc-proto-je-5"),
+            vec![DependencyBoundaryRule::StorageNoVersionedProtocol]
+        );
+        assert_eq!(
+            matching_dependency_rules("mc-plugin-api", "revy-voxel-core"),
+            vec![DependencyBoundaryRule::SurfaceNoEngine]
+        );
+    }
+
+    #[test]
+    fn validate_boundary_check_config_rejects_symbols_tracked_twice() {
+        let config = BoundaryCheckConfig {
+            canonical_symbol_owners: vec![CanonicalSymbolOwner {
+                symbol: "AdminPermission".to_string(),
+                path: PathBuf::from("crates/runtime/revy-server-types/src/lib.rs"),
+                reason: "canonical owner".to_string(),
+            }],
+            tracked_duplicate_symbols: vec![TrackedDuplicateSymbol {
+                symbol: "AdminPermission".to_string(),
+                paths: vec![
+                    PathBuf::from("crates/runtime/revy-server-types/src/lib.rs"),
+                    PathBuf::from("crates/runtime/revy-server-runtime/src/api.rs"),
+                ],
+                reason: "transition".to_string(),
+            }],
+            ..BoundaryCheckConfig::default()
+        };
+
+        let error = validate_boundary_check_config(&config)
+            .expect_err("canonical and duplicate tracking should not overlap");
+        assert!(error.contains("cannot be both a canonical owner and a tracked duplicate"));
+    }
+
+    #[test]
+    fn validate_boundary_check_config_rejects_single_path_duplicate_tracking() {
+        let config = BoundaryCheckConfig {
+            tracked_duplicate_symbols: vec![TrackedDuplicateSymbol {
+                symbol: "AdminPermission".to_string(),
+                paths: vec![PathBuf::from("crates/runtime/revy-server-types/src/lib.rs")],
+                reason: "transition".to_string(),
+            }],
+            ..BoundaryCheckConfig::default()
+        };
+
+        let error = validate_boundary_check_config(&config)
+            .expect_err("tracked duplicates should require multiple paths");
+        assert!(error.contains("must list at least two distinct paths"));
+    }
+
+    #[test]
+    fn versioned_protocol_detection_excludes_common_crates() {
+        assert!(is_versioned_protocol_crate("mc-proto-je-5"));
+        assert!(is_versioned_protocol_crate("mc-proto-be-924"));
+        assert!(!is_versioned_protocol_crate("mc-proto-common"));
+        assert!(!is_versioned_protocol_crate("mc-proto-je-common"));
+        assert!(!is_versioned_protocol_crate("mc-proto-be-common"));
+    }
+
+    #[test]
+    fn symbol_definition_line_matches_public_structs_and_enums() {
+        assert!(is_symbol_definition_line(
+            "pub enum RuntimeReloadMode {",
+            "RuntimeReloadMode"
+        ));
+        assert!(is_symbol_definition_line(
+            "pub struct AdminRuntimeReloadView {",
+            "AdminRuntimeReloadView"
+        ));
+        assert!(!is_symbol_definition_line(
+            "impl RuntimeReloadMode {",
+            "RuntimeReloadMode"
+        ));
     }
 
     #[test]

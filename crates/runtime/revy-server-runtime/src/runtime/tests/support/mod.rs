@@ -172,13 +172,13 @@ fn admin_permissions_toml(permissions: &[crate::config::AdminPermission]) -> Str
 pub(crate) fn plugin_host_bootstrap_test_config(
     config: &ServerConfig,
 ) -> mc_plugin_host::config::BootstrapConfig {
-    config.plugin_host_bootstrap_config()
+    crate::runtime::selection::plugin_host_bootstrap_config(config)
 }
 
 pub(crate) fn plugin_host_runtime_selection_test_config(
     config: &ServerConfig,
 ) -> mc_plugin_host::config::RuntimeSelectionConfig {
-    config.plugin_host_runtime_selection_config()
+    crate::runtime::selection::plugin_host_runtime_selection_config(config)
 }
 
 pub(crate) fn write_server_toml(path: &Path, config: &ServerConfig) -> Result<(), RuntimeError> {

@@ -8,12 +8,12 @@ use mc_proto_common::{
     ProtocolSessionSnapshot, ServerListStatus, SessionAdapter, StatusRequest, TransportKind,
     WireCodec,
 };
-use revy_voxel_core::{CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
 use revy_voxel_model::{
     BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
 };
 use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{ConnectionId, CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -32,7 +32,7 @@ struct JavaProtocolSessionState {
 
 #[derive(Default)]
 pub struct JavaProtocolSessionStore {
-    sessions: Mutex<HashMap<revy_voxel_core::ConnectionId, JavaProtocolSessionState>>,
+    sessions: Mutex<HashMap<ConnectionId, JavaProtocolSessionState>>,
 }
 
 fn player_container_kind() -> ContainerKindId {
@@ -49,7 +49,7 @@ fn protocol_block<'a>(block: &'a Option<BlockState>) -> std::borrow::Cow<'a, Blo
 impl JavaProtocolSessionStore {
     fn with_session<R>(
         &self,
-        connection_id: revy_voxel_core::ConnectionId,
+        connection_id: ConnectionId,
         f: impl FnOnce(&mut JavaProtocolSessionState) -> R,
     ) -> R {
         let mut sessions = self
@@ -107,6 +107,9 @@ impl JavaProtocolSessionStore {
 
     pub fn observe_event(&self, session: &ProtocolSessionSnapshot, event: &CoreEvent) {
         self.with_session(session.connection_id, |state| match event {
+            CoreEvent::PlayBootstrap { .. } => {
+                *state = JavaProtocolSessionState::default();
+            }
             CoreEvent::ContainerOpened {
                 window_id,
                 container,
@@ -535,5 +538,91 @@ impl<P: JavaEditionProfile> ProtocolAdapter for JavaEditionAdapter<P> {
         blob: &[u8],
     ) -> Result<(), ProtocolError> {
         self.profile.import_session_state(session, blob)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_proto_common::{ConnectionPhase, PlayerId};
+    use revy_voxel_model::{
+        BlockPos, DimensionId, InventoryTransactionContext, PlayerInventory, Vec3, WorldMeta,
+    };
+
+    fn test_session(connection_id: u64) -> ProtocolSessionSnapshot {
+        ProtocolSessionSnapshot {
+            connection_id: ConnectionId(connection_id),
+            phase: ConnectionPhase::Play,
+            player_id: None,
+            entity_id: None,
+        }
+    }
+
+    fn test_player() -> PlayerSnapshot {
+        PlayerSnapshot {
+            id: serde_json::from_str::<PlayerId>("\"00000000-0000-0000-0000-000000000000\"")
+                .expect("test player id should deserialize"),
+            username: "tester".to_string(),
+            position: Vec3::new(0.0, 64.0, 0.0),
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground: true,
+            dimension: DimensionId::Overworld,
+            health: 20.0,
+            food: 20,
+            food_saturation: 5.0,
+            inventory: PlayerInventory::default(),
+            selected_hotbar_slot: 0,
+        }
+    }
+
+    fn test_world_meta() -> WorldMeta {
+        WorldMeta {
+            level_name: "test".to_string(),
+            seed: 0,
+            spawn: BlockPos::new(0, 64, 0),
+            dimension: DimensionId::Overworld,
+            age: 0,
+            time: 0,
+            level_type: "flat".to_string(),
+            game_mode: 1,
+            difficulty: 1,
+            max_players: 20,
+        }
+    }
+
+    #[test]
+    fn play_bootstrap_resets_stale_window_tracking_for_reused_connection_ids() {
+        let store = JavaProtocolSessionStore::default();
+        let session = test_session(7);
+        store.with_session(session.connection_id, |state| {
+            state.active_window = Some(JavaTrackedWindow {
+                window_id: 4,
+                container: ContainerKindId::new("canonical:chest"),
+            });
+            state.pending_rejected_transaction = Some(InventoryTransactionContext {
+                window_id: 4,
+                action_number: 12,
+            });
+        });
+
+        store.observe_event(
+            &session,
+            &CoreEvent::PlayBootstrap {
+                player: test_player(),
+                entity_id: EntityId(9),
+                world_meta: test_world_meta(),
+                view_distance: 8,
+            },
+        );
+
+        let sessions = store
+            .sessions
+            .lock()
+            .expect("java protocol session store should not be poisoned");
+        let state = sessions
+            .get(&session.connection_id)
+            .expect("play bootstrap should initialize session state");
+        assert_eq!(state, &JavaProtocolSessionState::default());
     }
 }

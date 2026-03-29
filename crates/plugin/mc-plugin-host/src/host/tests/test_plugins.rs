@@ -159,17 +159,14 @@ pub(super) mod counting_gameplay_plugin {
 }
 
 pub(super) mod custom_wire_codec_protocol_plugin {
-    use mc_plugin_api::abi::{
-        ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
-        PluginKind, Utf8Slice,
-    };
+    use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginKind, Utf8Slice};
     use mc_plugin_api::codec::protocol::{
-        ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_protocol_request,
-        encode_protocol_response,
+        ProtocolRequest, ProtocolResponse, WireFrameDecodeResult,
     };
-    use mc_plugin_api::host_api::ProtocolPluginApiV3;
     use mc_plugin_api::manifest::PluginManifestV1;
-    use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
+    use mc_plugin_sdk_rust::test_support::{
+        InProcessProtocolPluginEntrypoints, ProtocolPluginHandler,
+    };
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
     use revy_voxel_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use std::sync::OnceLock;
@@ -185,24 +182,6 @@ pub(super) mod custom_wire_codec_protocol_plugin {
             version_name: "custom-wire".to_string(),
             protocol_number: 1234,
         }
-    }
-
-    fn write_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
-        if output.is_null() {
-            return;
-        }
-        unsafe {
-            *output = OwnedBuffer {
-                ptr: bytes.as_mut_ptr(),
-                len: bytes.len(),
-                cap: bytes.capacity(),
-            };
-        }
-        std::mem::forget(bytes);
-    }
-
-    fn write_error(error_out: *mut OwnedBuffer, message: String) {
-        write_buffer(error_out, message.into_bytes());
     }
 
     fn handle_request(request: ProtocolRequest) -> Result<ProtocolResponse, String> {
@@ -250,50 +229,19 @@ pub(super) mod custom_wire_codec_protocol_plugin {
         }
     }
 
-    unsafe extern "C" fn invoke(
-        request: ByteSlice,
-        output: *mut OwnedBuffer,
-        error_out: *mut OwnedBuffer,
-    ) -> PluginErrorCode {
-        let request_bytes = unsafe { std::slice::from_raw_parts(request.ptr, request.len) };
-        let request = match decode_protocol_request(request_bytes) {
-            Ok(request) => request,
-            Err(error) => {
-                write_error(error_out, error.to_string());
-                return PluginErrorCode::InvalidInput;
-            }
-        };
-        let response = match handle_request(request.clone()) {
-            Ok(response) => response,
-            Err(message) => {
-                write_error(error_out, message);
-                return PluginErrorCode::Internal;
-            }
-        };
-        match encode_protocol_response(&request, &response) {
-            Ok(bytes) => {
-                write_buffer(output, bytes);
-                PluginErrorCode::Ok
-            }
-            Err(error) => {
-                write_error(error_out, error.to_string());
-                PluginErrorCode::Internal
-            }
+    #[derive(Default)]
+    struct CustomWireCodecProtocolPluginHandler;
+
+    impl ProtocolPluginHandler for CustomWireCodecProtocolPluginHandler {
+        fn handle(&self, request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+            handle_request(request)
         }
     }
 
-    unsafe extern "C" fn free_buffer(buffer: OwnedBuffer) {
-        if buffer.ptr.is_null() {
-            return;
-        }
-        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
-    }
-
-    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV3> {
+    pub fn in_process_plugin_entrypoints() -> InProcessProtocolPluginEntrypoints {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
         static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
-        static API: OnceLock<ProtocolPluginApiV3> = OnceLock::new();
-        InProcessPluginEntrypoints::new(
+        InProcessProtocolPluginEntrypoints::new(
             MANIFEST.get_or_init(|| PluginManifestV1 {
                 plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
                 display_name: Utf8Slice::from_static_str("Custom Wire Codec Protocol Plugin"),
@@ -313,25 +261,18 @@ pub(super) mod custom_wire_codec_protocol_plugin {
                     .as_ptr(),
                 capabilities_len: 1,
             }),
-            API.get_or_init(|| ProtocolPluginApiV3 {
-                invoke,
-                free_buffer,
-            }),
+            || Box::new(CustomWireCodecProtocolPluginHandler),
         )
     }
 }
 
 pub(super) mod failing_protocol_plugin {
-    use mc_plugin_api::abi::{
-        ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
-        PluginKind, Utf8Slice,
-    };
-    use mc_plugin_api::codec::protocol::{
-        ProtocolRequest, ProtocolResponse, decode_protocol_request, encode_protocol_response,
-    };
-    use mc_plugin_api::host_api::ProtocolPluginApiV3;
+    use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginKind, Utf8Slice};
+    use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse};
     use mc_plugin_api::manifest::PluginManifestV1;
-    use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
+    use mc_plugin_sdk_rust::test_support::{
+        InProcessProtocolPluginEntrypoints, ProtocolPluginHandler,
+    };
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
     use revy_voxel_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use std::sync::OnceLock;
@@ -347,24 +288,6 @@ pub(super) mod failing_protocol_plugin {
             version_name: "failing-runtime".to_string(),
             protocol_number: 4242,
         }
-    }
-
-    fn write_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
-        if output.is_null() {
-            return;
-        }
-        unsafe {
-            *output = OwnedBuffer {
-                ptr: bytes.as_mut_ptr(),
-                len: bytes.len(),
-                cap: bytes.capacity(),
-            };
-        }
-        std::mem::forget(bytes);
-    }
-
-    fn write_error(error_out: *mut OwnedBuffer, message: String) {
-        write_buffer(error_out, message.into_bytes());
     }
 
     fn handle_request(request: ProtocolRequest) -> Result<ProtocolResponse, String> {
@@ -387,50 +310,19 @@ pub(super) mod failing_protocol_plugin {
         }
     }
 
-    unsafe extern "C" fn invoke(
-        request: ByteSlice,
-        output: *mut OwnedBuffer,
-        error_out: *mut OwnedBuffer,
-    ) -> PluginErrorCode {
-        let request_bytes = unsafe { std::slice::from_raw_parts(request.ptr, request.len) };
-        let request = match decode_protocol_request(request_bytes) {
-            Ok(request) => request,
-            Err(error) => {
-                write_error(error_out, error.to_string());
-                return PluginErrorCode::InvalidInput;
-            }
-        };
-        let response = match handle_request(request.clone()) {
-            Ok(response) => response,
-            Err(message) => {
-                write_error(error_out, message);
-                return PluginErrorCode::Internal;
-            }
-        };
-        match encode_protocol_response(&request, &response) {
-            Ok(bytes) => {
-                write_buffer(output, bytes);
-                PluginErrorCode::Ok
-            }
-            Err(error) => {
-                write_error(error_out, error.to_string());
-                PluginErrorCode::Internal
-            }
+    #[derive(Default)]
+    struct FailingProtocolPluginHandler;
+
+    impl ProtocolPluginHandler for FailingProtocolPluginHandler {
+        fn handle(&self, request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+            handle_request(request)
         }
     }
 
-    unsafe extern "C" fn free_buffer(buffer: OwnedBuffer) {
-        if buffer.ptr.is_null() {
-            return;
-        }
-        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
-    }
-
-    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV3> {
+    pub fn in_process_plugin_entrypoints() -> InProcessProtocolPluginEntrypoints {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
         static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
-        static API: OnceLock<ProtocolPluginApiV3> = OnceLock::new();
-        InProcessPluginEntrypoints::new(
+        InProcessProtocolPluginEntrypoints::new(
             MANIFEST.get_or_init(|| PluginManifestV1 {
                 plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
                 display_name: Utf8Slice::from_static_str("Failing Protocol Plugin"),
@@ -450,10 +342,7 @@ pub(super) mod failing_protocol_plugin {
                     .as_ptr(),
                 capabilities_len: 1,
             }),
-            API.get_or_init(|| ProtocolPluginApiV3 {
-                invoke,
-                free_buffer,
-            }),
+            || Box::new(FailingProtocolPluginHandler),
         )
     }
 }
@@ -545,17 +434,183 @@ pub(super) mod failing_auth_plugin {
     export_plugin!(auth, FailingAuthPlugin, MANIFEST);
 }
 
-pub(super) mod route_collision_protocol_plugin {
-    use mc_plugin_api::abi::{
-        ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
-        PluginKind, Utf8Slice,
-    };
-    use mc_plugin_api::codec::protocol::{
-        ProtocolRequest, ProtocolResponse, decode_protocol_request, encode_protocol_response,
-    };
-    use mc_plugin_api::host_api::ProtocolPluginApiV3;
+pub(super) mod fresh_instance_protocol_plugin {
+    use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginKind, Utf8Slice};
+    use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse};
     use mc_plugin_api::manifest::PluginManifestV1;
-    use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
+    use mc_plugin_sdk_rust::test_support::{
+        InProcessProtocolPluginEntrypoints, ProtocolPluginHandler,
+    };
+    use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
+    use revy_voxel_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    pub const PLUGIN_ID: &str = "protocol-fresh-instance";
+
+    static NEXT_INSTANCE_ID: AtomicUsize = AtomicUsize::new(1);
+
+    struct FreshInstanceProtocolPluginHandler {
+        instance_id: usize,
+    }
+
+    impl Default for FreshInstanceProtocolPluginHandler {
+        fn default() -> Self {
+            Self {
+                instance_id: NEXT_INSTANCE_ID.fetch_add(1, Ordering::SeqCst),
+            }
+        }
+    }
+
+    impl ProtocolPluginHandler for FreshInstanceProtocolPluginHandler {
+        fn handle(&self, request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+            match request {
+                ProtocolRequest::Describe => Ok(ProtocolResponse::Descriptor(ProtocolDescriptor {
+                    adapter_id: PLUGIN_ID.to_string(),
+                    transport: TransportKind::Tcp,
+                    wire_format: WireFormatKind::MinecraftFramed,
+                    edition: Edition::Je,
+                    version_name: format!("instance-{}", self.instance_id),
+                    protocol_number: 5000,
+                })),
+                ProtocolRequest::DescribeBedrockListener => {
+                    Ok(ProtocolResponse::BedrockListenerDescriptor(None))
+                }
+                ProtocolRequest::CapabilitySet => {
+                    let mut capabilities = ProtocolCapabilitySet::new();
+                    let _ = capabilities.insert(ProtocolCapability::RuntimeReload);
+                    Ok(ProtocolResponse::CapabilitySet(
+                        CapabilityAnnouncement::new(capabilities),
+                    ))
+                }
+                other => Err(format!(
+                    "unsupported protocol request in fresh-instance test plugin: {other:?}"
+                )),
+            }
+        }
+    }
+
+    pub fn in_process_plugin_entrypoints() -> InProcessProtocolPluginEntrypoints {
+        static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+        static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
+        InProcessProtocolPluginEntrypoints::new(
+            MANIFEST.get_or_init(|| PluginManifestV1 {
+                plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
+                display_name: Utf8Slice::from_static_str("Fresh Instance Protocol Plugin"),
+                plugin_kind: PluginKind::Protocol,
+                plugin_abi: CURRENT_PLUGIN_ABI,
+                min_host_abi: CURRENT_PLUGIN_ABI,
+                max_host_abi: CURRENT_PLUGIN_ABI,
+                capabilities: CAPABILITIES
+                    .get_or_init(|| {
+                        Box::leak(
+                            vec![CapabilityDescriptorV1 {
+                                name: Utf8Slice::from_static_str("runtime.reload.protocol"),
+                            }]
+                            .into_boxed_slice(),
+                        )
+                    })
+                    .as_ptr(),
+                capabilities_len: 1,
+            }),
+            || Box::new(FreshInstanceProtocolPluginHandler::default()),
+        )
+    }
+}
+
+pub(super) mod fresh_instance_auth_plugin {
+    use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginKind, Utf8Slice};
+    use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode, AuthRequest, AuthResponse};
+    use mc_plugin_api::manifest::PluginManifestV1;
+    use mc_plugin_sdk_rust::test_support::{AuthPluginHandler, InProcessAuthPluginEntrypoints};
+    use revy_voxel_core::{AuthCapability, AuthCapabilitySet, CapabilityAnnouncement, PlayerId};
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use uuid::Uuid;
+
+    pub const PLUGIN_ID: &str = "auth-fresh-instance";
+    pub const PROFILE_ID: &str = "fresh-auth";
+
+    static NEXT_INSTANCE_ID: AtomicUsize = AtomicUsize::new(1);
+
+    struct FreshInstanceAuthPluginHandler {
+        instance_id: usize,
+    }
+
+    impl Default for FreshInstanceAuthPluginHandler {
+        fn default() -> Self {
+            Self {
+                instance_id: NEXT_INSTANCE_ID.fetch_add(1, Ordering::SeqCst),
+            }
+        }
+    }
+
+    impl AuthPluginHandler for FreshInstanceAuthPluginHandler {
+        fn handle(&self, request: AuthRequest) -> Result<AuthResponse, String> {
+            match request {
+                AuthRequest::Describe => Ok(AuthResponse::Descriptor(AuthDescriptor {
+                    auth_profile: PROFILE_ID.into(),
+                    mode: AuthMode::Offline,
+                })),
+                AuthRequest::CapabilitySet => {
+                    let mut capabilities = AuthCapabilitySet::new();
+                    let _ = capabilities.insert(AuthCapability::RuntimeReload);
+                    Ok(AuthResponse::CapabilitySet(CapabilityAnnouncement::new(
+                        capabilities,
+                    )))
+                }
+                AuthRequest::AuthenticateOffline { .. } => Ok(
+                    AuthResponse::AuthenticatedPlayer(PlayerId(Uuid::from_u128(
+                        self.instance_id as u128,
+                    ))),
+                ),
+                other => Err(format!(
+                    "unsupported auth request in fresh-instance test plugin: {other:?}"
+                )),
+            }
+        }
+    }
+
+    pub fn in_process_plugin_entrypoints() -> InProcessAuthPluginEntrypoints {
+        static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
+        static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
+        InProcessAuthPluginEntrypoints::new(
+            MANIFEST.get_or_init(|| PluginManifestV1 {
+                plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
+                display_name: Utf8Slice::from_static_str("Fresh Instance Auth Plugin"),
+                plugin_kind: PluginKind::Auth,
+                plugin_abi: CURRENT_PLUGIN_ABI,
+                min_host_abi: CURRENT_PLUGIN_ABI,
+                max_host_abi: CURRENT_PLUGIN_ABI,
+                capabilities: CAPABILITIES
+                    .get_or_init(|| {
+                        Box::leak(
+                            vec![
+                                CapabilityDescriptorV1 {
+                                    name: Utf8Slice::from_static_str("runtime.reload.auth"),
+                                },
+                                CapabilityDescriptorV1 {
+                                    name: Utf8Slice::from_static_str("auth.profile:fresh-auth"),
+                                },
+                            ]
+                            .into_boxed_slice(),
+                        )
+                    })
+                    .as_ptr(),
+                capabilities_len: 2,
+            }),
+            || Box::new(FreshInstanceAuthPluginHandler::default()),
+        )
+    }
+}
+
+pub(super) mod route_collision_protocol_plugin {
+    use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginKind, Utf8Slice};
+    use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse};
+    use mc_plugin_api::manifest::PluginManifestV1;
+    use mc_plugin_sdk_rust::test_support::{
+        InProcessProtocolPluginEntrypoints, ProtocolPluginHandler,
+    };
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
     use revy_voxel_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use std::sync::OnceLock;
@@ -571,24 +626,6 @@ pub(super) mod route_collision_protocol_plugin {
             version_name: "je-5-collision".to_string(),
             protocol_number: 5,
         }
-    }
-
-    fn write_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
-        if output.is_null() {
-            return;
-        }
-        unsafe {
-            *output = OwnedBuffer {
-                ptr: bytes.as_mut_ptr(),
-                len: bytes.len(),
-                cap: bytes.capacity(),
-            };
-        }
-        std::mem::forget(bytes);
-    }
-
-    fn write_error(error_out: *mut OwnedBuffer, message: String) {
-        write_buffer(error_out, message.into_bytes());
     }
 
     fn handle_request(request: ProtocolRequest) -> Result<ProtocolResponse, String> {
@@ -610,50 +647,19 @@ pub(super) mod route_collision_protocol_plugin {
         }
     }
 
-    unsafe extern "C" fn invoke(
-        request: ByteSlice,
-        output: *mut OwnedBuffer,
-        error_out: *mut OwnedBuffer,
-    ) -> PluginErrorCode {
-        let request_bytes = unsafe { std::slice::from_raw_parts(request.ptr, request.len) };
-        let request = match decode_protocol_request(request_bytes) {
-            Ok(request) => request,
-            Err(error) => {
-                write_error(error_out, error.to_string());
-                return PluginErrorCode::InvalidInput;
-            }
-        };
-        let response = match handle_request(request.clone()) {
-            Ok(response) => response,
-            Err(message) => {
-                write_error(error_out, message);
-                return PluginErrorCode::Internal;
-            }
-        };
-        match encode_protocol_response(&request, &response) {
-            Ok(bytes) => {
-                write_buffer(output, bytes);
-                PluginErrorCode::Ok
-            }
-            Err(error) => {
-                write_error(error_out, error.to_string());
-                PluginErrorCode::Internal
-            }
+    #[derive(Default)]
+    struct RouteCollisionProtocolPluginHandler;
+
+    impl ProtocolPluginHandler for RouteCollisionProtocolPluginHandler {
+        fn handle(&self, request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+            handle_request(request)
         }
     }
 
-    unsafe extern "C" fn free_buffer(buffer: OwnedBuffer) {
-        if buffer.ptr.is_null() {
-            return;
-        }
-        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
-    }
-
-    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV3> {
+    pub fn in_process_plugin_entrypoints() -> InProcessProtocolPluginEntrypoints {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
         static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
-        static API: OnceLock<ProtocolPluginApiV3> = OnceLock::new();
-        InProcessPluginEntrypoints::new(
+        InProcessProtocolPluginEntrypoints::new(
             MANIFEST.get_or_init(|| PluginManifestV1 {
                 plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
                 display_name: Utf8Slice::from_static_str("Route Collision Protocol Plugin"),
@@ -673,25 +679,18 @@ pub(super) mod route_collision_protocol_plugin {
                     .as_ptr(),
                 capabilities_len: 1,
             }),
-            API.get_or_init(|| ProtocolPluginApiV3 {
-                invoke,
-                free_buffer,
-            }),
+            || Box::new(RouteCollisionProtocolPluginHandler),
         )
     }
 }
 
 pub(super) mod oversized_protocol_response_plugin {
-    use mc_plugin_api::abi::{
-        ByteSlice, CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginErrorCode,
-        PluginKind, Utf8Slice,
-    };
-    use mc_plugin_api::codec::protocol::{
-        ProtocolRequest, ProtocolResponse, decode_protocol_request, encode_protocol_response,
-    };
-    use mc_plugin_api::host_api::ProtocolPluginApiV3;
+    use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginKind, Utf8Slice};
+    use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse};
     use mc_plugin_api::manifest::PluginManifestV1;
-    use mc_plugin_sdk_rust::test_support::InProcessPluginEntrypoints;
+    use mc_plugin_sdk_rust::test_support::{
+        InProcessProtocolPluginEntrypoints, ProtocolPluginHandler,
+    };
     use mc_proto_common::{Edition, ProtocolDescriptor, TransportKind, WireFormatKind};
     use revy_voxel_core::{CapabilityAnnouncement, ProtocolCapability, ProtocolCapabilitySet};
     use std::sync::OnceLock;
@@ -707,24 +706,6 @@ pub(super) mod oversized_protocol_response_plugin {
             version_name: "x".repeat(512),
             protocol_number: 9123,
         }
-    }
-
-    fn write_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
-        if output.is_null() {
-            return;
-        }
-        unsafe {
-            *output = OwnedBuffer {
-                ptr: bytes.as_mut_ptr(),
-                len: bytes.len(),
-                cap: bytes.capacity(),
-            };
-        }
-        std::mem::forget(bytes);
-    }
-
-    fn write_error(error_out: *mut OwnedBuffer, message: String) {
-        write_buffer(error_out, message.into_bytes());
     }
 
     fn handle_request(request: ProtocolRequest) -> Result<ProtocolResponse, String> {
@@ -746,50 +727,19 @@ pub(super) mod oversized_protocol_response_plugin {
         }
     }
 
-    unsafe extern "C" fn invoke(
-        request: ByteSlice,
-        output: *mut OwnedBuffer,
-        error_out: *mut OwnedBuffer,
-    ) -> PluginErrorCode {
-        let request_bytes = unsafe { std::slice::from_raw_parts(request.ptr, request.len) };
-        let request = match decode_protocol_request(request_bytes) {
-            Ok(request) => request,
-            Err(error) => {
-                write_error(error_out, error.to_string());
-                return PluginErrorCode::InvalidInput;
-            }
-        };
-        let response = match handle_request(request.clone()) {
-            Ok(response) => response,
-            Err(message) => {
-                write_error(error_out, message);
-                return PluginErrorCode::Internal;
-            }
-        };
-        match encode_protocol_response(&request, &response) {
-            Ok(bytes) => {
-                write_buffer(output, bytes);
-                PluginErrorCode::Ok
-            }
-            Err(error) => {
-                write_error(error_out, error.to_string());
-                PluginErrorCode::Internal
-            }
+    #[derive(Default)]
+    struct OversizedProtocolResponsePluginHandler;
+
+    impl ProtocolPluginHandler for OversizedProtocolResponsePluginHandler {
+        fn handle(&self, request: ProtocolRequest) -> Result<ProtocolResponse, String> {
+            handle_request(request)
         }
     }
 
-    unsafe extern "C" fn free_buffer(buffer: OwnedBuffer) {
-        if buffer.ptr.is_null() {
-            return;
-        }
-        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
-    }
-
-    pub fn in_process_plugin_entrypoints() -> InProcessPluginEntrypoints<ProtocolPluginApiV3> {
+    pub fn in_process_plugin_entrypoints() -> InProcessProtocolPluginEntrypoints {
         static MANIFEST: OnceLock<PluginManifestV1> = OnceLock::new();
         static CAPABILITIES: OnceLock<&'static [CapabilityDescriptorV1]> = OnceLock::new();
-        static API: OnceLock<ProtocolPluginApiV3> = OnceLock::new();
-        InProcessPluginEntrypoints::new(
+        InProcessProtocolPluginEntrypoints::new(
             MANIFEST.get_or_init(|| PluginManifestV1 {
                 plugin_id: Utf8Slice::from_static_str(PLUGIN_ID),
                 display_name: Utf8Slice::from_static_str("Oversized Protocol Response Plugin"),
@@ -809,10 +759,7 @@ pub(super) mod oversized_protocol_response_plugin {
                     .as_ptr(),
                 capabilities_len: 1,
             }),
-            API.get_or_init(|| ProtocolPluginApiV3 {
-                invoke,
-                free_buffer,
-            }),
+            || Box::new(OversizedProtocolResponsePluginHandler),
         )
     }
 }

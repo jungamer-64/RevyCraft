@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::{
     AdminSurfacePluginApiV1, AdminSurfaceRequest, AdminSurfaceResponse, AuthPluginApiV1,
     AuthRequest, AuthResponse, ByteSlice, GameplayPluginApiV3, GameplayRequest, GameplayResponse,

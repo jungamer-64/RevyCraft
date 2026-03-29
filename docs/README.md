@@ -26,6 +26,8 @@
   [`contributors/core-command-event-flow.md`](contributors/core-command-event-flow.md)
 - reload の内部意味論、failure policy、consistency gate
   [`contributors/reload-semantics-and-boundaries.md`](contributors/reload-semantics-and-boundaries.md)
+- boundary redesign の target crate graph、dependency 方向、migration guardrail
+  [`contributors/adr-boundary-redesign.md`](contributors/adr-boundary-redesign.md)
 - plugin kind、packaged layout、discovery と activation
   [`plugin-authors/plugin-model.md`](plugin-authors/plugin-model.md)
 - Rust SDK、macro、manifest、ABI `5.0`

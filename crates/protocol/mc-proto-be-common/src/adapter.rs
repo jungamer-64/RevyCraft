@@ -6,12 +6,12 @@ use mc_proto_common::{
     ProtocolSessionSnapshot, RawPacketStreamWireCodec, ServerListStatus, SessionAdapter,
     StatusRequest, TransportKind, WireCodec,
 };
-use revy_voxel_core::{CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
 use revy_voxel_model::{
     BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
     ItemStack, WorldMeta,
 };
 use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
 
 pub trait BedrockProfile: Default + Send + Sync {
     fn adapter_id(&self) -> &'static str;

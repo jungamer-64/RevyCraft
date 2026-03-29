@@ -25,7 +25,6 @@ vek.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
-revy-voxel-core = { path = "../../../../crates/core/revy-voxel-core" }
 
 [lints]
 workspace = true

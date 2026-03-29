@@ -30,23 +30,21 @@ pub(crate) async fn build_test_server_from_source(
             let config = source.load()?;
             let runtime_selection = plugin_host_runtime_selection_test_config(&config);
             let loaded_plugins = plugin_host.load_plugin_set(&runtime_selection)?;
-            boot_server(
+            Ok(boot_server(
                 source,
                 config,
                 loaded_plugins,
                 Some(plugin_host.runtime_host()),
             )
-            .await
+            .await?)
         }
-        None => {
-            boot_server(
-                source.clone(),
-                source.load()?,
-                loaded_plugins.loaded_plugins,
-                None,
-            )
-            .await
-        }
+        None => Ok(boot_server(
+            source.clone(),
+            source.load()?,
+            loaded_plugins.loaded_plugins,
+            None,
+        )
+        .await?),
     }
 }
 
@@ -72,13 +70,13 @@ pub(crate) async fn build_reloadable_test_server_from_source(
     let config = source.load()?;
     let runtime_selection = plugin_host_runtime_selection_test_config(&config);
     let loaded_plugins = plugin_host.load_plugin_set(&runtime_selection)?;
-    boot_server(
+    Ok(boot_server(
         source,
         config,
         loaded_plugins,
         Some(plugin_host.runtime_host()),
     )
-    .await
+    .await?)
 }
 
 pub(crate) fn active_protocol_registry(server: &RunningServer) -> ProtocolRegistry {

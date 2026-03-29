@@ -1,3 +1,4 @@
+use mc_storage_common::StorageError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -18,14 +19,4 @@ pub enum ProtocolError {
     Plugin(String),
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
-}
-
-#[derive(Debug, Error)]
-pub enum StorageError {
-    #[error("i/o error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("invalid data: {0}")]
-    InvalidData(String),
-    #[error("plugin error: {0}")]
-    Plugin(String),
 }

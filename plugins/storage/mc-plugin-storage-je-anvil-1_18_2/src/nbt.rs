@@ -1,7 +1,7 @@
 use flate2::Compression;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::GzEncoder;
-use mc_proto_common::StorageError;
+use mc_storage_common::StorageError;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Cursor, Read, Write};

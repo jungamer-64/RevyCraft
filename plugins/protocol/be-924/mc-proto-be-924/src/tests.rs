@@ -32,10 +32,10 @@ use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFla
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use mc_proto_be_common::__version_support::world::bedrock_actor_id;
 use mc_proto_common::{
-    ConnectionPhase, HandshakeProbe, LoginRequest, PlayEncodingContext, PlaySyncAdapter,
-    ProtocolError, ProtocolSessionSnapshot, SessionAdapter,
+    ConnectionId, ConnectionPhase, CoreCommand, CoreEvent, EntityId, HandshakeProbe,
+    LoginRequest, PlayEncodingContext, PlaySyncAdapter, PlayerId, ProtocolError,
+    ProtocolSessionSnapshot, RuntimeCommand, SessionAdapter,
 };
-use revy_voxel_core::{CoreCommand, CoreEvent, EntityId, PlayerId, RuntimeCommand};
 use revy_voxel_model::{
     BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DroppedItemSnapshot,
     InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
@@ -56,7 +56,7 @@ fn test_jwt(payload: &serde_json::Value) -> String {
 
 fn decode_session(player_id: PlayerId) -> ProtocolSessionSnapshot {
     ProtocolSessionSnapshot {
-        connection_id: revy_voxel_core::ConnectionId(1),
+        connection_id: ConnectionId(1),
         phase: ConnectionPhase::Play,
         player_id: Some(player_id),
         entity_id: None,
@@ -65,7 +65,7 @@ fn decode_session(player_id: PlayerId) -> ProtocolSessionSnapshot {
 
 fn encode_session(context: &PlayEncodingContext) -> ProtocolSessionSnapshot {
     ProtocolSessionSnapshot {
-        connection_id: revy_voxel_core::ConnectionId(1),
+        connection_id: ConnectionId(1),
         phase: ConnectionPhase::Play,
         player_id: Some(context.player_id),
         entity_id: Some(context.entity_id),

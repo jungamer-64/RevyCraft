@@ -14,7 +14,10 @@ mod upgrade;
 
 use self::kernel::{KernelCommandOutcome, RuntimeKernel};
 use self::reload_coordinator::ReloadCoordinator;
-use self::selection::{ResolvedRuntimeSelection, SelectionManager};
+use self::selection::{
+    ResolvedRuntimeSelection, SelectionManager, plugin_host_bootstrap_config,
+    plugin_host_runtime_selection_config,
+};
 use self::session_registry::SessionRegistry;
 use self::topology_manager::TopologyManager;
 use crate::RuntimeError;
@@ -88,7 +91,7 @@ impl ServerSupervisor {
     pub async fn boot(config_source: ServerConfigSource) -> Result<Self, RuntimeError> {
         let config = config_source.load()?;
         let plugin_host =
-            mc_plugin_host::host::plugin_host_from_config(&config.plugin_host_bootstrap_config())?
+            mc_plugin_host::host::plugin_host_from_config(&plugin_host_bootstrap_config(&config))?
                 .ok_or_else(|| {
                     RuntimeError::Config(format!(
                         "no packaged plugins discovered under `{}`",
@@ -96,7 +99,7 @@ impl ServerSupervisor {
                     ))
                 })?;
         let loaded_plugins =
-            plugin_host.load_plugin_set(&config.plugin_host_runtime_selection_config())?;
+            plugin_host.load_plugin_set(&plugin_host_runtime_selection_config(&config))?;
         let running =
             self::bootstrap::boot_server(config_source, config, loaded_plugins, Some(plugin_host))
                 .await?;

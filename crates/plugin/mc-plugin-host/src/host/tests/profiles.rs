@@ -9,12 +9,12 @@ fn storage_and_auth_plugins_are_managed_without_quarantine() {
             .storage_raw(InProcessStoragePlugin {
                 plugin_id: "storage-je-anvil-1_7_10".to_string(),
                 manifest: storage.manifest,
-                api: storage.api,
+                factory: storage.factory,
             })
             .auth_raw(InProcessAuthPlugin {
                 plugin_id: "auth-offline".to_string(),
                 manifest: auth.manifest,
-                api: auth.api,
+                factory: auth.factory,
             }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
@@ -43,6 +43,44 @@ fn storage_and_auth_plugins_are_managed_without_quarantine() {
 }
 
 #[test]
+fn auth_plugins_get_fresh_instances_per_host() {
+    let entrypoints = fresh_instance_auth_plugin::in_process_plugin_entrypoints();
+    let build_host = || {
+        build_test_plugin_host(
+            TestPluginHostBuilder::new().auth_raw(InProcessAuthPlugin {
+                plugin_id: fresh_instance_auth_plugin::PLUGIN_ID.to_string(),
+                manifest: entrypoints.manifest,
+                factory: entrypoints.factory,
+            }),
+            PluginAbiRange::default(),
+            PluginFailureMatrix::default(),
+        )
+    };
+
+    let host_a = build_host();
+    let host_b = build_host();
+    host_a
+        .activate_auth_profile(fresh_instance_auth_plugin::PROFILE_ID)
+        .expect("fresh-instance auth profile should activate for host A");
+    host_b
+        .activate_auth_profile(fresh_instance_auth_plugin::PROFILE_ID)
+        .expect("fresh-instance auth profile should activate for host B");
+
+    let player_a = host_a
+        .resolve_auth_profile(fresh_instance_auth_plugin::PROFILE_ID)
+        .expect("fresh-instance auth profile should resolve for host A")
+        .authenticate_offline("tester")
+        .expect("host A auth should succeed");
+    let player_b = host_b
+        .resolve_auth_profile(fresh_instance_auth_plugin::PROFILE_ID)
+        .expect("fresh-instance auth profile should resolve for host B")
+        .authenticate_offline("tester")
+        .expect("host B auth should succeed");
+
+    assert_ne!(player_a, player_b);
+}
+
+#[test]
 fn gameplay_profiles_activate_and_resolve() {
     let canonical = canonical_gameplay_entrypoints();
     let readonly = readonly_gameplay_entrypoints();
@@ -51,12 +89,12 @@ fn gameplay_profiles_activate_and_resolve() {
             .gameplay_raw(InProcessGameplayPlugin {
                 plugin_id: "gameplay-canonical".to_string(),
                 manifest: canonical.manifest,
-                api: canonical.api,
+                factory: canonical.factory,
             })
             .gameplay_raw(InProcessGameplayPlugin {
                 plugin_id: "gameplay-readonly".to_string(),
                 manifest: readonly.manifest,
-                api: readonly.api,
+                factory: readonly.factory,
             }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
@@ -83,22 +121,22 @@ fn load_plugin_set_activates_runtime_profiles() {
             .protocol_raw(InProcessProtocolPlugin {
                 plugin_id: "je-5".to_string(),
                 manifest: protocol.manifest,
-                api: protocol.api,
+                factory: protocol.factory,
             })
             .gameplay_raw(InProcessGameplayPlugin {
                 plugin_id: "gameplay-canonical".to_string(),
                 manifest: canonical.manifest,
-                api: canonical.api,
+                factory: canonical.factory,
             })
             .storage_raw(InProcessStoragePlugin {
                 plugin_id: "storage-je-anvil-1_7_10".to_string(),
                 manifest: storage.manifest,
-                api: storage.api,
+                factory: storage.factory,
             })
             .auth_raw(InProcessAuthPlugin {
                 plugin_id: "auth-offline".to_string(),
                 manifest: auth.manifest,
-                api: auth.api,
+                factory: auth.factory,
             }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
@@ -132,7 +170,7 @@ fn gameplay_command_snapshot_preserves_entity_id() {
         TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-entity-aware".to_string(),
             manifest: probe.manifest,
-            api: probe.api,
+            factory: probe.factory,
         }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
@@ -185,7 +223,7 @@ fn gameplay_prepare_command_journal_replays_host_mutations() {
         TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-counting".to_string(),
             manifest: entrypoints.manifest,
-            api: entrypoints.api,
+            factory: entrypoints.factory,
         }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
@@ -271,7 +309,7 @@ fn gameplay_prepare_command_conflict_does_not_reinvoke_callback() {
         TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-counting".to_string(),
             manifest: entrypoints.manifest,
-            api: entrypoints.api,
+            factory: entrypoints.factory,
         }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
@@ -342,7 +380,7 @@ fn unknown_gameplay_profile_fails_activation() {
         TestPluginHostBuilder::new().gameplay_raw(InProcessGameplayPlugin {
             plugin_id: "gameplay-canonical".to_string(),
             manifest: canonical.manifest,
-            api: canonical.api,
+            factory: canonical.factory,
         }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
@@ -369,17 +407,17 @@ fn storage_and_auth_profiles_activate_and_resolve() {
             .storage_raw(InProcessStoragePlugin {
                 plugin_id: "storage-je-anvil-1_7_10".to_string(),
                 manifest: storage.manifest,
-                api: storage.api,
+                factory: storage.factory,
             })
             .storage_raw(InProcessStoragePlugin {
                 plugin_id: JE_1_18_2_STORAGE_PLUGIN_ID.to_string(),
                 manifest: modern_storage.manifest,
-                api: modern_storage.api,
+                factory: modern_storage.factory,
             })
             .auth_raw(InProcessAuthPlugin {
                 plugin_id: "auth-offline".to_string(),
                 manifest: auth.manifest,
-                api: auth.api,
+                factory: auth.factory,
             }),
         PluginAbiRange::default(),
         PluginFailureMatrix::default(),
@@ -404,7 +442,7 @@ fn modern_storage_profile_activates_and_resolves() {
             .storage_raw(InProcessStoragePlugin {
                 plugin_id: JE_1_18_2_STORAGE_PLUGIN_ID.to_string(),
                 manifest: storage_1_18_2_entrypoints().manifest,
-                api: storage_1_18_2_entrypoints().api,
+                factory: storage_1_18_2_entrypoints().factory,
             })
             .bootstrap_config(BootstrapConfig {
                 storage_profile: JE_1_18_2_STORAGE_PROFILE_ID.into(),

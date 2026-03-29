@@ -10,6 +10,7 @@
 | `mc-plugin-sdk-rust` | Rust 向け trait、manifest helper、capability helper、export macro | 通常の Rust plugin authoring の正規入口 |
 
 通常の plugin 作者は `mc-plugin-sdk-rust` を使い、ABI の細部が必要なときだけ `mc-plugin-api` を読みます。
+capability や id のような semantic type は `mc_plugin_sdk_rust` crate root から import し、`revy_voxel_core` は plugin authoring surface として使いません。
 
 ## kind ごとの正規入口
 
@@ -60,7 +61,7 @@ embedded manifest と runtime capability set は別です。
 ## protocol plugin の最小パターン
 
 ```rust
-use revy_voxel_core::ProtocolCapability;
+use mc_plugin_sdk_rust::ProtocolCapability;
 use mc_plugin_sdk_rust::protocol::declare_protocol_plugin;
 use mc_proto_je_47::Je47Adapter;
 
@@ -88,11 +89,11 @@ declare_protocol_plugin!(
 ## non-protocol plugin の最小パターン
 
 ```rust
-use revy_voxel_core::{GameplayCapability, GameplayCapabilitySet};
 use mc_plugin_api::codec::gameplay::GameplayDescriptor;
+use mc_plugin_sdk_rust::{GameplayCapability, GameplayCapabilitySet};
 use mc_plugin_sdk_rust::capabilities::gameplay_capabilities;
 use mc_plugin_sdk_rust::export_plugin;
-use mc_plugin_sdk_rust::gameplay::RustGameplayPlugin;
+use mc_plugin_sdk_rust::gameplay::{RustGameplayPlugin, gameplay_descriptor};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 
 #[derive(Default)]
@@ -100,9 +101,7 @@ pub struct CanonicalGameplayPlugin;
 
 impl RustGameplayPlugin for CanonicalGameplayPlugin {
     fn descriptor(&self) -> GameplayDescriptor {
-        GameplayDescriptor {
-            profile: "canonical".into(),
-        }
+        gameplay_descriptor("canonical")
     }
 
     fn capability_set(&self) -> GameplayCapabilitySet {
@@ -175,6 +174,8 @@ reload 以外の runtime capability は、必要なものだけ enum で追加�
 workspace 内 plugin では通常、`xtask` が package 時に `plugin.toml` を生成 / 配置します。external packaged plugin を配布する場合は、shared library に加えて `plugin.toml` も必要です。
 
 ## 避けるべき内部 path
+
+authoring code が semantic capability / id を参照するときは `mc_plugin_sdk_rust` crate root を使います。`revy_voxel_core` 直参照は engine internal 依存なので避けます。
 
 - `mc_plugin_sdk_rust::__macro_support`
 - `mc_plugin_host::__test_hooks`
