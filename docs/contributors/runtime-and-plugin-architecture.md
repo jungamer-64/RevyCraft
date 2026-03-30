@@ -19,7 +19,7 @@ RevyCraft の current workspace は実装としては成立していますが、
 この文書では、現在の `runtime` / plugin host の読み方を示しつつ、次の目標境界を正本として固定します。
 
 - `revy-voxel-semantic`
-  shared semantic contract を置く
+  shared semantic contract を置く。plugin / protocol / storage が共有する world、player、gameplay、content DTO の canonical owner
 - `revy-voxel-core`
   `ServerCore`、journal validate / apply、canonical event generation、inventory / world / runtime state machine のような engine internal を置く
 - `mc-proto-common`

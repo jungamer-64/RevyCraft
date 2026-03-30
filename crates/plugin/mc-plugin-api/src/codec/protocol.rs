@@ -301,11 +301,11 @@ mod tests {
         LoginRequest, PlayEncodingContext, ProtocolDescriptor, ServerListStatus, StatusRequest,
         TransportKind, WireFormatKind,
     };
-    use revy_voxel_model::{
+    use revy_voxel_semantic::ContainerKindId;
+    use revy_voxel_semantic::{
         BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, InventorySlot, ItemStack,
         PlayerInventory, Vec3, WorldMeta,
     };
-    use revy_voxel_rules::ContainerKindId;
     use revy_voxel_semantic::{
         CapabilityAnnouncement, ConnectionId, CoreCommand, CoreEvent, EntityId,
         GameplayCapabilitySet, GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId,

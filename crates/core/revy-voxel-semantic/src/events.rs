@@ -1,14 +1,13 @@
-use crate::{ConnectionId, EntityId, PlayerId, PlayerSnapshot};
-use revy_voxel_model::{
-    BlockFace, BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventoryClickButton,
-    InventoryClickTarget, InventoryClickValidation, InventorySlot, InventoryTransactionContext,
-    InventoryWindowContents, ItemStack, Vec3, WorldMeta,
+use crate::{
+    BlockFace, BlockPos, BlockState, ChunkColumn, ConnectionId, DroppedItemSnapshot, EntityId,
+    InteractionHand, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
+    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerId,
+    PlayerSnapshot, Vec3, WorldMeta,
 };
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use crate::{ContainerKindId, ContainerPropertyKey};
 use serde::{Deserialize, Serialize};
 
 pub use revy_core::event::EventTarget;
-use revy_voxel_model::InteractionHand;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CoreCommand {

@@ -11,8 +11,8 @@ use mc_plugin_api::codec::gameplay::host_blob::{
 };
 use mc_plugin_api::codec::gameplay::{GameplayRequest, GameplayResponse};
 use mc_plugin_api::host_api::GameplayHostApiV3;
-use revy_voxel_model::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};
-use revy_voxel_rules::{BlockEntityState, ContainerKindId};
+use revy_voxel_semantic::{BlockEntityState, ContainerKindId};
+use revy_voxel_semantic::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};
 use std::cell::RefCell;
 
 #[derive(Default)]

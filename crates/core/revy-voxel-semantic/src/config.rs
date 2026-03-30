@@ -1,4 +1,4 @@
-use revy_voxel_model::BlockPos;
+use crate::BlockPos;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoreConfig {

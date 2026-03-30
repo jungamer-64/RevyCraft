@@ -1,6 +1,6 @@
 use super::*;
-use revy_voxel_model::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3};
-use revy_voxel_rules::{BlockEntityState, ContainerKindId};
+use revy_voxel_semantic::{BlockEntityState, ContainerKindId};
+use revy_voxel_semantic::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3};
 
 pub trait GameplayHost {
     fn log(&self, level: u32, message: &str) -> Result<(), String>;

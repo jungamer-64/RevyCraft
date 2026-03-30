@@ -163,7 +163,7 @@ macro_rules! __export_plugin_gameplay {
         }
 
         #[allow(dead_code)]
-        unsafe extern "C" fn mc_gameplay_plugin_invoke_v4(
+        unsafe extern "C" fn mc_gameplay_plugin_invoke_v5(
             request: mc_plugin_api::abi::ByteSlice,
             host_api: *const mc_plugin_api::host_api::GameplayHostApiV3,
             output: *mut mc_plugin_api::abi::OwnedBuffer,
@@ -272,10 +272,10 @@ macro_rules! __export_plugin_gameplay {
             unsafe(no_mangle)
         )]
         #[allow(dead_code)]
-        pub extern "C" fn mc_plugin_gameplay_api_v4() -> *const mc_plugin_api::host_api::GameplayPluginApiV4 {
+        pub extern "C" fn mc_plugin_gameplay_api_v5() -> *const mc_plugin_api::host_api::GameplayPluginApiV4 {
             std::ptr::from_ref(MC_GAMEPLAY_PLUGIN_API.get_or_init(|| {
                 mc_plugin_api::host_api::GameplayPluginApiV4 {
-                    invoke: mc_gameplay_plugin_invoke_v4,
+                    invoke: mc_gameplay_plugin_invoke_v5,
                     free_buffer: mc_gameplay_plugin_free_buffer,
                 }
             }))
@@ -506,7 +506,7 @@ macro_rules! export_plugin {
             mc_plugin_api::codec::protocol::decode_protocol_request,
             $crate::__macro_support::handle_protocol_request,
             mc_plugin_api::codec::protocol::encode_protocol_response,
-            mc_plugin_protocol_api_v3,
+            mc_plugin_protocol_api_v4,
             "protocol plugin panicked while decoding request",
             "protocol plugin panicked while handling request",
             ProtocolPluginHandler,
@@ -527,7 +527,7 @@ macro_rules! export_plugin {
             mc_plugin_api::codec::storage::decode_storage_request,
             $crate::__macro_support::handle_storage_request,
             mc_plugin_api::codec::storage::encode_storage_response,
-            mc_plugin_storage_api_v1,
+            mc_plugin_storage_api_v2,
             "storage plugin panicked while decoding request",
             "storage plugin panicked while handling request",
             StoragePluginHandler,

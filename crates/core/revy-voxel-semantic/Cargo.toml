@@ -11,8 +11,7 @@ description = "Version-agnostic semantic contracts shared across runtime, protoc
 
 [dependencies]
 revy-core = { path = "../revy-core" }
-revy-voxel-model = { path = "../../model/revy-voxel-model" }
-revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
+num-traits.workspace = true
 serde.workspace = true
 
 [lints]

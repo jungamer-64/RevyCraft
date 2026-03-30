@@ -11,8 +11,6 @@ description = "Gameplay read-view bridge between the runtime kernel and plugin h
 
 [dependencies]
 revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
-revy-voxel-model = { path = "../../model/revy-voxel-model" }
-revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
 
 [lints]
 workspace = true

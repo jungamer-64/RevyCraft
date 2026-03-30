@@ -1,11 +1,11 @@
 use crate::codec::__internal::binary::{Decoder, Encoder, ProtocolCodecError};
 use crate::codec::__internal::shared::{decode_option, encode_option};
-use revy_voxel_model::{
+use revy_voxel_semantic::ContainerKindId;
+use revy_voxel_semantic::{
     InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemDataMap, ItemDataValue, ItemStack,
     OpaqueF32, OpaqueF64, PlayerInventory,
 };
-use revy_voxel_rules::ContainerKindId;
 
 const ITEM_DATA_BYTE: u8 = 1;
 const ITEM_DATA_SHORT: u8 = 2;

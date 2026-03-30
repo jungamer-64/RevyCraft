@@ -1,10 +1,8 @@
 #![allow(clippy::multiple_crate_versions)]
 
-pub use revy_voxel_model::{BlockPos, BlockState, WorldMeta};
-pub use revy_voxel_rules::BlockEntityState;
 pub use revy_voxel_semantic::{
-    GameplayCanEditBlockKey, GameplayEffect, GameplayEffectBatch, GameplayReadSet, PlayerId,
-    PlayerSnapshot,
+    BlockEntityState, BlockPos, BlockState, GameplayCanEditBlockKey, GameplayEffect,
+    GameplayEffectBatch, GameplayReadSet, PlayerId, PlayerSnapshot, WorldMeta,
 };
 
 pub trait GameplayReadView: Send {

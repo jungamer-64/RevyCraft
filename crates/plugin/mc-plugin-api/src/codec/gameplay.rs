@@ -13,8 +13,8 @@ use crate::codec::__internal::shared::{
     encode_optional_block_state, encode_player_id, encode_player_snapshot, encode_world_meta,
 };
 use mc_proto_common::ConnectionPhase;
-use revy_voxel_model::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};
-use revy_voxel_rules::{BlockEntityState, ContainerKindId};
+use revy_voxel_semantic::{BlockEntityState, ContainerKindId};
+use revy_voxel_semantic::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};
 use revy_voxel_semantic::{
     CapabilityAnnouncement, GameplayCapability, GameplayCommand, GameplayEffect,
     GameplayEffectBatch, GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId,
@@ -655,12 +655,12 @@ mod tests {
         },
     };
     use mc_proto_common::ConnectionPhase;
-    use revy_voxel_model::{
+    use revy_voxel_semantic::{
+        BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
+    };
+    use revy_voxel_semantic::{
         BlockFace, BlockPos, BlockState, DimensionId, InteractionHand, ItemStack, PlayerInventory,
         Vec3, WorldMeta,
-    };
-    use revy_voxel_rules::{
-        BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
     };
     use revy_voxel_semantic::{
         CapabilityAnnouncement, GameplayCapability, GameplayCapabilitySet, GameplayCommand,

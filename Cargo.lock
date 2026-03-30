@@ -1748,8 +1748,6 @@ dependencies = [
  "mc-content-canonical",
  "mc-proto-common",
  "revy-server-types",
- "revy-voxel-model",
- "revy-voxel-rules",
  "revy-voxel-semantic",
  "serde",
  "serde_json",
@@ -1974,8 +1972,7 @@ dependencies = [
  "mc-plugin-api",
  "mc-proto-common",
  "mc-storage-common",
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "serde",
  "serde_json",
 ]
@@ -3137,8 +3134,6 @@ dependencies = [
 name = "revy-server-gameplay-bridge"
 version = "0.1.0"
 dependencies = [
- "revy-voxel-model",
- "revy-voxel-rules",
  "revy-voxel-semantic",
 ]
 
@@ -3239,25 +3234,22 @@ dependencies = [
 name = "revy-voxel-model"
 version = "0.1.0"
 dependencies = [
- "num-traits",
- "serde",
+ "revy-voxel-semantic",
 ]
 
 [[package]]
 name = "revy-voxel-rules"
 version = "0.1.0"
 dependencies = [
- "revy-voxel-model",
- "serde",
+ "revy-voxel-semantic",
 ]
 
 [[package]]
 name = "revy-voxel-semantic"
 version = "0.1.0"
 dependencies = [
+ "num-traits",
  "revy-core",
- "revy-voxel-model",
- "revy-voxel-rules",
  "serde",
 ]
 

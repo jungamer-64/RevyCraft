@@ -5,25 +5,7 @@ pub mod host_api;
 pub mod manifest;
 
 pub mod semantic {
-    pub use revy_voxel_semantic::{
-        AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,
-        AuthCapability, AuthCapabilitySet, AuthProfileId, CapabilityAnnouncement,
-        ClosedCapabilitySet, ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId,
-        EventTarget, GameplayCanEditBlockKey, GameplayCapability, GameplayCapabilitySet,
-        GameplayCommand, GameplayEffect, GameplayEffectBatch, GameplayProfileId, GameplayReadSet,
-        PlayerId, PlayerSnapshot, PluginBuildTag, PluginGenerationId, ProtocolCapability,
-        ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet, SessionCommand,
-        StorageCapability, StorageCapabilitySet, StorageProfileId, TargetedEvent, WorldSnapshot,
-    };
+    pub use revy_voxel_semantic::*;
 }
 
-pub use self::semantic::{
-    AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,
-    AuthCapability, AuthCapabilitySet, AuthProfileId, CapabilityAnnouncement, ClosedCapabilitySet,
-    ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, EventTarget,
-    GameplayCanEditBlockKey, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
-    GameplayEffect, GameplayEffectBatch, GameplayProfileId, GameplayReadSet, PlayerId,
-    PlayerSnapshot, PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet,
-    RuntimeCommand, SessionCapabilitySet, SessionCommand, StorageCapability, StorageCapabilitySet,
-    StorageProfileId, TargetedEvent, WorldSnapshot,
-};
+pub use self::semantic::*;

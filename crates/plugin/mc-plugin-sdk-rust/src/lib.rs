@@ -11,7 +11,6 @@ use mc_plugin_api::codec::storage::StorageDescriptor;
 use mc_plugin_api::manifest::PluginManifestV1;
 use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError};
 use mc_storage_common::StorageError;
-use revy_voxel_model::WorldMeta;
 use std::path::Path;
 
 #[doc(hidden)]
@@ -30,13 +29,4 @@ pub mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub use mc_plugin_api::{
-    AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,
-    AuthCapability, AuthCapabilitySet, AuthProfileId, CapabilityAnnouncement, ClosedCapabilitySet,
-    ConnectionId, CoreCommand, CoreConfig, CoreEvent, EntityId, EventTarget,
-    GameplayCanEditBlockKey, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
-    GameplayEffect, GameplayEffectBatch, GameplayProfileId, GameplayReadSet, PlayerId,
-    PlayerSnapshot, PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet,
-    RuntimeCommand, SessionCapabilitySet, SessionCommand, StorageCapability, StorageCapabilitySet,
-    StorageProfileId, TargetedEvent, WorldSnapshot,
-};
+pub use mc_plugin_api::semantic::*;

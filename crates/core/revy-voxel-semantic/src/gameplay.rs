@@ -1,6 +1,8 @@
+use crate::{
+    BlockEntityState, BlockPos, BlockState, ContainerKindId, InventorySlot, ItemStack, Vec3,
+    WorldMeta,
+};
 use crate::{PlayerId, PlayerSnapshot, TargetedEvent};
-use revy_voxel_model::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};
-use revy_voxel_rules::{BlockEntityState, ContainerKindId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

@@ -14,7 +14,7 @@ use crate::codec::__internal::shared::{
 use crate::codec::gameplay::{
     GameplayDescriptor, GameplayOpCode, GameplayRequest, GameplayResponse, GameplaySessionSnapshot,
 };
-use revy_voxel_rules::ContainerKindId;
+use revy_voxel_semantic::ContainerKindId;
 use revy_voxel_semantic::{
     CapabilityAnnouncement, EventTarget, GameplayCanEditBlockKey, GameplayEffect,
     GameplayEffectBatch, GameplayProfileId, GameplayReadSet, ProtocolCapability, TargetedEvent,

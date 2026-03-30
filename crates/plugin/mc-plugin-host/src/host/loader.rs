@@ -4,8 +4,8 @@ use super::{
     AuthInvocationBackend, AuthPluginApiV1, AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest,
     GameplayCapability, GameplayGeneration, GameplayInvocationBackend, GameplayPluginApiV4,
     GameplayRequest, Library, ManifestCapabilities, Mutex, PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1,
-    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V4, PLUGIN_MANIFEST_SYMBOL_V1,
-    PLUGIN_PROTOCOL_API_SYMBOL_V3, PLUGIN_STORAGE_API_SYMBOL_V1, Path, PluginGenerationId,
+    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V5, PLUGIN_MANIFEST_SYMBOL_V1,
+    PLUGIN_PROTOCOL_API_SYMBOL_V4, PLUGIN_STORAGE_API_SYMBOL_V2, Path, PluginGenerationId,
     PluginManifestV1, PluginPackage, PluginSource, ProtocolCapability, ProtocolGeneration,
     ProtocolInvocationBackend, ProtocolPluginApiV3, ProtocolRequest, RuntimeError,
     StorageCapability, StorageGeneration, StorageInvocationBackend, StoragePluginApiV1,
@@ -541,7 +541,7 @@ impl PluginLoader {
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
             let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const ProtocolPluginApiV3> =
-                unsafe { library.get(PLUGIN_PROTOCOL_API_SYMBOL_V3) }.map_err(|error| {
+                unsafe { library.get(PLUGIN_PROTOCOL_API_SYMBOL_V4) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve protocol api symbol in {}: {error}",
                         library_path.display()
@@ -579,7 +579,7 @@ impl PluginLoader {
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
             let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const GameplayPluginApiV4> =
-                unsafe { library.get(PLUGIN_GAMEPLAY_API_SYMBOL_V4) }.map_err(|error| {
+                unsafe { library.get(PLUGIN_GAMEPLAY_API_SYMBOL_V5) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve gameplay api symbol in {}: {error}",
                         library_path.display()
@@ -617,7 +617,7 @@ impl PluginLoader {
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
             let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const StoragePluginApiV1> =
-                unsafe { library.get(PLUGIN_STORAGE_API_SYMBOL_V1) }.map_err(|error| {
+                unsafe { library.get(PLUGIN_STORAGE_API_SYMBOL_V2) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve storage api symbol in {}: {error}",
                         library_path.display()

@@ -197,7 +197,7 @@ mod tests {
         StorageDescriptor, StorageRequest, StorageResponse, decode_storage_request,
         decode_storage_response, encode_storage_request, encode_storage_response,
     };
-    use revy_voxel_model::{BlockPos, ChunkPos, DimensionId, Vec3, WorldMeta};
+    use revy_voxel_semantic::{BlockPos, ChunkPos, DimensionId, Vec3, WorldMeta};
     use revy_voxel_semantic::{PlayerId, PlayerSnapshot, WorldSnapshot};
     use std::collections::BTreeMap;
     use uuid::Uuid;
@@ -219,7 +219,7 @@ mod tests {
             },
             chunks: BTreeMap::from([(
                 ChunkPos::new(0, 0),
-                revy_voxel_model::ChunkColumn::new(ChunkPos::new(0, 0)),
+                revy_voxel_semantic::ChunkColumn::new(ChunkPos::new(0, 0)),
             )]),
             block_entities: BTreeMap::new(),
             players: BTreeMap::from([(

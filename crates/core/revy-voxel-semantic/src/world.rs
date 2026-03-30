@@ -1,7 +1,6 @@
 use crate::PlayerId;
 use crate::player::PlayerSnapshot;
-use revy_voxel_model::{BlockPos, ChunkColumn, ChunkPos, WorldMeta};
-use revy_voxel_rules::BlockEntityState;
+use crate::{BlockEntityState, BlockPos, ChunkColumn, ChunkPos, WorldMeta};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

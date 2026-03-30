@@ -16,10 +16,9 @@ in-process-testing = []
 [dependencies]
 bytes.workspace = true
 mc-storage-common = { path = "../../storage/mc-storage-common" }
-revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
-revy-voxel-model = { path = "../../model/revy-voxel-model" }
 mc-plugin-api = { path = "../mc-plugin-api" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 serde.workspace = true
 serde_json.workspace = true
 

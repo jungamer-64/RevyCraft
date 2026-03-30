@@ -3,7 +3,9 @@
 mod config;
 mod events;
 mod gameplay;
+mod model;
 mod player;
+mod rules;
 mod world;
 
 pub use self::config::CoreConfig;
@@ -14,7 +16,9 @@ pub use self::events::{
 pub use self::gameplay::{
     GameplayCanEditBlockKey, GameplayEffect, GameplayEffectBatch, GameplayReadSet,
 };
+pub use self::model::*;
 pub use self::player::PlayerSnapshot;
+pub use self::rules::*;
 pub use self::world::WorldSnapshot;
 pub use revy_core::{
     AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,

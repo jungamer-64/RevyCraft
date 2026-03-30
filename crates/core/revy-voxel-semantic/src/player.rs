@@ -1,5 +1,5 @@
 use crate::PlayerId;
-use revy_voxel_model::{DimensionId, PlayerInventory, Vec3};
+use crate::{DimensionId, PlayerInventory, Vec3};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

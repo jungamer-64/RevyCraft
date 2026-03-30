@@ -10,8 +10,7 @@ categories.workspace = true
 description = "Shared voxel world, inventory, and interaction model types for RevyCraft."
 
 [dependencies]
-num-traits.workspace = true
-serde.workspace = true
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 
 [lints]
 workspace = true

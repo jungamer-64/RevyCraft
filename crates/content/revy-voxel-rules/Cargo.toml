@@ -10,8 +10,7 @@ categories.workspace = true
 description = "Shared voxel content identifiers and simulation rules for RevyCraft."
 
 [dependencies]
-revy-voxel-model = { path = "../../model/revy-voxel-model" }
-serde.workspace = true
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 
 [lints]
 workspace = true

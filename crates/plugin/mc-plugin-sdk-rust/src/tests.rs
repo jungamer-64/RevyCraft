@@ -23,7 +23,7 @@ use mc_proto_common::{
     ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
     StatusRequest, TransportKind, WireCodec, WireFormatKind,
 };
-use revy_voxel_model::{BlockPos, DimensionId, WorldMeta};
+use revy_voxel_semantic::{BlockPos, DimensionId, WorldMeta};
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
@@ -964,7 +964,7 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
 
 #[test]
 fn exported_gameplay_plugins_reject_null_host_api() {
-    let api = unsafe { &*plugin_a::mc_plugin_gameplay_api_v4() };
+    let api = unsafe { &*plugin_a::mc_plugin_gameplay_api_v5() };
     let request = GameplayRequest::HandleTick {
         session: gameplay_session("plugin-a", Some(test_player_id())),
         now_ms: 3,
@@ -1001,7 +1001,7 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     };
     let mut host_api = gameplay_host_api_for(&context);
     host_api.abi = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
-    let api = unsafe { &*plugin_a::mc_plugin_gameplay_api_v4() };
+    let api = unsafe { &*plugin_a::mc_plugin_gameplay_api_v5() };
     let request = GameplayRequest::HandleTick {
         session: gameplay_session("plugin-a", Some(test_player_id())),
         now_ms: 4,
