@@ -3,7 +3,7 @@ use super::{
     AdminSurfacePauseView, AdminSurfacePluginInvokeV1Fn, AdminSurfaceProfileId,
     AdminSurfaceRequest, AdminSurfaceResponse, AdminSurfaceStatusView, Arc, AuthCapabilitySet,
     AuthGenerationHandle, AuthMode, AuthProfileId, AuthRequest, AuthResponse, BedrockAuthResult,
-    BedrockListenerDescriptor, ByteSlice, GameplayCapabilitySet, GameplayPluginInvokeV3Fn,
+    BedrockListenerDescriptor, ByteSlice, GameplayCapabilitySet, GameplayPluginInvokeV4Fn,
     GameplayProfileId, GameplayRequest, GameplayResponse, Library, Mutex, OwnedBuffer, PlayerId,
     PluginBuildTag, PluginErrorCode, PluginFreeBufferFn, PluginGenerationId, PluginInvokeFn,
     ProtocolCapabilitySet, ProtocolDescriptor, ProtocolError, ProtocolRequest, ProtocolResponse,
@@ -63,7 +63,7 @@ pub(crate) enum ProtocolInvocationBackend {
 #[derive(Clone)]
 pub(crate) enum GameplayInvocationBackend {
     Dynamic {
-        invoke: GameplayPluginInvokeV3Fn,
+        invoke: GameplayPluginInvokeV4Fn,
         free_buffer: PluginFreeBufferFn,
         _library_guard: Option<Arc<Mutex<Library>>>,
     },
@@ -261,7 +261,7 @@ impl GameplayInvocationBackend {
         plugin_id: &str,
         request: &GameplayRequest,
         buffer_limits: PluginBufferLimits,
-        host_api: mc_plugin_api::host_api::GameplayHostApiV2,
+        host_api: mc_plugin_api::host_api::GameplayHostApiV3,
     ) -> Result<GameplayResponse, String> {
         match self {
             Self::Dynamic {

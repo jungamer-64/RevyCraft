@@ -3,11 +3,6 @@ from = "revy-voxel-semantic"
 to = "revy-core"
 reason = "`revy-core` は engine ではなく、semantic capability/id の基盤 crate。"
 
-[[allowed_dependency_edge]]
-from = "mc-plugin-host"
-to = "revy-voxel-core"
-reason = "plugin host は runtime/core engine boundary の一部として engine internals 利用を許容する。"
-
 [[canonical_symbol_owner]]
 symbol = "AdminPermission"
 path = "crates/runtime/revy-server-types/src/lib.rs"

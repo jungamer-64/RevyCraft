@@ -24,12 +24,12 @@ pub type HostReadBlockEntityFn = unsafe extern "C" fn(
 ) -> PluginErrorCode;
 pub type HostCanEditBlockFn =
     unsafe extern "C" fn(*mut c_void, ByteSlice, *mut bool, *mut OwnedBuffer) -> PluginErrorCode;
-pub type GameplayHostMutationFn =
+pub type GameplayHostPushEffectFn =
     unsafe extern "C" fn(*mut c_void, ByteSlice, *mut OwnedBuffer) -> PluginErrorCode;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct GameplayHostApiV2 {
+pub struct GameplayHostApiV3 {
     pub abi: PluginAbiVersion,
     pub context: *mut c_void,
     pub log: Option<HostLogFn>,
@@ -38,27 +38,18 @@ pub struct GameplayHostApiV2 {
     pub read_block_state: Option<HostReadBlockStateFn>,
     pub read_block_entity: Option<HostReadBlockEntityFn>,
     pub can_edit_block: Option<HostCanEditBlockFn>,
-    pub set_player_pose: Option<GameplayHostMutationFn>,
-    pub set_selected_hotbar_slot: Option<GameplayHostMutationFn>,
-    pub set_inventory_slot: Option<GameplayHostMutationFn>,
-    pub clear_mining: Option<GameplayHostMutationFn>,
-    pub begin_mining: Option<GameplayHostMutationFn>,
-    pub open_container_at: Option<GameplayHostMutationFn>,
-    pub open_virtual_container: Option<GameplayHostMutationFn>,
-    pub set_block: Option<GameplayHostMutationFn>,
-    pub spawn_dropped_item: Option<GameplayHostMutationFn>,
-    pub emit_event: Option<GameplayHostMutationFn>,
+    pub push_effect: Option<GameplayHostPushEffectFn>,
 }
 
-unsafe impl Send for GameplayHostApiV2 {}
-unsafe impl Sync for GameplayHostApiV2 {}
+unsafe impl Send for GameplayHostApiV3 {}
+unsafe impl Sync for GameplayHostApiV3 {}
 
 pub type PluginInvokeFn =
     unsafe extern "C" fn(ByteSlice, *mut OwnedBuffer, *mut OwnedBuffer) -> PluginErrorCode;
 pub type PluginFreeBufferFn = unsafe extern "C" fn(OwnedBuffer);
-pub type GameplayPluginInvokeV3Fn = unsafe extern "C" fn(
+pub type GameplayPluginInvokeV4Fn = unsafe extern "C" fn(
     ByteSlice,
-    *const GameplayHostApiV2,
+    *const GameplayHostApiV3,
     *mut OwnedBuffer,
     *mut OwnedBuffer,
 ) -> PluginErrorCode;
@@ -114,8 +105,8 @@ pub struct AuthPluginApiV1 {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct GameplayPluginApiV3 {
-    pub invoke: GameplayPluginInvokeV3Fn,
+pub struct GameplayPluginApiV4 {
+    pub invoke: GameplayPluginInvokeV4Fn,
     pub free_buffer: PluginFreeBufferFn,
 }
 

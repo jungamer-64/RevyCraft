@@ -2,9 +2,11 @@ use crate::RuntimeError;
 use mc_plugin_api::abi::PluginKind;
 use mc_plugin_host::host::PluginFailureAction;
 use mc_plugin_host::runtime::{GameplayProfileHandle, RuntimePluginHost, StorageProfileHandle};
+use revy_server_gameplay_bridge::GameplayReadView;
 use revy_voxel_core::{
-    ConnectionId, CoreCommand, CoreEvent, CoreRuntimeStateBlob, GameplayJournalApplyResult,
-    PlayerId, PlayerSummary, Revisioned, ServerCore, SessionCapabilitySet, TargetedEvent,
+    ConnectionId, CoreCommand, CoreEvent, CoreRuntimeStateBlob, GameplayEffectApplyResult,
+    GameplayEffectBatch, GameplayLoginPreview, GameplayLoginPreviewError, PlayerId, PlayerSummary,
+    Revisioned, ServerCore, SessionCapabilitySet, TargetedEvent,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +17,96 @@ use tokio::sync::{Mutex as AsyncMutex, oneshot};
 struct KernelStateData {
     core: ServerCore,
     dirty: bool,
+}
+
+struct CoreSnapshotReadView {
+    snapshot: ServerCore,
+}
+
+impl CoreSnapshotReadView {
+    fn boxed(snapshot: ServerCore) -> Box<dyn GameplayReadView> {
+        Box::new(Self { snapshot })
+    }
+}
+
+impl GameplayReadView for CoreSnapshotReadView {
+    fn world_meta(&mut self) -> revy_server_gameplay_bridge::WorldMeta {
+        self.snapshot.world_meta().clone()
+    }
+
+    fn player_snapshot(
+        &mut self,
+        player_id: PlayerId,
+    ) -> Option<revy_server_gameplay_bridge::PlayerSnapshot> {
+        self.snapshot.player_snapshot(player_id)
+    }
+
+    fn block_state(
+        &mut self,
+        position: revy_server_gameplay_bridge::BlockPos,
+    ) -> Option<revy_server_gameplay_bridge::BlockState> {
+        self.snapshot.block_state(position)
+    }
+
+    fn block_entity(
+        &mut self,
+        position: revy_server_gameplay_bridge::BlockPos,
+    ) -> Option<revy_server_gameplay_bridge::BlockEntityState> {
+        self.snapshot.block_entity(position)
+    }
+
+    fn can_edit_block(
+        &mut self,
+        player_id: PlayerId,
+        position: revy_server_gameplay_bridge::BlockPos,
+    ) -> bool {
+        self.snapshot.can_edit_block(player_id, position)
+    }
+}
+
+struct LoginPreviewReadView {
+    preview: GameplayLoginPreview,
+}
+
+impl LoginPreviewReadView {
+    fn boxed(preview: GameplayLoginPreview) -> Box<dyn GameplayReadView> {
+        Box::new(Self { preview })
+    }
+}
+
+impl GameplayReadView for LoginPreviewReadView {
+    fn world_meta(&mut self) -> revy_server_gameplay_bridge::WorldMeta {
+        self.preview.world_meta()
+    }
+
+    fn player_snapshot(
+        &mut self,
+        player_id: PlayerId,
+    ) -> Option<revy_server_gameplay_bridge::PlayerSnapshot> {
+        self.preview.player_snapshot(player_id)
+    }
+
+    fn block_state(
+        &mut self,
+        position: revy_server_gameplay_bridge::BlockPos,
+    ) -> Option<revy_server_gameplay_bridge::BlockState> {
+        self.preview.block_state(position)
+    }
+
+    fn block_entity(
+        &mut self,
+        position: revy_server_gameplay_bridge::BlockPos,
+    ) -> Option<revy_server_gameplay_bridge::BlockEntityState> {
+        self.preview.block_entity(position)
+    }
+
+    fn can_edit_block(
+        &mut self,
+        player_id: PlayerId,
+        position: revy_server_gameplay_bridge::BlockPos,
+    ) -> bool {
+        self.preview.can_edit_block(player_id, position)
+    }
 }
 
 pub(crate) struct ExportedCoreRuntimeState {
@@ -81,20 +173,31 @@ impl RuntimeKernel {
                     (session_capabilities.as_ref(), gameplay.as_ref())
                 {
                     let (snapshot, revision) = self.snapshot_for_detached_gameplay().await;
-                    let journal = gameplay
-                        .prepare_player_join(
-                            snapshot,
-                            session_capabilities,
+                    let read_view = match GameplayLoginPreview::new(
+                        snapshot,
+                        connection_id,
+                        username.clone(),
+                        player_id,
+                        now_ms,
+                    ) {
+                        Ok(preview) => LoginPreviewReadView::boxed(preview),
+                        Err(GameplayLoginPreviewError::Rejected(events)) => {
+                            return Ok(KernelCommandOutcome::Events(events));
+                        }
+                        Err(GameplayLoginPreviewError::Invalid(message)) => {
+                            return Err(RuntimeError::Config(message));
+                        }
+                    };
+                    let batch = gameplay
+                        .prepare_player_join(read_view, session_capabilities, player_id, now_ms)
+                        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+                    Ok(self
+                        .commit_detached_login_batch(
+                            revision,
                             connection_id,
                             username,
                             player_id,
-                            now_ms,
-                        )
-                        .map_err(|error| RuntimeError::Config(error.to_string()))?;
-                    Ok(self
-                        .commit_detached_gameplay_journal(
-                            revision,
-                            journal,
+                            batch,
                             should_persist,
                             KernelCommandOutcome::StaleLogin { connection_id },
                         )
@@ -121,18 +224,18 @@ impl RuntimeKernel {
                     {
                         let player_id = gameplay_command.player_id();
                         let (snapshot, revision) = self.snapshot_for_detached_gameplay().await;
-                        let journal = gameplay
+                        let batch = gameplay
                             .prepare_command(
-                                snapshot,
+                                CoreSnapshotReadView::boxed(snapshot),
                                 session_capabilities,
                                 &gameplay_command,
                                 now_ms,
                             )
                             .map_err(|error| RuntimeError::Config(error.to_string()))?;
                         Ok(self
-                            .commit_detached_gameplay_journal(
+                            .commit_detached_gameplay_batch(
                                 revision,
-                                journal,
+                                batch,
                                 should_persist,
                                 KernelCommandOutcome::StaleGameplayCommand { player_id },
                             )
@@ -241,8 +344,13 @@ impl RuntimeKernel {
         now_ms: u64,
     ) -> Result<Option<Vec<TargetedEvent>>, RuntimeError> {
         let (snapshot, revision) = self.snapshot_for_detached_gameplay().await;
-        let journal = gameplay
-            .prepare_tick(snapshot, &session_capabilities, player_id, now_ms)
+        let batch = gameplay
+            .prepare_tick(
+                CoreSnapshotReadView::boxed(snapshot),
+                &session_capabilities,
+                player_id,
+                now_ms,
+            )
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
         #[cfg(test)]
         self.maybe_pause_before_detached_gameplay_commit_for_test()
@@ -257,12 +365,12 @@ impl RuntimeKernel {
             .try_apply_if(
                 expected_revision,
                 |state| {
-                    let apply_result = state.core.validate_and_apply_gameplay_journal(journal);
+                    let apply_result = state.core.validate_and_apply_gameplay_effects(batch);
                     let should_increment = match &apply_result {
-                        GameplayJournalApplyResult::Applied(events) => {
+                        GameplayEffectApplyResult::Applied(events) => {
                             Self::record_commit_side_effects(state, events, false)
                         }
-                        GameplayJournalApplyResult::Conflict => false,
+                        GameplayEffectApplyResult::Conflict => false,
                     };
                     (apply_result, should_increment)
                 },
@@ -270,8 +378,8 @@ impl RuntimeKernel {
             )
             .expect("detached gameplay tick should apply against the current revision");
         match apply_result {
-            GameplayJournalApplyResult::Applied(events) => Ok(Some(events)),
-            GameplayJournalApplyResult::Conflict => Ok(None),
+            GameplayEffectApplyResult::Applied(events) => Ok(Some(events)),
+            GameplayEffectApplyResult::Conflict => Ok(None),
         }
     }
 
@@ -451,10 +559,13 @@ impl RuntimeKernel {
         events
     }
 
-    async fn commit_detached_gameplay_journal(
+    async fn commit_detached_login_batch(
         &self,
         snapshot_revision: u64,
-        journal: revy_voxel_core::GameplayJournal,
+        connection_id: ConnectionId,
+        username: String,
+        player_id: PlayerId,
+        batch: GameplayEffectBatch,
         should_persist: bool,
         stale_outcome: KernelCommandOutcome,
     ) -> Result<KernelCommandOutcome, RuntimeError> {
@@ -471,21 +582,64 @@ impl RuntimeKernel {
             .try_apply_if(
                 expected_revision,
                 |state| {
-                    let apply_result = state.core.validate_and_apply_gameplay_journal(journal);
+                    let apply_result = state.core.validate_and_apply_login_effects(
+                        connection_id,
+                        username,
+                        player_id,
+                        batch,
+                    );
                     let should_increment = match &apply_result {
-                        GameplayJournalApplyResult::Applied(events) => {
+                        GameplayEffectApplyResult::Applied(events) => {
                             Self::record_commit_side_effects(state, events, should_persist)
                         }
-                        GameplayJournalApplyResult::Conflict => false,
+                        GameplayEffectApplyResult::Conflict => false,
                     };
                     (apply_result, should_increment)
                 },
                 |(_, should_increment)| *should_increment,
             )
-            .expect("detached gameplay journal should apply against the current revision");
+            .expect("detached gameplay login batch should apply against the current revision");
         Ok(match apply_result {
-            GameplayJournalApplyResult::Applied(events) => KernelCommandOutcome::Events(events),
-            GameplayJournalApplyResult::Conflict => stale_outcome,
+            GameplayEffectApplyResult::Applied(events) => KernelCommandOutcome::Events(events),
+            GameplayEffectApplyResult::Conflict => stale_outcome,
+        })
+    }
+
+    async fn commit_detached_gameplay_batch(
+        &self,
+        snapshot_revision: u64,
+        batch: GameplayEffectBatch,
+        should_persist: bool,
+        stale_outcome: KernelCommandOutcome,
+    ) -> Result<KernelCommandOutcome, RuntimeError> {
+        #[cfg(test)]
+        self.maybe_pause_before_detached_gameplay_commit_for_test()
+            .await;
+        let mut state = self.state.lock().await;
+        let expected_revision = if snapshot_revision == state.revision() {
+            snapshot_revision
+        } else {
+            state.revision()
+        };
+        let (_, (apply_result, _)) = state
+            .try_apply_if(
+                expected_revision,
+                |state| {
+                    let apply_result = state.core.validate_and_apply_gameplay_effects(batch);
+                    let should_increment = match &apply_result {
+                        GameplayEffectApplyResult::Applied(events) => {
+                            Self::record_commit_side_effects(state, events, should_persist)
+                        }
+                        GameplayEffectApplyResult::Conflict => false,
+                    };
+                    (apply_result, should_increment)
+                },
+                |(_, should_increment)| *should_increment,
+            )
+            .expect("detached gameplay effect batch should apply against the current revision");
+        Ok(match apply_result {
+            GameplayEffectApplyResult::Applied(events) => KernelCommandOutcome::Events(events),
+            GameplayEffectApplyResult::Conflict => stale_outcome,
         })
     }
 
@@ -550,8 +704,8 @@ mod tests {
     use mc_storage_common::StorageError;
     use revy_voxel_core::{
         ConnectionId, CoreConfig, EntityId, EventTarget, GameplayCapabilitySet, GameplayCommand,
-        GameplayJournal, GameplayProfileId, GameplayTransaction, PlayerId, ProtocolCapabilitySet,
-        SessionCapabilitySet, StorageCapabilitySet,
+        GameplayEffect, GameplayEffectBatch, GameplayProfileId, GameplayReadSet, PlayerId,
+        ProtocolCapabilitySet, SessionCapabilitySet, StorageCapabilitySet,
     };
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -611,74 +765,81 @@ mod tests {
 
         fn prepare_player_join(
             &self,
-            snapshot: ServerCore,
+            mut read_view: Box<dyn GameplayReadView>,
             _session: &SessionCapabilitySet,
-            connection_id: ConnectionId,
-            username: String,
-            player_id: PlayerId,
+            _player_id: PlayerId,
             now_ms: u64,
-        ) -> Result<GameplayJournal, PluginHostError> {
+        ) -> Result<GameplayEffectBatch, PluginHostError> {
             self.join_invocations.fetch_add(1, Ordering::SeqCst);
-            let mut tx = GameplayTransaction::detached(snapshot, now_ms);
-            if let Some(rejection) = tx
-                .begin_login(connection_id, username, player_id)
-                .map_err(PluginHostError::Config)?
-            {
-                for event in rejection {
-                    tx.emit_event(event.target, event.event);
-                }
-                return Ok(tx.into_journal());
-            }
-            tx.finalize_login(connection_id, player_id)
-                .map_err(PluginHostError::Config)?;
-            Ok(tx.into_journal())
+            let mut reads = GameplayReadSet::default();
+            reads.world_meta = Some(read_view.world_meta());
+            Ok(GameplayEffectBatch {
+                now_ms,
+                reads,
+                effects: Vec::new(),
+            })
         }
 
         fn prepare_command(
             &self,
-            snapshot: ServerCore,
+            mut read_view: Box<dyn GameplayReadView>,
             _session: &SessionCapabilitySet,
             command: &GameplayCommand,
             now_ms: u64,
-        ) -> Result<GameplayJournal, PluginHostError> {
+        ) -> Result<GameplayEffectBatch, PluginHostError> {
             self.command_invocations.fetch_add(1, Ordering::SeqCst);
-            let mut tx = GameplayTransaction::detached(snapshot, now_ms);
             match command {
                 GameplayCommand::SetHeldSlot { player_id, slot } => {
-                    tx.player_snapshot(*player_id).ok_or_else(|| {
-                        PluginHostError::Config(
-                            "tracking profile expected a live player".to_string(),
-                        )
-                    })?;
+                    let player_snapshot =
+                        read_view.player_snapshot(*player_id).ok_or_else(|| {
+                            PluginHostError::Config(
+                                "tracking profile expected a live player".to_string(),
+                            )
+                        })?;
                     let slot = u8::try_from(*slot).map_err(|_| {
                         PluginHostError::Config(
                             "tracking profile expected a non-negative held slot".to_string(),
                         )
                     })?;
-                    tx.set_selected_hotbar_slot(*player_id, slot);
+                    let mut reads = GameplayReadSet::default();
+                    reads
+                        .player_snapshots
+                        .insert(*player_id, Some(player_snapshot));
+                    Ok(GameplayEffectBatch {
+                        now_ms,
+                        reads,
+                        effects: vec![GameplayEffect::SetSelectedHotbarSlot {
+                            player_id: *player_id,
+                            slot,
+                        }],
+                    })
                 }
-                other => {
-                    return Err(PluginHostError::Config(format!(
-                        "tracking profile only supports SetHeldSlot, got {other:?}"
-                    )));
-                }
+                other => Err(PluginHostError::Config(format!(
+                    "tracking profile only supports SetHeldSlot, got {other:?}"
+                ))),
             }
-            Ok(tx.into_journal())
         }
 
         fn prepare_tick(
             &self,
-            snapshot: ServerCore,
+            mut read_view: Box<dyn GameplayReadView>,
             _session: &SessionCapabilitySet,
             player_id: PlayerId,
             now_ms: u64,
-        ) -> Result<GameplayJournal, PluginHostError> {
+        ) -> Result<GameplayEffectBatch, PluginHostError> {
             self.tick_invocations.fetch_add(1, Ordering::SeqCst);
-            let mut tx = GameplayTransaction::detached(snapshot, now_ms);
-            tx.player_snapshot(player_id).ok_or_else(|| {
+            let player_snapshot = read_view.player_snapshot(player_id).ok_or_else(|| {
                 PluginHostError::Config("tracking tick expected a live player".to_string())
             })?;
-            Ok(tx.into_journal())
+            let mut reads = GameplayReadSet::default();
+            reads
+                .player_snapshots
+                .insert(player_id, Some(player_snapshot));
+            Ok(GameplayEffectBatch {
+                now_ms,
+                reads,
+                effects: Vec::new(),
+            })
         }
 
         fn session_closed(
@@ -901,6 +1062,37 @@ mod tests {
         let state = kernel.export_core_runtime_state().await;
         assert!(state.blob.online_players.contains_key(&player_id));
         assert_eq!(state.blob.online_players.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejected_login_skips_gameplay_plugin_invocation() -> Result<(), RuntimeError> {
+        let mut config = CoreConfig::default();
+        config.max_players = 0;
+        let kernel = Arc::new(RuntimeKernel::new(
+            ServerCore::new(
+                config,
+                crate::runtime::selection::SelectionResolver::content_behavior(),
+            ),
+            Arc::new(NullStorage),
+            PathBuf::from("world"),
+        ));
+        let gameplay = Arc::new(TrackingGameplayProfile::default());
+        let outcome = kernel
+            .apply_command(
+                CoreCommand::LoginStart {
+                    connection_id: ConnectionId(9),
+                    username: "rejected".to_string(),
+                    player_id: tracking_player_id("rejected"),
+                },
+                Some(login_session_capabilities()),
+                Some(gameplay.clone()),
+                0,
+            )
+            .await?;
+
+        assert!(matches!(outcome, KernelCommandOutcome::Events(events) if !events.is_empty()));
+        assert_eq!(gameplay.join_invocations.load(Ordering::SeqCst), 0);
         Ok(())
     }
 

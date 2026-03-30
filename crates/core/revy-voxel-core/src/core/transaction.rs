@@ -12,6 +12,10 @@ use crate::player::{InteractionHand, PlayerSnapshot};
 use crate::world::{BlockEntityState, BlockFace, BlockPos, BlockState, Vec3, WorldMeta};
 use crate::{ConnectionId, HOTBAR_SLOT_COUNT, PlayerId};
 use revy_voxel_rules::ContainerKindId;
+use revy_voxel_semantic::{
+    GameplayEffect as SemanticGameplayEffect, GameplayEffectBatch as SemanticGameplayEffectBatch,
+    GameplayReadSet as SemanticGameplayReadSet,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default)]
@@ -104,6 +108,22 @@ impl GameplayJournal {
 pub enum GameplayJournalApplyResult {
     Applied(Vec<TargetedEvent>),
     Conflict,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum GameplayEffectApplyResult {
+    Applied(Vec<TargetedEvent>),
+    Conflict,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum GameplayLoginPreviewError {
+    Rejected(Vec<TargetedEvent>),
+    Invalid(String),
+}
+
+pub struct GameplayLoginPreview {
+    tx: GameplayTransaction<'static>,
 }
 
 pub struct GameplayTransaction<'a> {
@@ -549,12 +569,205 @@ impl<'a> GameplayTransaction<'a> {
     }
 }
 
+impl GameplayLoginPreview {
+    pub fn new(
+        snapshot: ServerCore,
+        connection_id: ConnectionId,
+        username: String,
+        player_id: PlayerId,
+        now_ms: u64,
+    ) -> Result<Self, GameplayLoginPreviewError> {
+        let mut tx = GameplayTransaction::detached(snapshot, now_ms);
+        match tx
+            .begin_login(connection_id, username, player_id)
+            .map_err(GameplayLoginPreviewError::Invalid)?
+        {
+            Some(events) => Err(GameplayLoginPreviewError::Rejected(events)),
+            None => Ok(Self { tx }),
+        }
+    }
+
+    #[must_use]
+    pub fn world_meta(&mut self) -> WorldMeta {
+        self.tx.world_meta()
+    }
+
+    #[must_use]
+    pub fn player_snapshot(&mut self, player_id: PlayerId) -> Option<PlayerSnapshot> {
+        self.tx.player_snapshot(player_id)
+    }
+
+    #[must_use]
+    pub fn block_state(&mut self, position: BlockPos) -> Option<BlockState> {
+        self.tx.block_state(position)
+    }
+
+    #[must_use]
+    pub fn block_entity(&mut self, position: BlockPos) -> Option<BlockEntityState> {
+        self.tx.block_entity(position)
+    }
+
+    #[must_use]
+    pub fn can_edit_block(&mut self, player_id: PlayerId, position: BlockPos) -> bool {
+        self.tx.can_edit_block(player_id, position)
+    }
+
+    fn matches_reads(&self, reads: &SemanticGameplayReadSet) -> bool {
+        semantic_reads_match(&self.tx.overlay_view(), reads)
+    }
+
+    fn into_transaction(self) -> GameplayTransaction<'static> {
+        self.tx
+    }
+}
+
+fn semantic_reads_match(view: &impl CoreStateRead, reads: &SemanticGameplayReadSet) -> bool {
+    if let Some(world_meta) = &reads.world_meta
+        && &view.world_meta() != world_meta
+    {
+        return false;
+    }
+    for (player_id, snapshot) in &reads.player_snapshots {
+        if &view.compose_player_snapshot(*player_id) != snapshot {
+            return false;
+        }
+    }
+    for (position, block_state) in &reads.block_states {
+        if &view.block_state(*position) != block_state {
+            return false;
+        }
+    }
+    for (position, block_entity) in &reads.block_entities {
+        if &view.block_entity(*position) != block_entity {
+            return false;
+        }
+    }
+    for (key, allowed) in &reads.can_edit_block {
+        let current = view
+            .compose_player_snapshot(key.player_id)
+            .is_some_and(|player| view.can_edit_block_for_snapshot(&player, key.position));
+        if &current != allowed {
+            return false;
+        }
+    }
+    true
+}
+
+fn core_op_from_effect(effect: SemanticGameplayEffect) -> CoreOp {
+    match effect {
+        SemanticGameplayEffect::SetPlayerPose {
+            player_id,
+            position,
+            yaw,
+            pitch,
+            on_ground,
+        } => CoreOp::SetPlayerPose {
+            player_id,
+            position,
+            yaw,
+            pitch,
+            on_ground,
+        },
+        SemanticGameplayEffect::SetSelectedHotbarSlot { player_id, slot } => {
+            CoreOp::SetSelectedHotbarSlot { player_id, slot }
+        }
+        SemanticGameplayEffect::SetInventorySlot {
+            player_id,
+            slot,
+            stack,
+        } => CoreOp::SetInventorySlot {
+            player_id,
+            slot,
+            stack,
+        },
+        SemanticGameplayEffect::ClearMining { player_id } => CoreOp::ClearMining { player_id },
+        SemanticGameplayEffect::BeginMining {
+            player_id,
+            position,
+            duration_ms,
+        } => CoreOp::BeginMining {
+            player_id,
+            position,
+            duration_ms,
+        },
+        SemanticGameplayEffect::OpenContainerAt {
+            player_id,
+            position,
+        } => CoreOp::OpenContainerAt {
+            player_id,
+            position,
+        },
+        SemanticGameplayEffect::OpenVirtualContainer { player_id, kind } => {
+            CoreOp::OpenVirtualContainer { player_id, kind }
+        }
+        SemanticGameplayEffect::SetBlock { position, block } => {
+            CoreOp::SetBlock { position, block }
+        }
+        SemanticGameplayEffect::SpawnDroppedItem { position, item } => CoreOp::SpawnDroppedItem {
+            expected_entity_id: None,
+            position,
+            item,
+        },
+        SemanticGameplayEffect::EmitEvent { event } => CoreOp::EmitEvent {
+            target: event.target,
+            event: event.event,
+        },
+    }
+}
+
+fn apply_effect_to_transaction(tx: &mut GameplayTransaction<'_>, effect: SemanticGameplayEffect) {
+    match effect {
+        SemanticGameplayEffect::SetPlayerPose {
+            player_id,
+            position,
+            yaw,
+            pitch,
+            on_ground,
+        } => tx.set_player_pose(player_id, position, yaw, pitch, on_ground),
+        SemanticGameplayEffect::SetSelectedHotbarSlot { player_id, slot } => {
+            tx.set_selected_hotbar_slot(player_id, slot);
+        }
+        SemanticGameplayEffect::SetInventorySlot {
+            player_id,
+            slot,
+            stack,
+        } => tx.set_inventory_slot(player_id, slot, stack),
+        SemanticGameplayEffect::ClearMining { player_id } => tx.clear_mining(player_id),
+        SemanticGameplayEffect::BeginMining {
+            player_id,
+            position,
+            duration_ms,
+        } => tx.begin_mining(player_id, position, duration_ms),
+        SemanticGameplayEffect::OpenContainerAt {
+            player_id,
+            position,
+        } => {
+            tx.open_container_at(player_id, position);
+        }
+        SemanticGameplayEffect::OpenVirtualContainer { player_id, kind } => {
+            tx.open_virtual_container(player_id, kind);
+        }
+        SemanticGameplayEffect::SetBlock { position, block } => tx.set_block(position, block),
+        SemanticGameplayEffect::SpawnDroppedItem { position, item } => {
+            tx.spawn_dropped_item(position, item);
+        }
+        SemanticGameplayEffect::EmitEvent { event } => tx.emit_event(event.target, event.event),
+    }
+}
+
+fn gameplay_effect_apply_result(result: GameplayJournalApplyResult) -> GameplayEffectApplyResult {
+    match result {
+        GameplayJournalApplyResult::Applied(events) => GameplayEffectApplyResult::Applied(events),
+        GameplayJournalApplyResult::Conflict => GameplayEffectApplyResult::Conflict,
+    }
+}
+
 impl ServerCore {
     pub fn begin_gameplay_transaction(&mut self, now_ms: u64) -> GameplayTransaction<'_> {
         GameplayTransaction::new(self, now_ms)
     }
 
-    pub fn validate_and_apply_gameplay_journal(
+    pub(crate) fn validate_and_apply_gameplay_journal(
         &mut self,
         journal: GameplayJournal,
     ) -> GameplayJournalApplyResult {
@@ -567,6 +780,54 @@ impl ServerCore {
             journal.now_ms,
             ApplyCoreOpsOptions::default(),
         ))
+    }
+
+    pub fn validate_and_apply_gameplay_effects(
+        &mut self,
+        batch: SemanticGameplayEffectBatch,
+    ) -> GameplayEffectApplyResult {
+        if !semantic_reads_match(&BaseStateRef::new(self), &batch.reads) {
+            return GameplayEffectApplyResult::Conflict;
+        }
+        gameplay_effect_apply_result(GameplayJournalApplyResult::Applied(apply_core_ops(
+            self,
+            batch.effects.into_iter().map(core_op_from_effect).collect(),
+            batch.now_ms,
+            ApplyCoreOpsOptions::default(),
+        )))
+    }
+
+    pub fn validate_and_apply_login_effects(
+        &mut self,
+        connection_id: ConnectionId,
+        username: String,
+        player_id: PlayerId,
+        batch: SemanticGameplayEffectBatch,
+    ) -> GameplayEffectApplyResult {
+        let preview = match GameplayLoginPreview::new(
+            self.clone(),
+            connection_id,
+            username,
+            player_id,
+            batch.now_ms,
+        ) {
+            Ok(preview) => preview,
+            Err(GameplayLoginPreviewError::Rejected(_))
+            | Err(GameplayLoginPreviewError::Invalid(_)) => {
+                return GameplayEffectApplyResult::Conflict;
+            }
+        };
+        if !preview.matches_reads(&batch.reads) {
+            return GameplayEffectApplyResult::Conflict;
+        }
+        let mut tx = preview.into_transaction();
+        for effect in batch.effects {
+            apply_effect_to_transaction(&mut tx, effect);
+        }
+        if tx.finalize_login(connection_id, player_id).is_err() {
+            return GameplayEffectApplyResult::Conflict;
+        }
+        gameplay_effect_apply_result(self.validate_and_apply_gameplay_journal(tx.into_journal()))
     }
 
     pub fn apply_builtin_gameplay_command(

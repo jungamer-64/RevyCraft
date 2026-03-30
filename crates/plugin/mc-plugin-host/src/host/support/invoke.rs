@@ -2,7 +2,7 @@
 
 use super::{
     AdminSurfacePluginApiV1, AdminSurfaceRequest, AdminSurfaceResponse, AuthPluginApiV1,
-    AuthRequest, AuthResponse, ByteSlice, GameplayPluginApiV3, GameplayRequest, GameplayResponse,
+    AuthRequest, AuthResponse, ByteSlice, GameplayPluginApiV4, GameplayRequest, GameplayResponse,
     OwnedBuffer, PluginErrorCode, ProtocolPluginApiV3, ProtocolRequest, ProtocolResponse,
     RuntimeError, StoragePluginApiV1, StorageRequest, StorageResponse, admin_surface_host_api,
     decode_admin_surface_response, decode_auth_response, decode_gameplay_response,
@@ -60,7 +60,7 @@ pub(crate) fn invoke_protocol(
 
 pub(crate) fn invoke_gameplay(
     plugin_id: &str,
-    api: &GameplayPluginApiV3,
+    api: &GameplayPluginApiV4,
     request: &GameplayRequest,
     buffer_limits: PluginBufferLimits,
 ) -> Result<GameplayResponse, RuntimeError> {

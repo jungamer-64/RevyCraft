@@ -113,14 +113,14 @@ Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host 
 - `revy-core`
   `ConnectionId` / `PlayerId` / capability set、`EventTarget` / routed event、revision control、session routing primitive を持ちます。
 - `revy-voxel-core`
-  `GameplayTransaction`、world state、inventory / container lifecycle、mining、login / bootstrap、canonical `CoreEvent` generation を持ちます。
+  world state、inventory / container lifecycle、mining、login / bootstrap、`GameplayEffectBatch` validate/apply、canonical `CoreEvent` generation を持ちます。
 
 plugin 種別ごとの責務は次です。
 
 - protocol plugin
   handshake routing、status / login / play packet の decode / encode、transport / version 固有 session state を持ちます。
 - gameplay plugin
-  semantic な `GameplayCommand` を評価し、invocation-scoped `GameplayTransaction` を通じて snapshot を読みつつ op journal を積みます。live core への validate / apply は runtime / `revy-voxel-core` 側が担当します。
+  semantic な `GameplayCommand` を評価し、invocation-scoped read/effect recorder を通じて snapshot read と `GameplayEffectBatch` を返します。live core への validate / apply は runtime / `revy-voxel-core` 側が担当します。
 - storage plugin
   world snapshot の load / save / import / export を担います。`core` migration blob は process-local であり、persistent storage schema とは共有しません。
 - auth plugin
@@ -158,11 +158,15 @@ plugin や protocol 共通層が共有してよい型は `revy-voxel-semantic` �
 apps/revy-server
   -> revy-server-runtime
      -> revy-server-config
+     -> revy-server-gameplay-bridge
      -> revy-server-types
      -> mc-plugin-host
      -> revy-voxel-core
         -> revy-voxel-semantic
            -> revy-core
+
+mc-plugin-host
+  -> revy-server-gameplay-bridge
 
 mc-plugin-api
   -> revy-voxel-semantic
@@ -194,9 +198,10 @@ storage crates
 - no crate outside runtime / core engine depends on `revy-voxel-core` or `revy-core` as a shared public contract proxy
 - no storage crate depends on versioned protocol crate
 - no config crate depends on `mc-plugin-host`
+- no host crate depends on `revy-voxel-core`; gameplay read access is bridged through `revy-server-gameplay-bridge`
 - no duplicated canonical admin / reload DTO definitions across `revy-server-config` / `revy-server-runtime` / `mc-plugin-api` / `mc-plugin-host`
 
-最初の rule は、最終的には `ServerCore` / `GameplayTransaction` を public surface から消すことが目的です。migration 中は crate-level dependency check で proxy を張り、`revy-voxel-semantic` 導入後に tighten します。
+最初の rule は、`ServerCore` / `GameplayTransaction` を public surface から消し、plugin-facing contract を `GameplayEffectBatch` と `GameplayReadView` に寄せることが目的です。runtime kernel が `GameplayLoginPreview` / snapshot adapter を所有し、`mc-plugin-host` は bridge trait 越しに読むだけにします。
 
 ## 移行順序と境界チェック
 
@@ -206,7 +211,8 @@ boundary redesign の進め方は次を前提にします。
 2. `revy-voxel-semantic` を導入し、shared semantic type を移す
 3. `mc-storage-common` と `mc-storage-je-anvil-1_7_10` を導入し、protocol / storage を切り離す
 4. `revy-server-types` を導入し、admin / reload DTO を寄せる
-5. plugin-host translation を runtime 側へ移し、`revy-server-config` を validated config に閉じる
+5. plugin-host translation を runtime 側へ移し、`mc-plugin-host` の gameplay read path を `revy-server-gameplay-bridge` 越しにする
+6. `revy-server-config` を validated config に閉じる
 
 境界チェックの入口は次です。
 

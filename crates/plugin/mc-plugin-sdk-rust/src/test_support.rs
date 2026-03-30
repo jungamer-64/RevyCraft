@@ -3,7 +3,7 @@ use mc_plugin_api::codec::auth::{AuthRequest, AuthResponse};
 use mc_plugin_api::codec::gameplay::{GameplayRequest, GameplayResponse};
 use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse};
 use mc_plugin_api::codec::storage::{StorageRequest, StorageResponse};
-use mc_plugin_api::host_api::{AdminSurfaceHostApiV1, GameplayHostApiV2};
+use mc_plugin_api::host_api::{AdminSurfaceHostApiV1, GameplayHostApiV3};
 use mc_plugin_api::manifest::PluginManifestV1;
 
 pub trait ProtocolPluginHandler: Send + Sync + 'static {
@@ -14,7 +14,7 @@ pub trait GameplayPluginHandler: Send + Sync + 'static {
     fn handle(
         &self,
         request: GameplayRequest,
-        host_api: Option<GameplayHostApiV2>,
+        host_api: Option<GameplayHostApiV3>,
     ) -> Result<GameplayResponse, String>;
 }
 

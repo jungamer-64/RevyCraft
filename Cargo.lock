@@ -1863,6 +1863,7 @@ dependencies = [
  "mc-proto-je-5",
  "mc-proto-je-775",
  "mc-storage-common",
+ "revy-server-gameplay-bridge",
  "revy-server-types",
  "revy-voxel-core",
  "serde",
@@ -3133,6 +3134,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "revy-server-gameplay-bridge"
+version = "0.1.0"
+dependencies = [
+ "revy-voxel-model",
+ "revy-voxel-rules",
+ "revy-voxel-semantic",
+]
+
+[[package]]
 name = "revy-server-runtime"
 version = "0.1.0"
 dependencies = [
@@ -3182,6 +3192,7 @@ dependencies = [
  "num-bigint",
  "rak-rs",
  "revy-server-config",
+ "revy-server-gameplay-bridge",
  "revy-server-types",
  "revy-voxel-core",
  "revy-voxel-model",

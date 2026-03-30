@@ -1,5 +1,6 @@
 use super::{
-    current_artifact_key, with_current_gameplay_transaction, with_gameplay_transaction_and_limits,
+    GameplayInvocationScope, current_artifact_key, with_current_gameplay_query,
+    with_gameplay_invocation_and_limits,
 };
 use crate::PluginHostError as RuntimeError;
 use crate::config::{BootstrapConfig, PluginBufferLimits, RuntimeSelectionConfig};

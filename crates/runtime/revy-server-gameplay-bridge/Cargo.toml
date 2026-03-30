@@ -1,0 +1,18 @@
+[package]
+name = "revy-server-gameplay-bridge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Gameplay read-view bridge between the runtime kernel and plugin host."
+
+[dependencies]
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
+revy-voxel-model = { path = "../../model/revy-voxel-model" }
+revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
+
+[lints]
+workspace = true

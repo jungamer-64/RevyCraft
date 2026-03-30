@@ -120,7 +120,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
         .plugin_host
         .as_ref()
         .expect("runtime status should expose the plugin host snapshot");
-    assert_eq!(plugin_host.protocol_count, 6);
+    assert_eq!(plugin_host.protocol_count, 7);
     assert_eq!(plugin_host.gameplay_count, 1);
     assert_eq!(plugin_host.storage_count, 1);
     assert_eq!(plugin_host.auth_count, 1);
@@ -137,7 +137,7 @@ async fn running_server_status_exposes_topology_and_plugin_snapshot() -> Result<
             "runtime active-generation=1 draining-generations=0 listeners=1 sessions=0 dirty=false\n",
             "generation tcp-default=je-5 tcp-enabled=je-5 udp-default=- udp-enabled=- max-players=20 motd=\"Multi-version Rust server\"\n",
             "session-summary transport=tcp:0,udp:0 phase=handshaking:0,status:0,login:0,play:0\n",
-            "plugins protocol=6 gameplay=1 storage=1 auth=1 admin-surface=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
+            "plugins protocol=7 gameplay=1 storage=1 auth=1 admin-surface=1 active-quarantines=0 artifact-quarantines=0 pending-fatal=none"
         )
     );
     let serialized = toml::to_string(&status).expect("runtime status snapshot should serialize");

@@ -4,7 +4,7 @@ pub const PLUGIN_MANIFEST_SYMBOL_V1: &[u8] = b"mc_plugin_manifest_v1\0";
 pub const PLUGIN_PROTOCOL_API_SYMBOL_V3: &[u8] = b"mc_plugin_protocol_api_v3\0";
 pub const PLUGIN_STORAGE_API_SYMBOL_V1: &[u8] = b"mc_plugin_storage_api_v1\0";
 pub const PLUGIN_AUTH_API_SYMBOL_V1: &[u8] = b"mc_plugin_auth_api_v1\0";
-pub const PLUGIN_GAMEPLAY_API_SYMBOL_V3: &[u8] = b"mc_plugin_gameplay_api_v3\0";
+pub const PLUGIN_GAMEPLAY_API_SYMBOL_V4: &[u8] = b"mc_plugin_gameplay_api_v4\0";
 pub const PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1: &[u8] = b"mc_plugin_admin_surface_api_v1\0";
 
 #[repr(C)]

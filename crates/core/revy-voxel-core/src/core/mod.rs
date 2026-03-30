@@ -14,8 +14,8 @@ use crate::events::{CoreEvent, EventTarget, TargetedEvent};
 use crate::inventory::{InventoryWindowContents, ItemStack, PlayerInventory};
 use crate::player::PlayerSnapshot;
 use crate::world::{
-    BlockEntityState, BlockPos, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot, WorldMeta,
-    required_chunks,
+    BlockEntityState, BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId,
+    DroppedItemSnapshot, WorldMeta, required_chunks,
 };
 use crate::{DEFAULT_KEEPALIVE_INTERVAL_MS, DEFAULT_KEEPALIVE_TIMEOUT_MS, EntityId, PlayerId};
 use revy_voxel_rules::{ContainerKindId, ContentBehavior, MiningToolSpec};
@@ -24,7 +24,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 pub use self::inventory::OpenInventoryWindow;
-use self::state_backend::CoreStateMut;
+use self::state_backend::{CoreStateMut, CoreStateRead};
+pub use self::transaction::{
+    GameplayEffectApplyResult, GameplayLoginPreview, GameplayLoginPreviewError,
+};
 pub use revy_voxel_semantic::CoreConfig;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -516,6 +519,31 @@ impl ServerCore {
     #[must_use]
     pub fn world_meta(&self) -> &WorldMeta {
         &self.world.world_meta
+    }
+
+    #[must_use]
+    pub fn player_snapshot(&self, player_id: PlayerId) -> Option<PlayerSnapshot> {
+        self::state_backend::BaseStateRef::new(self).compose_player_snapshot(player_id)
+    }
+
+    #[must_use]
+    pub fn block_state(&self, position: BlockPos) -> Option<BlockState> {
+        self::state_backend::BaseStateRef::new(self).block_state(position)
+    }
+
+    #[must_use]
+    pub fn block_entity(&self, position: BlockPos) -> Option<BlockEntityState> {
+        self::state_backend::BaseStateRef::new(self).block_entity(position)
+    }
+
+    #[must_use]
+    pub fn can_edit_block(&self, player_id: PlayerId, position: BlockPos) -> bool {
+        self::state_backend::BaseStateRef::new(self)
+            .compose_player_snapshot(player_id)
+            .is_some_and(|player| {
+                self::state_backend::BaseStateRef::new(self)
+                    .can_edit_block_for_snapshot(&player, position)
+            })
     }
 
     #[must_use]

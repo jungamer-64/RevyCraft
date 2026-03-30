@@ -11,17 +11,17 @@ description = "Dynamic plugin host, catalog, and runtime profile management for 
 
 [features]
 disable-exported-symbols = []
-in-process-testing = []
+in-process-testing = ["dep:mc-plugin-sdk-rust"]
 
 [dependencies]
 bytes.workspace = true
 libloading.workspace = true
 mc-plugin-api = { path = "../mc-plugin-api" }
-mc-plugin-sdk-rust = { path = "../mc-plugin-sdk-rust", features = ["in-process-testing"] }
+mc-plugin-sdk-rust = { path = "../mc-plugin-sdk-rust", features = ["in-process-testing"], optional = true }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
 mc-storage-common = { path = "../../storage/mc-storage-common" }
+revy-server-gameplay-bridge = { path = "../../runtime/revy-server-gameplay-bridge" }
 revy-server-types = { path = "../../runtime/revy-server-types" }
-revy-voxel-core = { path = "../../core/revy-voxel-core" }
 serde.workspace = true
 thiserror.workspace = true
 toml.workspace = true
@@ -33,6 +33,7 @@ mc-plugin-admin-console = { path = "../../../plugins/admin/mc-plugin-admin-conso
 mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gameplay-canonical", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-sdk-rust = { path = "../mc-plugin-sdk-rust", features = ["in-process-testing"] }
 mc-plugin-test-support = { path = "../../testing/mc-plugin-test-support" }
 mc-plugin-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-plugin-proto-be-924", features = ["disable-exported-symbols", "in-process-testing"] }
 mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/be-placeholder/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols", "in-process-testing"] }
@@ -51,6 +52,7 @@ mc-proto-je-404 = { path = "../../../plugins/protocol/je-404/mc-proto-je-404" }
 mc-proto-je-775 = { path = "../../../plugins/protocol/je-775/mc-proto-je-775" }
 mc-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-proto-je-5" }
 mc-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-proto-je-47" }
+revy-voxel-core = { path = "../../core/revy-voxel-core" }
 tempfile.workspace = true
 
 [lints]

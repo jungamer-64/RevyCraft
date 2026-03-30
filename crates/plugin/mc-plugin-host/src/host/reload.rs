@@ -8,13 +8,14 @@ use super::{
 };
 use crate::runtime::ProtocolReloadSession;
 use crate::runtime::{
-    PreparedRuntimeSelection, RuntimeProtocolTopologyCandidate, StagedRuntimeSelection,
+    PreparedRuntimeSelection, RuntimeProtocolTopologyCandidate, RuntimeSelectionStage,
+    StagedRuntimeSelection,
 };
 use mc_plugin_api::{AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
 use std::collections::HashMap;
 use std::hash::Hash;
 
-struct PreparedFreshRuntimeSelection {
+pub(crate) struct PreparedFreshRuntimeSelection {
     candidate_config: RuntimeSelectionConfig,
     protocols: PreparedProtocolTopology,
     gameplay: HashMap<GameplayProfileId, ManagedGameplayPlugin>,
@@ -46,7 +47,7 @@ type PreparedAuthArtifactUpdate = PreparedProfileArtifactUpdate<AuthProfileId, A
 type PreparedAdminSurfaceArtifactUpdate =
     PreparedProfileArtifactUpdate<AdminSurfaceProfileId, AdminSurfaceGeneration>;
 
-struct PreparedArtifactRuntimeSelection {
+pub(crate) struct PreparedArtifactRuntimeSelection {
     protocol_updates: Vec<PreparedProtocolArtifactUpdate>,
     gameplay_updates: Vec<PreparedGameplayArtifactUpdate>,
     storage_updates: Vec<PreparedStorageArtifactUpdate>,
@@ -54,7 +55,7 @@ struct PreparedArtifactRuntimeSelection {
     admin_surface_updates: Vec<PreparedAdminSurfaceArtifactUpdate>,
 }
 
-enum PreparedRuntimeSelectionState {
+pub(crate) enum PreparedRuntimeSelectionState {
     Fresh(PreparedFreshRuntimeSelection),
     Artifacts(PreparedArtifactRuntimeSelection),
 }
@@ -993,13 +994,15 @@ impl PluginHost {
             loaded_plugins,
             reloaded_plugin_ids.clone(),
             current_topology,
-            PreparedRuntimeSelectionState::Artifacts(PreparedArtifactRuntimeSelection {
-                protocol_updates,
-                gameplay_updates: Vec::new(),
-                storage_updates: Vec::new(),
-                auth_updates: Vec::new(),
-                admin_surface_updates: Vec::new(),
-            }),
+            RuntimeSelectionStage::Prepared(PreparedRuntimeSelectionState::Artifacts(
+                PreparedArtifactRuntimeSelection {
+                    protocol_updates,
+                    gameplay_updates: Vec::new(),
+                    storage_updates: Vec::new(),
+                    auth_updates: Vec::new(),
+                    admin_surface_updates: Vec::new(),
+                },
+            )),
         );
         self.commit_runtime_selection(prepared);
         Ok(reloaded_plugin_ids)
@@ -1056,13 +1059,15 @@ impl PluginHost {
             loaded_plugins,
             reloaded_plugin_ids,
             current_topology,
-            PreparedRuntimeSelectionState::Artifacts(PreparedArtifactRuntimeSelection {
-                protocol_updates,
-                gameplay_updates,
-                storage_updates,
-                auth_updates,
-                admin_surface_updates,
-            }),
+            RuntimeSelectionStage::Prepared(PreparedRuntimeSelectionState::Artifacts(
+                PreparedArtifactRuntimeSelection {
+                    protocol_updates,
+                    gameplay_updates,
+                    storage_updates,
+                    auth_updates,
+                    admin_surface_updates,
+                },
+            )),
         ))
     }
 
@@ -1110,14 +1115,16 @@ impl PluginHost {
                     protocols.clone(),
                     self.requires_protocol_swap(config, &protocols),
                 ),
-                PreparedRuntimeSelectionState::Fresh(PreparedFreshRuntimeSelection {
-                    candidate_config: config.clone(),
-                    protocols,
-                    gameplay,
-                    storage,
-                    auth,
-                    admin_surface,
-                }),
+                RuntimeSelectionStage::Prepared(PreparedRuntimeSelectionState::Fresh(
+                    PreparedFreshRuntimeSelection {
+                        candidate_config: config.clone(),
+                        protocols,
+                        gameplay,
+                        storage,
+                        auth,
+                        admin_surface,
+                    },
+                )),
             ))
         })();
         self.failures.update_matrix(previous_matrix);
@@ -1140,9 +1147,7 @@ impl PluginHost {
     ) -> Result<PreparedRuntimeSelection, RuntimeError> {
         let (loaded_plugins, mut reloaded_plugin_ids, protocol_topology, staged_state) =
             staged.into_parts();
-        let staged_state = *staged_state
-            .downcast::<PreparedRuntimeSelectionState>()
-            .expect("staged runtime selection payload type should match");
+        let RuntimeSelectionStage::Prepared(staged_state) = staged_state;
         match staged_state {
             PreparedRuntimeSelectionState::Fresh(fresh) => {
                 self.validate_fresh_protocol_sessions(
@@ -1155,7 +1160,7 @@ impl PluginHost {
                     loaded_plugins,
                     reloaded_plugin_ids,
                     protocol_topology,
-                    PreparedRuntimeSelectionState::Fresh(fresh),
+                    RuntimeSelectionStage::Prepared(PreparedRuntimeSelectionState::Fresh(fresh)),
                 ))
             }
             PreparedRuntimeSelectionState::Artifacts(mut artifacts) => {
@@ -1195,14 +1200,17 @@ impl PluginHost {
                     loaded_plugins,
                     reloaded_plugin_ids,
                     protocol_topology,
-                    PreparedRuntimeSelectionState::Artifacts(artifacts),
+                    RuntimeSelectionStage::Prepared(PreparedRuntimeSelectionState::Artifacts(
+                        artifacts,
+                    )),
                 ))
             }
         }
     }
 
     pub(crate) fn commit_runtime_selection(&self, prepared: PreparedRuntimeSelection) {
-        match prepared.take_staged::<PreparedRuntimeSelectionState>() {
+        let RuntimeSelectionStage::Prepared(staged_state) = prepared.take_staged();
+        match staged_state {
             PreparedRuntimeSelectionState::Fresh(fresh) => {
                 let mut cleared_plugin_ids =
                     fresh.protocols.managed.keys().cloned().collect::<Vec<_>>();

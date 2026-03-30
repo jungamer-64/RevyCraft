@@ -2,12 +2,11 @@ use super::{
     Arc, ConnectionPhase, GameplayCapabilitySet, GameplayCommand, GameplayProfileHandle,
     GameplayProfileId, GameplayRequest, GameplayResponse, GameplaySessionSnapshot, PlayerId,
     PluginFailureAction, PluginFailureDispatch, PluginGenerationId, PluginKind,
-    ReloadableGenerationSlot, ServerCore, SessionCapabilitySet,
-    with_gameplay_transaction_and_limits,
+    ReloadableGenerationSlot, SessionCapabilitySet, with_gameplay_invocation_and_limits,
 };
 use crate::PluginHostError;
-use mc_plugin_api::ConnectionId;
-use revy_voxel_core::{GameplayJournal, GameplayTransaction};
+use crate::host::GameplayInvocationScope;
+use revy_server_gameplay_bridge::{GameplayEffectBatch, GameplayReadView};
 
 pub(crate) struct HotSwappableGameplayProfile {
     plugin_id: String,
@@ -77,33 +76,39 @@ impl HotSwappableGameplayProfile {
         }
     }
 
-    fn prepare_request(
+    fn invoke_with_scope(
         &self,
-        core: ServerCore,
-        now_ms: u64,
+        mut scope: GameplayInvocationScope,
         request: GameplayRequest,
-    ) -> Result<GameplayJournal, PluginHostError> {
+        now_ms: u64,
+    ) -> Result<GameplayEffectBatch, PluginHostError> {
         self.generation.with_reload_read(|generation| {
             if self.failures.is_active_quarantined(&self.plugin_id) {
-                return Ok(GameplayJournal::empty(now_ms));
+                return Ok(GameplayEffectBatch::empty(now_ms));
             }
 
-            let mut tx = GameplayTransaction::detached(core, now_ms);
             let response =
-                with_gameplay_transaction_and_limits(&mut tx, generation.buffer_limits, || {
-                    generation.invoke(&request)
-                });
+                with_gameplay_invocation_and_limits(&mut scope, || generation.invoke(&request));
+            let recorded_batch = scope.finish(now_ms);
             match response {
-                Ok(GameplayResponse::Empty) => Ok(tx.into_journal()),
+                Ok(GameplayResponse::EffectBatch(batch)) => {
+                    if batch != recorded_batch {
+                        self.handle_runtime_failure::<()>(
+                            "gameplay plugin returned an effect batch that did not match host-recorded reads/effects".to_string(),
+                        )?;
+                        return Ok(GameplayEffectBatch::empty(now_ms));
+                    }
+                    Ok(recorded_batch)
+                }
                 Ok(other) => {
                     self.handle_runtime_failure::<()>(format!(
                         "unexpected gameplay response payload: {other:?}"
                     ))?;
-                    Ok(GameplayJournal::empty(now_ms))
+                    Ok(GameplayEffectBatch::empty(now_ms))
                 }
                 Err(error) => {
                     self.handle_runtime_failure::<()>(error.to_string())?;
-                    Ok(GameplayJournal::empty(now_ms))
+                    Ok(GameplayEffectBatch::empty(now_ms))
                 }
             }
         })
@@ -141,68 +146,30 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
 
     fn prepare_player_join(
         &self,
-        core: ServerCore,
+        read_view: Box<dyn GameplayReadView>,
         session: &SessionCapabilitySet,
-        connection_id: ConnectionId,
-        username: String,
         player_id: PlayerId,
         now_ms: u64,
-    ) -> Result<GameplayJournal, PluginHostError> {
-        let mut tx = GameplayTransaction::detached(core, now_ms);
-        if let Some(rejection) = tx
-            .begin_login(connection_id, username, player_id)
-            .map_err(PluginHostError::Config)?
-        {
-            for event in rejection {
-                tx.emit_event(event.target, event.event);
-            }
-            return Ok(tx.into_journal());
-        }
+    ) -> Result<GameplayEffectBatch, PluginHostError> {
         let request = GameplayRequest::HandlePlayerJoin {
             session: self.session_snapshot(ConnectionPhase::Login, session, Some(player_id)),
             player_id,
+            now_ms,
         };
-        self.generation.with_reload_read(|generation| {
-            if self.failures.is_active_quarantined(&self.plugin_id) {
-                tx.finalize_login(connection_id, player_id)
-                    .map_err(PluginHostError::Config)?;
-                return Ok(tx.into_journal());
-            }
-            let response =
-                with_gameplay_transaction_and_limits(&mut tx, generation.buffer_limits, || {
-                    generation.invoke(&request)
-                });
-            match response {
-                Ok(GameplayResponse::Empty) => {
-                    tx.finalize_login(connection_id, player_id)
-                        .map_err(PluginHostError::Config)?;
-                    Ok(tx.into_journal())
-                }
-                Ok(other) => {
-                    self.handle_runtime_failure::<()>(format!(
-                        "unexpected gameplay join payload: {other:?}"
-                    ))?;
-                    tx.finalize_login(connection_id, player_id)
-                        .map_err(PluginHostError::Config)?;
-                    Ok(tx.into_journal())
-                }
-                Err(error) => {
-                    self.handle_runtime_failure::<()>(error.to_string())?;
-                    tx.finalize_login(connection_id, player_id)
-                        .map_err(PluginHostError::Config)?;
-                    Ok(tx.into_journal())
-                }
-            }
-        })
+        self.invoke_with_scope(
+            GameplayInvocationScope::new(read_view, self.current_generation().buffer_limits),
+            request,
+            now_ms,
+        )
     }
 
     fn prepare_command(
         &self,
-        core: ServerCore,
+        read_view: Box<dyn GameplayReadView>,
         session: &SessionCapabilitySet,
         command: &GameplayCommand,
         now_ms: u64,
-    ) -> Result<GameplayJournal, PluginHostError> {
+    ) -> Result<GameplayEffectBatch, PluginHostError> {
         let request = GameplayRequest::HandleCommand {
             session: self.session_snapshot(
                 ConnectionPhase::Play,
@@ -210,22 +177,31 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
                 Some(command.player_id()),
             ),
             command: command.clone(),
+            now_ms,
         };
-        self.prepare_request(core, now_ms, request)
+        self.invoke_with_scope(
+            GameplayInvocationScope::new(read_view, self.current_generation().buffer_limits),
+            request,
+            now_ms,
+        )
     }
 
     fn prepare_tick(
         &self,
-        core: ServerCore,
+        read_view: Box<dyn GameplayReadView>,
         session: &SessionCapabilitySet,
         player_id: PlayerId,
         now_ms: u64,
-    ) -> Result<GameplayJournal, PluginHostError> {
+    ) -> Result<GameplayEffectBatch, PluginHostError> {
         let request = GameplayRequest::HandleTick {
             session: self.session_snapshot(ConnectionPhase::Play, session, Some(player_id)),
             now_ms,
         };
-        self.prepare_request(core, now_ms, request)
+        self.invoke_with_scope(
+            GameplayInvocationScope::new(read_view, self.current_generation().buffer_limits),
+            request,
+            now_ms,
+        )
     }
 
     fn session_closed(&self, session: &GameplaySessionSnapshot) -> Result<(), PluginHostError> {

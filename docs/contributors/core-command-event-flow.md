@@ -65,7 +65,7 @@ runtime 側の本体は [`../../crates/runtime/revy-server-runtime/src/runtime/k
 
 ### login special-case
 
-`CoreCommand::LoginStart` は gameplay profile があれば `prepare_player_join(...)` へ入り、transaction の `begin_login(...)` / `finalize_login(...)` を経由して detached journal を作ります。runtime はその journal を live core へ validate/apply します。実装は [`../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs`](../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs) と [`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) にあります。
+`CoreCommand::LoginStart` は gameplay profile があれば、runtime kernel が先に `GameplayLoginPreview::new(...)` で login prelude を作り、reject をここで short-circuit します。success のときだけ preview-backed `GameplayReadView` を `prepare_player_join(...)` へ渡し、戻ってきた `GameplayEffectBatch` を `validate_and_apply_login_effects(...)` で live core へ commit します。host は detached read/effect batch を返すだけで、`begin_login(...)` / `finalize_login(...)` の owner ではありません。実装は [`../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs`](../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs)、[`../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs`](../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs)、[`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) にあります。
 
 ### direct-core command
 

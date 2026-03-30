@@ -1,7 +1,8 @@
 use super::{__macro_support, admin_surface, capabilities, gameplay, manifest, protocol};
 use crate::{
-    CapabilityAnnouncement, CoreEvent, GameplayCapability, GameplayProfileId, PlayerId,
-    PlayerSnapshot, PluginBuildTag, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
+    CapabilityAnnouncement, CoreEvent, GameplayCapability, GameplayEffectBatch, GameplayProfileId,
+    GameplayReadSet, PlayerId, PlayerSnapshot, PluginBuildTag, ProtocolCapability,
+    ProtocolCapabilitySet, RuntimeCommand,
 };
 use bytes::BytesMut;
 use mc_plugin_api::abi::{ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginErrorCode};
@@ -16,7 +17,7 @@ use mc_plugin_api::codec::gameplay::{
     encode_gameplay_request, host_blob::encode_world_meta,
 };
 use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse, WireFrameDecodeResult};
-use mc_plugin_api::host_api::{AdminSurfaceHostApiV1, GameplayHostApiV2};
+use mc_plugin_api::host_api::{AdminSurfaceHostApiV1, GameplayHostApiV3};
 use mc_proto_common::{
     ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe, LoginRequest, PlayEncodingContext,
     ProtocolAdapter, ProtocolDescriptor, ProtocolError, ServerListStatus, SessionAdapter,
@@ -71,8 +72,8 @@ unsafe extern "C" fn host_read_world_meta(
     PluginErrorCode::Ok
 }
 
-fn gameplay_host_api_for(context: &TestHostContext) -> GameplayHostApiV2 {
-    GameplayHostApiV2 {
+fn gameplay_host_api_for(context: &TestHostContext) -> GameplayHostApiV3 {
+    GameplayHostApiV3 {
         abi: CURRENT_PLUGIN_ABI,
         context: std::ptr::from_ref(context).cast_mut().cast(),
         log: None,
@@ -81,16 +82,7 @@ fn gameplay_host_api_for(context: &TestHostContext) -> GameplayHostApiV2 {
         read_block_state: None,
         read_block_entity: None,
         can_edit_block: None,
-        set_player_pose: None,
-        set_selected_hotbar_slot: None,
-        set_inventory_slot: None,
-        clear_mining: None,
-        begin_mining: None,
-        open_container_at: None,
-        open_virtual_container: None,
-        set_block: None,
-        spawn_dropped_item: None,
-        emit_event: None,
+        push_effect: None,
     }
 }
 
@@ -916,13 +908,49 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
         (entrypoints_a.factory)()
             .handle(request_a, Some(host_api_a))
             .expect("in-process gameplay handler should succeed"),
-        GameplayResponse::Empty
+        GameplayResponse::EffectBatch(GameplayEffectBatch {
+            now_ms: 1,
+            reads: GameplayReadSet {
+                world_meta: Some(WorldMeta {
+                    level_name: "host-a".to_string(),
+                    seed: 0,
+                    spawn: BlockPos::new(0, 64, 0),
+                    dimension: DimensionId::Overworld,
+                    age: 0,
+                    time: 0,
+                    level_type: "FLAT".to_string(),
+                    game_mode: 0,
+                    difficulty: 1,
+                    max_players: 20,
+                }),
+                ..GameplayReadSet::default()
+            },
+            effects: Vec::new(),
+        })
     );
     assert_eq!(
         (entrypoints_b.factory)()
             .handle(request_b, Some(host_api_b))
             .expect("in-process gameplay handler should succeed"),
-        GameplayResponse::Empty
+        GameplayResponse::EffectBatch(GameplayEffectBatch {
+            now_ms: 2,
+            reads: GameplayReadSet {
+                world_meta: Some(WorldMeta {
+                    level_name: "host-b".to_string(),
+                    seed: 0,
+                    spawn: BlockPos::new(0, 64, 0),
+                    dimension: DimensionId::Overworld,
+                    age: 0,
+                    time: 0,
+                    level_type: "FLAT".to_string(),
+                    game_mode: 0,
+                    difficulty: 1,
+                    max_players: 20,
+                }),
+                ..GameplayReadSet::default()
+            },
+            effects: Vec::new(),
+        })
     );
     assert_eq!(
         plugin_a::take_recorded_level_name().as_deref(),
@@ -936,7 +964,7 @@ fn exported_gameplay_plugins_keep_host_api_slots_isolated() {
 
 #[test]
 fn exported_gameplay_plugins_reject_null_host_api() {
-    let api = unsafe { &*plugin_a::mc_plugin_gameplay_api_v3() };
+    let api = unsafe { &*plugin_a::mc_plugin_gameplay_api_v4() };
     let request = GameplayRequest::HandleTick {
         session: gameplay_session("plugin-a", Some(test_player_id())),
         now_ms: 3,
@@ -973,7 +1001,7 @@ fn exported_gameplay_plugins_reject_mismatched_host_api_abi() {
     };
     let mut host_api = gameplay_host_api_for(&context);
     host_api.abi = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
-    let api = unsafe { &*plugin_a::mc_plugin_gameplay_api_v3() };
+    let api = unsafe { &*plugin_a::mc_plugin_gameplay_api_v4() };
     let request = GameplayRequest::HandleTick {
         session: gameplay_session("plugin-a", Some(test_player_id())),
         now_ms: 4,

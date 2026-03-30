@@ -93,9 +93,9 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
         let profile = host
             .resolve_gameplay_profile("failing")
             .expect("failing gameplay profile should resolve");
-        let mut core = stub_server_core("world");
-        let result = profile.handle_command(
-            &mut core,
+        let core = stub_server_core("world");
+        let result = profile.prepare_command(
+            boxed_gameplay_read_view(core.clone()),
             &SessionCapabilitySet {
                 protocol: ProtocolCapabilitySet::new(),
                 gameplay: GameplayCapabilitySet::new(),
@@ -135,8 +135,8 @@ fn gameplay_runtime_failure_policy_matrix_controls_noop_and_fatal_behavior() {
         if action == PluginFailureAction::Quarantine {
             assert!(
                 profile
-                    .handle_command(
-                        &mut core,
+                    .prepare_command(
+                        boxed_gameplay_read_view(core),
                         &SessionCapabilitySet {
                             protocol: ProtocolCapabilitySet::new(),
                             gameplay: GameplayCapabilitySet::new(),

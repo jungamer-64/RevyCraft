@@ -12,13 +12,12 @@ use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_api::host_api::AdminSurfaceHostApiV1;
 use mc_plugin_api::{
-    AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapabilitySet, ConnectionId,
-    GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId, PluginGenerationId,
-    SessionCapabilitySet, StorageCapabilitySet, TargetedEvent, WorldSnapshot,
+    AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapabilitySet, GameplayCapabilitySet,
+    GameplayCommand, GameplayProfileId, PlayerId, PluginGenerationId, SessionCapabilitySet,
+    StorageCapabilitySet, WorldSnapshot,
 };
 use mc_storage_common::StorageError;
-use revy_voxel_core::{GameplayJournal, GameplayJournalApplyResult, ServerCore};
-use std::any::Any;
+use revy_server_gameplay_bridge::{GameplayEffectBatch, GameplayReadView};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -46,86 +45,27 @@ pub trait GameplayProfileHandle: Send + Sync {
 
     fn prepare_player_join(
         &self,
-        snapshot: ServerCore,
+        read_view: Box<dyn GameplayReadView>,
         session: &SessionCapabilitySet,
-        connection_id: ConnectionId,
-        username: String,
         player_id: PlayerId,
         now_ms: u64,
-    ) -> Result<GameplayJournal, PluginHostError>;
+    ) -> Result<GameplayEffectBatch, PluginHostError>;
 
     fn prepare_command(
         &self,
-        snapshot: ServerCore,
+        read_view: Box<dyn GameplayReadView>,
         session: &SessionCapabilitySet,
         command: &GameplayCommand,
         now_ms: u64,
-    ) -> Result<GameplayJournal, PluginHostError>;
+    ) -> Result<GameplayEffectBatch, PluginHostError>;
 
     fn prepare_tick(
         &self,
-        snapshot: ServerCore,
+        read_view: Box<dyn GameplayReadView>,
         session: &SessionCapabilitySet,
         player_id: PlayerId,
         now_ms: u64,
-    ) -> Result<GameplayJournal, PluginHostError>;
-
-    fn handle_player_join(
-        &self,
-        core: &mut ServerCore,
-        session: &SessionCapabilitySet,
-        connection_id: ConnectionId,
-        username: String,
-        player_id: PlayerId,
-        now_ms: u64,
-    ) -> Result<Vec<TargetedEvent>, PluginHostError> {
-        let journal = self.prepare_player_join(
-            core.clone(),
-            session,
-            connection_id,
-            username,
-            player_id,
-            now_ms,
-        )?;
-        match core.validate_and_apply_gameplay_journal(journal) {
-            GameplayJournalApplyResult::Applied(events) => Ok(events),
-            GameplayJournalApplyResult::Conflict => Err(PluginHostError::Config(
-                "prepared gameplay join journal conflicted against the live core".to_string(),
-            )),
-        }
-    }
-
-    fn handle_command(
-        &self,
-        core: &mut ServerCore,
-        session: &SessionCapabilitySet,
-        command: &GameplayCommand,
-        now_ms: u64,
-    ) -> Result<Vec<TargetedEvent>, PluginHostError> {
-        let journal = self.prepare_command(core.clone(), session, command, now_ms)?;
-        match core.validate_and_apply_gameplay_journal(journal) {
-            GameplayJournalApplyResult::Applied(events) => Ok(events),
-            GameplayJournalApplyResult::Conflict => Err(PluginHostError::Config(
-                "prepared gameplay command journal conflicted against the live core".to_string(),
-            )),
-        }
-    }
-
-    fn handle_tick(
-        &self,
-        core: &mut ServerCore,
-        session: &SessionCapabilitySet,
-        player_id: PlayerId,
-        now_ms: u64,
-    ) -> Result<Vec<TargetedEvent>, PluginHostError> {
-        let journal = self.prepare_tick(core.clone(), session, player_id, now_ms)?;
-        match core.validate_and_apply_gameplay_journal(journal) {
-            GameplayJournalApplyResult::Applied(events) => Ok(events),
-            GameplayJournalApplyResult::Conflict => Err(PluginHostError::Config(
-                "prepared gameplay tick journal conflicted against the live core".to_string(),
-            )),
-        }
-    }
+    ) -> Result<GameplayEffectBatch, PluginHostError>;
 
     /// # Errors
     ///
@@ -337,26 +277,30 @@ pub struct RuntimeSelectionResult {
     pub reloaded: Vec<String>,
 }
 
+pub(crate) enum RuntimeSelectionStage {
+    Prepared(crate::host::PreparedRuntimeSelectionState),
+}
+
 pub struct StagedRuntimeSelection {
     loaded_plugins: LoadedPluginSet,
     reloaded_plugin_ids: Vec<String>,
     protocol_topology: RuntimeProtocolTopologyCandidate,
-    staged: Option<Box<dyn Any + Send>>,
+    staged: Option<RuntimeSelectionStage>,
 }
 
 impl StagedRuntimeSelection {
     #[must_use]
-    pub(crate) fn new<T: Any + Send>(
+    pub(crate) const fn new(
         loaded_plugins: LoadedPluginSet,
         reloaded_plugin_ids: Vec<String>,
         protocol_topology: RuntimeProtocolTopologyCandidate,
-        staged: T,
+        staged: RuntimeSelectionStage,
     ) -> Self {
         Self {
             loaded_plugins,
             reloaded_plugin_ids,
             protocol_topology,
-            staged: Some(Box::new(staged)),
+            staged: Some(staged),
         }
     }
 
@@ -381,7 +325,7 @@ impl StagedRuntimeSelection {
         LoadedPluginSet,
         Vec<String>,
         RuntimeProtocolTopologyCandidate,
-        Box<dyn Any + Send>,
+        RuntimeSelectionStage,
     ) {
         (
             self.loaded_plugins,
@@ -398,22 +342,22 @@ pub struct PreparedRuntimeSelection {
     loaded_plugins: LoadedPluginSet,
     reloaded_plugin_ids: Vec<String>,
     protocol_topology: RuntimeProtocolTopologyCandidate,
-    staged: Option<Box<dyn Any + Send>>,
+    staged: Option<RuntimeSelectionStage>,
 }
 
 impl PreparedRuntimeSelection {
     #[must_use]
-    pub(crate) fn new<T: Any + Send>(
+    pub(crate) const fn new(
         loaded_plugins: LoadedPluginSet,
         reloaded_plugin_ids: Vec<String>,
         protocol_topology: RuntimeProtocolTopologyCandidate,
-        staged: T,
+        staged: RuntimeSelectionStage,
     ) -> Self {
         Self {
             loaded_plugins,
             reloaded_plugin_ids,
             protocol_topology,
-            staged: Some(Box::new(staged)),
+            staged: Some(staged),
         }
     }
 
@@ -432,13 +376,10 @@ impl PreparedRuntimeSelection {
         &self.protocol_topology
     }
 
-    pub(crate) fn take_staged<T: Any + Send>(mut self) -> T {
-        *self
-            .staged
+    pub(crate) fn take_staged(mut self) -> RuntimeSelectionStage {
+        self.staged
             .take()
             .expect("prepared runtime selection should contain staged state")
-            .downcast::<T>()
-            .expect("prepared runtime selection staged payload type should match")
     }
 }
 

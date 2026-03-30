@@ -1,4 +1,7 @@
 use super::*;
+use revy_server_gameplay_bridge::{
+    BlockEntityState, BlockPos, BlockState, GameplayReadView, PlayerSnapshot, WorldMeta,
+};
 
 pub(super) const PACKAGED_PLUGIN_TEST_HARNESS_TAG: &str = "runtime-test-harness";
 
@@ -96,6 +99,34 @@ pub(super) fn stub_server_core(level_name: &str) -> ServerCore {
     let mut config = CoreConfig::default();
     config.level_name = level_name.to_string();
     test_server_core(config)
+}
+
+struct CoreBackedGameplayReadView(ServerCore);
+
+impl GameplayReadView for CoreBackedGameplayReadView {
+    fn world_meta(&mut self) -> WorldMeta {
+        self.0.world_meta().clone()
+    }
+
+    fn player_snapshot(&mut self, player_id: PlayerId) -> Option<PlayerSnapshot> {
+        self.0.player_snapshot(player_id)
+    }
+
+    fn block_state(&mut self, position: BlockPos) -> Option<BlockState> {
+        self.0.block_state(position)
+    }
+
+    fn block_entity(&mut self, position: BlockPos) -> Option<BlockEntityState> {
+        self.0.block_entity(position)
+    }
+
+    fn can_edit_block(&mut self, player_id: PlayerId, position: BlockPos) -> bool {
+        self.0.can_edit_block(player_id, position)
+    }
+}
+
+pub(super) fn boxed_gameplay_read_view(core: ServerCore) -> Box<dyn GameplayReadView> {
+    Box::new(CoreBackedGameplayReadView(core))
 }
 
 pub(super) fn je_handshake_frame(protocol_version: i32) -> Vec<u8> {

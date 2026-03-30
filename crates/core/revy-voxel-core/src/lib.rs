@@ -9,11 +9,9 @@ pub(crate) mod player;
 mod tests;
 pub(crate) mod world;
 
-pub use self::core::transaction::{
-    GameplayJournal, GameplayJournalApplyResult, GameplayTransaction,
-};
 pub use self::core::{
     ActiveMiningState, ClientView, CoreConfig, CoreRuntimeStateBlob, DroppedItemState,
+    GameplayEffectApplyResult, GameplayLoginPreview, GameplayLoginPreviewError,
     OnlinePlayerRuntimeState, OpenInventoryWindow, PlayerSessionState, ServerCore,
     WorldContainerViewers,
 };
@@ -30,6 +28,9 @@ pub use revy_core::{
     GameplayCapability, GameplayCapabilitySet, GameplayProfileId, PlayerId, PluginBuildTag,
     PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet, RevisionConflict, Revisioned,
     SessionCapabilitySet, SessionRoutes, StorageCapability, StorageCapabilitySet, StorageProfileId,
+};
+pub use revy_voxel_semantic::{
+    GameplayCanEditBlockKey, GameplayEffect, GameplayEffectBatch, GameplayReadSet,
 };
 
 #[allow(unused_imports)]

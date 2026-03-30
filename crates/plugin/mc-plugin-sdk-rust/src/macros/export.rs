@@ -154,7 +154,7 @@ macro_rules! __export_plugin_gameplay {
         static MC_GAMEPLAY_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
         #[allow(dead_code)]
-        static MC_GAMEPLAY_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::host_api::GameplayPluginApiV3> =
+        static MC_GAMEPLAY_PLUGIN_API: std::sync::OnceLock<mc_plugin_api::host_api::GameplayPluginApiV4> =
             std::sync::OnceLock::new();
 
         #[allow(dead_code)]
@@ -163,9 +163,9 @@ macro_rules! __export_plugin_gameplay {
         }
 
         #[allow(dead_code)]
-        unsafe extern "C" fn mc_gameplay_plugin_invoke_v3(
+        unsafe extern "C" fn mc_gameplay_plugin_invoke_v4(
             request: mc_plugin_api::abi::ByteSlice,
-            host_api: *const mc_plugin_api::host_api::GameplayHostApiV2,
+            host_api: *const mc_plugin_api::host_api::GameplayHostApiV3,
             output: *mut mc_plugin_api::abi::OwnedBuffer,
             error_out: *mut mc_plugin_api::abi::OwnedBuffer,
         ) -> mc_plugin_api::abi::PluginErrorCode {
@@ -272,10 +272,10 @@ macro_rules! __export_plugin_gameplay {
             unsafe(no_mangle)
         )]
         #[allow(dead_code)]
-        pub extern "C" fn mc_plugin_gameplay_api_v3() -> *const mc_plugin_api::host_api::GameplayPluginApiV3 {
+        pub extern "C" fn mc_plugin_gameplay_api_v4() -> *const mc_plugin_api::host_api::GameplayPluginApiV4 {
             std::ptr::from_ref(MC_GAMEPLAY_PLUGIN_API.get_or_init(|| {
-                mc_plugin_api::host_api::GameplayPluginApiV3 {
-                    invoke: mc_gameplay_plugin_invoke_v3,
+                mc_plugin_api::host_api::GameplayPluginApiV4 {
+                    invoke: mc_gameplay_plugin_invoke_v4,
                     free_buffer: mc_gameplay_plugin_free_buffer,
                 }
             }))
@@ -289,7 +289,7 @@ macro_rules! __export_plugin_gameplay {
             fn handle(
                 &self,
                 request: mc_plugin_api::codec::gameplay::GameplayRequest,
-                host_api: Option<mc_plugin_api::host_api::GameplayHostApiV2>,
+                host_api: Option<mc_plugin_api::host_api::GameplayHostApiV3>,
             ) -> Result<mc_plugin_api::codec::gameplay::GameplayResponse, String> {
                 $crate::__macro_support::handle_gameplay_request_with_host_api(
                     &self.0, request, host_api,

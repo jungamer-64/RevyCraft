@@ -4,8 +4,8 @@ use crate::codec::__internal::binary::{
     encode_envelope,
 };
 use crate::codec::__internal::gameplay_semantic::{
-    decode_gameplay_request_payload, decode_gameplay_response_payload,
-    encode_gameplay_request_payload, encode_gameplay_response_payload,
+    decode_gameplay_effect, decode_gameplay_request_payload, decode_gameplay_response_payload,
+    encode_gameplay_effect, encode_gameplay_request_payload, encode_gameplay_response_payload,
 };
 use crate::codec::__internal::shared::{
     decode_block_pos, decode_option, decode_optional_block_state, decode_player_id,
@@ -16,8 +16,9 @@ use mc_proto_common::ConnectionPhase;
 use revy_voxel_model::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};
 use revy_voxel_rules::{BlockEntityState, ContainerKindId};
 use revy_voxel_semantic::{
-    CapabilityAnnouncement, GameplayCapability, GameplayCommand, GameplayProfileId, PlayerId,
-    PlayerSnapshot, PluginGenerationId, ProtocolCapabilitySet,
+    CapabilityAnnouncement, GameplayCapability, GameplayCommand, GameplayEffect,
+    GameplayEffectBatch, GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId,
+    ProtocolCapabilitySet,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,10 +75,12 @@ pub enum GameplayRequest {
     HandlePlayerJoin {
         session: GameplaySessionSnapshot,
         player_id: PlayerId,
+        now_ms: u64,
     },
     HandleCommand {
         session: GameplaySessionSnapshot,
         command: GameplayCommand,
+        now_ms: u64,
     },
     HandleTick {
         session: GameplaySessionSnapshot,
@@ -115,6 +118,7 @@ impl GameplayRequest {
 pub enum GameplayResponse {
     Descriptor(GameplayDescriptor),
     CapabilitySet(CapabilityAnnouncement<GameplayCapability>),
+    EffectBatch(GameplayEffectBatch),
     SessionTransferBlob(Vec<u8>),
     Empty,
 }
@@ -398,6 +402,31 @@ pub mod host_blob {
         Ok(block_entity)
     }
 
+    /// Encodes a gameplay effect for the effect-recorder host callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the effect cannot be serialized.
+    pub fn encode_gameplay_effect_blob(
+        effect: &GameplayEffect,
+    ) -> Result<Vec<u8>, ProtocolCodecError> {
+        let mut encoder = Encoder::default();
+        encode_gameplay_effect(&mut encoder, effect)?;
+        Ok(encoder.into_inner())
+    }
+
+    /// Decodes a gameplay effect blob provided through the host callback layer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the blob is truncated, malformed, or contains trailing bytes.
+    pub fn decode_gameplay_effect_blob(bytes: &[u8]) -> Result<GameplayEffect, ProtocolCodecError> {
+        let mut decoder = Decoder::new(bytes);
+        let effect = decode_gameplay_effect(&mut decoder)?;
+        decoder.finish()?;
+        Ok(effect)
+    }
+
     #[must_use]
     pub fn encode_player_pose_update(
         player_id: PlayerId,
@@ -635,7 +664,7 @@ mod tests {
     };
     use revy_voxel_semantic::{
         CapabilityAnnouncement, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
-        GameplayProfileId, PlayerId, PlayerSnapshot, ProtocolCapabilitySet,
+        GameplayEffectBatch, GameplayProfileId, PlayerId, PlayerSnapshot, ProtocolCapabilitySet,
     };
     use uuid::Uuid;
 
@@ -708,8 +737,9 @@ mod tests {
                 GameplayRequest::HandlePlayerJoin {
                     session: sample_session(),
                     player_id: sample_player_id(),
+                    now_ms: 7,
                 },
-                GameplayResponse::Empty,
+                GameplayResponse::EffectBatch(GameplayEffectBatch::empty(7)),
             ),
             (
                 GameplayRequest::HandleCommand {
@@ -721,15 +751,16 @@ mod tests {
                         face: Some(BlockFace::Top),
                         held_item: Some(ItemStack::new("minecraft:stone", 64, 0)),
                     },
+                    now_ms: 42,
                 },
-                GameplayResponse::Empty,
+                GameplayResponse::EffectBatch(GameplayEffectBatch::empty(42)),
             ),
             (
                 GameplayRequest::HandleTick {
                     session: sample_session(),
                     now_ms: 42,
                 },
-                GameplayResponse::Empty,
+                GameplayResponse::EffectBatch(GameplayEffectBatch::empty(42)),
             ),
             (
                 GameplayRequest::SessionClosed {

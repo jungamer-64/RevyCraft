@@ -133,9 +133,9 @@ fn packaged_gameplay_boot_load_respects_failure_policy_for_missing_v2_symbol()
                 let profile = loaded
                     .resolve_gameplay_profile("canonical")
                     .expect("canonical gameplay profile should resolve");
-                let mut core = stub_server_core("world");
-                let result = profile.handle_command(
-                    &mut core,
+                let core = stub_server_core("world");
+                let result = profile.prepare_command(
+                    boxed_gameplay_read_view(core),
                     &SessionCapabilitySet {
                         protocol: ProtocolCapabilitySet::new(),
                         gameplay: GameplayCapabilitySet::new(),

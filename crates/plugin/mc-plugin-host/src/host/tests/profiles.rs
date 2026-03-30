@@ -185,10 +185,10 @@ fn gameplay_command_snapshot_preserves_entity_id() {
         .resolve_gameplay_profile("entity-aware")
         .expect("entity-aware gameplay profile should resolve");
     let player_id = PlayerId(Uuid::from_u128(7));
-    let mut core = test_server_core(CoreConfig::default());
+    let core = test_server_core(CoreConfig::default());
     profile
-        .handle_command(
-            &mut core,
+        .prepare_command(
+            boxed_gameplay_read_view(core),
             &SessionCapabilitySet {
                 protocol: ProtocolCapabilitySet::new(),
                 gameplay: GameplayCapabilitySet::new(),
@@ -200,7 +200,7 @@ fn gameplay_command_snapshot_preserves_entity_id() {
             &GameplayCommand::SetHeldSlot { player_id, slot: 0 },
             0,
         )
-        .expect("gameplay command should succeed");
+        .expect("gameplay command should prepare successfully");
 
     let recorded = entity_id_probe_gameplay_plugin::take_recorded_session()
         .expect("gameplay plugin should receive a session snapshot");
@@ -213,7 +213,7 @@ fn gameplay_command_snapshot_preserves_entity_id() {
 fn gameplay_prepare_command_journal_replays_host_mutations() {
     use revy_voxel_core::{
         ConnectionId, CoreCommand, CoreEvent, EventTarget, GameplayCapabilitySet, GameplayCommand,
-        GameplayJournalApplyResult, GameplayProfileId, ProtocolCapabilitySet, SessionCapabilitySet,
+        GameplayEffectApplyResult, GameplayProfileId, ProtocolCapabilitySet, SessionCapabilitySet,
     };
 
     let _guard = counting_gameplay_plugin::lock();
@@ -252,9 +252,9 @@ fn gameplay_prepare_command_journal_replays_host_mutations() {
         .online_players
         .get(&player_id)
         .expect("logged-in player should expose an entity id");
-    let journal = profile
+    let batch = profile
         .prepare_command(
-            core.clone(),
+            boxed_gameplay_read_view(core.clone()),
             &SessionCapabilitySet {
                 protocol: ProtocolCapabilitySet::new(),
                 gameplay: GameplayCapabilitySet::new(),
@@ -266,11 +266,11 @@ fn gameplay_prepare_command_journal_replays_host_mutations() {
             &GameplayCommand::SetHeldSlot { player_id, slot: 4 },
             0,
         )
-        .expect("counting gameplay profile should prepare a detached journal");
-    let events = match core.validate_and_apply_gameplay_journal(journal) {
-        GameplayJournalApplyResult::Applied(events) => events,
-        GameplayJournalApplyResult::Conflict => {
-            panic!("prepared gameplay journal should replay against an unchanged core")
+        .expect("counting gameplay profile should prepare a detached effect batch");
+    let events = match core.validate_and_apply_gameplay_effects(batch) {
+        GameplayEffectApplyResult::Applied(events) => events,
+        GameplayEffectApplyResult::Conflict => {
+            panic!("prepared gameplay effect batch should replay against an unchanged core")
         }
     };
 
@@ -281,7 +281,7 @@ fn gameplay_prepare_command_journal_replays_host_mutations() {
             (
                 EventTarget::Player(event_player_id),
                 CoreEvent::SelectedHotbarSlotChanged { slot: 4 }
-            ) if *event_player_id == player_id
+            ) if event_player_id == &player_id
         )
     }));
     assert_eq!(
@@ -299,7 +299,7 @@ fn gameplay_prepare_command_journal_replays_host_mutations() {
 fn gameplay_prepare_command_conflict_does_not_reinvoke_callback() {
     use revy_voxel_core::{
         ConnectionId, CoreCommand, GameplayCapabilitySet, GameplayCommand,
-        GameplayJournalApplyResult, GameplayProfileId, ProtocolCapabilitySet, SessionCapabilitySet,
+        GameplayEffectApplyResult, GameplayProfileId, ProtocolCapabilitySet, SessionCapabilitySet,
     };
 
     let _guard = counting_gameplay_plugin::lock();
@@ -346,20 +346,20 @@ fn gameplay_prepare_command_conflict_does_not_reinvoke_callback() {
         protocol_generation: None,
         gameplay_generation: None,
     };
-    let journal = profile
+    let batch = profile
         .prepare_command(
-            core.clone(),
+            boxed_gameplay_read_view(core.clone()),
             &session,
             &GameplayCommand::SetHeldSlot { player_id, slot: 5 },
             0,
         )
-        .expect("counting gameplay profile should prepare a detached journal");
+        .expect("counting gameplay profile should prepare a detached effect batch");
 
     let _ = core.apply_command(CoreCommand::SetHeldSlot { player_id, slot: 1 }, 0);
 
     assert_eq!(
-        core.validate_and_apply_gameplay_journal(journal),
-        GameplayJournalApplyResult::Conflict
+        core.validate_and_apply_gameplay_effects(batch),
+        GameplayEffectApplyResult::Conflict
     );
     assert_eq!(counting_gameplay_plugin::command_invocations(), 1);
     assert_eq!(

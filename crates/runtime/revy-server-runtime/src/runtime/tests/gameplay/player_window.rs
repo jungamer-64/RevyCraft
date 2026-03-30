@@ -215,6 +215,7 @@ async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
         decode_set_slot(TestJavaProtocol::Je5, &cursor_resync)?,
         (-1, -1, Some((17, 1, 0)))
     );
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 
     write_packet(
         &mut stream,
@@ -222,14 +223,29 @@ async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
         &click_window(TestJavaProtocol::Je5, 1, 0, 2, Some((17, 1, 0))),
     )
     .await?;
-    assert_no_java_packet(
-        &mut stream,
-        &codec,
-        &mut buffer,
-        TestJavaProtocol::Je5,
-        TestJavaPacket::ConfirmTransaction,
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        read_until_confirm_transaction(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je5,
+            0,
+            2,
+            16,
+        ),
     )
-    .await?;
+    .await
+    {
+        Err(_) | Ok(Err(RuntimeError::Config(_))) => {}
+        Ok(Err(error)) => return Err(error),
+        Ok(Ok(packet)) => {
+            return Err(RuntimeError::Config(format!(
+                "unexpected confirm transaction before apology: {:?}",
+                decode_confirm_transaction(TestJavaProtocol::Je5, &packet)?
+            )));
+        }
+    }
 
     write_packet(
         &mut stream,

@@ -27,7 +27,7 @@
 | `crates/runtime/revy-server-runtime` | listener、generation、session、status、reload、admin control plane を持つ orchestration 層 |
 | `crates/core/revy-core` | id、capability、routing、revision を持つ internal kernel primitive |
 | `crates/core/revy-voxel-core` | protocol 非依存の semantic state machine |
-| `crates/plugin/mc-plugin-api` | plugin ABI `5.0`、manifest、host API、typed codec |
+| `crates/plugin/mc-plugin-api` | plugin ABI `6.0`、manifest、host API、typed codec |
 | `crates/plugin/mc-plugin-host` | packaged plugin discovery、activation、selection、reload、quarantine |
 | `crates/plugin/mc-plugin-sdk-rust` | Rust plugin authoring 向け trait、manifest helper、macro |
 | `crates/protocol/mc-proto-{common,je-common,be-common}` | shared protocol trait、wire codec、edition-family helper |

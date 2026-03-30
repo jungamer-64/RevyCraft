@@ -33,11 +33,11 @@ use mc_plugin_api::codec::storage::{
 };
 use mc_plugin_api::host_api::{
     AdminSurfaceHostApiV1, AdminSurfacePluginApiV1, AdminSurfacePluginInvokeV1Fn, AuthPluginApiV1,
-    GameplayPluginApiV3, GameplayPluginInvokeV3Fn, PluginFreeBufferFn, PluginInvokeFn,
+    GameplayPluginApiV4, GameplayPluginInvokeV4Fn, PluginFreeBufferFn, PluginInvokeFn,
     ProtocolPluginApiV3, StoragePluginApiV1,
 };
 use mc_plugin_api::manifest::{
-    PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V3,
+    PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V4,
     PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V3, PLUGIN_STORAGE_API_SYMBOL_V1,
     PluginManifestV1,
 };
@@ -54,7 +54,6 @@ use mc_proto_common::{
     ServerListStatus, StatusRequest, TransportKind, WireCodec, WireFormatKind,
 };
 use mc_storage_common::{StorageAdapter, StorageError};
-use revy_voxel_core::ServerCore;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -73,11 +72,12 @@ mod status;
 mod support;
 mod topology;
 
+pub(crate) use self::callbacks::GameplayInvocationScope;
 use self::callbacks::admin_surface_host_api;
 use self::callbacks::gameplay_host_api;
 #[cfg(test)]
-pub(crate) use self::callbacks::with_current_gameplay_transaction;
-pub(crate) use self::callbacks::with_gameplay_transaction_and_limits;
+pub(crate) use self::callbacks::with_current_gameplay_query;
+pub(crate) use self::callbacks::with_gameplay_invocation_and_limits;
 pub(crate) use self::catalog::PluginCatalog;
 #[cfg(test)]
 pub(crate) use self::catalog::current_artifact_key;
@@ -104,6 +104,7 @@ pub(crate) use self::profiles::{
     HotSwappableProtocolAdapter, HotSwappableStorageProfile, ManagedAdminSurfacePlugin,
     ManagedAuthPlugin, ManagedGameplayPlugin, ManagedProtocolPlugin, ManagedStoragePlugin,
 };
+pub(crate) use self::reload::PreparedRuntimeSelectionState;
 pub use self::status::{
     AdminSurfacePluginStatusSnapshot, AuthPluginStatusSnapshot, GameplayPluginStatusSnapshot,
     PluginArtifactStatusSnapshot, PluginHostInventoryStatusSnapshot, ProtocolPluginStatusSnapshot,

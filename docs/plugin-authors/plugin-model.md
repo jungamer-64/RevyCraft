@@ -109,7 +109,7 @@ profile id を新しく増やす plugin は、manifest / descriptor / config の
 
 | crate | 役割 | 使いどころ |
 | --- | --- | --- |
-| `mc-plugin-api` | ABI `5.0`、manifest struct、host API、typed codec | host / runtime 実装、ABI 契約確認 |
+| `mc-plugin-api` | ABI `6.0`、manifest struct、host API、typed codec | host / runtime 実装、ABI 契約確認 |
 | `mc-plugin-sdk-rust` | Rust 向け trait、manifest helper、capability helper、export macro | 通常の Rust plugin authoring の正規入口 |
 
 通常の plugin 作者は `mc-plugin-sdk-rust` を使い、ABI の細部が必要なときだけ `mc-plugin-api` を読みます。capability や id のような semantic type は `mc_plugin_sdk_rust` crate root から import し、`revy_voxel_core` は plugin authoring surface として使いません。
@@ -147,7 +147,7 @@ profile id を新しく増やす plugin は、manifest / descriptor / config の
 - `StaticPluginManifest::admin_surface(..., profile_id)`
   `admin-surface.profile:<profile_id>` と `runtime.reload.admin-surface`
 
-ABI はすべて `CURRENT_PLUGIN_ABI`、すなわち `5.0` に揃います。通常の Rust plugin ではこれを手で上書きする必要はありません。
+ABI はすべて `CURRENT_PLUGIN_ABI`、すなわち `6.0` に揃います。通常の Rust plugin ではこれを手で上書きする必要はありません。
 
 ### runtime capability set は別物
 

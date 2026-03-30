@@ -16,8 +16,8 @@ storage_profile = "je-anvil-1_7_10"
 
 [static.plugins]
 plugins_dir = "plugins"
-plugin_abi_min = "5.0"
-plugin_abi_max = "5.0"
+plugin_abi_min = "6.0"
+plugin_abi_max = "6.0"
 
 [live.network]
 server_ip = ""

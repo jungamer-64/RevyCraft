@@ -2,6 +2,7 @@
 
 mod config;
 mod events;
+mod gameplay;
 mod player;
 mod world;
 
@@ -9,6 +10,9 @@ pub use self::config::CoreConfig;
 pub use self::events::{
     CoreCommand, CoreEvent, EventTarget, GameplayCommand, PlayerSummary, RuntimeCommand,
     SessionCommand, TargetedEvent,
+};
+pub use self::gameplay::{
+    GameplayCanEditBlockKey, GameplayEffect, GameplayEffectBatch, GameplayReadSet,
 };
 pub use self::player::PlayerSnapshot;
 pub use self::world::WorldSnapshot;

@@ -28,6 +28,7 @@ mc-plugin-host = { path = "../../plugin/mc-plugin-host" }
 mc-proto-be-common = { path = "../../protocol/mc-proto-be-common" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
 revy-server-config = { path = "../revy-server-config" }
+revy-server-gameplay-bridge = { path = "../revy-server-gameplay-bridge" }
 revy-server-types = { path = "../revy-server-types" }
 num-bigint.workspace = true
 rsa.workspace = true
