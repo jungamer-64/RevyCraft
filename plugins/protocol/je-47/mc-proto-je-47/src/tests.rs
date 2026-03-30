@@ -7,12 +7,12 @@ use mc_proto_common::{
 };
 use mc_proto_je_common::__version_support::positions::pack_block_position;
 use mc_proto_je_common::__version_support::{blocks::legacy_block_state_id, inventory::read_slot};
-use revy_voxel_model::{
+use revy_voxel_semantic::{
     BlockFace, BlockPos, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot, InteractionHand,
     InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, Vec3,
 };
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use uuid::Uuid;
 
 fn player_container() -> ContainerKindId {
@@ -429,7 +429,7 @@ fn encodes_block_change_packets() {
         .encode_play_event_for(
             &CoreEvent::BlockChanged {
                 position: BlockPos::new(2, 3, 4),
-                block: Some(revy_voxel_model::BlockState::new("minecraft:glass")),
+                block: Some(revy_voxel_semantic::BlockState::new("minecraft:glass")),
             },
             &PlayEncodingContext {
                 player_id: PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"block-change-18")),
@@ -446,7 +446,7 @@ fn encodes_block_change_packets() {
     );
     assert_eq!(
         reader.read_varint().expect("state id should decode"),
-        legacy_block_state_id(&revy_voxel_model::BlockState::new("minecraft:glass"))
+        legacy_block_state_id(&revy_voxel_semantic::BlockState::new("minecraft:glass"))
     );
 }
 

@@ -11,11 +11,10 @@ description = "Minecraft Java Edition 1.7.10 protocol codecs."
 
 [dependencies]
 flate2.workspace = true
-revy-voxel-rules = { path = "../../../../crates/content/revy-voxel-rules" }
 mc-content-canonical = { path = "../../../../crates/content/mc-content-canonical" }
-revy-voxel-model = { path = "../../../../crates/model/revy-voxel-model" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
 mc-proto-je-common = { path = "../../../../crates/protocol/mc-proto-je-common" }
+revy-voxel-semantic = { path = "../../../../crates/core/revy-voxel-semantic" }
 uuid.workspace = true
 
 [dev-dependencies]

@@ -10,7 +10,7 @@ use crate::world::{
     BlockEntityState, BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, Vec3,
 };
 use crate::{EntityId, HOTBAR_SLOT_COUNT, PlayerId};
-use revy_voxel_rules::ContainerKindId;
+use revy_voxel_semantic::ContainerKindId;
 
 const DROPPED_ITEM_PICKUP_DELAY_MS: u64 = 500;
 const DROPPED_ITEM_DESPAWN_MS: u64 = 5 * 60 * 1000;

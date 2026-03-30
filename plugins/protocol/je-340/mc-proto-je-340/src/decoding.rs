@@ -14,11 +14,11 @@ use mc_proto_je_common::__version_support::{
     positions::unpack_block_position,
 };
 use mc_proto_je_common::JavaProtocolSessionStore;
-use revy_voxel_model::{
+use revy_voxel_semantic::ContainerKindId;
+use revy_voxel_semantic::{
     BlockFace, InteractionHand, InventoryClickButton, InventoryClickTarget,
     InventoryClickValidation, InventoryTransactionContext, Vec3,
 };
-use revy_voxel_rules::ContainerKindId;
 
 pub fn decode_play_packet(
     session: &ProtocolSessionSnapshot,

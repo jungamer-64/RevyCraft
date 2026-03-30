@@ -36,12 +36,12 @@ use mc_proto_common::{
     PlayEncodingContext, PlaySyncAdapter, PlayerId, ProtocolError, ProtocolSessionSnapshot,
     RuntimeCommand, SessionAdapter,
 };
-use revy_voxel_model::{
+use revy_voxel_semantic::{
     BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DroppedItemSnapshot,
     InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerInventory,
 };
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use serde_json::json;
 use std::io::Cursor;
 use uuid::Uuid;
@@ -614,8 +614,8 @@ fn encodes_dropped_item_spawn_and_despawn_packets() {
                 entity_id: EntityId(77),
                 item: DroppedItemSnapshot {
                     item: item("minecraft:cobblestone", 1),
-                    position: revy_voxel_model::Vec3::new(1.5, 4.5, 0.5),
-                    velocity: revy_voxel_model::Vec3::new(0.0, 0.0, 0.0),
+                    position: revy_voxel_semantic::Vec3::new(1.5, 4.5, 0.5),
+                    velocity: revy_voxel_semantic::Vec3::new(0.0, 0.0, 0.0),
                 },
             },
             &play_context(),

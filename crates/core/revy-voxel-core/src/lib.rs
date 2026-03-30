@@ -34,18 +34,18 @@ pub use revy_voxel_semantic::{
 };
 
 #[allow(unused_imports)]
-pub(crate) use revy_voxel_model::{
+pub(crate) use revy_voxel_semantic::{
+    BlockDescriptor, BlockEntityKindId, BlockEntityState, ContainerBinding,
+    ContainerBlockEntityState, ContainerKindId, ContainerPropertyKey, ContainerSlotRole,
+    ContainerSpec, ContentBehavior, ItemDescriptor, MiningToolSpec, OpenContainerState, ToolClass,
+};
+#[allow(unused_imports)]
+pub(crate) use revy_voxel_semantic::{
     BlockFace, BlockKey, BlockPos, BlockState, ChunkColumn, ChunkDelta, ChunkPos, ChunkSection,
     DimensionId, DroppedItemSnapshot, InteractionHand, InventoryClickButton, InventoryClickTarget,
     InventoryClickValidation, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
     ItemKey, ItemStack, PlayerInventory, SectionBlockIndex, SectionPos, Vec3, WorldMeta,
     expand_block_index,
-};
-#[allow(unused_imports)]
-pub(crate) use revy_voxel_rules::{
-    BlockDescriptor, BlockEntityKindId, BlockEntityState, ContainerBinding,
-    ContainerBlockEntityState, ContainerKindId, ContainerPropertyKey, ContainerSlotRole,
-    ContainerSpec, ContentBehavior, ItemDescriptor, MiningToolSpec, OpenContainerState, ToolClass,
 };
 
 #[cfg(test)]

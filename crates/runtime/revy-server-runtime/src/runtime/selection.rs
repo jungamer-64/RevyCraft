@@ -132,7 +132,7 @@ impl SelectionManager {
 pub(crate) struct SelectionResolver;
 
 impl SelectionResolver {
-    pub(crate) fn content_behavior() -> std::sync::Arc<dyn revy_voxel_rules::ContentBehavior> {
+    pub(crate) fn content_behavior() -> std::sync::Arc<dyn revy_voxel_semantic::ContentBehavior> {
         canonical_content()
     }
 

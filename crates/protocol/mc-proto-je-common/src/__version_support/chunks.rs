@@ -5,7 +5,7 @@ use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use mc_proto_common::ProtocolError;
 use num_traits::ToPrimitive;
-use revy_voxel_model::ChunkColumn;
+use revy_voxel_semantic::ChunkColumn;
 use std::collections::BTreeMap;
 use std::io::Write;
 

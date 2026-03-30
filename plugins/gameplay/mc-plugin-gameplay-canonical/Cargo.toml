@@ -17,9 +17,7 @@ disable-exported-symbols = []
 in-process-testing = ["mc-plugin-sdk-rust/in-process-testing"]
 
 [dependencies]
-revy-voxel-rules = { path = "../../../crates/content/revy-voxel-rules" }
 mc-content-canonical = { path = "../../../crates/content/mc-content-canonical" }
-revy-voxel-model = { path = "../../../crates/model/revy-voxel-model" }
 mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
 

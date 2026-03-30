@@ -18,7 +18,7 @@ use crate::world::{
     DroppedItemSnapshot, WorldMeta, required_chunks,
 };
 use crate::{DEFAULT_KEEPALIVE_INTERVAL_MS, DEFAULT_KEEPALIVE_TIMEOUT_MS, EntityId, PlayerId};
-use revy_voxel_rules::{ContainerKindId, ContentBehavior, MiningToolSpec};
+use revy_voxel_semantic::{ContainerKindId, ContentBehavior, MiningToolSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

@@ -4,7 +4,7 @@ use super::nbt::{
 };
 use mc_proto_je_common::__version_support::blocks::{legacy_item, semantic_item};
 use mc_storage_common::StorageError;
-use revy_voxel_model::{DimensionId, InventorySlot, PlayerInventory, Vec3};
+use revy_voxel_semantic::{DimensionId, InventorySlot, PlayerInventory, Vec3};
 use revy_voxel_semantic::{PlayerId, PlayerSnapshot};
 use std::collections::BTreeMap;
 use std::fs;
@@ -135,7 +135,7 @@ fn inventory_to_nbt(inventory: &PlayerInventory) -> Vec<NbtTag> {
         .iter()
         .enumerate()
         .filter_map(
-            |(window_slot, stack): (usize, &Option<revy_voxel_model::ItemStack>)| {
+            |(window_slot, stack): (usize, &Option<revy_voxel_semantic::ItemStack>)| {
                 let stack = stack.as_ref()?;
                 let (item_id, damage) = legacy_item(stack)?;
                 let nbt_slot = window_slot_to_playerdata_slot(

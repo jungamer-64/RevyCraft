@@ -17,11 +17,11 @@ use mc_proto_je_common::__version_support::{
     players::encode_player_info_add as encode_shared_player_info_add,
     positions::{pack_block_position, to_angle_byte, to_fixed_point},
 };
-use revy_voxel_model::{
+use revy_voxel_semantic::ContainerKindId;
+use revy_voxel_semantic::{
     BlockPos, BlockState, ChunkColumn, DimensionId, DroppedItemSnapshot, InventoryWindowContents,
     ItemStack, WorldMeta,
 };
-use revy_voxel_rules::ContainerKindId;
 
 pub(crate) fn encode_join_game(
     entity_id: EntityId,

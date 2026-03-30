@@ -9,7 +9,7 @@ use crate::events::{
     InventoryTransactionContext,
 };
 use crate::inventory::{InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory};
-use revy_voxel_rules::ContainerSlotRole;
+use revy_voxel_semantic::ContainerSlotRole;
 
 pub(in crate::core) fn apply_inventory_click_state(
     state: &mut impl CoreStateMut,
@@ -152,7 +152,7 @@ pub(in crate::core) fn apply_inventory_click_state(
 }
 
 fn apply_player_window_click(
-    content_behavior: &dyn revy_voxel_rules::ContentBehavior,
+    content_behavior: &dyn revy_voxel_semantic::ContentBehavior,
     inventory: &mut PlayerInventory,
     cursor: &mut Option<ItemStack>,
     slot: Option<InventorySlot>,
@@ -218,7 +218,7 @@ fn apply_player_window_click(
 }
 
 fn apply_active_container_click(
-    content_behavior: &dyn revy_voxel_rules::ContentBehavior,
+    content_behavior: &dyn revy_voxel_semantic::ContentBehavior,
     session: &mut super::super::PlayerSessionState,
     player_inventory: &mut PlayerInventory,
     window_id: u8,

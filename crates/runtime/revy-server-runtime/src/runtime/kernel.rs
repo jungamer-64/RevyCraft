@@ -273,7 +273,7 @@ impl RuntimeKernel {
             .try_apply_if(
                 current_revision,
                 |state| {
-                    let crafting_table_kind = revy_voxel_rules::ContainerKindId::new(
+                    let crafting_table_kind = revy_voxel_semantic::ContainerKindId::new(
                         mc_content_canonical::ids::CRAFTING_TABLE,
                     );
                     let mut should_increment = false;

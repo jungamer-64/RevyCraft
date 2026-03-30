@@ -10,10 +10,9 @@ categories.workspace = true
 description = "Minecraft Java Edition 1.13.2 protocol codecs."
 
 [dependencies]
-revy-voxel-rules = { path = "../../../../crates/content/revy-voxel-rules" }
-revy-voxel-model = { path = "../../../../crates/model/revy-voxel-model" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
 mc-proto-je-common = { path = "../../../../crates/protocol/mc-proto-je-common" }
+revy-voxel-semantic = { path = "../../../../crates/core/revy-voxel-semantic" }
 uuid.workspace = true
 
 [dev-dependencies]

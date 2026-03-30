@@ -2,10 +2,10 @@ use super::super::PlayerSessionState;
 use crate::PlayerId;
 use crate::events::{CoreEvent, EventTarget, InventoryClickTarget, TargetedEvent};
 use crate::inventory::{InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory};
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 
 pub(super) fn active_window_container(
-    content_behavior: &dyn revy_voxel_rules::ContentBehavior,
+    content_behavior: &dyn revy_voxel_semantic::ContentBehavior,
     session: &PlayerSessionState,
     window_id: u8,
 ) -> Option<ContainerKindId> {
@@ -21,7 +21,7 @@ pub(super) fn active_window_container(
 }
 
 pub(super) fn window_contents(
-    content_behavior: &dyn revy_voxel_rules::ContentBehavior,
+    content_behavior: &dyn revy_voxel_semantic::ContentBehavior,
     session: &PlayerSessionState,
     inventory: &PlayerInventory,
     container: &ContainerKindId,
@@ -48,7 +48,7 @@ pub(super) fn resolve_inventory_target(target: &InventoryClickTarget) -> Option<
 }
 
 pub(in crate::core) fn inventory_diff_events(
-    content_behavior: &dyn revy_voxel_rules::ContentBehavior,
+    content_behavior: &dyn revy_voxel_semantic::ContentBehavior,
     window_id: u8,
     container: &ContainerKindId,
     player_id: PlayerId,
@@ -117,7 +117,7 @@ pub(in crate::core) fn property_diff_events(
 }
 
 pub(in crate::core) fn window_resync_events(
-    content_behavior: &dyn revy_voxel_rules::ContentBehavior,
+    content_behavior: &dyn revy_voxel_semantic::ContentBehavior,
     player_id: PlayerId,
     window_id: u8,
     container: &ContainerKindId,
@@ -165,7 +165,7 @@ pub(in crate::core) fn window_resync_events(
 }
 
 fn visible_slots(
-    content_behavior: &dyn revy_voxel_rules::ContentBehavior,
+    content_behavior: &dyn revy_voxel_semantic::ContentBehavior,
     container: &ContainerKindId,
 ) -> Vec<InventorySlot> {
     let mut slots = Vec::new();

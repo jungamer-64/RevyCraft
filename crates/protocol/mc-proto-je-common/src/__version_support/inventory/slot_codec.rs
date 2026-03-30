@@ -2,7 +2,7 @@ use crate::__version_support::blocks::{
     flattened_item_id_1_13_2, legacy_item, semantic_flattened_item_1_13_2, semantic_item,
 };
 use mc_proto_common::{PacketReader, PacketWriter, ProtocolError};
-use revy_voxel_model::ItemStack;
+use revy_voxel_semantic::ItemStack;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlotNbtEncoding {

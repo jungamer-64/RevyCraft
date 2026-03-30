@@ -1,12 +1,12 @@
 use crate::catalog;
 use crate::ids;
-use revy_voxel_model::{
-    BlockState, ChunkColumn, ChunkPos, InventoryClickButton, InventorySlot, ItemStack,
-    PlayerInventory, WorldMeta,
-};
-use revy_voxel_rules::{
+use revy_voxel_semantic::{
     BlockEntityKindId, ContainerBlockEntityState, ContainerKindId, ContainerPropertyKey,
     ContainerSlotRole, ContainerSpec, ContentBehavior, MiningToolSpec, OpenContainerState,
+};
+use revy_voxel_semantic::{
+    BlockState, ChunkColumn, ChunkPos, InventoryClickButton, InventorySlot, ItemStack,
+    PlayerInventory, WorldMeta,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;

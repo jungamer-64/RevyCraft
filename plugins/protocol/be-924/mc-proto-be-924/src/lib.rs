@@ -16,11 +16,11 @@ use mc_proto_common::{
     LoginRequest, PlayerSnapshot, ProtocolDescriptor, ProtocolError, ProtocolSessionSnapshot,
     RuntimeCommand, TransportKind, WireFormatKind,
 };
-use revy_voxel_model::{
+use revy_voxel_semantic::{
     BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
     ItemStack, WorldMeta,
 };
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;

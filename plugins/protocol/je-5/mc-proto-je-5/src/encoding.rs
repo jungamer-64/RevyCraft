@@ -16,11 +16,11 @@ use mc_proto_je_common::__version_support::{
     metadata::{write_empty_metadata_1_8, write_item_stack_metadata_1_8},
     positions::{to_angle_byte, to_fixed_point},
 };
-use revy_voxel_model::{
+use revy_voxel_semantic::ContainerKindId;
+use revy_voxel_semantic::{
     BlockPos, BlockState, ChunkColumn, DimensionId, DroppedItemSnapshot, InventoryWindowContents,
     ItemStack, WorldMeta,
 };
-use revy_voxel_rules::ContainerKindId;
 
 pub(crate) fn encode_join_game(
     entity_id: EntityId,

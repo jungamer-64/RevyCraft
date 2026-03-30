@@ -5,11 +5,11 @@ use super::{JE_1_18_2_DATA_VERSION, Je1182StoragePlugin};
 use mc_plugin_sdk_rust::storage::RustStoragePlugin;
 use mc_plugin_sdk_rust::{PlayerId, PlayerSnapshot, WorldSnapshot};
 use mc_storage_common::StorageError;
-use revy_voxel_model::{
+use revy_voxel_semantic::{BlockEntityState, ContainerPropertyKey};
+use revy_voxel_semantic::{
     BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, InventorySlot, ItemStack,
     PlayerInventory, Vec3, WorldMeta,
 };
-use revy_voxel_rules::{BlockEntityState, ContainerPropertyKey};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

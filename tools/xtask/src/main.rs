@@ -1064,13 +1064,7 @@ fn is_versioned_protocol_crate(package_name: &str) -> bool {
 fn is_boundary_surface_crate(package_name: &str) -> bool {
     !matches!(
         package_name,
-        "revy-core"
-            | "revy-voxel-core"
-            | "revy-server-runtime"
-            | "revy-voxel-model"
-            | "revy-voxel-rules"
-            | "mc-content-canonical"
-            | "xtask"
+        "revy-core" | "revy-voxel-core" | "revy-server-runtime" | "mc-content-canonical" | "xtask"
     ) && !package_name.contains("test-support")
 }
 

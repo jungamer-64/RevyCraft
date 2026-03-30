@@ -1,5 +1,5 @@
 use num_traits::ToPrimitive;
-use revy_voxel_model::BlockPos;
+use revy_voxel_semantic::BlockPos;
 
 #[must_use]
 pub fn pack_block_position(position: BlockPos) -> i64 {

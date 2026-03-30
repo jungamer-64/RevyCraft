@@ -17,7 +17,7 @@ use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::storage::RustStoragePlugin;
 use mc_plugin_sdk_rust::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
 use mc_storage_common::StorageError;
-use revy_voxel_model::{ChunkColumn, ChunkPos, ItemStack};
+use revy_voxel_semantic::{ChunkColumn, ChunkPos, ItemStack};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

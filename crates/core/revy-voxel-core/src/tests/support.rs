@@ -1,4 +1,5 @@
 pub(super) use crate::*;
+pub(super) use crate::core::transaction::{GameplayJournalApplyResult, GameplayTransaction};
 
 use mc_content_canonical::catalog;
 use std::collections::BTreeMap;
@@ -29,7 +30,7 @@ pub(super) enum InventoryContainer {
 #[derive(Clone, Debug, Default)]
 struct TestContentBehavior;
 
-pub(super) fn test_content_behavior() -> Arc<dyn revy_voxel_rules::ContentBehavior> {
+pub(super) fn test_content_behavior() -> Arc<dyn revy_voxel_semantic::ContentBehavior> {
     Arc::new(TestContentBehavior)
 }
 
@@ -90,7 +91,7 @@ pub(super) fn furnace_property_key(property_id: u8) -> ContainerPropertyKey {
 
 pub(super) fn crafting_table_state(
     window: &crate::core::OpenInventoryWindow,
-) -> &revy_voxel_rules::OpenContainerState {
+) -> &revy_voxel_semantic::OpenContainerState {
     assert_eq!(
         window.container.kind,
         container_kind(InventoryContainer::CraftingTable)
@@ -100,7 +101,7 @@ pub(super) fn crafting_table_state(
 
 pub(super) fn chest_state(
     window: &crate::core::OpenInventoryWindow,
-) -> &revy_voxel_rules::OpenContainerState {
+) -> &revy_voxel_semantic::OpenContainerState {
     assert_eq!(
         window.container.kind,
         container_kind(InventoryContainer::Chest)
@@ -110,7 +111,7 @@ pub(super) fn chest_state(
 
 pub(super) fn chest_state_mut(
     window: &mut crate::core::OpenInventoryWindow,
-) -> &mut revy_voxel_rules::OpenContainerState {
+) -> &mut revy_voxel_semantic::OpenContainerState {
     assert_eq!(
         window.container.kind,
         container_kind(InventoryContainer::Chest)
@@ -120,7 +121,7 @@ pub(super) fn chest_state_mut(
 
 pub(super) fn furnace_state(
     window: &crate::core::OpenInventoryWindow,
-) -> &revy_voxel_rules::OpenContainerState {
+) -> &revy_voxel_semantic::OpenContainerState {
     assert_eq!(
         window.container.kind,
         container_kind(InventoryContainer::Furnace)
@@ -130,7 +131,7 @@ pub(super) fn furnace_state(
 
 pub(super) fn furnace_state_mut(
     window: &mut crate::core::OpenInventoryWindow,
-) -> &mut revy_voxel_rules::OpenContainerState {
+) -> &mut revy_voxel_semantic::OpenContainerState {
     assert_eq!(
         window.container.kind,
         container_kind(InventoryContainer::Furnace)
@@ -434,7 +435,7 @@ fn container_spec(kind: &ContainerKindId) -> Option<ContainerSpec> {
     })
 }
 
-impl revy_voxel_rules::ContentBehavior for TestContentBehavior {
+impl revy_voxel_semantic::ContentBehavior for TestContentBehavior {
     fn generate_chunk(&self, _meta: &WorldMeta, chunk_pos: ChunkPos) -> ChunkColumn {
         let mut chunk = ChunkColumn::new(chunk_pos);
         for z in 0_u8..16 {

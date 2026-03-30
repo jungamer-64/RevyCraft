@@ -4,7 +4,7 @@ use super::nbt::{
     string_field, write_gzip_nbt,
 };
 use mc_storage_common::StorageError;
-use revy_voxel_model::{BlockPos, DimensionId, WorldMeta};
+use revy_voxel_semantic::{BlockPos, DimensionId, WorldMeta};
 use std::collections::BTreeMap;
 use std::path::Path;
 

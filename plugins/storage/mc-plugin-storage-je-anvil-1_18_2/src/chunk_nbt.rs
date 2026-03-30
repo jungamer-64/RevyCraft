@@ -6,11 +6,11 @@ use super::nbt::{
 };
 use mc_content_canonical::catalog;
 use mc_storage_common::StorageError;
-use revy_voxel_model::{
-    BlockPos, BlockState, ChunkColumn, ChunkPos, ChunkSection, ItemStack, expand_block_index,
-};
-use revy_voxel_rules::{
+use revy_voxel_semantic::{
     BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
+};
+use revy_voxel_semantic::{
+    BlockPos, BlockState, ChunkColumn, ChunkPos, ChunkSection, ItemStack, expand_block_index,
 };
 use std::collections::{BTreeMap, BTreeSet};
 

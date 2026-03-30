@@ -1,6 +1,6 @@
 use super::slot_codec::{SlotEncoding, SlotNbtEncoding};
-use revy_voxel_model::InventorySlot;
-use revy_voxel_rules::ContainerKindId;
+use revy_voxel_semantic::ContainerKindId;
+use revy_voxel_semantic::InventorySlot;
 
 pub const PLAYER_WINDOW_CRAFTING_RESULT_SLOT: i16 = 0;
 pub const PLAYER_WINDOW_CRAFTING_INPUT_SLOTS: [i16; 4] = [1, 2, 3, 4];

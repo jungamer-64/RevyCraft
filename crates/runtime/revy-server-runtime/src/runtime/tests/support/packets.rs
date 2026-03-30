@@ -21,7 +21,7 @@ use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
 use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
 use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use mc_proto_be_924::BE_924_PROTOCOL_NUMBER;
-use revy_voxel_model::BlockPos;
+use revy_voxel_semantic::BlockPos;
 use serde_json::json;
 use std::io::Cursor;
 use vek::{Vec2, Vec3};

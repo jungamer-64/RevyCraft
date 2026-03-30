@@ -36,11 +36,11 @@ use mc_proto_be_common::__version_support::world::{
     bedrock_actor_id, block_pos_to_network, vec3_to_bedrock,
 };
 use mc_proto_common::{ConnectionPhase, EntityId, PlayerSnapshot, ProtocolError};
-use revy_voxel_model::{
+use revy_voxel_semantic::{
     BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryWindowContents,
     ItemStack, WorldMeta,
 };
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use std::collections::HashMap;
 use vek::Vec2;
 

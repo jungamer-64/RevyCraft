@@ -26,7 +26,7 @@ use crate::inventory::{InventorySlot, InventoryWindowContents, ItemStack};
 use crate::player::PlayerSnapshot;
 use crate::world::{BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, Vec3};
 use crate::{ConnectionId, EntityId, PlayerId};
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]

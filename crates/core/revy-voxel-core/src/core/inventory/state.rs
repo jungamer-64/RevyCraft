@@ -1,6 +1,6 @@
 use crate::inventory::{InventoryWindowContents, ItemStack, PlayerInventory};
-use revy_voxel_model::BlockPos;
-use revy_voxel_rules::{ContainerBlockEntityState, ContainerPropertyKey, OpenContainerState};
+use revy_voxel_semantic::BlockPos;
+use revy_voxel_semantic::{ContainerBlockEntityState, ContainerPropertyKey, OpenContainerState};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

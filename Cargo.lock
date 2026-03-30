@@ -1708,8 +1708,7 @@ dependencies = [
 name = "mc-content-canonical"
 version = "0.1.0"
 dependencies = [
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "serde",
 ]
 
@@ -1816,8 +1815,6 @@ dependencies = [
  "mc-content-canonical",
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
- "revy-voxel-model",
- "revy-voxel-rules",
 ]
 
 [[package]]
@@ -1986,8 +1983,7 @@ dependencies = [
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-storage-common",
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "tempfile",
  "uuid",
 ]
@@ -2011,8 +2007,7 @@ dependencies = [
  "mc-plugin-api",
  "mc-plugin-sdk-rust",
  "mc-storage-common",
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "tempfile",
  "uuid",
 ]
@@ -2037,8 +2032,7 @@ dependencies = [
  "mc-proto-be-common",
  "mc-proto-common",
  "nbtx",
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "serde",
  "serde_json",
  "uuid",
@@ -2054,8 +2048,6 @@ dependencies = [
  "mc-content-canonical",
  "mc-proto-common",
  "num-traits",
- "revy-voxel-model",
- "revy-voxel-rules",
  "revy-voxel-semantic",
  "serde",
  "serde_json",
@@ -2088,8 +2080,7 @@ dependencies = [
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "uuid",
 ]
 
@@ -2101,8 +2092,7 @@ dependencies = [
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "uuid",
 ]
 
@@ -2114,8 +2104,7 @@ dependencies = [
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "uuid",
 ]
 
@@ -2128,8 +2117,7 @@ dependencies = [
  "mc-proto-common",
  "mc-proto-je-common",
  "mc-proto-test-support",
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "tempfile",
  "uuid",
 ]
@@ -2140,8 +2128,7 @@ version = "0.1.0"
 dependencies = [
  "mc-proto-common",
  "mc-proto-je-common",
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "uuid",
 ]
 
@@ -2153,8 +2140,6 @@ dependencies = [
  "mc-content-canonical",
  "mc-proto-common",
  "num-traits",
- "revy-voxel-model",
- "revy-voxel-rules",
  "revy-voxel-semantic",
  "serde",
  "serde_json",
@@ -2185,8 +2170,6 @@ dependencies = [
  "mc-proto-je-common",
  "mc-storage-common",
  "revy-voxel-core",
- "revy-voxel-model",
- "revy-voxel-rules",
  "revy-voxel-semantic",
  "tempfile",
  "uuid",
@@ -3190,8 +3173,7 @@ dependencies = [
  "revy-server-gameplay-bridge",
  "revy-server-types",
  "revy-voxel-core",
- "revy-voxel-model",
- "revy-voxel-rules",
+ "revy-voxel-semantic",
  "rsa",
  "serde",
  "serde_json",
@@ -3222,26 +3204,10 @@ dependencies = [
  "mc-content-canonical",
  "num-traits",
  "revy-core",
- "revy-voxel-model",
- "revy-voxel-rules",
  "revy-voxel-semantic",
  "serde",
  "serde_json",
  "uuid",
-]
-
-[[package]]
-name = "revy-voxel-model"
-version = "0.1.0"
-dependencies = [
- "revy-voxel-semantic",
-]
-
-[[package]]
-name = "revy-voxel-rules"
-version = "0.1.0"
-dependencies = [
- "revy-voxel-semantic",
 ]
 
 [[package]]

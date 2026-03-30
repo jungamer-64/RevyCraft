@@ -22,7 +22,7 @@ use mc_proto_be_common::__version_support::{
 use mc_proto_common::{
     CoreCommand, LoginRequest, PlayerId, ProtocolError, ProtocolSessionSnapshot, RuntimeCommand,
 };
-use revy_voxel_model::{
+use revy_voxel_semantic::{
     InteractionHand, InventoryClickValidation, InventoryTransactionContext, Vec3,
 };
 use std::io::Cursor;

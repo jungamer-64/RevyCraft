@@ -62,7 +62,7 @@ fn persistent_slot_order() -> impl Iterator<Item = InventorySlot> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use revy_voxel_model::{ItemDataMap, ItemDataValue};
+    use revy_voxel_semantic::{ItemDataMap, ItemDataValue};
 
     fn component_stack(name: &str) -> ItemStack {
         let mut stack = ItemStack::new("minecraft:stone", 4, 0);

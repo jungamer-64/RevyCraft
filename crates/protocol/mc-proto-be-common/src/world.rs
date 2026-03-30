@@ -1,7 +1,7 @@
 use mc_proto_common::ProtocolError;
 use num_traits::ToPrimitive;
-use revy_voxel_model::{BlockFace, BlockPos, Vec3 as ModelVec3};
 use revy_voxel_semantic::EntityId;
+use revy_voxel_semantic::{BlockFace, BlockPos, Vec3 as ModelVec3};
 use vek::Vec3;
 
 #[must_use]

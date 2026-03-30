@@ -21,7 +21,7 @@ use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::storage::RustStoragePlugin;
 use mc_plugin_sdk_rust::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
 use mc_storage_common::StorageError;
-use revy_voxel_model::{
+use revy_voxel_semantic::{
     ChunkColumn, ChunkPos, ItemDataMap, ItemDataValue, ItemStack, OpaqueF32, OpaqueF64,
 };
 use std::collections::BTreeMap;

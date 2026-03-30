@@ -12,11 +12,11 @@ use bedrockrs_proto::v748::packets::{InventoryContentPacket, InventorySlotPacket
 use bedrockrs_proto::v776::packets::{CreativeContentPacket, CreativeItemData};
 use bedrockrs_proto_core::{ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use mc_proto_common::ProtocolError;
-use revy_voxel_model::{
+use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{
     InventoryClickButton, InventoryClickTarget, InventorySlot, InventoryTransactionContext,
     InventoryWindowContents, ItemStack,
 };
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 use std::io::Cursor;
 
 const PLAYER_STORAGE_SLOT_COUNT: u32 = 36;

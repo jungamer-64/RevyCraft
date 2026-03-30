@@ -29,7 +29,7 @@
 | `crates/core/revy-voxel-core` | protocol 非依存の semantic state machine |
 | `crates/plugin/mc-plugin-api` | plugin ABI `7.0`、manifest、host API、typed codec |
 | `crates/plugin/mc-plugin-host` | packaged plugin discovery、activation、selection、reload、quarantine |
-| `crates/plugin/mc-plugin-sdk-rust` | Rust plugin authoring 向け trait、manifest helper、macro |
+| `crates/plugin/mc-plugin-sdk-rust` | Rust plugin authoring 向け trait、manifest helper、macro、shared semantic type re-export |
 | `crates/protocol/mc-proto-{common,je-common,be-common}` | shared protocol trait、wire codec、edition-family helper |
 | `plugins/*/*` | protocol / gameplay / storage / auth / admin-surface の concrete plugin 実装 |
 | `crates/testing/*` | packaged harness、plugin-host fixture、protocol test support |
@@ -65,7 +65,7 @@
 - `mc_plugin_api`
   host と plugin 間の ABI 契約です。
 - `mc_plugin_sdk_rust`
-  Rust plugin authoring の正規入口です。
+  Rust plugin authoring の正規入口です。plugin-facing shared type はここか `mc_plugin_api` の re-export から取ります。
 
 ## 内部専用 `surface`
 

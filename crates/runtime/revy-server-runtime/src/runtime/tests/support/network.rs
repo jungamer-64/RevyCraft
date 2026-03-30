@@ -18,7 +18,7 @@ use rak_rs::protocol::packet::online::{
     NewConnection, OnlinePacket,
 };
 use rak_rs::protocol::reliability::Reliability as RakReliability;
-use revy_voxel_model::BlockPos;
+use revy_voxel_semantic::BlockPos;
 use rsa::rand_core::{OsRng, RngCore};
 use std::sync::Arc;
 

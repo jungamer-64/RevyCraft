@@ -128,7 +128,7 @@ plugin 種別ごとの責務は次です。
 - admin-surface plugin
   console / gRPC などの operator surface、identity mapping、surface-owned config、process / handoff resource を担います。
 
-plugin / protocol authoring 側の依存もこの境界に合わせます。`mc-plugin-sdk-rust`、`mc-plugin-api`、`mc-proto-common` が公開 surface として shared semantic type を再公開するので、外側の crate は `revy-voxel-core` を直接依存先にせず、まずこれらの surface 経由で型を参照する前提で扱います。
+plugin / protocol authoring 側の依存もこの境界に合わせます。runtime / content / protocol / storage の実装 crate は `revy-voxel-semantic` を正本として直接参照し、plugin authoring crate は `mc-plugin-sdk-rust` / `mc-plugin-api` / `mc-proto-common` などの公開 surface から型を取ります。`revy-voxel-model` / `revy-voxel-rules` のような wrapper crate は置かない前提で扱います。
 
 ## 迷ったときの境界判断
 
@@ -201,7 +201,7 @@ storage crates
 - no host crate depends on `revy-voxel-core`; gameplay read access is bridged through `revy-server-gameplay-bridge`
 - no duplicated canonical admin / reload DTO definitions across `revy-server-config` / `revy-server-runtime` / `mc-plugin-api` / `mc-plugin-host`
 
-最初の rule は、`ServerCore` / `GameplayTransaction` を public surface から消し、plugin-facing contract を `GameplayEffectBatch` と `GameplayReadView` に寄せることが目的です。runtime kernel が `GameplayLoginPreview` / snapshot adapter を所有し、`mc-plugin-host` は bridge trait 越しに読むだけにします。
+最初の rule は、`ServerCore` と旧 transaction/journal surface を public contract から消し、plugin-facing contract を `GameplayEffectBatch` と `GameplayReadView` に寄せることが目的です。runtime kernel が `GameplayLoginPreview` / snapshot adapter を所有し、`mc-plugin-host` は bridge trait 越しに読むだけにします。
 
 ## 移行順序と境界チェック
 

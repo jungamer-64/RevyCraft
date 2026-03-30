@@ -1,6 +1,6 @@
 # `CoreCommand` から `CoreEvent` までの流れ
 
-- 対象読者: play 処理と login 処理で `CoreCommand`、`GameplayCommand`、`GameplayTransaction`、`CoreEvent` の流れを追いたい contributors
+- 対象読者: play 処理と login 処理で `CoreCommand`、`GameplayCommand`、`GameplayEffectBatch`、`CoreEvent` の流れを追いたい contributors
 - この文書で扱う範囲: 型の役割、runtime 側の分岐、login special-case、event dispatch までの流れ
 - この文書で扱わないこと: reload coordinator の実装、boundary redesign の crate graph、operator 向け command 運用
 - 次に読む文書: [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
@@ -15,19 +15,18 @@ client packet
   -> CoreCommand
   -> runtime dispatch
      -> CoreCommand::LoginStart
-        -> GameplayTransaction::begin_login(...)
+        -> GameplayLoginPreview::new(...)
         -> gameplay plugin HandlePlayerJoin
-        -> GameplayTransaction::finalize_login(...)
-        -> detached journal validate/apply
+        -> validate_and_apply_login_effects(...)
         -> Vec<TargetedEvent>
      -> direct-core command
         -> ServerCore::apply_command(...)
         -> Vec<TargetedEvent>
      -> gameplay-owned command
         -> GameplayCommand
-        -> snapshot clone + detached GameplayTransaction
+        -> snapshot-backed GameplayReadView + detached GameplayEffectBatch
         -> gameplay plugin callback
-        -> validate_and_apply_gameplay_journal(...)
+        -> validate_and_apply_gameplay_effects(...)
         -> Vec<TargetedEvent>
   -> TargetedEvent dispatch
   -> protocol plugin encode
@@ -49,13 +48,13 @@ login は gameplay transaction の special-case ですが、`LoginAccepted` を 
 ## 型の役割
 
 - `CoreCommand`
-  runtime / protocol 境界で使う semantic input です。定義は [`../../crates/core/revy-voxel-core/src/events.rs`](../../crates/core/revy-voxel-core/src/events.rs) にあります。
+  runtime / protocol 境界で使う semantic input です。定義は [`../../crates/core/revy-voxel-semantic/src/events.rs`](../../crates/core/revy-voxel-semantic/src/events.rs) にあります。
 - `GameplayCommand`
-  gameplay plugin に見せる gameplay-owned command だけを抜き出した入力です。`CoreCommand` から分離されます。定義は [`../../crates/core/revy-voxel-core/src/events.rs`](../../crates/core/revy-voxel-core/src/events.rs) にあります。
-- `GameplayTransaction`
-  gameplay callback 単位で host が開始する invocation-scoped transaction です。plugin はここを通じて world / player / inventory / block を読み書きします。runtime は live core を直接触らず、snapshot を読みながら `read-set + op journal` を積み、最後に live core へ validate/apply します。定義は [`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) にあります。
+  gameplay plugin に見せる gameplay-owned command だけを抜き出した入力です。`CoreCommand` から分離されます。定義は [`../../crates/core/revy-voxel-semantic/src/events.rs`](../../crates/core/revy-voxel-semantic/src/events.rs) にあります。
+- `GameplayEffectBatch`
+  gameplay callback 単位で host が返す invocation-scoped result です。plugin は read callback と effect recorder を通じて snapshot を読み、`read-set + effect list` を batch に積みます。runtime は live core を直接触らせず、この batch を `ServerCore::validate_and_apply_*` へ渡して validate/apply します。定義は [`../../crates/core/revy-voxel-semantic/src/gameplay.rs`](../../crates/core/revy-voxel-semantic/src/gameplay.rs)、apply 側は [`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) にあります。
 - `CoreEvent`
-  core から外へ出る出力です。最終的に protocol plugin が encode します。定義は [`../../crates/core/revy-voxel-core/src/events.rs`](../../crates/core/revy-voxel-core/src/events.rs) にあります。
+  core から外へ出る出力です。最終的に protocol plugin が encode します。定義は [`../../crates/core/revy-voxel-semantic/src/events.rs`](../../crates/core/revy-voxel-semantic/src/events.rs) にあります。
 - `TargetedEvent`
   `CoreEvent` に配送先を付けた wrapper です。routing primitive 自体は `revy-core` にあり、`revy-voxel-core` は `TargetedEvent = RoutedEvent<CoreEvent>` として re-export します。runtime はこれを session / connection / broadcast へ dispatch します。
 
@@ -92,11 +91,11 @@ runtime 側の本体は [`../../crates/runtime/revy-server-runtime/src/runtime/k
 - `PlaceBlock`
 - `UseBlock`
 
-ここで runtime が `CoreCommand` を `GameplayCommand` へ落とし、gameplay plugin の `prepare_command(...)` を detached transaction 上で 1 回だけ実行します。plugin は host mutation API を通じて draft state を更新し、runtime はその journal を live core に対して validate/apply します。read-set が stale なら callback は再実行せず、結果を authoritative resync / drop に寄せます。
+ここで runtime が `CoreCommand` を `GameplayCommand` へ落とし、gameplay plugin の `prepare_command(...)` を snapshot-backed read view 上で 1 回だけ実行します。plugin は host effect API を通じて detached `GameplayEffectBatch` を組み立て、runtime はその batch を live core に対して validate/apply します。read-set が stale なら callback は再実行せず、結果を authoritative resync / drop に寄せます。
 
 ## login 時に何が足されるか
 
-`GameplayTransaction::finalize_login(...)` は gameplay callback が成功したあと、runtime bootstrap に必要な event をまとめて積みます。
+`validate_and_apply_login_effects(...)` は gameplay callback が成功したあと、runtime bootstrap に必要な event をまとめて積みます。
 
 - `LoginAccepted`
 - `PlayBootstrap`

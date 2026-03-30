@@ -16,11 +16,11 @@ pub use self::window_items::window_items;
 mod tests {
     use super::*;
     use mc_proto_common::{PacketReader, PacketWriter};
-    use revy_voxel_model::{
+    use revy_voxel_semantic::ContainerKindId;
+    use revy_voxel_semantic::{
         InventorySlot, InventoryWindowContents, ItemDataMap, ItemDataValue, ItemStack,
         PlayerInventory,
     };
-    use revy_voxel_rules::ContainerKindId;
 
     fn player_container() -> ContainerKindId {
         ContainerKindId::new("canonical:player")

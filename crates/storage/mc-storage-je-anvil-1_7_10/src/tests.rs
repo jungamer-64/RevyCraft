@@ -1,8 +1,8 @@
 use super::Je1710StorageAdapter;
 use mc_storage_common::StorageAdapter;
 use revy_voxel_core::{CoreConfig, PlayerId, ServerCore};
-use revy_voxel_model::{BlockPos, BlockState, ChunkColumn, ChunkPos, InventorySlot, ItemStack};
-use revy_voxel_rules::{BlockEntityState, ContainerPropertyKey};
+use revy_voxel_semantic::{BlockEntityState, ContainerPropertyKey};
+use revy_voxel_semantic::{BlockPos, BlockState, ChunkColumn, ChunkPos, InventorySlot, ItemStack};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;

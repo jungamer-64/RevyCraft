@@ -4,7 +4,7 @@ use bedrockrs_proto::v662::types::ChunkPos as BedrockChunkPos;
 use mc_content_canonical::catalog;
 use mc_proto_common::ProtocolError;
 use nbtx::Value;
-use revy_voxel_model::{BlockState, ChunkColumn, ChunkSection};
+use revy_voxel_semantic::{BlockState, ChunkColumn, ChunkSection};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 

@@ -10,7 +10,7 @@ use super::{ContainerBinding, OpenContainerState};
 use crate::inventory::{InventorySlot, InventoryWindowContents, ItemStack, PlayerInventory};
 use crate::world::{BlockEntityState, BlockPos, BlockState, Vec3};
 use crate::{EntityId, PlayerId, PlayerSnapshot};
-use revy_voxel_rules::ContainerSlotRole;
+use revy_voxel_semantic::ContainerSlotRole;
 use std::collections::BTreeMap;
 
 const DROPPED_ITEM_PICKUP_RADIUS_SQUARED: f64 = 1.5 * 1.5;
@@ -22,7 +22,7 @@ const DROPPED_ITEM_REST_HEIGHT: f64 = 0.25;
 pub(in crate::core) fn open_virtual_container_state(
     state: &mut impl CoreStateMut,
     player_id: PlayerId,
-    kind: revy_voxel_rules::ContainerKindId,
+    kind: revy_voxel_semantic::ContainerKindId,
 ) -> Option<OpenContainerDelta> {
     let window_id = allocate_non_player_window_id(state, player_id)?;
     let mut window = OpenInventoryWindow {
@@ -410,7 +410,7 @@ fn allocate_non_player_window_id(state: &mut impl CoreStateMut, player_id: Playe
 
 fn build_virtual_container_state(
     state: &impl CoreStateRead,
-    kind: revy_voxel_rules::ContainerKindId,
+    kind: revy_voxel_semantic::ContainerKindId,
 ) -> Option<OpenContainerState> {
     let spec = state.content_behavior().container_spec(&kind)?;
     let (local_slots, properties) = default_container_contents(state, &kind, spec.local_slot_count);
@@ -425,7 +425,7 @@ fn build_virtual_container_state(
 fn build_world_container_state(
     state: &mut impl CoreStateMut,
     position: BlockPos,
-    kind: revy_voxel_rules::ContainerKindId,
+    kind: revy_voxel_semantic::ContainerKindId,
 ) -> Option<OpenContainerState> {
     let spec = state.content_behavior().container_spec(&kind)?;
     let Some(block_entity_kind) = state
@@ -467,11 +467,11 @@ fn build_world_container_state(
 
 fn default_container_contents(
     state: &impl CoreStateRead,
-    kind: &revy_voxel_rules::ContainerKindId,
+    kind: &revy_voxel_semantic::ContainerKindId,
     local_slot_count: u16,
 ) -> (
     Vec<Option<ItemStack>>,
-    BTreeMap<revy_voxel_rules::ContainerPropertyKey, i16>,
+    BTreeMap<revy_voxel_semantic::ContainerPropertyKey, i16>,
 ) {
     if let Some(block_entity_kind) = state
         .content_behavior()
@@ -490,7 +490,7 @@ fn register_world_container_viewer_state(
     position: BlockPos,
     player_id: PlayerId,
     window_id: u8,
-    kind: revy_voxel_rules::ContainerKindId,
+    kind: revy_voxel_semantic::ContainerKindId,
 ) {
     let mut entry =
         state
@@ -686,7 +686,7 @@ fn dropped_item_rest_y(state: &impl CoreStateRead, x: f64, y: f64, z: f64) -> Op
 }
 
 fn persist_live_player_state(
-    content_behavior: &dyn revy_voxel_rules::ContentBehavior,
+    content_behavior: &dyn revy_voxel_semantic::ContentBehavior,
     snapshot: &PlayerSnapshot,
     cursor: Option<&ItemStack>,
     active_container: Option<&OpenInventoryWindow>,
@@ -718,7 +718,7 @@ fn persist_live_player_state(
 }
 
 fn close_active_container_window(
-    content_behavior: &dyn revy_voxel_rules::ContentBehavior,
+    content_behavior: &dyn revy_voxel_semantic::ContentBehavior,
     session: &mut PlayerSessionState,
     inventory: &mut PlayerInventory,
 ) -> Option<OpenInventoryWindow> {
@@ -728,7 +728,7 @@ fn close_active_container_window(
 }
 
 fn fold_active_container_items_into_player(
-    content_behavior: &dyn revy_voxel_rules::ContentBehavior,
+    content_behavior: &dyn revy_voxel_semantic::ContentBehavior,
     inventory: &mut PlayerInventory,
     window: &OpenInventoryWindow,
 ) {

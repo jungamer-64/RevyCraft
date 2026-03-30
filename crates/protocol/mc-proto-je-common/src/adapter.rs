@@ -8,12 +8,12 @@ use mc_proto_common::{
     ProtocolSessionSnapshot, ServerListStatus, SessionAdapter, StatusRequest, TransportKind,
     WireCodec,
 };
-use revy_voxel_model::{
+use revy_voxel_semantic::{
     BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
 };
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
 use revy_voxel_semantic::{ConnectionId, CoreEvent, EntityId, PlayerSnapshot, RuntimeCommand};
+use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -545,7 +545,7 @@ impl<P: JavaEditionProfile> ProtocolAdapter for JavaEditionAdapter<P> {
 mod tests {
     use super::*;
     use mc_proto_common::{ConnectionPhase, PlayerId};
-    use revy_voxel_model::{
+    use revy_voxel_semantic::{
         BlockPos, DimensionId, InventoryTransactionContext, PlayerInventory, Vec3, WorldMeta,
     };
 

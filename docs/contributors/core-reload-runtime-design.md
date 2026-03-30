@@ -44,7 +44,7 @@ reload を読むときの責務分割は次です。
 - protocol
   wire format、routing、transport 固有 session state、session transfer blob を持つ
 - gameplay
-  semantic `GameplayCommand` を評価し、callback 単位の `GameplayTransaction` を commit する
+  semantic `GameplayCommand` を評価し、callback 単位の detached `GameplayEffectBatch` を返す
 - core
   world / entity / inventory / keepalive / dropped item / active mining を含む canonical runtime state を持つ
 

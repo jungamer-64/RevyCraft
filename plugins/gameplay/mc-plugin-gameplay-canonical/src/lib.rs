@@ -7,11 +7,10 @@ use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::gameplay::{self, GameplayHost, RustGameplayPlugin};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::{
-    CoreEvent, EventTarget, GameplayCapability, GameplayCommand, PlayerId, PlayerSnapshot,
+    BlockFace, BlockPos, ContainerKindId, CoreEvent, EventTarget, GameplayCapability,
+    GameplayCommand, InteractionHand, InventorySlot, ItemStack, PlayerId, PlayerSnapshot,
     TargetedEvent,
 };
-use revy_voxel_model::{BlockFace, BlockPos, InteractionHand, InventorySlot, ItemStack};
-use revy_voxel_rules::ContainerKindId;
 
 #[derive(Default)]
 pub struct CanonicalGameplayPlugin;

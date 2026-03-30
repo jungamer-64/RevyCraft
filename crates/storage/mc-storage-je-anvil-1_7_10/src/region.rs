@@ -1,8 +1,8 @@
 use super::chunk_nbt::{chunk_from_nbt, chunk_to_nbt, region_chunk_index};
 use super::nbt::{decompress_gzip, decompress_zlib, read_nbt, zlib_compress_nbt};
 use mc_storage_common::StorageError;
-use revy_voxel_model::{BlockPos, ChunkColumn, ChunkPos};
-use revy_voxel_rules::BlockEntityState;
+use revy_voxel_semantic::BlockEntityState;
+use revy_voxel_semantic::{BlockPos, ChunkColumn, ChunkPos};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;

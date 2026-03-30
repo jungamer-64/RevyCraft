@@ -26,11 +26,11 @@ use mc_proto_je_common::{
     },
     JavaEditionAdapter, JavaEditionProfile, JavaProtocolSessionStore, format_text_component,
 };
-use revy_voxel_model::{
+use revy_voxel_semantic::{
     BlockPos, BlockState, ChunkColumn, DroppedItemSnapshot, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, WorldMeta,
 };
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 
 const PROTOCOL_VERSION_1_12_2: i32 = 340;
 const VERSION_NAME_1_12_2: &str = "1.12.2";

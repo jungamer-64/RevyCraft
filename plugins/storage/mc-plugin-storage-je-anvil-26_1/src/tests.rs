@@ -4,10 +4,10 @@ use super::{JE_26_1_DATA_VERSION, Je261StoragePlugin, item_stack_from_nbt, item_
 use mc_plugin_sdk_rust::storage::RustStoragePlugin;
 use mc_plugin_sdk_rust::{PlayerId, PlayerSnapshot, WorldSnapshot};
 use mc_storage_common::StorageError;
-use revy_voxel_model::{
+use revy_voxel_semantic::BlockEntityState;
+use revy_voxel_semantic::{
     BlockPos, ChunkColumn, ItemDataMap, ItemDataValue, ItemStack, Vec3, WorldMeta,
 };
-use revy_voxel_rules::BlockEntityState;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -77,7 +77,7 @@ fn snapshot_roundtrip_preserves_modern_items() -> Result<(), StorageError> {
         4,
         chest_pos.y,
         4,
-        Some(revy_voxel_model::BlockState::new("minecraft:chest")),
+        Some(revy_voxel_semantic::BlockState::new("minecraft:chest")),
     );
     chunk.biomes = vec![1; 256];
 
@@ -85,7 +85,7 @@ fn snapshot_roundtrip_preserves_modern_items() -> Result<(), StorageError> {
     chest_slots[0] = Some(component_stack());
 
     let player_id = PlayerId(Uuid::from_u128(0x26_1));
-    let mut inventory = revy_voxel_model::PlayerInventory::new_empty();
+    let mut inventory = revy_voxel_semantic::PlayerInventory::new_empty();
     let _ = inventory.set(36, Some(component_stack()));
 
     let snapshot = WorldSnapshot {
@@ -108,7 +108,7 @@ fn snapshot_roundtrip_preserves_modern_items() -> Result<(), StorageError> {
                 yaw: 0.0,
                 pitch: 0.0,
                 on_ground: true,
-                dimension: revy_voxel_model::DimensionId::Overworld,
+                dimension: revy_voxel_semantic::DimensionId::Overworld,
                 health: 20.0,
                 food: 20,
                 food_saturation: 5.0,
@@ -147,7 +147,7 @@ fn sample_meta() -> WorldMeta {
         level_name: "world".to_string(),
         seed: 123,
         spawn: BlockPos::new(0, 64, 0),
-        dimension: revy_voxel_model::DimensionId::Overworld,
+        dimension: revy_voxel_semantic::DimensionId::Overworld,
         age: 10,
         time: 20,
         level_type: "FLAT".to_string(),

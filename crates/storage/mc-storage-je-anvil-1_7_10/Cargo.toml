@@ -15,8 +15,6 @@ mc-content-canonical = { path = "../../content/mc-content-canonical" }
 mc-storage-common = { path = "../mc-storage-common" }
 mc-proto-je-common = { path = "../../protocol/mc-proto-je-common" }
 revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
-revy-voxel-model = { path = "../../model/revy-voxel-model" }
-revy-voxel-rules = { path = "../../content/revy-voxel-rules" }
 uuid.workspace = true
 
 [dev-dependencies]

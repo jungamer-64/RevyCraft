@@ -26,11 +26,11 @@ use mc_proto_je_common::{
     },
     JavaEditionAdapter, JavaEditionProfile, JavaProtocolSessionStore, format_text_component,
 };
-use revy_voxel_model::{
+use revy_voxel_semantic::{
     BlockPos, ChunkColumn, DroppedItemSnapshot, InventorySlot, InventoryTransactionContext,
     InventoryWindowContents, ItemStack, WorldMeta,
 };
-use revy_voxel_rules::{ContainerKindId, ContainerPropertyKey};
+use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 
 const PROTOCOL_VERSION_1_8_X: i32 = 47;
 const VERSION_NAME_1_8_X: &str = "1.8.x";
@@ -251,7 +251,7 @@ impl JavaEditionProfile for Je47Profile {
     fn encode_block_changed(
         &self,
         position: BlockPos,
-        block: &revy_voxel_model::BlockState,
+        block: &revy_voxel_semantic::BlockState,
     ) -> Result<Vec<u8>, ProtocolError> {
         Ok(encode_block_change(position, block))
     }

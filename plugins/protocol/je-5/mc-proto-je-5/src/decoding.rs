@@ -13,11 +13,11 @@ use mc_proto_je_common::{
     __version_support::inventory::{inventory_slot, read_slot},
     JavaProtocolSessionStore,
 };
-use revy_voxel_model::{
+use revy_voxel_semantic::ContainerKindId;
+use revy_voxel_semantic::{
     BlockFace, BlockPos, InteractionHand, InventoryClickButton, InventoryClickTarget,
     InventoryClickValidation, InventoryTransactionContext, Vec3,
 };
-use revy_voxel_rules::ContainerKindId;
 
 pub(crate) fn decode_play_packet(
     session: &ProtocolSessionSnapshot,

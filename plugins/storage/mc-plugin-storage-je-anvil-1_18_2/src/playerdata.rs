@@ -4,7 +4,7 @@ use super::nbt::{
 };
 use mc_plugin_sdk_rust::{PlayerId, PlayerSnapshot};
 use mc_storage_common::StorageError;
-use revy_voxel_model::{DimensionId, InventorySlot, PlayerInventory, Vec3};
+use revy_voxel_semantic::{DimensionId, InventorySlot, PlayerInventory, Vec3};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;

@@ -7,10 +7,10 @@ use mc_proto_je_common::__version_support::{
     chunks::get_nibble,
 };
 use mc_storage_common::StorageError;
-use revy_voxel_model::{BlockPos, ChunkColumn, ChunkPos, ItemStack, expand_block_index};
-use revy_voxel_rules::{
+use revy_voxel_semantic::{
     BlockEntityKindId, BlockEntityState, ContainerBlockEntityState, ContainerPropertyKey,
 };
+use revy_voxel_semantic::{BlockPos, ChunkColumn, ChunkPos, ItemStack, expand_block_index};
 use std::collections::BTreeMap;
 
 const CHEST_BLOCK_ENTITY_KIND: &str = "canonical:chest";
@@ -55,12 +55,12 @@ pub(super) fn chunk_to_nbt(
         .sections
         .iter()
         .filter(
-            |(section_y, section): &(&i32, &revy_voxel_model::ChunkSection)| {
+            |(section_y, section): &(&i32, &revy_voxel_semantic::ChunkSection)| {
                 **section_y >= 0 && **section_y < 16 && !section.is_empty()
             },
         )
         .map(
-            |(section_y, section): (&i32, &revy_voxel_model::ChunkSection)| {
+            |(section_y, section): (&i32, &revy_voxel_semantic::ChunkSection)| {
                 let mut blocks = vec![0_u8; 4096];
                 let mut data = vec![0_u8; 2048];
                 let block_light = vec![0_u8; 2048];

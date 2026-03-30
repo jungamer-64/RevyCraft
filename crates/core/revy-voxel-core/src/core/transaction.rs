@@ -11,7 +11,7 @@ use crate::inventory::{InventorySlot, ItemStack};
 use crate::player::{InteractionHand, PlayerSnapshot};
 use crate::world::{BlockEntityState, BlockFace, BlockPos, BlockState, Vec3, WorldMeta};
 use crate::{ConnectionId, HOTBAR_SLOT_COUNT, PlayerId};
-use revy_voxel_rules::ContainerKindId;
+use revy_voxel_semantic::ContainerKindId;
 use revy_voxel_semantic::{
     GameplayEffect as SemanticGameplayEffect, GameplayEffectBatch as SemanticGameplayEffectBatch,
     GameplayReadSet as SemanticGameplayReadSet,

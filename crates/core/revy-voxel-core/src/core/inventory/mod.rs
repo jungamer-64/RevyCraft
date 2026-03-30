@@ -17,4 +17,4 @@ pub(in crate::core) use self::sync::{
     inventory_diff_events, property_diff_events, property_events, window_resync_events,
 };
 #[allow(unused_imports)]
-pub(crate) use revy_voxel_rules::{ContainerBinding, OpenContainerState};
+pub(crate) use revy_voxel_semantic::{ContainerBinding, OpenContainerState};
