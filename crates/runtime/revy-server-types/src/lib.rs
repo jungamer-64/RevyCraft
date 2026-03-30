@@ -1,7 +1,12 @@
 use mc_proto_common::{ConnectionPhase, TransportKind};
-use revy_voxel_semantic::{AdapterId, ConnectionId, EntityId, PlayerId, PluginGenerationId};
+use revy_voxel_semantic::{
+    AdapterId, AdminSurfaceProfileId, AuthProfileId, ConnectionId, EntityId, GameplayProfileId,
+    PlayerId, PluginGenerationId, StorageProfileId,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListenerBinding {
@@ -47,6 +52,51 @@ impl Default for PluginFailureMatrix {
             admin_surface: PluginFailureAction::Skip,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginHostBufferLimitsView {
+    pub protocol_response_bytes: usize,
+    pub gameplay_response_bytes: usize,
+    pub storage_response_bytes: usize,
+    pub auth_response_bytes: usize,
+    pub admin_surface_response_bytes: usize,
+    pub callback_payload_bytes: usize,
+    pub metadata_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginAbiVersionView {
+    pub major: u16,
+    pub minor: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginHostBootstrapSelectionView {
+    pub storage_profile: StorageProfileId,
+    pub plugins_dir: PathBuf,
+    pub plugin_abi_min: PluginAbiVersionView,
+    pub plugin_abi_max: PluginAbiVersionView,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginHostAdminSurfaceSelectionView {
+    pub instance_id: String,
+    pub profile: AdminSurfaceProfileId,
+    pub config_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginHostRuntimeSelectionView {
+    pub be_enabled: bool,
+    pub auth_profile: AuthProfileId,
+    pub bedrock_auth_profile: AuthProfileId,
+    pub default_gameplay_profile: GameplayProfileId,
+    pub gameplay_profile_map: HashMap<AdapterId, GameplayProfileId>,
+    pub admin_surfaces: Vec<PluginHostAdminSurfaceSelectionView>,
+    pub plugin_allowlist: Option<Vec<String>>,
+    pub buffer_limits: PluginHostBufferLimitsView,
+    pub failure_matrix: PluginFailureMatrix,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

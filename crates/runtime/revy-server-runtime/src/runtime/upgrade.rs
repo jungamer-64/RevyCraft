@@ -6,9 +6,6 @@ use super::{
 use crate::RuntimeError;
 use crate::config::{ServerConfig, ServerConfigSource};
 use crate::runtime::bootstrap::boot_server_from_upgrade;
-use crate::runtime::selection::{
-    plugin_host_bootstrap_config, plugin_host_runtime_selection_config,
-};
 use crate::transport::{AcceptedTransportSession, TransportEncryptionSnapshot, TransportSessionIo};
 use bytes::BytesMut;
 use mc_plugin_host::host::plugin_host_from_config;
@@ -230,15 +227,18 @@ impl ServerSupervisor {
         import: RuntimeUpgradeImport,
     ) -> Result<Self, RuntimeError> {
         let config = import.payload.config.clone().validate_owned()?;
-        let plugin_host = plugin_host_from_config(&plugin_host_bootstrap_config(&config))?
-            .ok_or_else(|| {
-                RuntimeError::Config(format!(
-                    "no packaged plugins discovered under `{}`",
-                    config.bootstrap.plugins_dir.display()
-                ))
-            })?;
-        let loaded_plugins =
-            plugin_host.load_plugin_set(&plugin_host_runtime_selection_config(&config))?;
+        let bootstrap_view = config.plugin_host_bootstrap_view();
+        let bootstrap_config = mc_plugin_host::config::BootstrapConfig::from(&bootstrap_view);
+        let plugin_host = plugin_host_from_config(&bootstrap_config)?.ok_or_else(|| {
+            RuntimeError::Config(format!(
+                "no packaged plugins discovered under `{}`",
+                config.bootstrap.plugins_dir.display()
+            ))
+        })?;
+        let runtime_selection_view = config.plugin_host_runtime_selection_view();
+        let runtime_selection =
+            mc_plugin_host::config::RuntimeSelectionConfig::from(&runtime_selection_view);
+        let loaded_plugins = plugin_host.load_plugin_set(&runtime_selection)?;
         let running = boot_server_from_upgrade(
             config_source,
             import,

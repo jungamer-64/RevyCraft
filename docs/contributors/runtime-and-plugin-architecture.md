@@ -14,7 +14,7 @@ RevyCraft の current workspace は実装としては成立していますが、
 - semantic contract と engine internal が `revy-voxel-core` / `mc-plugin-api` に混在している
 - protocol と storage の責務が `mc-proto-*` / storage plugin にまたがっている
 - admin / reload DTO が `revy-server-runtime`、`revy-server-config`、`mc-plugin-api`、`mc-plugin-host` に重複している
-- `revy-server-config` が validated config だけでなく plugin-host translation まで持っている
+- config parsing / normalize / reload planning の読み順が 1 file に集中しやすい
 
 この文書では、現在の `runtime` / plugin host の読み方を示しつつ、次の目標境界を正本として固定します。
 
@@ -29,7 +29,7 @@ RevyCraft の current workspace は実装としては成立していますが、
 - `revy-server-types`
   operator-facing shared DTO の single source of truth に寄せる
 - `revy-server-config`
-  validated config と reload planning のみに寄せる
+  schema / document / normalize / validate / reload plan と neutral selection view を持つ
 
 ## レイヤー構成
 
@@ -146,7 +146,7 @@ plugin や protocol 共通層が共有してよい型は `revy-voxel-semantic` �
 
 ### config と runtime translation
 
-`revy-server-config` は schema、load / normalize / validate、reload plan に寄せます。plugin-host bootstrap や runtime selection への translation は runtime 側の責務です。
+`revy-server-config` は schema、document load、normalize、validate、reload plan、neutral selection view に寄せます。runtime は `ServerConfig` から host view を受け取り、`mc-plugin-host` は自分の `config::*` へ変換する owner として扱います。
 
 ### build-time と run-time
 
@@ -211,8 +211,8 @@ boundary redesign の進め方は次を前提にします。
 2. `revy-voxel-semantic` を導入し、shared semantic type を移す
 3. `mc-storage-common` と `mc-storage-je-anvil-1_7_10` を導入し、protocol / storage を切り離す
 4. `revy-server-types` を導入し、admin / reload DTO を寄せる
-5. plugin-host translation を runtime 側へ移し、`mc-plugin-host` の gameplay read path を `revy-server-gameplay-bridge` 越しにする
-6. `revy-server-config` を validated config に閉じる
+5. plugin-host translation を runtime 直書き helper から neutral selection view + host-owned conversion へ移し、`mc-plugin-host` の gameplay read path を `revy-server-gameplay-bridge` 越しにする
+6. `revy-server-config` を schema / document / normalize / validate / reload plan の分割構造に保つ
 
 境界チェックの入口は次です。
 

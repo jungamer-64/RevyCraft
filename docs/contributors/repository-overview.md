@@ -23,7 +23,7 @@
 | パス | 役割 |
 | --- | --- |
 | `apps/revy-server` | `server-bootstrap` binary。config 読み込み、runtime 起動、stdio / gRPC admin surface を束ねる |
-| `crates/runtime/revy-server-config` | `runtime/server.toml` の load / normalize / validate と reload plan |
+| `crates/runtime/revy-server-config` | `runtime/server.toml` の schema / document load / normalize / validate / reload plan と neutral selection view |
 | `crates/runtime/revy-server-runtime` | listener、generation、session、status、reload、admin control plane を持つ orchestration 層 |
 | `crates/core/revy-core` | id、capability、routing、revision を持つ internal kernel primitive |
 | `crates/core/revy-voxel-core` | protocol 非依存の semantic state machine |
