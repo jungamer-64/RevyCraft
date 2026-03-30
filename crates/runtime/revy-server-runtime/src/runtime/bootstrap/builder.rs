@@ -2,7 +2,7 @@ use super::listeners::{bind_runtime_listeners, spawn_listener_workers};
 use super::r#loop::spawn_runtime_loop;
 use super::protocols::{ActiveProtocols, activate_protocols};
 use crate::RuntimeError;
-use crate::config::ServerConfigSource;
+use crate::config::{ServerConfig, ServerConfigSource, ValidatedServerConfig};
 use crate::runtime::kernel::RuntimeKernel;
 use crate::runtime::reload_coordinator::ReloadCoordinator;
 use crate::runtime::selection::{
@@ -23,23 +23,11 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 pub(crate) async fn boot_server(
     config_source: ServerConfigSource,
-    config: crate::config::ServerConfig,
+    config: ValidatedServerConfig,
     loaded_plugins: LoadedPluginSet,
     reload_host: Option<Arc<dyn RuntimePluginHost>>,
 ) -> Result<RunningServer, RuntimeError> {
-    config.validate()?;
-    if reload_host.is_none() {
-        if config.plugins.reload_watch {
-            return Err(RuntimeError::Config(
-                "plugins.reload_watch requires a reload-capable supervisor boot".to_string(),
-            ));
-        }
-        if config.topology.reload_watch {
-            return Err(RuntimeError::Config(
-                "topology.reload_watch requires a reload-capable supervisor boot".to_string(),
-            ));
-        }
-    }
+    validate_reload_capable_boot(&config, reload_host.as_ref())?;
 
     let ActiveProtocols {
         protocols,
@@ -59,7 +47,7 @@ pub(crate) async fn boot_server(
     let initial_generation_id = GenerationId(1);
     let active_generation = Arc::new(ActiveGeneration {
         generation_id: initial_generation_id,
-        config: config.clone(),
+        config: config.as_inner().clone(),
         protocol_registry: protocols,
         default_adapter,
         default_bedrock_adapter,
@@ -105,28 +93,16 @@ pub(crate) async fn boot_server(
 pub(crate) async fn boot_server_from_upgrade(
     config_source: ServerConfigSource,
     import: RuntimeUpgradeImport,
+    config: ValidatedServerConfig,
     loaded_plugins: LoadedPluginSet,
     reload_host: Option<Arc<dyn RuntimePluginHost>>,
 ) -> Result<RunningServer, RuntimeError> {
-    let config = import.payload.config.clone();
-    config.validate()?;
     if config.topology.be_enabled {
         return Err(RuntimeError::Unsupported(
             "runtime upgrade does not support bedrock listener/session transfer".to_string(),
         ));
     }
-    if reload_host.is_none() {
-        if config.plugins.reload_watch {
-            return Err(RuntimeError::Config(
-                "plugins.reload_watch requires a reload-capable supervisor boot".to_string(),
-            ));
-        }
-        if config.topology.reload_watch {
-            return Err(RuntimeError::Config(
-                "topology.reload_watch requires a reload-capable supervisor boot".to_string(),
-            ));
-        }
-    }
+    validate_reload_capable_boot(&config, reload_host.as_ref())?;
 
     let ActiveProtocols {
         protocols,
@@ -152,8 +128,11 @@ pub(crate) async fn boot_server_from_upgrade(
             })
         })
         .collect::<Vec<_>>();
-    let selection =
-        SelectionResolver::resolve(config.clone(), loaded_plugins.clone(), &gameplay_sessions)?;
+    let selection = SelectionResolver::resolve(
+        config.as_inner().clone(),
+        loaded_plugins.clone(),
+        &gameplay_sessions,
+    )?;
     let storage_profile = SelectionResolver::resolve_storage_profile(&config, &loaded_plugins)?;
     let online_auth_keys = import
         .payload
@@ -182,7 +161,7 @@ pub(crate) async fn boot_server_from_upgrade(
     let initial_generation_id = import.payload.active_generation_id;
     let active_generation = Arc::new(ActiveGeneration {
         generation_id: initial_generation_id,
-        config: config.clone(),
+        config: config.as_inner().clone(),
         protocol_registry: protocols,
         default_adapter,
         default_bedrock_adapter,
@@ -243,4 +222,24 @@ pub(crate) async fn boot_server_from_upgrade(
         join_handle: tokio::sync::Mutex::new(Some(join_handle)),
         runtime_completion_rx,
     })
+}
+
+fn validate_reload_capable_boot(
+    config: &ServerConfig,
+    reload_host: Option<&Arc<dyn RuntimePluginHost>>,
+) -> Result<(), RuntimeError> {
+    if reload_host.is_some() {
+        return Ok(());
+    }
+    if config.plugins.reload_watch {
+        return Err(RuntimeError::Config(
+            "plugins.reload_watch requires a reload-capable supervisor boot".to_string(),
+        ));
+    }
+    if config.topology.reload_watch {
+        return Err(RuntimeError::Config(
+            "topology.reload_watch requires a reload-capable supervisor boot".to_string(),
+        ));
+    }
+    Ok(())
 }

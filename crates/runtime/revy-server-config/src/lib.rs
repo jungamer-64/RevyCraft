@@ -1,15 +1,15 @@
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use mc_plugin_api::{
-    AdapterId, AdminSurfaceProfileId, AuthProfileId, CoreConfig, GameplayProfileId,
-    StorageProfileId,
+    AdapterId, AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
 };
 pub use revy_server_types::{AdminPermission, PluginFailureAction, PluginFailureMatrix};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::fs;
 use std::io::ErrorKind;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -38,11 +38,7 @@ impl ServerConfigSource {
     /// Returns [`ServerConfigError`] when the source cannot be materialized.
     pub fn load(&self) -> Result<ValidatedServerConfig, ServerConfigError> {
         match self {
-            Self::Inline(config) => {
-                let config = config.clone();
-                config.validate()?;
-                Ok(config)
-            }
+            Self::Inline(config) => config.clone().validate_owned(),
             Self::Toml(path) => ServerConfig::from_toml(path),
         }
     }
@@ -279,7 +275,49 @@ pub struct ServerConfig {
     pub admin: AdminConfig,
 }
 
-pub type ValidatedServerConfig = ServerConfig;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValidatedServerConfig(ServerConfig);
+
+impl ValidatedServerConfig {
+    #[must_use]
+    pub const fn as_inner(&self) -> &ServerConfig {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> ServerConfig {
+        self.0
+    }
+}
+
+impl AsRef<ServerConfig> for ValidatedServerConfig {
+    fn as_ref(&self) -> &ServerConfig {
+        self.as_inner()
+    }
+}
+
+impl Deref for ValidatedServerConfig {
+    type Target = ServerConfig;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_inner()
+    }
+}
+
+impl From<ValidatedServerConfig> for ServerConfig {
+    fn from(config: ValidatedServerConfig) -> Self {
+        config.into_inner()
+    }
+}
+
+impl TryFrom<ServerConfig> for ValidatedServerConfig {
+    type Error = ServerConfigError;
+
+    fn try_from(config: ServerConfig) -> Result<Self, Self::Error> {
+        config.validate()?;
+        Ok(Self(config))
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TopologyReloadPlan {
@@ -289,13 +327,11 @@ pub struct TopologyReloadPlan {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoreReloadPlan {
     pub next_active_config: ServerConfig,
-    pub core_config: CoreConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FullReloadPlan {
     pub next_active_config: ServerConfig,
-    pub core_config: CoreConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -323,9 +359,8 @@ impl From<ServerConfig> for NormalizedServerConfig {
 }
 
 impl NormalizedServerConfig {
-    fn into_validated(self) -> Result<ServerConfig, ServerConfigError> {
-        self.server.validate()?;
-        Ok(self.server)
+    fn into_validated(self) -> Result<ValidatedServerConfig, ServerConfigError> {
+        self.server.validate_owned()
     }
 
     fn static_config(&self) -> StaticConfig {
@@ -349,7 +384,7 @@ impl ServerConfig {
     /// # Errors
     ///
     /// Returns [`ServerConfigError`] when `server.toml` cannot be read or parsed.
-    pub fn from_toml(path: &Path) -> Result<Self, ServerConfigError> {
+    pub fn from_toml(path: &Path) -> Result<ValidatedServerConfig, ServerConfigError> {
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         ServerConfigDocument::from_path(path)?
             .normalize(parent)?
@@ -424,10 +459,7 @@ impl ServerConfig {
         next_active_config.bootstrap.difficulty = candidate.bootstrap.difficulty;
         next_active_config.bootstrap.view_distance = candidate.bootstrap.view_distance;
         next_active_config.network.max_players = candidate.network.max_players;
-        Ok(CoreReloadPlan {
-            core_config: runtime_core_config(&next_active_config),
-            next_active_config,
-        })
+        Ok(CoreReloadPlan { next_active_config })
     }
 
     /// # Errors
@@ -440,7 +472,6 @@ impl ServerConfig {
         )?;
         Ok(FullReloadPlan {
             next_active_config: candidate.clone(),
-            core_config: runtime_core_config(candidate),
         })
     }
 
@@ -448,8 +479,28 @@ impl ServerConfig {
     ///
     /// Returns [`ServerConfigError`] when validated fields are inconsistent.
     pub fn validate(&self) -> Result<(), ServerConfigError> {
+        validate_plugin_abi_range(self.bootstrap.plugin_abi_min, self.bootstrap.plugin_abi_max)?;
+        validate_enabled_adapters(
+            self.topology.enabled_adapters.as_deref(),
+            &self.topology.default_adapter,
+            "enabled-adapters",
+            "default-adapter",
+        )?;
+        validate_enabled_adapters(
+            self.topology.enabled_bedrock_adapters.as_deref(),
+            &self.topology.default_bedrock_adapter,
+            "enabled-bedrock-adapters",
+            "default-bedrock-adapter",
+        )?;
         validate_admin_surfaces(&self.admin.surfaces)?;
         validate_admin_principals(&self.admin.principals)
+    }
+
+    /// # Errors
+    ///
+    /// Returns [`ServerConfigError`] when config-only invariants are violated.
+    pub fn validate_owned(self) -> Result<ValidatedServerConfig, ServerConfigError> {
+        ValidatedServerConfig::try_from(self)
     }
 }
 
@@ -806,18 +857,6 @@ fn validate_core_reload_static_compatibility(
     Ok(())
 }
 
-fn runtime_core_config(config: &ServerConfig) -> CoreConfig {
-    CoreConfig {
-        level_name: config.bootstrap.level_name.clone(),
-        seed: 0,
-        max_players: config.network.max_players,
-        view_distance: config.bootstrap.view_distance,
-        game_mode: config.bootstrap.game_mode,
-        difficulty: config.bootstrap.difficulty,
-        ..CoreConfig::default()
-    }
-}
-
 fn normalize_optional_vec<T>(values: Option<Vec<T>>) -> Option<Vec<T>> {
     match values {
         Some(values) if values.is_empty() => None,
@@ -883,6 +922,52 @@ fn parse_server_ip(value: Option<&str>) -> Result<Option<IpAddr>, ServerConfigEr
             .map(Some)
             .map_err(|_| ServerConfigError::Config("invalid live.network.server_ip".to_string())),
     }
+}
+
+fn validate_plugin_abi_range(
+    min: PluginAbiVersion,
+    max: PluginAbiVersion,
+) -> Result<(), ServerConfigError> {
+    if min > max {
+        return Err(ServerConfigError::Config(format!(
+            "static.plugins.plugin_abi_min `{min}` must be <= static.plugins.plugin_abi_max `{max}`"
+        )));
+    }
+    if CURRENT_PLUGIN_ABI < min || CURRENT_PLUGIN_ABI > max {
+        return Err(ServerConfigError::Config(format!(
+            "plugin ABI range `{min}..={max}` does not include current host ABI `{CURRENT_PLUGIN_ABI}`"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_enabled_adapters(
+    values: Option<&[AdapterId]>,
+    default_adapter: &AdapterId,
+    values_key: &str,
+    default_key: &str,
+) -> Result<(), ServerConfigError> {
+    let Some(values) = values else {
+        return Ok(());
+    };
+
+    let mut seen = HashSet::new();
+    for adapter_id in values {
+        if !seen.insert(adapter_id.clone()) {
+            return Err(ServerConfigError::Config(format!(
+                "{values_key} contains duplicate adapter `{adapter_id}`"
+            )));
+        }
+    }
+    if !values
+        .iter()
+        .any(|adapter_id| adapter_id == default_adapter)
+    {
+        return Err(ServerConfigError::Config(format!(
+            "{default_key} `{default_adapter}` must be included in {values_key}"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_admin_principals(
@@ -1250,11 +1335,6 @@ mod tests {
         assert_eq!(plan.next_active_config.plugins, active.plugins);
         assert_eq!(plan.next_active_config.profiles, active.profiles);
         assert_eq!(plan.next_active_config.admin, active.admin);
-        assert_eq!(plan.core_config.level_name, "candidate-world");
-        assert_eq!(plan.core_config.game_mode, 1);
-        assert_eq!(plan.core_config.difficulty, 3);
-        assert_eq!(plan.core_config.view_distance, 5);
-        assert_eq!(plan.core_config.max_players, 31);
         Ok(())
     }
 
@@ -1316,12 +1396,54 @@ mod tests {
         let plan = active.plan_full_reload(&candidate)?;
 
         assert_eq!(plan.next_active_config, candidate);
-        assert_eq!(plan.core_config.level_name, "candidate-world");
-        assert_eq!(plan.core_config.game_mode, 1);
-        assert_eq!(plan.core_config.difficulty, 3);
-        assert_eq!(plan.core_config.view_distance, 5);
-        assert_eq!(plan.core_config.max_players, 31);
         Ok(())
+    }
+
+    #[test]
+    fn validate_rejects_plugin_abi_range_when_min_exceeds_max() {
+        let mut config = configured_server_config();
+        config.bootstrap.plugin_abi_min = PluginAbiVersion { major: 5, minor: 1 };
+        config.bootstrap.plugin_abi_max = PluginAbiVersion { major: 5, minor: 0 };
+
+        let error = config
+            .validate_owned()
+            .expect_err("plugin ABI range should reject min > max");
+        assert_config_error_contains(error, "plugin_abi_min");
+    }
+
+    #[test]
+    fn validate_rejects_plugin_abi_range_when_current_host_abi_is_excluded() {
+        let mut config = configured_server_config();
+        config.bootstrap.plugin_abi_min = PluginAbiVersion { major: 4, minor: 0 };
+        config.bootstrap.plugin_abi_max = PluginAbiVersion { major: 4, minor: 9 };
+
+        let error = config
+            .validate_owned()
+            .expect_err("plugin ABI range should include current host ABI");
+        assert_config_error_contains(error, "does not include current host ABI");
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_enabled_adapters() {
+        let mut config = configured_server_config();
+        config.topology.enabled_adapters =
+            Some(vec![AdapterId::new("je-47"), AdapterId::new("je-47")]);
+
+        let error = config
+            .validate_owned()
+            .expect_err("enabled adapters should reject duplicates");
+        assert_config_error_contains(error, "duplicate adapter");
+    }
+
+    #[test]
+    fn validate_rejects_enabled_adapters_without_default() {
+        let mut config = configured_server_config();
+        config.topology.enabled_adapters = Some(vec![AdapterId::new("je-5")]);
+
+        let error = config
+            .validate_owned()
+            .expect_err("enabled adapters should include the default adapter");
+        assert_config_error_contains(error, "default-adapter");
     }
 
     #[test]

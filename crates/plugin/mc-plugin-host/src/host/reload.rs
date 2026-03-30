@@ -12,6 +12,7 @@ use crate::runtime::{
 };
 use mc_plugin_api::{AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
 use std::collections::HashMap;
+use std::hash::Hash;
 
 struct PreparedFreshRuntimeSelection {
     candidate_config: RuntimeSelectionConfig,
@@ -29,35 +30,21 @@ struct PreparedProtocolArtifactUpdate {
     generation: Arc<super::ProtocolGeneration>,
 }
 
-struct PreparedGameplayArtifactUpdate {
+struct PreparedProfileArtifactUpdate<ProfileId, Generation> {
     plugin_id: String,
-    profile_id: GameplayProfileId,
+    profile_id: ProfileId,
     identity: ArtifactIdentity,
     loaded_at: SystemTime,
-    generation: Arc<GameplayGeneration>,
+    generation: Arc<Generation>,
 }
 
-struct PreparedStorageArtifactUpdate {
-    plugin_id: String,
-    profile_id: StorageProfileId,
-    identity: ArtifactIdentity,
-    loaded_at: SystemTime,
-    generation: Arc<StorageGeneration>,
-}
-
-struct PreparedAuthArtifactUpdate {
-    plugin_id: String,
-    profile_id: AuthProfileId,
-    loaded_at: SystemTime,
-    generation: Arc<AuthGeneration>,
-}
-
-struct PreparedAdminSurfaceArtifactUpdate {
-    plugin_id: String,
-    profile_id: AdminSurfaceProfileId,
-    loaded_at: SystemTime,
-    generation: Arc<AdminSurfaceGeneration>,
-}
+type PreparedGameplayArtifactUpdate =
+    PreparedProfileArtifactUpdate<GameplayProfileId, GameplayGeneration>;
+type PreparedStorageArtifactUpdate =
+    PreparedProfileArtifactUpdate<StorageProfileId, StorageGeneration>;
+type PreparedAuthArtifactUpdate = PreparedProfileArtifactUpdate<AuthProfileId, AuthGeneration>;
+type PreparedAdminSurfaceArtifactUpdate =
+    PreparedProfileArtifactUpdate<AdminSurfaceProfileId, AdminSurfaceGeneration>;
 
 struct PreparedArtifactRuntimeSelection {
     protocol_updates: Vec<PreparedProtocolArtifactUpdate>,
@@ -70,6 +57,402 @@ struct PreparedArtifactRuntimeSelection {
 enum PreparedRuntimeSelectionState {
     Fresh(PreparedFreshRuntimeSelection),
     Artifacts(PreparedArtifactRuntimeSelection),
+}
+
+trait ProfileArtifactKindOps {
+    type ProfileId: Clone + Eq + Hash;
+    type Managed;
+    type Generation;
+
+    const KIND: PluginKind;
+    const PROFILE_LABEL: &'static str;
+
+    fn registry(host: &PluginHost) -> &std::sync::Mutex<HashMap<Self::ProfileId, Self::Managed>>;
+
+    fn package(managed: &Self::Managed) -> &super::PluginPackage;
+
+    fn package_mut(managed: &mut Self::Managed) -> &mut super::PluginPackage;
+
+    fn profile_id(managed: &Self::Managed) -> &Self::ProfileId;
+
+    fn loaded_at(managed: &Self::Managed) -> SystemTime;
+
+    fn set_loaded_at(managed: &mut Self::Managed, loaded_at: SystemTime);
+
+    fn set_active_loaded_at(managed: &mut Self::Managed, loaded_at: SystemTime);
+
+    fn load_generation(
+        host: &PluginHost,
+        package: &super::PluginPackage,
+    ) -> Result<Arc<Self::Generation>, RuntimeError>;
+
+    fn generation_profile_id(generation: &Self::Generation) -> &Self::ProfileId;
+
+    fn profile_change_message(
+        plugin_id: &str,
+        current_profile_id: &Self::ProfileId,
+        next_profile_id: &Self::ProfileId,
+    ) -> String;
+
+    fn validate_update(
+        host: &PluginHost,
+        managed: &Self::Managed,
+        update: &PreparedProfileArtifactUpdate<Self::ProfileId, Self::Generation>,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<bool, RuntimeError>;
+
+    fn validation_failure_message(
+        managed: &Self::Managed,
+        update: &PreparedProfileArtifactUpdate<Self::ProfileId, Self::Generation>,
+    ) -> String;
+
+    fn apply_generation(managed: &mut Self::Managed, generation: Arc<Self::Generation>);
+}
+
+struct GameplayArtifactOps;
+struct StorageArtifactOps;
+struct AuthArtifactOps;
+struct AdminSurfaceArtifactOps;
+
+impl ProfileArtifactKindOps for GameplayArtifactOps {
+    type ProfileId = GameplayProfileId;
+    type Managed = ManagedGameplayPlugin;
+    type Generation = GameplayGeneration;
+
+    const KIND: PluginKind = PluginKind::Gameplay;
+    const PROFILE_LABEL: &'static str = "gameplay";
+
+    fn registry(host: &PluginHost) -> &std::sync::Mutex<HashMap<Self::ProfileId, Self::Managed>> {
+        &host.gameplay
+    }
+
+    fn package(managed: &Self::Managed) -> &super::PluginPackage {
+        &managed.package
+    }
+
+    fn package_mut(managed: &mut Self::Managed) -> &mut super::PluginPackage {
+        &mut managed.package
+    }
+
+    fn profile_id(managed: &Self::Managed) -> &Self::ProfileId {
+        &managed.profile_id
+    }
+
+    fn loaded_at(managed: &Self::Managed) -> SystemTime {
+        managed.loaded_at
+    }
+
+    fn set_loaded_at(managed: &mut Self::Managed, loaded_at: SystemTime) {
+        managed.loaded_at = loaded_at;
+    }
+
+    fn set_active_loaded_at(managed: &mut Self::Managed, loaded_at: SystemTime) {
+        managed.active_loaded_at = loaded_at;
+    }
+
+    fn load_generation(
+        host: &PluginHost,
+        package: &super::PluginPackage,
+    ) -> Result<Arc<Self::Generation>, RuntimeError> {
+        Ok(Arc::new(host.loader.load_gameplay_generation(
+            package,
+            host.generations.next_generation_id(),
+            host.current_runtime_selection().buffer_limits,
+        )?))
+    }
+
+    fn generation_profile_id(generation: &Self::Generation) -> &Self::ProfileId {
+        &generation.profile_id
+    }
+
+    fn profile_change_message(
+        plugin_id: &str,
+        current_profile_id: &Self::ProfileId,
+        next_profile_id: &Self::ProfileId,
+    ) -> String {
+        format!(
+            "gameplay plugin `{plugin_id}` changed profile from `{}` to `{}` during reload",
+            current_profile_id.as_str(),
+            next_profile_id.as_str()
+        )
+    }
+
+    fn validate_update(
+        _host: &PluginHost,
+        managed: &Self::Managed,
+        update: &PreparedProfileArtifactUpdate<Self::ProfileId, Self::Generation>,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<bool, RuntimeError> {
+        validate_gameplay_session_migration(managed, &update.generation, runtime)
+    }
+
+    fn validation_failure_message(
+        _managed: &Self::Managed,
+        _update: &PreparedProfileArtifactUpdate<Self::ProfileId, Self::Generation>,
+    ) -> String {
+        "gameplay session migration failed".to_string()
+    }
+
+    fn apply_generation(managed: &mut Self::Managed, generation: Arc<Self::Generation>) {
+        managed.profile.swap_generation(generation);
+    }
+}
+
+impl ProfileArtifactKindOps for StorageArtifactOps {
+    type ProfileId = StorageProfileId;
+    type Managed = ManagedStoragePlugin;
+    type Generation = StorageGeneration;
+
+    const KIND: PluginKind = PluginKind::Storage;
+    const PROFILE_LABEL: &'static str = "storage";
+
+    fn registry(host: &PluginHost) -> &std::sync::Mutex<HashMap<Self::ProfileId, Self::Managed>> {
+        &host.storage
+    }
+
+    fn package(managed: &Self::Managed) -> &super::PluginPackage {
+        &managed.package
+    }
+
+    fn package_mut(managed: &mut Self::Managed) -> &mut super::PluginPackage {
+        &mut managed.package
+    }
+
+    fn profile_id(managed: &Self::Managed) -> &Self::ProfileId {
+        &managed.profile_id
+    }
+
+    fn loaded_at(managed: &Self::Managed) -> SystemTime {
+        managed.loaded_at
+    }
+
+    fn set_loaded_at(managed: &mut Self::Managed, loaded_at: SystemTime) {
+        managed.loaded_at = loaded_at;
+    }
+
+    fn set_active_loaded_at(managed: &mut Self::Managed, loaded_at: SystemTime) {
+        managed.active_loaded_at = loaded_at;
+    }
+
+    fn load_generation(
+        host: &PluginHost,
+        package: &super::PluginPackage,
+    ) -> Result<Arc<Self::Generation>, RuntimeError> {
+        Ok(Arc::new(host.loader.load_storage_generation(
+            package,
+            host.generations.next_generation_id(),
+            host.current_runtime_selection().buffer_limits,
+        )?))
+    }
+
+    fn generation_profile_id(generation: &Self::Generation) -> &Self::ProfileId {
+        &generation.profile_id
+    }
+
+    fn profile_change_message(
+        plugin_id: &str,
+        current_profile_id: &Self::ProfileId,
+        next_profile_id: &Self::ProfileId,
+    ) -> String {
+        format!(
+            "storage plugin `{plugin_id}` changed profile from `{}` to `{}` during reload",
+            current_profile_id, next_profile_id
+        )
+    }
+
+    fn validate_update(
+        _host: &PluginHost,
+        _managed: &Self::Managed,
+        update: &PreparedProfileArtifactUpdate<Self::ProfileId, Self::Generation>,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<bool, RuntimeError> {
+        Ok(import_storage_runtime_state(
+            &update.plugin_id,
+            &update.generation,
+            runtime,
+        ))
+    }
+
+    fn validation_failure_message(
+        _managed: &Self::Managed,
+        _update: &PreparedProfileArtifactUpdate<Self::ProfileId, Self::Generation>,
+    ) -> String {
+        "storage runtime state import failed".to_string()
+    }
+
+    fn apply_generation(managed: &mut Self::Managed, generation: Arc<Self::Generation>) {
+        let profile = Arc::clone(&managed.profile);
+        let generation = Arc::clone(&generation);
+        profile.with_reload_write(|_| {
+            profile.swap_generation_while_reloading(generation);
+        });
+    }
+}
+
+impl ProfileArtifactKindOps for AuthArtifactOps {
+    type ProfileId = AuthProfileId;
+    type Managed = ManagedAuthPlugin;
+    type Generation = AuthGeneration;
+
+    const KIND: PluginKind = PluginKind::Auth;
+    const PROFILE_LABEL: &'static str = "auth";
+
+    fn registry(host: &PluginHost) -> &std::sync::Mutex<HashMap<Self::ProfileId, Self::Managed>> {
+        &host.auth
+    }
+
+    fn package(managed: &Self::Managed) -> &super::PluginPackage {
+        &managed.package
+    }
+
+    fn package_mut(managed: &mut Self::Managed) -> &mut super::PluginPackage {
+        &mut managed.package
+    }
+
+    fn profile_id(managed: &Self::Managed) -> &Self::ProfileId {
+        &managed.profile_id
+    }
+
+    fn loaded_at(managed: &Self::Managed) -> SystemTime {
+        managed.loaded_at
+    }
+
+    fn set_loaded_at(managed: &mut Self::Managed, loaded_at: SystemTime) {
+        managed.loaded_at = loaded_at;
+    }
+
+    fn set_active_loaded_at(managed: &mut Self::Managed, loaded_at: SystemTime) {
+        managed.active_loaded_at = loaded_at;
+    }
+
+    fn load_generation(
+        host: &PluginHost,
+        package: &super::PluginPackage,
+    ) -> Result<Arc<Self::Generation>, RuntimeError> {
+        Ok(Arc::new(host.loader.load_auth_generation(
+            package,
+            host.generations.next_generation_id(),
+            host.current_runtime_selection().buffer_limits,
+        )?))
+    }
+
+    fn generation_profile_id(generation: &Self::Generation) -> &Self::ProfileId {
+        &generation.profile_id
+    }
+
+    fn profile_change_message(
+        plugin_id: &str,
+        current_profile_id: &Self::ProfileId,
+        next_profile_id: &Self::ProfileId,
+    ) -> String {
+        format!(
+            "auth plugin `{plugin_id}` changed profile from `{}` to `{}` during reload",
+            current_profile_id, next_profile_id
+        )
+    }
+
+    fn validate_update(
+        _host: &PluginHost,
+        _managed: &Self::Managed,
+        _update: &PreparedProfileArtifactUpdate<Self::ProfileId, Self::Generation>,
+        _runtime: &RuntimeReloadContext,
+    ) -> Result<bool, RuntimeError> {
+        Ok(true)
+    }
+
+    fn validation_failure_message(
+        _managed: &Self::Managed,
+        _update: &PreparedProfileArtifactUpdate<Self::ProfileId, Self::Generation>,
+    ) -> String {
+        format!("{} reload validation failed", Self::PROFILE_LABEL)
+    }
+
+    fn apply_generation(managed: &mut Self::Managed, generation: Arc<Self::Generation>) {
+        managed.profile.swap_generation(generation);
+    }
+}
+
+impl ProfileArtifactKindOps for AdminSurfaceArtifactOps {
+    type ProfileId = AdminSurfaceProfileId;
+    type Managed = ManagedAdminSurfacePlugin;
+    type Generation = AdminSurfaceGeneration;
+
+    const KIND: PluginKind = PluginKind::AdminSurface;
+    const PROFILE_LABEL: &'static str = "admin-surface";
+
+    fn registry(host: &PluginHost) -> &std::sync::Mutex<HashMap<Self::ProfileId, Self::Managed>> {
+        &host.admin_surface
+    }
+
+    fn package(managed: &Self::Managed) -> &super::PluginPackage {
+        &managed.package
+    }
+
+    fn package_mut(managed: &mut Self::Managed) -> &mut super::PluginPackage {
+        &mut managed.package
+    }
+
+    fn profile_id(managed: &Self::Managed) -> &Self::ProfileId {
+        &managed.profile_id
+    }
+
+    fn loaded_at(managed: &Self::Managed) -> SystemTime {
+        managed.loaded_at
+    }
+
+    fn set_loaded_at(managed: &mut Self::Managed, loaded_at: SystemTime) {
+        managed.loaded_at = loaded_at;
+    }
+
+    fn set_active_loaded_at(managed: &mut Self::Managed, loaded_at: SystemTime) {
+        managed.active_loaded_at = loaded_at;
+    }
+
+    fn load_generation(
+        host: &PluginHost,
+        package: &super::PluginPackage,
+    ) -> Result<Arc<Self::Generation>, RuntimeError> {
+        Ok(Arc::new(host.loader.load_admin_surface_generation(
+            package,
+            host.generations.next_generation_id(),
+            host.current_runtime_selection().buffer_limits,
+        )?))
+    }
+
+    fn generation_profile_id(generation: &Self::Generation) -> &Self::ProfileId {
+        &generation.profile_id
+    }
+
+    fn profile_change_message(
+        plugin_id: &str,
+        current_profile_id: &Self::ProfileId,
+        next_profile_id: &Self::ProfileId,
+    ) -> String {
+        format!(
+            "admin-surface plugin `{plugin_id}` changed profile from `{}` to `{}` during reload",
+            current_profile_id, next_profile_id
+        )
+    }
+
+    fn validate_update(
+        _host: &PluginHost,
+        _managed: &Self::Managed,
+        _update: &PreparedProfileArtifactUpdate<Self::ProfileId, Self::Generation>,
+        _runtime: &RuntimeReloadContext,
+    ) -> Result<bool, RuntimeError> {
+        Ok(true)
+    }
+
+    fn validation_failure_message(
+        _managed: &Self::Managed,
+        _update: &PreparedProfileArtifactUpdate<Self::ProfileId, Self::Generation>,
+    ) -> String {
+        format!("{} reload validation failed", Self::PROFILE_LABEL)
+    }
+
+    fn apply_generation(managed: &mut Self::Managed, generation: Arc<Self::Generation>) {
+        managed.profile.swap_generation(generation);
+    }
 }
 
 impl PluginHost {
@@ -292,6 +675,127 @@ impl PluginHost {
         Ok(())
     }
 
+    fn stage_profile_artifact_updates<Ops>(
+        &self,
+    ) -> Result<Vec<PreparedProfileArtifactUpdate<Ops::ProfileId, Ops::Generation>>, RuntimeError>
+    where
+        Ops: ProfileArtifactKindOps,
+    {
+        let mut updates = Vec::new();
+        let mut registry = Ops::registry(self)
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        for managed in registry.values_mut() {
+            Ops::package_mut(managed).refresh_dynamic_manifest()?;
+            let modified_at = Ops::package(managed).modified_at()?;
+            if modified_at <= Ops::loaded_at(managed) {
+                continue;
+            }
+            let identity = Ops::package(managed).artifact_identity(modified_at);
+            let plugin_id = Ops::package(managed).plugin_id.clone();
+            if self.failures.is_artifact_quarantined(&plugin_id, &identity) {
+                continue;
+            }
+            let generation = match Ops::load_generation(self, Ops::package(managed)) {
+                Ok(generation) => generation,
+                Err(error) => {
+                    self.failures.handle_candidate_failure(
+                        Ops::KIND,
+                        PluginFailureStage::Reload,
+                        &plugin_id,
+                        identity,
+                        &error.to_string(),
+                    )?;
+                    continue;
+                }
+            };
+            let profile_id = Ops::profile_id(managed).clone();
+            let next_profile_id = Ops::generation_profile_id(&generation);
+            if next_profile_id != &profile_id {
+                self.failures.handle_candidate_failure(
+                    Ops::KIND,
+                    PluginFailureStage::Reload,
+                    &plugin_id,
+                    identity,
+                    &Ops::profile_change_message(&plugin_id, &profile_id, next_profile_id),
+                )?;
+                continue;
+            }
+            updates.push(PreparedProfileArtifactUpdate {
+                plugin_id,
+                profile_id,
+                identity,
+                loaded_at: modified_at,
+                generation,
+            });
+        }
+        Ok(updates)
+    }
+
+    fn finalize_profile_artifact_updates<Ops>(
+        &self,
+        updates: Vec<PreparedProfileArtifactUpdate<Ops::ProfileId, Ops::Generation>>,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<Vec<PreparedProfileArtifactUpdate<Ops::ProfileId, Ops::Generation>>, RuntimeError>
+    where
+        Ops: ProfileArtifactKindOps,
+    {
+        let registry = Ops::registry(self)
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        let mut finalized = Vec::new();
+        for update in updates {
+            let Some(managed) = registry.get(&update.profile_id) else {
+                continue;
+            };
+            if !Ops::validate_update(self, managed, &update, runtime)? {
+                self.failures.handle_candidate_failure(
+                    Ops::KIND,
+                    PluginFailureStage::Reload,
+                    &update.plugin_id,
+                    update.identity.clone(),
+                    &Ops::validation_failure_message(managed, &update),
+                )?;
+                continue;
+            }
+            finalized.push(update);
+        }
+        Ok(finalized)
+    }
+
+    fn commit_profile_artifact_updates<Ops>(
+        &self,
+        updates: Vec<PreparedProfileArtifactUpdate<Ops::ProfileId, Ops::Generation>>,
+    ) where
+        Ops: ProfileArtifactKindOps,
+    {
+        let mut registry = Ops::registry(self)
+            .lock()
+            .expect("plugin host mutex should not be poisoned");
+        for update in updates {
+            if let Some(managed) = registry.get_mut(&update.profile_id) {
+                Ops::apply_generation(managed, update.generation);
+                Ops::set_loaded_at(managed, update.loaded_at);
+                Ops::set_active_loaded_at(managed, update.loaded_at);
+                self.failures.clear_plugin_state(&update.plugin_id);
+            }
+        }
+    }
+
+    fn collect_profile_update_plugin_ids<ProfileId, Generation>(
+        updates: &[PreparedProfileArtifactUpdate<ProfileId, Generation>],
+    ) -> Vec<String> {
+        updates
+            .iter()
+            .map(|update| update.plugin_id.clone())
+            .collect()
+    }
+
+    fn normalize_reloaded_plugin_ids(reloaded_plugin_ids: &mut Vec<String>) {
+        reloaded_plugin_ids.sort();
+        reloaded_plugin_ids.dedup();
+    }
+
     fn stage_protocol_artifact_updates(
         &self,
     ) -> Result<Vec<PreparedProtocolArtifactUpdate>, RuntimeError> {
@@ -391,65 +895,7 @@ impl PluginHost {
     fn stage_gameplay_artifact_updates(
         &self,
     ) -> Result<Vec<PreparedGameplayArtifactUpdate>, RuntimeError> {
-        let mut updates = Vec::new();
-        let mut gameplay = self
-            .gameplay
-            .lock()
-            .expect("plugin host mutex should not be poisoned");
-        for managed in gameplay.values_mut() {
-            managed.package.refresh_dynamic_manifest()?;
-            let modified_at = managed.package.modified_at()?;
-            if modified_at <= managed.loaded_at {
-                continue;
-            }
-            let identity = managed.package.artifact_identity(modified_at);
-            if self
-                .failures
-                .is_artifact_quarantined(&managed.package.plugin_id, &identity)
-            {
-                continue;
-            }
-            let generation = match self.loader.load_gameplay_generation(
-                &managed.package,
-                self.generations.next_generation_id(),
-                self.current_runtime_selection().buffer_limits,
-            ) {
-                Ok(generation) => Arc::new(generation),
-                Err(error) => {
-                    self.failures.handle_candidate_failure(
-                        PluginKind::Gameplay,
-                        PluginFailureStage::Reload,
-                        &managed.package.plugin_id,
-                        identity,
-                        &error.to_string(),
-                    )?;
-                    continue;
-                }
-            };
-            if generation.profile_id != managed.profile_id {
-                self.failures.handle_candidate_failure(
-                    PluginKind::Gameplay,
-                    PluginFailureStage::Reload,
-                    &managed.package.plugin_id,
-                    identity,
-                    &format!(
-                        "gameplay plugin `{}` changed profile from `{}` to `{}` during reload",
-                        managed.package.plugin_id,
-                        managed.profile_id.as_str(),
-                        generation.profile_id.as_str()
-                    ),
-                )?;
-                continue;
-            }
-            updates.push(PreparedGameplayArtifactUpdate {
-                plugin_id: managed.package.plugin_id.clone(),
-                profile_id: managed.profile_id.clone(),
-                identity,
-                loaded_at: modified_at,
-                generation,
-            });
-        }
-        Ok(updates)
+        self.stage_profile_artifact_updates::<GameplayArtifactOps>()
     }
 
     fn finalize_gameplay_artifact_updates(
@@ -457,90 +903,13 @@ impl PluginHost {
         updates: Vec<PreparedGameplayArtifactUpdate>,
         runtime: &RuntimeReloadContext,
     ) -> Result<Vec<PreparedGameplayArtifactUpdate>, RuntimeError> {
-        let gameplay = self
-            .gameplay
-            .lock()
-            .expect("plugin host mutex should not be poisoned");
-        let mut finalized = Vec::new();
-        for update in updates {
-            let Some(managed) = gameplay.get(&update.profile_id) else {
-                continue;
-            };
-            if !validate_gameplay_session_migration(managed, &update.generation, runtime)? {
-                self.failures.handle_candidate_failure(
-                    PluginKind::Gameplay,
-                    PluginFailureStage::Reload,
-                    &update.plugin_id,
-                    update.identity,
-                    "gameplay session migration failed",
-                )?;
-                continue;
-            }
-            finalized.push(update);
-        }
-        Ok(finalized)
+        self.finalize_profile_artifact_updates::<GameplayArtifactOps>(updates, runtime)
     }
 
     fn stage_storage_artifact_updates(
         &self,
     ) -> Result<Vec<PreparedStorageArtifactUpdate>, RuntimeError> {
-        let mut updates = Vec::new();
-        let mut storage = self
-            .storage
-            .lock()
-            .expect("plugin host mutex should not be poisoned");
-        for managed in storage.values_mut() {
-            managed.package.refresh_dynamic_manifest()?;
-            let modified_at = managed.package.modified_at()?;
-            if modified_at <= managed.loaded_at {
-                continue;
-            }
-            let identity = managed.package.artifact_identity(modified_at);
-            if self
-                .failures
-                .is_artifact_quarantined(&managed.package.plugin_id, &identity)
-            {
-                continue;
-            }
-            let generation = match self.loader.load_storage_generation(
-                &managed.package,
-                self.generations.next_generation_id(),
-                self.current_runtime_selection().buffer_limits,
-            ) {
-                Ok(generation) => Arc::new(generation),
-                Err(error) => {
-                    self.failures.handle_candidate_failure(
-                        PluginKind::Storage,
-                        PluginFailureStage::Reload,
-                        &managed.package.plugin_id,
-                        identity,
-                        &error.to_string(),
-                    )?;
-                    continue;
-                }
-            };
-            if generation.profile_id != managed.profile_id {
-                self.failures.handle_candidate_failure(
-                    PluginKind::Storage,
-                    PluginFailureStage::Reload,
-                    &managed.package.plugin_id,
-                    identity,
-                    &format!(
-                        "storage plugin `{}` changed profile from `{}` to `{}` during reload",
-                        managed.package.plugin_id, managed.profile_id, generation.profile_id
-                    ),
-                )?;
-                continue;
-            }
-            updates.push(PreparedStorageArtifactUpdate {
-                plugin_id: managed.package.plugin_id.clone(),
-                profile_id: managed.profile_id.clone(),
-                identity,
-                loaded_at: modified_at,
-                generation,
-            });
-        }
-        Ok(updates)
+        self.stage_profile_artifact_updates::<StorageArtifactOps>()
     }
 
     fn finalize_storage_artifact_updates(
@@ -548,143 +917,33 @@ impl PluginHost {
         updates: Vec<PreparedStorageArtifactUpdate>,
         runtime: &RuntimeReloadContext,
     ) -> Result<Vec<PreparedStorageArtifactUpdate>, RuntimeError> {
-        let mut finalized = Vec::new();
-        for update in updates {
-            if !import_storage_runtime_state(&update.plugin_id, &update.generation, runtime) {
-                self.failures.handle_candidate_failure(
-                    PluginKind::Storage,
-                    PluginFailureStage::Reload,
-                    &update.plugin_id,
-                    update.identity,
-                    "storage runtime state import failed",
-                )?;
-                continue;
-            }
-            finalized.push(update);
-        }
-        Ok(finalized)
+        self.finalize_profile_artifact_updates::<StorageArtifactOps>(updates, runtime)
     }
 
-    fn prepare_auth_artifact_updates(
+    fn stage_auth_artifact_updates(&self) -> Result<Vec<PreparedAuthArtifactUpdate>, RuntimeError> {
+        self.stage_profile_artifact_updates::<AuthArtifactOps>()
+    }
+
+    fn finalize_auth_artifact_updates(
         &self,
+        updates: Vec<PreparedAuthArtifactUpdate>,
+        runtime: &RuntimeReloadContext,
     ) -> Result<Vec<PreparedAuthArtifactUpdate>, RuntimeError> {
-        let mut updates = Vec::new();
-        let mut auth = self
-            .auth
-            .lock()
-            .expect("plugin host mutex should not be poisoned");
-        for managed in auth.values_mut() {
-            managed.package.refresh_dynamic_manifest()?;
-            let modified_at = managed.package.modified_at()?;
-            if modified_at <= managed.loaded_at {
-                continue;
-            }
-            let identity = managed.package.artifact_identity(modified_at);
-            if self
-                .failures
-                .is_artifact_quarantined(&managed.package.plugin_id, &identity)
-            {
-                continue;
-            }
-            let generation = match self.loader.load_auth_generation(
-                &managed.package,
-                self.generations.next_generation_id(),
-                self.current_runtime_selection().buffer_limits,
-            ) {
-                Ok(generation) => Arc::new(generation),
-                Err(error) => {
-                    self.failures.handle_candidate_failure(
-                        PluginKind::Auth,
-                        PluginFailureStage::Reload,
-                        &managed.package.plugin_id,
-                        identity,
-                        &error.to_string(),
-                    )?;
-                    continue;
-                }
-            };
-            if generation.profile_id != managed.profile_id {
-                self.failures.handle_candidate_failure(
-                    PluginKind::Auth,
-                    PluginFailureStage::Reload,
-                    &managed.package.plugin_id,
-                    identity,
-                    &format!(
-                        "auth plugin `{}` changed profile from `{}` to `{}` during reload",
-                        managed.package.plugin_id, managed.profile_id, generation.profile_id
-                    ),
-                )?;
-                continue;
-            }
-            updates.push(PreparedAuthArtifactUpdate {
-                plugin_id: managed.package.plugin_id.clone(),
-                profile_id: managed.profile_id.clone(),
-                loaded_at: modified_at,
-                generation,
-            });
-        }
-        Ok(updates)
+        self.finalize_profile_artifact_updates::<AuthArtifactOps>(updates, runtime)
     }
 
-    fn prepare_admin_surface_artifact_updates(
+    fn stage_admin_surface_artifact_updates(
         &self,
     ) -> Result<Vec<PreparedAdminSurfaceArtifactUpdate>, RuntimeError> {
-        let mut updates = Vec::new();
-        let mut admin_surface = self
-            .admin_surface
-            .lock()
-            .expect("plugin host mutex should not be poisoned");
-        for managed in admin_surface.values_mut() {
-            managed.package.refresh_dynamic_manifest()?;
-            let modified_at = managed.package.modified_at()?;
-            if modified_at <= managed.loaded_at {
-                continue;
-            }
-            let identity = managed.package.artifact_identity(modified_at);
-            if self
-                .failures
-                .is_artifact_quarantined(&managed.package.plugin_id, &identity)
-            {
-                continue;
-            }
-            let generation = match self.loader.load_admin_surface_generation(
-                &managed.package,
-                self.generations.next_generation_id(),
-                self.current_runtime_selection().buffer_limits,
-            ) {
-                Ok(generation) => Arc::new(generation),
-                Err(error) => {
-                    self.failures.handle_candidate_failure(
-                        PluginKind::AdminSurface,
-                        PluginFailureStage::Reload,
-                        &managed.package.plugin_id,
-                        identity,
-                        &error.to_string(),
-                    )?;
-                    continue;
-                }
-            };
-            if generation.profile_id != managed.profile_id {
-                self.failures.handle_candidate_failure(
-                    PluginKind::AdminSurface,
-                    PluginFailureStage::Reload,
-                    &managed.package.plugin_id,
-                    identity,
-                    &format!(
-                        "admin-surface plugin `{}` changed profile from `{}` to `{}` during reload",
-                        managed.package.plugin_id, managed.profile_id, generation.profile_id
-                    ),
-                )?;
-                continue;
-            }
-            updates.push(PreparedAdminSurfaceArtifactUpdate {
-                plugin_id: managed.package.plugin_id.clone(),
-                profile_id: managed.profile_id.clone(),
-                loaded_at: modified_at,
-                generation,
-            });
-        }
-        Ok(updates)
+        self.stage_profile_artifact_updates::<AdminSurfaceArtifactOps>()
+    }
+
+    fn finalize_admin_surface_artifact_updates(
+        &self,
+        updates: Vec<PreparedAdminSurfaceArtifactUpdate>,
+        runtime: &RuntimeReloadContext,
+    ) -> Result<Vec<PreparedAdminSurfaceArtifactUpdate>, RuntimeError> {
+        self.finalize_profile_artifact_updates::<AdminSurfaceArtifactOps>(updates, runtime)
     }
 
     /// Reloads modified protocol plugins in place.
@@ -750,30 +1009,19 @@ impl PluginHost {
         let protocol_updates = self.stage_protocol_artifact_updates()?;
         let gameplay_updates = self.stage_gameplay_artifact_updates()?;
         let storage_updates = self.stage_storage_artifact_updates()?;
-        let auth_updates = self.prepare_auth_artifact_updates()?;
-        let admin_surface_updates = self.prepare_admin_surface_artifact_updates()?;
+        let auth_updates = self.stage_auth_artifact_updates()?;
+        let admin_surface_updates = self.stage_admin_surface_artifact_updates()?;
         let mut reloaded_plugin_ids = protocol_updates
             .iter()
             .map(|update| update.plugin_id.clone())
             .collect::<Vec<_>>();
-        reloaded_plugin_ids.extend(
-            gameplay_updates
-                .iter()
-                .map(|update| update.plugin_id.clone()),
-        );
-        reloaded_plugin_ids.extend(
-            storage_updates
-                .iter()
-                .map(|update| update.plugin_id.clone()),
-        );
-        reloaded_plugin_ids.extend(auth_updates.iter().map(|update| update.plugin_id.clone()));
-        reloaded_plugin_ids.extend(
-            admin_surface_updates
-                .iter()
-                .map(|update| update.plugin_id.clone()),
-        );
-        reloaded_plugin_ids.sort();
-        reloaded_plugin_ids.dedup();
+        reloaded_plugin_ids.extend(Self::collect_profile_update_plugin_ids(&gameplay_updates));
+        reloaded_plugin_ids.extend(Self::collect_profile_update_plugin_ids(&storage_updates));
+        reloaded_plugin_ids.extend(Self::collect_profile_update_plugin_ids(&auth_updates));
+        reloaded_plugin_ids.extend(Self::collect_profile_update_plugin_ids(
+            &admin_surface_updates,
+        ));
+        Self::normalize_reloaded_plugin_ids(&mut reloaded_plugin_ids);
 
         let current_selection = self.current_runtime_selection();
         let current_topology = self.current_protocol_topology_candidate()?;
@@ -919,37 +1167,30 @@ impl PluginHost {
                     self.finalize_gameplay_artifact_updates(artifacts.gameplay_updates, runtime)?;
                 artifacts.storage_updates =
                     self.finalize_storage_artifact_updates(artifacts.storage_updates, runtime)?;
+                artifacts.auth_updates =
+                    self.finalize_auth_artifact_updates(artifacts.auth_updates, runtime)?;
+                artifacts.admin_surface_updates = self.finalize_admin_surface_artifact_updates(
+                    artifacts.admin_surface_updates,
+                    runtime,
+                )?;
                 reloaded_plugin_ids = artifacts
                     .protocol_updates
                     .iter()
                     .map(|update| update.plugin_id.clone())
-                    .chain(
-                        artifacts
-                            .gameplay_updates
-                            .iter()
-                            .map(|update| update.plugin_id.clone()),
-                    )
-                    .chain(
-                        artifacts
-                            .storage_updates
-                            .iter()
-                            .map(|update| update.plugin_id.clone()),
-                    )
-                    .chain(
-                        artifacts
-                            .auth_updates
-                            .iter()
-                            .map(|update| update.plugin_id.clone()),
-                    )
-                    .chain(
-                        artifacts
-                            .admin_surface_updates
-                            .iter()
-                            .map(|update| update.plugin_id.clone()),
-                    )
                     .collect::<Vec<_>>();
-                reloaded_plugin_ids.sort();
-                reloaded_plugin_ids.dedup();
+                reloaded_plugin_ids.extend(Self::collect_profile_update_plugin_ids(
+                    &artifacts.gameplay_updates,
+                ));
+                reloaded_plugin_ids.extend(Self::collect_profile_update_plugin_ids(
+                    &artifacts.storage_updates,
+                ));
+                reloaded_plugin_ids.extend(Self::collect_profile_update_plugin_ids(
+                    &artifacts.auth_updates,
+                ));
+                reloaded_plugin_ids.extend(Self::collect_profile_update_plugin_ids(
+                    &artifacts.admin_surface_updates,
+                ));
+                Self::normalize_reloaded_plugin_ids(&mut reloaded_plugin_ids);
                 Ok(PreparedRuntimeSelection::new(
                     loaded_plugins,
                     reloaded_plugin_ids,
@@ -1041,69 +1282,16 @@ impl PluginHost {
                         }
                     }
                 }
-                {
-                    let mut gameplay = self
-                        .gameplay
-                        .lock()
-                        .expect("plugin host mutex should not be poisoned");
-                    for update in artifacts.gameplay_updates {
-                        if let Some(managed) = gameplay
-                            .values_mut()
-                            .find(|managed| managed.package.plugin_id == update.plugin_id)
-                        {
-                            managed.profile.swap_generation(update.generation);
-                            managed.loaded_at = update.loaded_at;
-                            managed.active_loaded_at = update.loaded_at;
-                            self.failures.clear_plugin_state(&update.plugin_id);
-                        }
-                    }
-                }
-                {
-                    let mut storage = self
-                        .storage
-                        .lock()
-                        .expect("plugin host mutex should not be poisoned");
-                    for update in artifacts.storage_updates {
-                        if let Some(managed) = storage.get_mut(&update.profile_id) {
-                            let profile = Arc::clone(&managed.profile);
-                            let generation = Arc::clone(&update.generation);
-                            profile.with_reload_write(|_| {
-                                profile.swap_generation_while_reloading(generation);
-                            });
-                            managed.loaded_at = update.loaded_at;
-                            managed.active_loaded_at = update.loaded_at;
-                            self.failures.clear_plugin_state(&update.plugin_id);
-                        }
-                    }
-                }
-                {
-                    let mut auth = self
-                        .auth
-                        .lock()
-                        .expect("plugin host mutex should not be poisoned");
-                    for update in artifacts.auth_updates {
-                        if let Some(managed) = auth.get_mut(&update.profile_id) {
-                            managed.profile.swap_generation(update.generation);
-                            managed.loaded_at = update.loaded_at;
-                            managed.active_loaded_at = update.loaded_at;
-                            self.failures.clear_plugin_state(&update.plugin_id);
-                        }
-                    }
-                }
-                {
-                    let mut admin_surface = self
-                        .admin_surface
-                        .lock()
-                        .expect("plugin host mutex should not be poisoned");
-                    for update in artifacts.admin_surface_updates {
-                        if let Some(managed) = admin_surface.get_mut(&update.profile_id) {
-                            managed.profile.swap_generation(update.generation);
-                            managed.loaded_at = update.loaded_at;
-                            managed.active_loaded_at = update.loaded_at;
-                            self.failures.clear_plugin_state(&update.plugin_id);
-                        }
-                    }
-                }
+                self.commit_profile_artifact_updates::<GameplayArtifactOps>(
+                    artifacts.gameplay_updates,
+                );
+                self.commit_profile_artifact_updates::<StorageArtifactOps>(
+                    artifacts.storage_updates,
+                );
+                self.commit_profile_artifact_updates::<AuthArtifactOps>(artifacts.auth_updates);
+                self.commit_profile_artifact_updates::<AdminSurfaceArtifactOps>(
+                    artifacts.admin_surface_updates,
+                );
                 {}
             }
         }

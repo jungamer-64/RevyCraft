@@ -4,12 +4,12 @@ use crate::runtime::selection::{
 };
 use crate::runtime::topology_manager::PreparedTopologyReload;
 use crate::runtime::{
-    ArtifactsReloadResult, CoreReloadResult, FullReloadResult, RuntimeReloadContext,
-    RuntimeReloadMode, RuntimeReloadResult, RuntimeServer, SessionControl,
-    SessionReattachInstruction, SessionReattachRecord,
+    ArtifactsReloadResult, CoreReloadResult, FullReloadResult, RuntimeReloadMode,
+    RuntimeReloadResult, RuntimeServer, SessionControl, SessionReattachInstruction,
+    SessionReattachRecord,
 };
 use mc_plugin_host::runtime::{
-    PreparedRuntimeSelection, RuntimePluginHost, StagedRuntimeSelection,
+    PreparedRuntimeSelection, RuntimePluginHost, RuntimeReloadContext, StagedRuntimeSelection,
 };
 use std::sync::Arc;
 #[cfg(test)]
@@ -194,7 +194,7 @@ impl RuntimeServer {
     async fn reload_runtime_with_loaded(
         &self,
         reload_host: &dyn RuntimePluginHost,
-        loaded_config: crate::config::ServerConfig,
+        loaded_config: crate::config::ValidatedServerConfig,
         mode: RuntimeReloadMode,
     ) -> Result<RuntimeReloadResult, RuntimeError> {
         if matches!(mode, RuntimeReloadMode::Topology) {
@@ -222,7 +222,7 @@ impl RuntimeServer {
                 .reload_core_with_plan(
                     &consistency_guard,
                     SelectionResolver::core_config(&active_selection.config),
-                    reload_plan.core_config.clone(),
+                    SelectionResolver::core_config(&reload_plan.next_active_config),
                     Arc::clone(&active_generation),
                     &active_selection,
                 )
@@ -290,7 +290,7 @@ impl RuntimeServer {
             .reload_core_with_plan(
                 &consistency_guard,
                 SelectionResolver::core_config(&prepared.previous_selection.config),
-                reload_plan.core_config.clone(),
+                SelectionResolver::core_config(&reload_plan.next_active_config),
                 candidate_generation,
                 &prepared.candidate_selection,
             )

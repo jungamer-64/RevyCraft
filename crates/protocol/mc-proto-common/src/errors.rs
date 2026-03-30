@@ -1,4 +1,3 @@
-use mc_storage_common::StorageError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -17,6 +16,4 @@ pub enum ProtocolError {
     UnsupportedPacket(i32),
     #[error("plugin error: {0}")]
     Plugin(String),
-    #[error("storage error: {0}")]
-    Storage(#[from] StorageError),
 }

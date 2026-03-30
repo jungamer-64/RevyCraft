@@ -87,7 +87,7 @@ async fn plain_server_builder_rejects_reload_watch_without_reload_host() -> Resu
     let LoadedPluginTestEnvironment { loaded_plugins, .. } =
         in_process_failing_storage_registries(PluginFailureAction::Skip)?;
     let source = ServerConfigSource::Inline(config.clone());
-    let error = match boot_server(source, config, loaded_plugins, None).await {
+    let error = match boot_server(source, config.validate_owned()?, loaded_plugins, None).await {
         Ok(_) => panic!("plain server builder should reject reload watch settings"),
         Err(error) => error,
     };
@@ -118,7 +118,7 @@ async fn reloadable_server_builder_applies_reload_host_failure_policy() -> Resul
     let source = ServerConfigSource::Inline(config.clone());
     let server = boot_server(
         source,
-        config,
+        config.validate_owned()?,
         loaded_plugins,
         Some(reload_host.runtime_host()),
     )

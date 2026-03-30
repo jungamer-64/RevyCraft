@@ -1,10 +1,15 @@
 use crate::RuntimeError;
-use crate::runtime::{LOGIN_VERIFY_TOKEN_LEN, OnlineAuthKeys};
+use crate::runtime::LOGIN_VERIFY_TOKEN_LEN;
 use num_bigint::BigInt;
 use rsa::pkcs8::EncodePublicKey;
 use rsa::rand_core::{OsRng, RngCore};
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use sha1::{Digest, Sha1};
+
+pub(crate) struct OnlineAuthKeys {
+    pub(crate) private_key: RsaPrivateKey,
+    pub(crate) public_key_der: Vec<u8>,
+}
 
 impl OnlineAuthKeys {
     pub(in crate::runtime) fn generate() -> Result<Self, RuntimeError> {

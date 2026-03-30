@@ -229,20 +229,24 @@ impl ServerSupervisor {
         config_source: ServerConfigSource,
         import: RuntimeUpgradeImport,
     ) -> Result<Self, RuntimeError> {
-        let plugin_host =
-            plugin_host_from_config(&plugin_host_bootstrap_config(&import.payload.config))?
-                .ok_or_else(|| {
-                    RuntimeError::Config(format!(
-                        "no packaged plugins discovered under `{}`",
-                        import.payload.config.bootstrap.plugins_dir.display()
-                    ))
-                })?;
-        let loaded_plugins = plugin_host.load_plugin_set(&plugin_host_runtime_selection_config(
-            &import.payload.config,
-        ))?;
-        let running =
-            boot_server_from_upgrade(config_source, import, loaded_plugins, Some(plugin_host))
-                .await?;
+        let config = import.payload.config.clone().validate_owned()?;
+        let plugin_host = plugin_host_from_config(&plugin_host_bootstrap_config(&config))?
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "no packaged plugins discovered under `{}`",
+                    config.bootstrap.plugins_dir.display()
+                ))
+            })?;
+        let loaded_plugins =
+            plugin_host.load_plugin_set(&plugin_host_runtime_selection_config(&config))?;
+        let running = boot_server_from_upgrade(
+            config_source,
+            import,
+            config,
+            loaded_plugins,
+            Some(plugin_host),
+        )
+        .await?;
         running.runtime.reload.set_upgrade_state(
             RuntimeUpgradeRole::Child,
             RuntimeUpgradePhase::ChildWaitingCommit,
