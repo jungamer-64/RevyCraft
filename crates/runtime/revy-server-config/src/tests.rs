@@ -1,5 +1,5 @@
 use crate::*;
-use mc_plugin_api::{AdapterId, AdminSurfaceProfileId, GameplayProfileId, StorageProfileId};
+use revy_voxel_semantic::{AdapterId, AdminSurfaceProfileId, GameplayProfileId, StorageProfileId};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -1,0 +1,6 @@
+# RevyCraft overview
+- Purpose: Rust-based, server-only Minecraft workspace that loads packaged plugins and exposes `ServerSupervisor` as the main boot/status/reload/shutdown entrypoint.
+- Architecture: app (`apps/revy-server`) -> runtime (`crates/runtime/revy-server-runtime`) -> plugin host / core / config / types. Shared Minecraft-facing contracts live in `crates/core/revy-voxel-semantic`; engine internals live in `crates/core/revy-voxel-core`; generic kernel primitives live in `crates/core/revy-core`.
+- Plugin model: protocol, gameplay, storage, auth, and admin-surface plugins live under `plugins/*` and are packaged into `runtime/plugins/<plugin-id>/`.
+- Multi-protocol support: Java Edition TCP and Bedrock UDP adapters can coexist in one process, selected by runtime config.
+- Important docs: `docs/contributors/runtime-and-plugin-architecture.md` is the main contributor architecture reference; `docs/contributors/repository-overview.md` gives the workspace map; `docs/plugin-authors/plugin-model.md` is the plugin authoring guide.

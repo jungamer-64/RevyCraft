@@ -16,9 +16,20 @@ pub use self::events::{
 pub use self::gameplay::{
     GameplayCanEditBlockKey, GameplayEffect, GameplayEffectBatch, GameplayReadSet,
 };
-pub use self::model::*;
+pub use self::model::{
+    BlockFace, BlockKey, BlockPos, BlockState, ChunkColumn, ChunkDelta, ChunkPos, ChunkSection,
+    DimensionId, DroppedItemSnapshot, InteractionHand, InventoryClickButton, InventoryClickTarget,
+    InventoryClickValidation, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
+    ItemDataMap, ItemDataValue, ItemKey, ItemStack, OpaqueF32, OpaqueF64, PlayerInventory,
+    SectionBlockIndex, SectionPos, Vec3, WorldMeta, expand_block_index, flatten_block_index,
+    required_chunks, section_local_y,
+};
 pub use self::player::PlayerSnapshot;
-pub use self::rules::*;
+pub use self::rules::{
+    BlockDescriptor, BlockEntityKindId, BlockEntityState, ContainerBinding,
+    ContainerBlockEntityState, ContainerKindId, ContainerPropertyKey, ContainerSlotRole,
+    ContainerSpec, ContentBehavior, ItemDescriptor, MiningToolSpec, OpenContainerState, ToolClass,
+};
 pub use self::world::WorldSnapshot;
 pub use revy_core::{
     AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,

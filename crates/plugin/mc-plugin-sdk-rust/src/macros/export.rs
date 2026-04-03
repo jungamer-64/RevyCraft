@@ -506,7 +506,7 @@ macro_rules! export_plugin {
             mc_plugin_api::codec::protocol::decode_protocol_request,
             $crate::__macro_support::handle_protocol_request,
             mc_plugin_api::codec::protocol::encode_protocol_response,
-            mc_plugin_protocol_api_v4,
+            mc_plugin_protocol_api_v5,
             "protocol plugin panicked while decoding request",
             "protocol plugin panicked while handling request",
             ProtocolPluginHandler,

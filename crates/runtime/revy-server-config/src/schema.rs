@@ -1,4 +1,4 @@
-use mc_plugin_api::{
+use revy_voxel_semantic::{
     AdapterId, AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
 };
 use serde::Deserialize;

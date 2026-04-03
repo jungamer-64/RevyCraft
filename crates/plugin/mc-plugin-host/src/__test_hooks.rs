@@ -13,7 +13,7 @@ use crate::runtime::{
     AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
     RuntimeReloadContext, StorageProfileHandle,
 };
-use mc_plugin_api::{PluginGenerationId, StorageProfileId};
+use revy_voxel_semantic::{PluginGenerationId, StorageProfileId};
 use std::sync::Arc;
 
 #[derive(Clone)]

@@ -11,7 +11,9 @@ use crate::runtime::{
     PreparedRuntimeSelection, RuntimeProtocolTopologyCandidate, RuntimeSelectionStage,
     StagedRuntimeSelection,
 };
-use mc_plugin_api::{AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId};
+use revy_voxel_semantic::{
+    AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
+};
 use std::collections::HashMap;
 use std::hash::Hash;
 

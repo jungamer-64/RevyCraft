@@ -9,9 +9,9 @@ use mc_proto_je_common::__version_support::{
     blocks::flattened_block_state_id_1_13_2, inventory::read_slot,
 };
 use revy_voxel_semantic::{
-    BlockPos, DimensionId, DroppedItemSnapshot, InteractionHand, InventoryClickButton,
-    InventoryClickTarget, InventoryClickValidation, InventorySlot, InventoryTransactionContext,
-    InventoryWindowContents, ItemStack, PlayerInventory, Vec3,
+    BlockPos, DimensionId, DroppedItemSnapshot, GameplayCommand, InteractionHand,
+    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
+    InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerInventory, Vec3,
 };
 use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use uuid::Uuid;
@@ -209,10 +209,10 @@ fn decodes_offhand_block_place() {
         .expect("block place should produce a command");
     assert!(matches!(
         command,
-        RuntimeCommand::Core(CoreCommand::UseBlock {
+        RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::UseBlock {
             hand: InteractionHand::Offhand,
             ..
-        })
+        }))
     ));
 }
 

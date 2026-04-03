@@ -1861,6 +1861,7 @@ dependencies = [
  "revy-server-gameplay-bridge",
  "revy-server-types",
  "revy-voxel-core",
+ "revy-voxel-semantic",
  "serde",
  "tempfile",
  "thiserror 2.0.18",
@@ -3108,6 +3109,7 @@ version = "0.1.0"
 dependencies = [
  "mc-plugin-api",
  "revy-server-types",
+ "revy-voxel-semantic",
  "serde",
  "thiserror 2.0.18",
  "toml",
@@ -3217,6 +3219,7 @@ dependencies = [
  "num-traits",
  "revy-core",
  "serde",
+ "uuid",
 ]
 
 [[package]]

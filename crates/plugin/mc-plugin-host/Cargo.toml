@@ -20,6 +20,7 @@ mc-plugin-api = { path = "../mc-plugin-api" }
 mc-plugin-sdk-rust = { path = "../mc-plugin-sdk-rust", features = ["in-process-testing"], optional = true }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
 mc-storage-common = { path = "../../storage/mc-storage-common" }
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 revy-server-gameplay-bridge = { path = "../../runtime/revy-server-gameplay-bridge" }
 revy-server-types = { path = "../../runtime/revy-server-types" }
 serde.workspace = true

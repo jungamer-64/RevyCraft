@@ -153,14 +153,9 @@ impl RuntimeKernel {
         let should_persist = matches!(
             command,
             CoreCommand::LoginStart { .. }
-                | CoreCommand::MoveIntent { .. }
-                | CoreCommand::SetHeldSlot { .. }
-                | CoreCommand::CreativeInventorySet { .. }
+                | CoreCommand::Gameplay(..)
                 | CoreCommand::InventoryClick { .. }
                 | CoreCommand::CloseContainer { .. }
-                | CoreCommand::DigBlock { .. }
-                | CoreCommand::PlaceBlock { .. }
-                | CoreCommand::UseBlock { .. }
                 | CoreCommand::Disconnect { .. }
         );
         match command {
@@ -217,46 +212,43 @@ impl RuntimeKernel {
                     ))
                 }
             }
-            command => {
-                if let Ok(gameplay_command) = command.clone().into_gameplay() {
-                    if let (Some(session_capabilities), Some(gameplay)) =
-                        (session_capabilities.as_ref(), gameplay.as_ref())
-                    {
-                        let player_id = gameplay_command.player_id();
-                        let (snapshot, revision) = self.snapshot_for_detached_gameplay().await;
-                        let batch = gameplay
-                            .prepare_command(
-                                CoreSnapshotReadView::boxed(snapshot),
-                                session_capabilities,
-                                &gameplay_command,
-                                now_ms,
-                            )
-                            .map_err(|error| RuntimeError::Config(error.to_string()))?;
-                        Ok(self
-                            .commit_detached_gameplay_batch(
-                                revision,
-                                batch,
-                                should_persist,
-                                KernelCommandOutcome::StaleGameplayCommand { player_id },
-                            )
-                            .await?)
-                    } else {
-                        Ok(KernelCommandOutcome::Events(
-                            self.apply_builtin_gameplay_command(
-                                gameplay_command,
-                                now_ms,
-                                should_persist,
-                            )
-                            .await,
-                        ))
-                    }
+            CoreCommand::Gameplay(gameplay_command) => {
+                if let (Some(session_capabilities), Some(gameplay)) =
+                    (session_capabilities.as_ref(), gameplay.as_ref())
+                {
+                    let player_id = gameplay_command.player_id();
+                    let (snapshot, revision) = self.snapshot_for_detached_gameplay().await;
+                    let batch = gameplay
+                        .prepare_command(
+                            CoreSnapshotReadView::boxed(snapshot),
+                            session_capabilities,
+                            &gameplay_command,
+                            now_ms,
+                        )
+                        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+                    Ok(self
+                        .commit_detached_gameplay_batch(
+                            revision,
+                            batch,
+                            should_persist,
+                            KernelCommandOutcome::StaleGameplayCommand { player_id },
+                        )
+                        .await?)
                 } else {
                     Ok(KernelCommandOutcome::Events(
-                        self.apply_direct_command(command, now_ms, should_persist)
-                            .await,
+                        self.apply_builtin_gameplay_command(
+                            gameplay_command,
+                            now_ms,
+                            should_persist,
+                        )
+                        .await,
                     ))
                 }
             }
+            command => Ok(KernelCommandOutcome::Events(
+                self.apply_direct_command(command, now_ms, should_persist)
+                    .await,
+            )),
         }
     }
 
@@ -926,7 +918,7 @@ mod tests {
         let task = tokio::spawn(async move {
             task_kernel
                 .apply_command(
-                    CoreCommand::SetHeldSlot { player_id, slot: 5 },
+                    GameplayCommand::SetHeldSlot { player_id, slot: 5 }.into(),
                     Some(task_session),
                     Some(task_gameplay),
                     0,
@@ -969,7 +961,7 @@ mod tests {
         let task = tokio::spawn(async move {
             task_kernel
                 .apply_command(
-                    CoreCommand::SetHeldSlot { player_id, slot: 5 },
+                    GameplayCommand::SetHeldSlot { player_id, slot: 5 }.into(),
                     Some(task_session),
                     Some(task_gameplay),
                     0,

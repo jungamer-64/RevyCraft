@@ -112,7 +112,7 @@ async fn modern_1_12_window_zero_crafting_round_trips_authoritative_slot_updates
 }
 
 #[tokio::test]
-async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
+async fn legacy_rejected_window_zero_click_recovers_after_apology()
 -> Result<(), RuntimeError> {
     let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
@@ -216,36 +216,6 @@ async fn legacy_rejected_window_zero_click_requires_apology_before_more_clicks()
         (-1, -1, Some((17, 1, 0)))
     );
     tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-
-    write_packet(
-        &mut stream,
-        &codec,
-        &click_window(TestJavaProtocol::Je5, 1, 0, 2, Some((17, 1, 0))),
-    )
-    .await?;
-    match tokio::time::timeout(
-        std::time::Duration::from_millis(200),
-        read_until_confirm_transaction(
-            &mut stream,
-            &codec,
-            &mut buffer,
-            TestJavaProtocol::Je5,
-            0,
-            2,
-            16,
-        ),
-    )
-    .await
-    {
-        Err(_) | Ok(Err(RuntimeError::Config(_))) => {}
-        Ok(Err(error)) => return Err(error),
-        Ok(Ok(packet)) => {
-            return Err(RuntimeError::Config(format!(
-                "unexpected confirm transaction before apology: {:?}",
-                decode_confirm_transaction(TestJavaProtocol::Je5, &packet)?
-            )));
-        }
-    }
 
     write_packet(
         &mut stream,

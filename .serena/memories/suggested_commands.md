@@ -1,0 +1,12 @@
+# Suggested commands
+- `cargo run -p xtask -- check-boundaries` : workspace boundary drift check used by docs and CI.
+- `cargo fmt --check --all` : formatting check.
+- `cargo check --workspace --all-targets` : compile check.
+- `cargo test --workspace --all-targets --quiet` : full test suite used by CI.
+- `cargo deny check` : dependency/license/security check used by CI.
+- `cargo run -p xtask -- package-plugins` : package managed plugins into `runtime/plugins/`.
+- `cargo run -p xtask -- package-all-plugins` : package all workspace-managed plugins.
+- `cargo run -p revy-server` : run the server using `runtime/server.toml` or `REVY_SERVER_CONFIG`.
+- `cargo run -p xtask -- build-release-bundles --target <triple>` : build release bundles.
+- `rg --files -g 'Cargo.toml'` : quick workspace crate inventory.
+- `rg -n '<pattern>' crates plugins apps` : fast code search.

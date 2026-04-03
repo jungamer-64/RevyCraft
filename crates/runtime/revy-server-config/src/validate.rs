@@ -1,7 +1,7 @@
 use crate::error::ServerConfigError;
 use crate::types::{AdminPrincipalConfig, AdminSurfaceConfig, ServerConfig};
-use mc_plugin_api::AdapterId;
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use revy_voxel_semantic::AdapterId;
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 

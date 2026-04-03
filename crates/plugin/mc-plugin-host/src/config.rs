@@ -1,10 +1,10 @@
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
-use mc_plugin_api::{
-    AdapterId, AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
-};
 use revy_server_types::{
     PluginFailureAction, PluginFailureMatrix, PluginHostBootstrapSelectionView,
     PluginHostBufferLimitsView, PluginHostRuntimeSelectionView,
+};
+use revy_voxel_semantic::{
+    AdapterId, AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -182,6 +182,7 @@ impl From<&PluginHostRuntimeSelectionView> for RuntimeSelectionConfig {
 #[cfg(test)]
 mod tests {
     use super::{BootstrapConfig, PluginBufferLimits, RuntimeSelectionConfig};
+    use revy_voxel_semantic::AdapterId;
     use revy_server_types::{
         PluginFailureAction, PluginFailureMatrix, PluginHostAdminSurfaceSelectionView,
         PluginHostBootstrapSelectionView, PluginHostBufferLimitsView,
@@ -217,8 +218,8 @@ mod tests {
             bedrock_auth_profile: "bedrock-offline-v1".into(),
             default_gameplay_profile: "canonical".into(),
             gameplay_profile_map: HashMap::from([
-                (mc_plugin_api::AdapterId::new("je-5"), "canonical".into()),
-                (mc_plugin_api::AdapterId::new("be-924"), "readonly".into()),
+                (AdapterId::new("je-5"), "canonical".into()),
+                (AdapterId::new("be-924"), "readonly".into()),
             ]),
             admin_surfaces: vec![
                 PluginHostAdminSurfaceSelectionView {

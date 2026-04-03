@@ -38,15 +38,8 @@ use mc_plugin_api::host_api::{
 };
 use mc_plugin_api::manifest::{
     PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V5,
-    PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V4, PLUGIN_STORAGE_API_SYMBOL_V2,
+    PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V5, PLUGIN_STORAGE_API_SYMBOL_V2,
     PluginManifestV1,
-};
-use mc_plugin_api::{
-    AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapability,
-    AuthCapabilitySet, AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
-    GameplayProfileId, PlayerId, PluginBuildTag, PluginGenerationId, ProtocolCapability,
-    ProtocolCapabilitySet, SessionCapabilitySet, StorageCapability, StorageCapabilitySet,
-    StorageProfileId, WorldSnapshot,
 };
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
@@ -54,6 +47,13 @@ use mc_proto_common::{
     ServerListStatus, StatusRequest, TransportKind, WireCodec, WireFormatKind,
 };
 use mc_storage_common::{StorageAdapter, StorageError};
+use revy_voxel_semantic::{
+    AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId, AuthCapability,
+    AuthCapabilitySet, AuthProfileId, GameplayCapability, GameplayCapabilitySet, GameplayCommand,
+    GameplayProfileId, PlayerId, PluginBuildTag, PluginGenerationId, ProtocolCapability,
+    ProtocolCapabilitySet, SessionCapabilitySet, StorageCapability, StorageCapabilitySet,
+    StorageProfileId, WorldSnapshot,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

@@ -322,8 +322,8 @@ storage_profile = \"je-anvil-1_7_10\"
 
 [static.plugins]
 plugins_dir = {}
-plugin_abi_min = \"5.0\"
-plugin_abi_max = \"5.0\"
+plugin_abi_min = \"8.0\"
+plugin_abi_max = \"8.0\"
 
 {}\
 [static.admin.principals.\"console:console\"]

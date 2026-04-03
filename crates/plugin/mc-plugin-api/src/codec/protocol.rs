@@ -308,8 +308,9 @@ mod tests {
     };
     use revy_voxel_semantic::{
         CapabilityAnnouncement, ConnectionId, CoreCommand, CoreEvent, EntityId,
-        GameplayCapabilitySet, GameplayProfileId, PlayerId, PlayerSnapshot, PluginGenerationId,
-        ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand, SessionCapabilitySet,
+        GameplayCapabilitySet, GameplayCommand, GameplayProfileId, PlayerId, PlayerSnapshot,
+        PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet, RuntimeCommand,
+        SessionCapabilitySet,
     };
     use uuid::Uuid;
 
@@ -386,11 +387,13 @@ mod tests {
     }
 
     fn sample_command() -> RuntimeCommand {
-        RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
-            player_id: sample_player_id(),
-            slot: InventorySlot::Hotbar(1),
-            stack: Some(ItemStack::new("minecraft:glass", 16, 0)),
-        })
+        RuntimeCommand::Core(CoreCommand::Gameplay(
+            GameplayCommand::CreativeInventorySet {
+                player_id: sample_player_id(),
+                slot: InventorySlot::Hotbar(1),
+                stack: Some(ItemStack::new("minecraft:glass", 16, 0)),
+            },
+        ))
     }
 
     fn sample_protocol_session() -> super::ProtocolSessionSnapshot {

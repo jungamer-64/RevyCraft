@@ -23,7 +23,7 @@ use mc_proto_common::{
     CoreCommand, LoginRequest, PlayerId, ProtocolError, ProtocolSessionSnapshot, RuntimeCommand,
 };
 use revy_voxel_semantic::{
-    InteractionHand, InventoryClickValidation, InventoryTransactionContext, Vec3,
+    GameplayCommand, InteractionHand, InventoryClickValidation, InventoryTransactionContext, Vec3,
 };
 use std::io::Cursor;
 
@@ -84,7 +84,7 @@ pub(crate) fn decode_play_packet(
             rotation,
             on_ground,
             ..
-        }) => Ok(Some(RuntimeCommand::Core(CoreCommand::MoveIntent {
+        }) => Ok(Some(runtime_gameplay(GameplayCommand::MoveIntent {
             player_id,
             position: Some(Vec3::new(
                 f64::from(position.x),
@@ -96,7 +96,7 @@ pub(crate) fn decode_play_packet(
             on_ground,
         }))),
         V924::MobEquipmentPacket(MobEquipmentPacket { slot, .. }) => {
-            Ok(Some(RuntimeCommand::Core(CoreCommand::SetHeldSlot {
+            Ok(Some(runtime_gameplay(GameplayCommand::SetHeldSlot {
                 player_id,
                 slot: i16::from(slot),
             })))
@@ -108,7 +108,7 @@ pub(crate) fn decode_play_packet(
             ..
         }) => match action {
             PlayerActionType::StartDestroyBlock | PlayerActionType::ContinueDestroyBlock => {
-                Ok(Some(RuntimeCommand::Core(CoreCommand::DigBlock {
+                Ok(Some(runtime_gameplay(GameplayCommand::DigBlock {
                     player_id,
                     position: block_pos_from_network(&block_position),
                     status: 0,
@@ -116,7 +116,7 @@ pub(crate) fn decode_play_packet(
                 })))
             }
             PlayerActionType::AbortDestroyBlock | PlayerActionType::StopDestroyBlock => {
-                Ok(Some(RuntimeCommand::Core(CoreCommand::DigBlock {
+                Ok(Some(runtime_gameplay(GameplayCommand::DigBlock {
                     player_id,
                     position: block_pos_from_network(&block_position),
                     status: 1,
@@ -124,7 +124,7 @@ pub(crate) fn decode_play_packet(
                 })))
             }
             PlayerActionType::CreativeDestroyBlock | PlayerActionType::PredictDestroyBlock => {
-                Ok(Some(RuntimeCommand::Core(CoreCommand::DigBlock {
+                Ok(Some(runtime_gameplay(GameplayCommand::DigBlock {
                     player_id,
                     position: block_pos_from_network(&block_position),
                     status: 2,
@@ -152,7 +152,7 @@ pub(crate) fn decode_play_packet(
                 return decode_item_use_transaction(player_id, &transaction)
                     .map(|command| command.map(RuntimeCommand::Core));
             }
-            Ok(Some(RuntimeCommand::Core(CoreCommand::MoveIntent {
+            Ok(Some(runtime_gameplay(GameplayCommand::MoveIntent {
                 player_id,
                 position: Some(Vec3::new(
                     f64::from(player_position.x),
@@ -181,32 +181,40 @@ pub(crate) fn decode_play_packet(
     }
 }
 
+fn gameplay(command: GameplayCommand) -> CoreCommand {
+    command.into()
+}
+
+fn runtime_gameplay(command: GameplayCommand) -> RuntimeCommand {
+    RuntimeCommand::Core(gameplay(command))
+}
+
 fn decode_item_use_transaction(
     player_id: PlayerId,
     transaction: &bedrockrs_proto::v712::types::PackedItemUseLegacyInventoryTransaction<V924>,
 ) -> Result<Option<CoreCommand>, ProtocolError> {
-    Ok(Some(match transaction.action_type {
-        ItemUseInventoryTransactionType::Place => CoreCommand::PlaceBlock {
+    Ok(Some(gameplay(match transaction.action_type {
+        ItemUseInventoryTransactionType::Place => GameplayCommand::PlaceBlock {
             player_id,
             hand: InteractionHand::Main,
             position: block_pos_from_network(&transaction.position),
             face: block_face_from_i32(transaction.face),
             held_item: None,
         },
-        ItemUseInventoryTransactionType::Use => CoreCommand::UseBlock {
+        ItemUseInventoryTransactionType::Use => GameplayCommand::UseBlock {
             player_id,
             hand: InteractionHand::Main,
             position: block_pos_from_network(&transaction.position),
             face: block_face_from_i32(transaction.face),
             held_item: None,
         },
-        ItemUseInventoryTransactionType::Destroy => CoreCommand::DigBlock {
+        ItemUseInventoryTransactionType::Destroy => GameplayCommand::DigBlock {
             player_id,
             position: block_pos_from_network(&transaction.position),
             status: 2,
             face: block_face_from_i32(transaction.face),
         },
-    }))
+    })))
 }
 
 fn decode_inventory_transaction_frame(

@@ -10,8 +10,9 @@ use mc_proto_je_common::__version_support::{
 };
 use revy_voxel_semantic::{
     BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot,
-    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, Vec3, WorldMeta,
+    GameplayCommand, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
+    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, Vec3,
+    WorldMeta,
 };
 use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use uuid::Uuid;
@@ -205,10 +206,10 @@ fn decodes_play_packets_into_core_commands() {
         .expect("position should produce a command");
     assert!(matches!(
         command,
-        RuntimeCommand::Core(CoreCommand::MoveIntent {
+        RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::MoveIntent {
             position: Some(_),
             ..
-        })
+        }))
     ));
 }
 
@@ -226,7 +227,10 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
         .expect("held item change should produce command");
     assert!(matches!(
         command,
-        RuntimeCommand::Core(CoreCommand::SetHeldSlot { slot: 4, .. })
+        RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::SetHeldSlot {
+            slot: 4,
+            ..
+        }))
     ));
 
     let mut settings = PacketWriter::default();
@@ -262,11 +266,11 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
         .expect("creative inventory should produce command");
     assert!(matches!(
         command,
-        RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
+        RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::CreativeInventorySet {
             slot: InventorySlot::Hotbar(0),
             stack: Some(ref stack),
             ..
-        })
+        }))
             if stack.key.as_str() == "minecraft:glass"
     ));
 
@@ -289,12 +293,12 @@ fn decodes_inventory_and_edit_packets_into_core_commands() {
         .expect("placement should produce command");
     assert!(matches!(
         command,
-        RuntimeCommand::Core(CoreCommand::UseBlock {
+        RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::UseBlock {
             position: BlockPos { x: 2, y: 3, z: 0 },
             face: Some(BlockFace::Top),
             held_item: Some(ref stack),
             ..
-        }) if stack.key.as_str() == "minecraft:stone"
+        })) if stack.key.as_str() == "minecraft:stone"
     ));
 }
 

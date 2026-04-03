@@ -16,7 +16,7 @@ use mc_proto_je_common::__version_support::{
 use mc_proto_je_common::JavaProtocolSessionStore;
 use revy_voxel_semantic::ContainerKindId;
 use revy_voxel_semantic::{
-    BlockFace, InteractionHand, InventoryClickButton, InventoryClickTarget,
+    BlockFace, GameplayCommand, InteractionHand, InventoryClickButton, InventoryClickTarget,
     InventoryClickValidation, InventoryTransactionContext, Vec3,
 };
 
@@ -36,7 +36,7 @@ pub fn decode_play_packet(
             keep_alive_id: i32::try_from(reader.read_i64()?)
                 .map_err(|_| ProtocolError::InvalidPacket("keepalive id out of range"))?,
         }))),
-        PACKET_SB_FLYING => Ok(Some(RuntimeCommand::Core(CoreCommand::MoveIntent {
+        PACKET_SB_FLYING => Ok(Some(runtime_gameplay(GameplayCommand::MoveIntent {
             player_id,
             position: None,
             yaw: None,
@@ -47,7 +47,7 @@ pub fn decode_play_packet(
             player_id,
             &mut reader,
         )?))),
-        PACKET_SB_LOOK => Ok(Some(RuntimeCommand::Core(CoreCommand::MoveIntent {
+        PACKET_SB_LOOK => Ok(Some(runtime_gameplay(GameplayCommand::MoveIntent {
             player_id,
             position: None,
             yaw: Some(reader.read_f32()?),
@@ -62,7 +62,7 @@ pub fn decode_play_packet(
             player_id,
             &mut reader,
         )?))),
-        PACKET_SB_HELD_ITEM_CHANGE => Ok(Some(RuntimeCommand::Core(CoreCommand::SetHeldSlot {
+        PACKET_SB_HELD_ITEM_CHANGE => Ok(Some(runtime_gameplay(GameplayCommand::SetHeldSlot {
             player_id,
             slot: reader.read_i16()?,
         }))),
@@ -88,7 +88,7 @@ pub fn decode_play_packet(
                 slot,
             )
             .map(|slot| {
-                RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
+                runtime_gameplay(GameplayCommand::CreativeInventorySet {
                     player_id,
                     slot,
                     stack,
@@ -115,6 +115,14 @@ pub fn decode_play_packet(
     }
 }
 
+fn gameplay(command: GameplayCommand) -> CoreCommand {
+    command.into()
+}
+
+fn runtime_gameplay(command: GameplayCommand) -> RuntimeCommand {
+    RuntimeCommand::Core(gameplay(command))
+}
+
 fn decode_position_packet(
     player_id: PlayerId,
     reader: &mut PacketReader<'_>,
@@ -123,13 +131,13 @@ fn decode_position_packet(
     let y = reader.read_f64()?;
     let z = reader.read_f64()?;
     let on_ground = reader.read_bool()?;
-    Ok(CoreCommand::MoveIntent {
+    Ok(gameplay(GameplayCommand::MoveIntent {
         player_id,
         position: Some(Vec3::new(x, y, z)),
         yaw: None,
         pitch: None,
         on_ground,
-    })
+    }))
 }
 
 fn decode_position_look_packet(
@@ -142,26 +150,26 @@ fn decode_position_look_packet(
     let yaw = reader.read_f32()?;
     let pitch = reader.read_f32()?;
     let on_ground = reader.read_bool()?;
-    Ok(CoreCommand::MoveIntent {
+    Ok(gameplay(GameplayCommand::MoveIntent {
         player_id,
         position: Some(Vec3::new(x, y, z)),
         yaw: Some(yaw),
         pitch: Some(pitch),
         on_ground,
-    })
+    }))
 }
 
 fn decode_digging_packet(
     player_id: PlayerId,
     reader: &mut PacketReader<'_>,
 ) -> Result<CoreCommand, ProtocolError> {
-    Ok(CoreCommand::DigBlock {
+    Ok(gameplay(GameplayCommand::DigBlock {
         player_id,
         status: u8::try_from(reader.read_varint()?)
             .map_err(|_| ProtocolError::InvalidPacket("dig status out of range"))?,
         position: unpack_block_position(reader.read_i64()?),
         face: BlockFace::from_protocol_byte(reader.read_i8()?.to_be_bytes()[0]),
-    })
+    }))
 }
 
 fn decode_place_block_packet(
@@ -175,7 +183,7 @@ fn decode_place_block_packet(
     let _cursor_x = reader.read_f32()?;
     let _cursor_y = reader.read_f32()?;
     let _cursor_z = reader.read_f32()?;
-    Ok(Some(RuntimeCommand::Core(CoreCommand::UseBlock {
+    Ok(Some(runtime_gameplay(GameplayCommand::UseBlock {
         player_id,
         hand,
         position,

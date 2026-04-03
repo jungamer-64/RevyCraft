@@ -1,5 +1,5 @@
-pub(super) use crate::*;
 pub(super) use crate::core::transaction::{GameplayJournalApplyResult, GameplayTransaction};
+pub(super) use crate::*;
 
 use mc_content_canonical::catalog;
 use std::collections::BTreeMap;
@@ -245,6 +245,10 @@ pub(super) fn logged_in_creative_core(name: &str) -> (ServerCore, PlayerId) {
     )
 }
 
+pub(super) fn gameplay(command: GameplayCommand) -> CoreCommand {
+    command.into()
+}
+
 pub(super) fn creative_inventory_set(
     core: &mut ServerCore,
     player_id: PlayerId,
@@ -252,11 +256,11 @@ pub(super) fn creative_inventory_set(
     stack: Option<ItemStack>,
 ) -> Vec<TargetedEvent> {
     core.apply_command(
-        CoreCommand::CreativeInventorySet {
+        gameplay(GameplayCommand::CreativeInventorySet {
             player_id,
             slot,
             stack,
-        },
+        }),
         0,
     )
 }
@@ -266,7 +270,10 @@ pub(super) fn set_held_slot(
     player_id: PlayerId,
     slot: i16,
 ) -> Vec<TargetedEvent> {
-    core.apply_command(CoreCommand::SetHeldSlot { player_id, slot }, 0)
+    core.apply_command(
+        gameplay(GameplayCommand::SetHeldSlot { player_id, slot }),
+        0,
+    )
 }
 
 pub(super) fn click_slot(

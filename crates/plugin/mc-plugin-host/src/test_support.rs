@@ -7,7 +7,7 @@ use crate::runtime::{
     AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, RuntimeReloadContext,
     StorageProfileHandle,
 };
-use mc_plugin_api::PluginGenerationId;
+use revy_voxel_semantic::PluginGenerationId;
 use std::sync::Arc;
 
 pub use crate::host::{

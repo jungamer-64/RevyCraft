@@ -11,6 +11,7 @@ description = "Validated server configuration loading and parsing for RevyCraft.
 
 [dependencies]
 mc-plugin-api = { path = "../../plugin/mc-plugin-api" }
+revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 revy-server-types = { path = "../revy-server-types" }
 serde.workspace = true
 thiserror.workspace = true

@@ -338,13 +338,13 @@ fn moving_player_updates_other_clients_and_view() {
     let (_first, _) = login_player(&mut core, 1, "first");
     let (second, _) = login_player(&mut core, 2, "second");
     let events = core.apply_command(
-        CoreCommand::MoveIntent {
+        gameplay(GameplayCommand::MoveIntent {
             player_id: second,
             position: Some(Vec3::new(32.5, 4.0, 0.5)),
             yaw: Some(90.0),
             pitch: Some(0.0),
             on_ground: true,
-        },
+        }),
         50,
     );
 
@@ -631,13 +631,13 @@ fn gameplay_move_direct_path_matches_manual_transaction_commit() {
     let mut via_tx = direct.clone();
 
     let direct_events = direct.apply_command(
-        CoreCommand::MoveIntent {
+        gameplay(GameplayCommand::MoveIntent {
             player_id: mover,
             position: Some(Vec3::new(32.5, 4.0, 0.5)),
             yaw: Some(90.0),
             pitch: Some(-15.0),
             on_ground: true,
-        },
+        }),
         50,
     );
     let tx_events = apply_test_transaction(&mut via_tx, 50, |tx| {
@@ -698,12 +698,12 @@ fn gameplay_begin_mining_direct_path_matches_manual_transaction_commit() {
     let position = BlockPos::new(2, 1, 0);
 
     let direct_events = direct.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id,
             position,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     let tx_events = apply_test_transaction(&mut via_tx, 0, |tx| {
@@ -731,24 +731,24 @@ fn gameplay_clear_mining_direct_path_matches_manual_transaction_commit() {
     let (mut base, player_id) = logged_in_core(CoreConfig::default(), 1, "clear-mining-parity");
     let position = BlockPos::new(2, 1, 0);
     let _ = base.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id,
             position,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     let mut direct = base.clone();
     let mut via_tx = base.clone();
 
     let direct_events = direct.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id,
             position,
             status: 1,
             face: Some(BlockFace::Top),
-        },
+        }),
         100,
     );
     let tx_events = apply_test_transaction(&mut via_tx, 100, |tx| {
@@ -776,12 +776,12 @@ fn tick_emits_scheduler_phases_in_canonical_order() {
     let _ = spawn_dropped_item_via_tx(&mut core, player_position, item("minecraft:oak_log", 1), 0);
     let mining_pos = BlockPos::new(2, 1, 0);
     let _ = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id,
             position: mining_pos,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     core.player_session_mut(player_id)
@@ -958,24 +958,24 @@ fn creative_place_and_break_emit_authoritative_corrections() {
     let corrected_block = BlockPos::new(2, 4, 0);
 
     let place_events = creative.apply_command(
-        CoreCommand::PlaceBlock {
+        gameplay(GameplayCommand::PlaceBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: BlockPos::new(2, 3, 0),
             face: Some(BlockFace::Top),
             held_item: Some(item("minecraft:stone", 64)),
-        },
+        }),
         0,
     );
     assert!(block_change_count(&place_events, corrected_block, |_| true) >= 2);
 
     let break_events = creative.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: first,
             position: corrected_block,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     assert!(block_change_count(&break_events, corrected_block, is_air) >= 2);
@@ -993,13 +993,13 @@ fn use_block_places_opens_closes_and_roundtrips_world_backed_chest() {
         Some(item("minecraft:chest", 1)),
     );
     let place_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: BlockPos::new(2, 3, 0),
             face: Some(BlockFace::Top),
             held_item: Some(item("minecraft:chest", 1)),
-        },
+        }),
         0,
     );
     assert!(
@@ -1017,13 +1017,13 @@ fn use_block_places_opens_closes_and_roundtrips_world_backed_chest() {
     );
 
     let open_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: chest_pos,
             face: Some(BlockFace::Top),
             held_item: None,
-        },
+        }),
         0,
     );
     assert_container_opened(&open_events, first, 1, InventoryContainer::Chest);
@@ -1039,13 +1039,13 @@ fn use_block_places_opens_closes_and_roundtrips_world_backed_chest() {
     assert_container_closed(&close_events, first, 1);
 
     let reopen_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: chest_pos,
             face: Some(BlockFace::Top),
             held_item: None,
-        },
+        }),
         0,
     );
     assert_container_opened(&reopen_events, first, 2, InventoryContainer::Chest);
@@ -1073,13 +1073,13 @@ fn use_block_places_and_opens_crafting_table() {
         Some(item("minecraft:crafting_table", 1)),
     );
     let place_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: BlockPos::new(2, 3, 0),
             face: Some(BlockFace::Top),
             held_item: Some(item("minecraft:crafting_table", 1)),
-        },
+        }),
         0,
     );
     assert!(
@@ -1095,13 +1095,13 @@ fn use_block_places_and_opens_crafting_table() {
     );
 
     let open_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: crafting_table_pos,
             face: Some(BlockFace::Top),
             held_item: None,
-        },
+        }),
         0,
     );
     assert_container_opened(&open_events, first, 1, InventoryContainer::CraftingTable);
@@ -1140,13 +1140,13 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
         Some(item("minecraft:chest", 1)),
     );
     let place_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: BlockPos::new(2, 3, 0),
             face: Some(BlockFace::Top),
             held_item: Some(item("minecraft:chest", 1)),
-        },
+        }),
         0,
     );
     assert!(
@@ -1179,23 +1179,23 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
     );
 
     let first_open = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: chest_pos,
             face: Some(BlockFace::Top),
             held_item: None,
-        },
+        }),
         0,
     );
     let second_open = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: second,
             hand: InteractionHand::Main,
             position: chest_pos,
             face: Some(BlockFace::Top),
             held_item: None,
-        },
+        }),
         0,
     );
     assert_container_opened(&first_open, first, 1, InventoryContainer::Chest);
@@ -1304,12 +1304,12 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
     assert!(actor_slot_index < viewer_slot_index);
 
     let reject_break = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: first,
             position: chest_pos,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     assert_eq!(block_change_count(&reject_break, chest_pos, is_air), 0);
@@ -1354,12 +1354,12 @@ fn world_backed_chest_multiview_syncs_and_only_breaks_when_empty() {
     assert_transaction_processed(&return_hotbar_events, first, 1, 4, true);
 
     let break_events = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: first,
             position: chest_pos,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     assert!(block_change_count(&break_events, chest_pos, is_air) >= 2);
@@ -1407,13 +1407,13 @@ fn disconnecting_world_backed_chest_writes_back_contents_and_unregisters_viewer(
         Some(item("minecraft:chest", 1)),
     );
     let place_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: BlockPos::new(2, 3, 0),
             face: Some(BlockFace::Top),
             held_item: Some(item("minecraft:chest", 1)),
-        },
+        }),
         0,
     );
     assert!(
@@ -1436,13 +1436,13 @@ fn disconnecting_world_backed_chest_writes_back_contents_and_unregisters_viewer(
         Some(item("minecraft:stone", 3)),
     );
     let open_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: chest_pos,
             face: Some(BlockFace::Top),
             held_item: None,
-        },
+        }),
         0,
     );
     assert_container_opened(&open_events, first, 1, InventoryContainer::Chest);
@@ -1503,13 +1503,13 @@ fn use_block_places_ticks_closes_and_roundtrips_world_backed_furnace() {
         Some(item("minecraft:furnace", 1)),
     );
     let place_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: BlockPos::new(2, 3, 0),
             face: Some(BlockFace::Top),
             held_item: Some(item("minecraft:furnace", 1)),
-        },
+        }),
         0,
     );
     assert!(
@@ -1523,13 +1523,13 @@ fn use_block_places_ticks_closes_and_roundtrips_world_backed_furnace() {
     );
 
     let open_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: furnace_pos,
             face: Some(BlockFace::Top),
             held_item: None,
-        },
+        }),
         0,
     );
     assert_container_opened(&open_events, first, 1, InventoryContainer::Furnace);
@@ -1584,13 +1584,13 @@ fn use_block_places_ticks_closes_and_roundtrips_world_backed_furnace() {
     );
 
     let reopen_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: furnace_pos,
             face: Some(BlockFace::Top),
             held_item: None,
-        },
+        }),
         0,
     );
     assert_container_opened(&reopen_events, first, 2, InventoryContainer::Furnace);
@@ -1618,23 +1618,23 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
         Some(item("minecraft:furnace", 1)),
     );
     let _ = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: BlockPos::new(2, 3, 0),
             face: Some(BlockFace::Top),
             held_item: Some(item("minecraft:furnace", 1)),
-        },
+        }),
         0,
     );
     let open_events = core.apply_command(
-        CoreCommand::UseBlock {
+        gameplay(GameplayCommand::UseBlock {
             player_id: first,
             hand: InteractionHand::Main,
             position: furnace_pos,
             face: Some(BlockFace::Top),
             held_item: None,
-        },
+        }),
         0,
     );
     assert_container_opened(&open_events, first, 1, InventoryContainer::Furnace);
@@ -1645,12 +1645,12 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
     let _ = core.tick(0);
 
     let reject_break = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: first,
             position: furnace_pos,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     assert_eq!(block_change_count(&reject_break, furnace_pos, is_air), 0);
@@ -1673,12 +1673,12 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
     let _ = core.tick(100);
 
     let break_events = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: first,
             position: furnace_pos,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     assert!(block_change_count(&break_events, furnace_pos, is_air) >= 1);
@@ -1717,13 +1717,13 @@ fn world_backed_furnace_rejects_break_until_empty_and_closes_viewers_when_remove
 fn survival_place_consumes_selected_stack_and_updates_world() {
     let (mut survival, lone) = logged_in_core(CoreConfig::default(), 3, "lone");
     let place_events = survival.apply_command(
-        CoreCommand::PlaceBlock {
+        gameplay(GameplayCommand::PlaceBlock {
             player_id: lone,
             hand: InteractionHand::Main,
             position: BlockPos::new(2, 3, 0),
             face: Some(BlockFace::Top),
             held_item: Some(item("minecraft:stone", 64)),
-        },
+        }),
         0,
     );
 
@@ -1756,12 +1756,12 @@ fn survival_break_spawns_drop_and_snapshot_roundtrip_omits_active_drops() {
     let break_pos = BlockPos::new(2, 1, 0);
 
     let start_events = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: player,
             position: break_pos,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     assert!(block_break_progress_count(&start_events, player, break_pos, Some(0)) >= 1);
@@ -1798,12 +1798,12 @@ fn survival_break_drop_mapping_handles_grass_and_glass() {
     let (mut core, player) = logged_in_core(CoreConfig::default(), 1, "mapper");
 
     let grass_break = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: player,
             position: BlockPos::new(2, 3, 0),
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     assert_eq!(
@@ -1816,12 +1816,12 @@ fn survival_break_drop_mapping_handles_grass_and_glass() {
     let glass_pos = BlockPos::new(4, 4, 0);
     let _ = set_block_via_tx(&mut core, glass_pos, glass(), 0);
     let glass_break = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: player,
             position: glass_pos,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     assert_eq!(block_change_count(&glass_break, glass_pos, is_air), 0);
@@ -1847,12 +1847,12 @@ fn survival_mining_respects_exact_boundaries_for_dirt_sand_and_stone() {
         }
 
         let start = core.apply_command(
-            CoreCommand::DigBlock {
+            gameplay(GameplayCommand::DigBlock {
                 player_id: player,
                 position,
                 status: 0,
                 face: Some(BlockFace::Top),
-            },
+            }),
             0,
         );
         assert_eq!(block_change_count(&start, position, is_air), 0);
@@ -1869,23 +1869,23 @@ fn survival_mining_cancel_and_held_slot_change_clear_progress() {
     let position = BlockPos::new(2, 2, 0);
 
     let start = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: player,
             position,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     assert!(block_break_progress_count(&start, player, position, Some(0)) >= 1);
 
     let cancel = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: player,
             position,
             status: 1,
             face: Some(BlockFace::Top),
-        },
+        }),
         100,
     );
     assert!(block_break_progress_count(&cancel, player, position, None) >= 1);
@@ -1894,12 +1894,12 @@ fn survival_mining_cancel_and_held_slot_change_clear_progress() {
     assert_eq!(snapshot_block(&core, position), dirt());
 
     let restart = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: player,
             position,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         1_100,
     );
     assert!(block_break_progress_count(&restart, player, position, Some(0)) >= 1);
@@ -1915,22 +1915,22 @@ fn survival_successful_place_and_external_block_change_clear_active_mining() {
     let mined_pos = BlockPos::new(2, 2, 0);
 
     let _ = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: player,
             position: mined_pos,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     let place = core.apply_command(
-        CoreCommand::PlaceBlock {
+        gameplay(GameplayCommand::PlaceBlock {
             player_id: player,
             hand: InteractionHand::Main,
             position: BlockPos::new(4, 3, 0),
             face: Some(BlockFace::Top),
             held_item: Some(item("minecraft:stone", 64)),
-        },
+        }),
         100,
     );
     assert!(block_break_progress_count(&place, player, mined_pos, None) >= 1);
@@ -1939,12 +1939,12 @@ fn survival_successful_place_and_external_block_change_clear_active_mining() {
     assert_eq!(block_change_count(&after_place, mined_pos, is_air), 0);
 
     let _ = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: player,
             position: mined_pos,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         1_100,
     );
     let external = set_block_via_tx(&mut core, mined_pos, sand(), 1_200);
@@ -1962,21 +1962,21 @@ fn survival_multiple_players_do_not_share_mining_progress() {
     let position = BlockPos::new(2, 1, 0);
 
     let _ = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: first,
             position,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
     let _ = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: second,
             position,
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         1_000,
     );
 
@@ -1992,12 +1992,12 @@ fn survival_multiple_players_do_not_share_mining_progress() {
 fn active_mining_is_not_persisted_in_snapshots() {
     let (mut core, _player) = logged_in_core(CoreConfig::default(), 1, "snapshot-miner");
     let _ = core.apply_command(
-        CoreCommand::DigBlock {
+        gameplay(GameplayCommand::DigBlock {
             player_id: player_id("snapshot-miner"),
             position: BlockPos::new(2, 1, 0),
             status: 0,
             face: Some(BlockFace::Top),
-        },
+        }),
         0,
     );
 
@@ -2019,23 +2019,23 @@ fn survival_pickup_delay_and_nearest_player_pickup_work() {
     let (second, _) = login_player(&mut core, 2, "far");
 
     let _ = core.apply_command(
-        CoreCommand::MoveIntent {
+        gameplay(GameplayCommand::MoveIntent {
             player_id: first,
             position: Some(Vec3::new(1.5, 4.0, 0.5)),
             yaw: Some(0.0),
             pitch: Some(0.0),
             on_ground: true,
-        },
+        }),
         0,
     );
     let _ = core.apply_command(
-        CoreCommand::MoveIntent {
+        gameplay(GameplayCommand::MoveIntent {
             player_id: second,
             position: Some(Vec3::new(4.5, 4.0, 0.5)),
             yaw: Some(0.0),
             pitch: Some(0.0),
             on_ground: true,
-        },
+        }),
         0,
     );
 
@@ -2090,13 +2090,13 @@ fn survival_high_fall_drop_becomes_pickable_after_settling() {
     let (player, _) = login_player(&mut core, 1, "high-fall");
 
     let _ = core.apply_command(
-        CoreCommand::MoveIntent {
+        gameplay(GameplayCommand::MoveIntent {
             player_id: player,
             position: Some(Vec3::new(1.5, 4.0, 0.5)),
             yaw: Some(0.0),
             pitch: Some(0.0),
             on_ground: true,
-        },
+        }),
         0,
     );
 
@@ -2133,13 +2133,13 @@ fn survival_high_fall_drop_becomes_pickable_after_settling() {
 fn survival_partial_pickup_leaves_leftover_drop_for_late_joiners() {
     let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "picker");
     let _ = core.apply_command(
-        CoreCommand::MoveIntent {
+        gameplay(GameplayCommand::MoveIntent {
             player_id: first,
             position: Some(Vec3::new(1.5, 4.0, 0.5)),
             yaw: Some(0.0),
             pitch: Some(0.0),
             on_ground: true,
-        },
+        }),
         0,
     );
 
@@ -2196,13 +2196,13 @@ fn survival_partial_pickup_leaves_leftover_drop_for_late_joiners() {
 fn survival_pickup_prefers_leftmost_hotbar_slot_before_main_inventory() {
     let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "hotbar-first");
     let _ = core.apply_command(
-        CoreCommand::MoveIntent {
+        gameplay(GameplayCommand::MoveIntent {
             player_id: first,
             position: Some(Vec3::new(1.5, 4.0, 0.5)),
             yaw: Some(0.0),
             pitch: Some(0.0),
             on_ground: true,
-        },
+        }),
         0,
     );
 

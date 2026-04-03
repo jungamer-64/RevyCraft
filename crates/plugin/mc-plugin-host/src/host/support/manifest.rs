@@ -4,7 +4,7 @@ use super::{
 };
 use crate::config::PluginBufferLimits;
 use mc_plugin_api::abi::CapabilityDescriptorV1;
-use mc_plugin_api::{AdminSurfaceProfileId, AuthProfileId, StorageProfileId};
+use revy_voxel_semantic::{AdminSurfaceProfileId, AuthProfileId, StorageProfileId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProtocolManifestCapabilities {

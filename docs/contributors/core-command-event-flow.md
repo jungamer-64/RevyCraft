@@ -22,8 +22,7 @@ client packet
      -> direct-core command
         -> ServerCore::apply_command(...)
         -> Vec<TargetedEvent>
-     -> gameplay-owned command
-        -> GameplayCommand
+     -> CoreCommand::Gameplay(GameplayCommand)
         -> snapshot-backed GameplayReadView + detached GameplayEffectBatch
         -> gameplay plugin callback
         -> validate_and_apply_gameplay_effects(...)
@@ -50,7 +49,7 @@ login は gameplay transaction の special-case ですが、`LoginAccepted` を 
 - `CoreCommand`
   runtime / protocol 境界で使う semantic input です。定義は [`../../crates/core/revy-voxel-semantic/src/events.rs`](../../crates/core/revy-voxel-semantic/src/events.rs) にあります。
 - `GameplayCommand`
-  gameplay plugin に見せる gameplay-owned command だけを抜き出した入力です。`CoreCommand` から分離されます。定義は [`../../crates/core/revy-voxel-semantic/src/events.rs`](../../crates/core/revy-voxel-semantic/src/events.rs) にあります。
+  gameplay plugin に見せる gameplay-owned command だけを表す canonical enum です。runtime / protocol 境界では `CoreCommand::Gameplay(GameplayCommand)` の payload として運ばれます。定義は [`../../crates/core/revy-voxel-semantic/src/events.rs`](../../crates/core/revy-voxel-semantic/src/events.rs) にあります。
 - `GameplayEffectBatch`
   gameplay callback 単位で host が返す invocation-scoped result です。plugin は read callback と effect recorder を通じて snapshot を読み、`read-set + effect list` を batch に積みます。runtime は live core を直接触らせず、この batch を `ServerCore::validate_and_apply_*` へ渡して validate/apply します。定義は [`../../crates/core/revy-voxel-semantic/src/gameplay.rs`](../../crates/core/revy-voxel-semantic/src/gameplay.rs)、apply 側は [`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) にあります。
 - `CoreEvent`
@@ -71,18 +70,16 @@ runtime 側の本体は [`../../crates/runtime/revy-server-runtime/src/runtime/k
 次の command は gameplay policy を通らず、core が直接処理します。
 
 - `UpdateClientView`
-- `ClientStatus`
-- `InventoryTransactionAck`
 - `InventoryClick`
 - `CloseContainer`
 - `KeepAliveResponse`
 - `Disconnect`
 
-特に `InventoryClick` は [`../../crates/core/revy-voxel-core/src/core/inventory/click.rs`](../../crates/core/revy-voxel-core/src/core/inventory/click.rs) で直接処理されます。gameplay plugin transaction は経由しません。
+特に `InventoryClick` は [`../../crates/core/revy-voxel-core/src/core/inventory/click.rs`](../../crates/core/revy-voxel-core/src/core/inventory/click.rs) で直接処理されます。gameplay plugin transaction は経由しません。`ClientStatus` と `InventoryTransactionAck` は `CoreCommand` ではなく `SessionCommand` なので、runtime 側で別レーンを通ります。
 
 ### gameplay-owned command
 
-次の command は gameplay policy へ渡されます。
+次の command は `CoreCommand::Gameplay(...)` に畳み込まれて gameplay policy へ渡されます。
 
 - `MoveIntent`
 - `SetHeldSlot`
@@ -91,7 +88,7 @@ runtime 側の本体は [`../../crates/runtime/revy-server-runtime/src/runtime/k
 - `PlaceBlock`
 - `UseBlock`
 
-ここで runtime が `CoreCommand` を `GameplayCommand` へ落とし、gameplay plugin の `prepare_command(...)` を snapshot-backed read view 上で 1 回だけ実行します。plugin は host effect API を通じて detached `GameplayEffectBatch` を組み立て、runtime はその batch を live core に対して validate/apply します。read-set が stale なら callback は再実行せず、結果を authoritative resync / drop に寄せます。
+protocol plugin の decode 結果も `RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::...))` として runtime に入ります。runtime はここで enum を落とし直さず、nested `GameplayCommand` をそのまま `prepare_command(...)` へ渡します。plugin は host effect API を通じて detached `GameplayEffectBatch` を組み立て、runtime はその batch を live core に対して validate/apply します。read-set が stale なら callback は再実行せず、結果を authoritative resync / drop に寄せます。
 
 ## login 時に何が足されるか
 

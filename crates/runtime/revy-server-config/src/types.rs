@@ -1,9 +1,9 @@
 use crate::error::ServerConfigError;
 use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
-use mc_plugin_api::{
+use revy_server_types::{AdminPermission, PluginFailureMatrix};
+use revy_voxel_semantic::{
     AdapterId, AdminSurfaceProfileId, AuthProfileId, GameplayProfileId, StorageProfileId,
 };
-use revy_server_types::{AdminPermission, PluginFailureMatrix};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};

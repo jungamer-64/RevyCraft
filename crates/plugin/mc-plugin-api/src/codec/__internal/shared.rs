@@ -627,28 +627,9 @@ pub(crate) fn encode_runtime_command(
             encode_player_id(encoder, *player_id);
             encoder.write_i8(*action_id);
         }
-        RuntimeCommand::Core(CoreCommand::MoveIntent {
-            player_id,
-            position,
-            yaw,
-            pitch,
-            on_ground,
-        }) => {
+        RuntimeCommand::Core(CoreCommand::Gameplay(command)) => {
             encoder.write_u8(4);
-            encode_player_id(encoder, *player_id);
-            encode_option(encoder, position.as_ref(), |encoder, position| {
-                encode_vec3(encoder, *position);
-                Ok(())
-            })?;
-            encode_option(encoder, yaw.as_ref(), |encoder, value| {
-                encoder.write_f32(*value);
-                Ok(())
-            })?;
-            encode_option(encoder, pitch.as_ref(), |encoder, value| {
-                encoder.write_f32(*value);
-                Ok(())
-            })?;
-            encoder.write_bool(*on_ground);
+            encode_gameplay_command(encoder, command)?;
         }
         RuntimeCommand::Core(CoreCommand::KeepAliveResponse {
             player_id,
@@ -657,21 +638,6 @@ pub(crate) fn encode_runtime_command(
             encoder.write_u8(5);
             encode_player_id(encoder, *player_id);
             encoder.write_i32(*keep_alive_id);
-        }
-        RuntimeCommand::Core(CoreCommand::SetHeldSlot { player_id, slot }) => {
-            encoder.write_u8(6);
-            encode_player_id(encoder, *player_id);
-            encoder.write_i16(*slot);
-        }
-        RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
-            player_id,
-            slot,
-            stack,
-        }) => {
-            encoder.write_u8(7);
-            encode_player_id(encoder, *player_id);
-            encode_inventory_slot(encoder, *slot);
-            encode_option(encoder, stack.as_ref(), encode_item_stack)?;
         }
         RuntimeCommand::Core(CoreCommand::InventoryClick {
             player_id,
@@ -705,55 +671,6 @@ pub(crate) fn encode_runtime_command(
             encode_player_id(encoder, *player_id);
             encoder.write_u8(*window_id);
         }
-        RuntimeCommand::Core(CoreCommand::DigBlock {
-            player_id,
-            position,
-            status,
-            face,
-        }) => {
-            encoder.write_u8(8);
-            encode_player_id(encoder, *player_id);
-            encode_block_pos(encoder, *position);
-            encoder.write_u8(*status);
-            encode_option(encoder, face.as_ref(), |encoder, face| {
-                encode_block_face(encoder, *face);
-                Ok(())
-            })?;
-        }
-        RuntimeCommand::Core(CoreCommand::PlaceBlock {
-            player_id,
-            hand,
-            position,
-            face,
-            held_item,
-        }) => {
-            encoder.write_u8(9);
-            encode_player_id(encoder, *player_id);
-            encode_interaction_hand(encoder, *hand);
-            encode_block_pos(encoder, *position);
-            encode_option(encoder, face.as_ref(), |encoder, face| {
-                encode_block_face(encoder, *face);
-                Ok(())
-            })?;
-            encode_option(encoder, held_item.as_ref(), encode_item_stack)?;
-        }
-        RuntimeCommand::Core(CoreCommand::UseBlock {
-            player_id,
-            hand,
-            position,
-            face,
-            held_item,
-        }) => {
-            encoder.write_u8(14);
-            encode_player_id(encoder, *player_id);
-            encode_interaction_hand(encoder, *hand);
-            encode_block_pos(encoder, *position);
-            encode_option(encoder, face.as_ref(), |encoder, face| {
-                encode_block_face(encoder, *face);
-                Ok(())
-            })?;
-            encode_option(encoder, held_item.as_ref(), encode_item_stack)?;
-        }
         RuntimeCommand::Core(CoreCommand::Disconnect { player_id }) => {
             encoder.write_u8(10);
             encode_player_id(encoder, *player_id);
@@ -779,25 +696,12 @@ pub(crate) fn decode_runtime_command(
             player_id: decode_player_id(decoder)?,
             action_id: decoder.read_i8()?,
         })),
-        4 => Ok(RuntimeCommand::Core(CoreCommand::MoveIntent {
-            player_id: decode_player_id(decoder)?,
-            position: decode_option(decoder, decode_vec3)?,
-            yaw: decode_option(decoder, decode_f32_value)?,
-            pitch: decode_option(decoder, decode_f32_value)?,
-            on_ground: decoder.read_bool()?,
-        })),
+        4 => Ok(RuntimeCommand::Core(CoreCommand::from(
+            decode_gameplay_command(decoder)?,
+        ))),
         5 => Ok(RuntimeCommand::Core(CoreCommand::KeepAliveResponse {
             player_id: decode_player_id(decoder)?,
             keep_alive_id: decoder.read_i32()?,
-        })),
-        6 => Ok(RuntimeCommand::Core(CoreCommand::SetHeldSlot {
-            player_id: decode_player_id(decoder)?,
-            slot: decoder.read_i16()?,
-        })),
-        7 => Ok(RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
-            player_id: decode_player_id(decoder)?,
-            slot: decode_inventory_slot(decoder)?,
-            stack: decode_option(decoder, decode_item_stack)?,
         })),
         11 => Ok(RuntimeCommand::Core(CoreCommand::InventoryClick {
             player_id: decode_player_id(decoder)?,
@@ -816,26 +720,6 @@ pub(crate) fn decode_runtime_command(
         13 => Ok(RuntimeCommand::Core(CoreCommand::CloseContainer {
             player_id: decode_player_id(decoder)?,
             window_id: decoder.read_u8()?,
-        })),
-        8 => Ok(RuntimeCommand::Core(CoreCommand::DigBlock {
-            player_id: decode_player_id(decoder)?,
-            position: decode_block_pos(decoder)?,
-            status: decoder.read_u8()?,
-            face: decode_option(decoder, decode_block_face)?,
-        })),
-        9 => Ok(RuntimeCommand::Core(CoreCommand::PlaceBlock {
-            player_id: decode_player_id(decoder)?,
-            hand: decode_interaction_hand(decoder)?,
-            position: decode_block_pos(decoder)?,
-            face: decode_option(decoder, decode_block_face)?,
-            held_item: decode_option(decoder, decode_item_stack)?,
-        })),
-        14 => Ok(RuntimeCommand::Core(CoreCommand::UseBlock {
-            player_id: decode_player_id(decoder)?,
-            hand: decode_interaction_hand(decoder)?,
-            position: decode_block_pos(decoder)?,
-            face: decode_option(decoder, decode_block_face)?,
-            held_item: decode_option(decoder, decode_item_stack)?,
         })),
         10 => Ok(RuntimeCommand::Core(CoreCommand::Disconnect {
             player_id: decode_player_id(decoder)?,

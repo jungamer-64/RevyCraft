@@ -68,17 +68,7 @@ impl ServerCore {
                 now_ms,
                 ApplyCoreOpsOptions::default(),
             ),
-            command @ (CoreCommand::MoveIntent { .. }
-            | CoreCommand::SetHeldSlot { .. }
-            | CoreCommand::CreativeInventorySet { .. }
-            | CoreCommand::DigBlock { .. }
-            | CoreCommand::PlaceBlock { .. }
-            | CoreCommand::UseBlock { .. }) => {
-                let gameplay_command = command
-                    .into_gameplay()
-                    .expect("gameplay-owned command should convert to GameplayCommand");
-                self.apply_builtin_gameplay_command(gameplay_command, now_ms)
-            }
+            CoreCommand::Gameplay(command) => self.apply_builtin_gameplay_command(command, now_ms),
             CoreCommand::KeepAliveResponse {
                 player_id,
                 keep_alive_id,

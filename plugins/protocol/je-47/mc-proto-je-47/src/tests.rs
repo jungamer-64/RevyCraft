@@ -8,9 +8,9 @@ use mc_proto_common::{
 use mc_proto_je_common::__version_support::positions::pack_block_position;
 use mc_proto_je_common::__version_support::{blocks::legacy_block_state_id, inventory::read_slot};
 use revy_voxel_semantic::{
-    BlockFace, BlockPos, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot, InteractionHand,
-    InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
-    InventoryTransactionContext, InventoryWindowContents, ItemStack, Vec3,
+    BlockFace, BlockPos, ChunkColumn, ChunkPos, DimensionId, DroppedItemSnapshot, GameplayCommand,
+    InteractionHand, InventoryClickButton, InventoryClickTarget, InventoryClickValidation,
+    InventorySlot, InventoryTransactionContext, InventoryWindowContents, ItemStack, Vec3,
 };
 use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use uuid::Uuid;
@@ -204,10 +204,10 @@ fn decodes_play_packets_into_core_commands() {
         .expect("position should produce a command");
     assert!(matches!(
         command,
-        RuntimeCommand::Core(CoreCommand::MoveIntent {
+        RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::MoveIntent {
             position: Some(_),
             ..
-        })
+        }))
     ));
 
     let mut placement = PacketWriter::default();
@@ -227,13 +227,13 @@ fn decodes_play_packets_into_core_commands() {
         .expect("placement should produce a command");
     assert!(matches!(
         command,
-        RuntimeCommand::Core(CoreCommand::UseBlock {
+        RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::UseBlock {
             hand: InteractionHand::Main,
             position: BlockPos { x: 2, y: 3, z: 4 },
             face: Some(BlockFace::Top),
             held_item: Some(ref stack),
             ..
-        }) if stack.key.as_str() == "minecraft:chest" && stack.count == 1
+        })) if stack.key.as_str() == "minecraft:chest" && stack.count == 1
     ));
 }
 
@@ -321,10 +321,12 @@ fn decodes_creative_inventory_slot_mapping() {
         .expect("creative inventory action should produce a command");
     assert!(matches!(
         command,
-        RuntimeCommand::Core(CoreCommand::CreativeInventorySet {
-            slot: InventorySlot::Hotbar(0),
-            ..
-        })
+        RuntimeCommand::Core(CoreCommand::Gameplay(
+            GameplayCommand::CreativeInventorySet {
+                slot: InventorySlot::Hotbar(0),
+                ..
+            }
+        ))
     ));
 }
 

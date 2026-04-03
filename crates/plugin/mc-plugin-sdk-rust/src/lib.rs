@@ -28,4 +28,23 @@ pub mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub use mc_plugin_api::semantic::*;
+pub use revy_voxel_semantic::{
+    AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,
+    AuthCapability, AuthCapabilitySet, AuthProfileId, BlockDescriptor, BlockEntityKindId,
+    BlockEntityState, BlockFace, BlockKey, BlockPos, BlockState, CapabilityAnnouncement,
+    CapabilityParseError, ChunkColumn, ChunkDelta, ChunkPos, ChunkSection, ClosedCapability,
+    ClosedCapabilitySet, ConnectionId, ConnectionIdSource, ContainerBinding,
+    ContainerBlockEntityState, ContainerKindId, ContainerPropertyKey, ContainerSlotRole,
+    ContainerSpec, ContentBehavior, CoreCommand, CoreConfig, CoreEvent, DimensionId,
+    DroppedItemSnapshot, EntityId, EventTarget, GameplayCanEditBlockKey, GameplayCapability,
+    GameplayCapabilitySet, GameplayCommand, GameplayEffect, GameplayEffectBatch, GameplayProfileId,
+    GameplayReadSet, InteractionHand, InventoryClickButton, InventoryClickTarget,
+    InventoryClickValidation, InventorySlot, InventoryTransactionContext, InventoryWindowContents,
+    ItemDataMap, ItemDataValue, ItemDescriptor, ItemKey, ItemStack, MiningToolSpec, OpaqueF32,
+    OpaqueF64, OpenContainerState, PlayerId, PlayerInventory, PlayerSnapshot, PlayerSummary,
+    PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet,
+    RevisionConflict, Revisioned, RuntimeCommand, SectionBlockIndex, SectionPos,
+    SessionCapabilitySet, SessionCommand, SessionRoutes, StorageCapability, StorageCapabilitySet,
+    StorageProfileId, TargetedEvent, ToolClass, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
+    flatten_block_index, required_chunks, section_local_y,
+};

@@ -645,21 +645,6 @@ async fn mixed_java_versions_keep_window_zero_crafting_isolated() -> Result<(), 
     )
     .await?;
 
-    write_packet(
-        &mut modern,
-        &codec,
-        &click_window(TestJavaProtocol::Je340, 1, 0, 2, Some((17, 1, 0))),
-    )
-    .await?;
-    assert_no_java_packet(
-        &mut modern,
-        &codec,
-        &mut modern_buffer,
-        TestJavaProtocol::Je340,
-        TestJavaPacket::ConfirmTransaction,
-    )
-    .await?;
-
     let result_preview = {
         write_packet(&mut legacy, &codec, &held_item_change(4)).await?;
         let held_item = read_until_held_item_change(

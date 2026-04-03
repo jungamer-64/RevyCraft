@@ -20,25 +20,10 @@ pub enum CoreCommand {
         player_id: PlayerId,
         view_distance: u8,
     },
-    MoveIntent {
-        player_id: PlayerId,
-        position: Option<Vec3>,
-        yaw: Option<f32>,
-        pitch: Option<f32>,
-        on_ground: bool,
-    },
+    Gameplay(GameplayCommand),
     KeepAliveResponse {
         player_id: PlayerId,
         keep_alive_id: i32,
-    },
-    SetHeldSlot {
-        player_id: PlayerId,
-        slot: i16,
-    },
-    CreativeInventorySet {
-        player_id: PlayerId,
-        slot: InventorySlot,
-        stack: Option<ItemStack>,
     },
     InventoryClick {
         player_id: PlayerId,
@@ -51,26 +36,6 @@ pub enum CoreCommand {
         player_id: PlayerId,
         window_id: u8,
     },
-    DigBlock {
-        player_id: PlayerId,
-        position: BlockPos,
-        status: u8,
-        face: Option<BlockFace>,
-    },
-    PlaceBlock {
-        player_id: PlayerId,
-        hand: InteractionHand,
-        position: BlockPos,
-        face: Option<BlockFace>,
-        held_item: Option<ItemStack>,
-    },
-    UseBlock {
-        player_id: PlayerId,
-        hand: InteractionHand,
-        position: BlockPos,
-        face: Option<BlockFace>,
-        held_item: Option<ItemStack>,
-    },
     Disconnect {
         player_id: PlayerId,
     },
@@ -82,22 +47,12 @@ impl CoreCommand {
         match self {
             Self::LoginStart { player_id, .. }
             | Self::UpdateClientView { player_id, .. }
-            | Self::MoveIntent { player_id, .. }
             | Self::KeepAliveResponse { player_id, .. }
-            | Self::SetHeldSlot { player_id, .. }
-            | Self::CreativeInventorySet { player_id, .. }
             | Self::InventoryClick { player_id, .. }
             | Self::CloseContainer { player_id, .. }
-            | Self::DigBlock { player_id, .. }
-            | Self::PlaceBlock { player_id, .. }
-            | Self::UseBlock { player_id, .. }
             | Self::Disconnect { player_id, .. } => Some(*player_id),
+            Self::Gameplay(command) => Some(command.player_id()),
         }
-    }
-
-    #[must_use]
-    pub fn into_gameplay(self) -> Result<GameplayCommand, Self> {
-        GameplayCommand::try_from(self)
     }
 }
 
@@ -199,68 +154,7 @@ impl TryFrom<CoreCommand> for GameplayCommand {
 
     fn try_from(command: CoreCommand) -> Result<Self, Self::Error> {
         match command {
-            CoreCommand::MoveIntent {
-                player_id,
-                position,
-                yaw,
-                pitch,
-                on_ground,
-            } => Ok(Self::MoveIntent {
-                player_id,
-                position,
-                yaw,
-                pitch,
-                on_ground,
-            }),
-            CoreCommand::SetHeldSlot { player_id, slot } => {
-                Ok(Self::SetHeldSlot { player_id, slot })
-            }
-            CoreCommand::CreativeInventorySet {
-                player_id,
-                slot,
-                stack,
-            } => Ok(Self::CreativeInventorySet {
-                player_id,
-                slot,
-                stack,
-            }),
-            CoreCommand::DigBlock {
-                player_id,
-                position,
-                status,
-                face,
-            } => Ok(Self::DigBlock {
-                player_id,
-                position,
-                status,
-                face,
-            }),
-            CoreCommand::PlaceBlock {
-                player_id,
-                hand,
-                position,
-                face,
-                held_item,
-            } => Ok(Self::PlaceBlock {
-                player_id,
-                hand,
-                position,
-                face,
-                held_item,
-            }),
-            CoreCommand::UseBlock {
-                player_id,
-                hand,
-                position,
-                face,
-                held_item,
-            } => Ok(Self::UseBlock {
-                player_id,
-                hand,
-                position,
-                face,
-                held_item,
-            }),
+            CoreCommand::Gameplay(command) => Ok(command),
             other => Err(other),
         }
     }
@@ -268,70 +162,7 @@ impl TryFrom<CoreCommand> for GameplayCommand {
 
 impl From<GameplayCommand> for CoreCommand {
     fn from(command: GameplayCommand) -> Self {
-        match command {
-            GameplayCommand::MoveIntent {
-                player_id,
-                position,
-                yaw,
-                pitch,
-                on_ground,
-            } => Self::MoveIntent {
-                player_id,
-                position,
-                yaw,
-                pitch,
-                on_ground,
-            },
-            GameplayCommand::SetHeldSlot { player_id, slot } => {
-                Self::SetHeldSlot { player_id, slot }
-            }
-            GameplayCommand::CreativeInventorySet {
-                player_id,
-                slot,
-                stack,
-            } => Self::CreativeInventorySet {
-                player_id,
-                slot,
-                stack,
-            },
-            GameplayCommand::DigBlock {
-                player_id,
-                position,
-                status,
-                face,
-            } => Self::DigBlock {
-                player_id,
-                position,
-                status,
-                face,
-            },
-            GameplayCommand::PlaceBlock {
-                player_id,
-                hand,
-                position,
-                face,
-                held_item,
-            } => Self::PlaceBlock {
-                player_id,
-                hand,
-                position,
-                face,
-                held_item,
-            },
-            GameplayCommand::UseBlock {
-                player_id,
-                hand,
-                position,
-                face,
-                held_item,
-            } => Self::UseBlock {
-                player_id,
-                hand,
-                position,
-                face,
-                held_item,
-            },
-        }
+        Self::Gameplay(command)
     }
 }
 
@@ -424,4 +255,36 @@ pub type TargetedEvent = revy_core::event::RoutedEvent<CoreEvent>;
 pub struct PlayerSummary {
     pub online_players: usize,
     pub max_players: u8,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn core_command_player_id_reports_gameplay_variant() {
+        let command = CoreCommand::Gameplay(GameplayCommand::SetHeldSlot {
+            player_id: PlayerId(Uuid::nil()),
+            slot: 2,
+        });
+
+        assert_eq!(command.player_id(), Some(PlayerId(Uuid::nil())));
+    }
+
+    #[test]
+    fn gameplay_command_wraps_into_core_command() {
+        let gameplay = GameplayCommand::UseBlock {
+            player_id: PlayerId(Uuid::from_u128(5)),
+            hand: InteractionHand::Main,
+            position: BlockPos::new(1, 64, 1),
+            face: Some(BlockFace::Top),
+            held_item: Some(ItemStack::new("minecraft:stone", 1, 0)),
+        };
+
+        assert_eq!(
+            CoreCommand::from(gameplay.clone()),
+            CoreCommand::Gameplay(gameplay)
+        );
+    }
 }

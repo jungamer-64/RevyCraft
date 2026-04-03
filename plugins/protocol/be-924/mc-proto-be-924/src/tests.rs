@@ -37,7 +37,7 @@ use mc_proto_common::{
     RuntimeCommand, SessionAdapter,
 };
 use revy_voxel_semantic::{
-    BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DroppedItemSnapshot,
+    BlockFace, BlockPos, BlockState, ChunkColumn, ChunkPos, DroppedItemSnapshot, GameplayCommand,
     InventoryClickButton, InventoryClickTarget, InventoryClickValidation, InventorySlot,
     InventoryTransactionContext, InventoryWindowContents, ItemStack, PlayerInventory,
 };
@@ -511,12 +511,12 @@ fn decodes_legacy_inventory_transaction_item_use() {
         .expect("legacy inventory transaction should produce a command");
     assert!(matches!(
         command,
-        RuntimeCommand::Core(CoreCommand::PlaceBlock {
+        RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::PlaceBlock {
             player_id: decoded_player,
             position,
             face: Some(BlockFace::Top),
             ..
-        }) if decoded_player == player_id && position == BlockPos::new(2, 3, 4)
+        })) if decoded_player == player_id && position == BlockPos::new(2, 3, 4)
     ));
 }
 
@@ -555,12 +555,12 @@ fn decodes_player_auth_input_item_use() {
         .expect("player auth input should produce a command");
     assert!(matches!(
         command,
-        RuntimeCommand::Core(CoreCommand::DigBlock {
+        RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::DigBlock {
             player_id: decoded_player,
             position,
             face: Some(BlockFace::West),
             ..
-        }) if decoded_player == player_id && position == BlockPos::new(5, 6, 7)
+        })) if decoded_player == player_id && position == BlockPos::new(5, 6, 7)
     ));
 }
 
@@ -772,12 +772,12 @@ fn decodes_player_action_destroy_packets_to_dig_statuses() {
             .expect("player action should produce a command");
         assert!(matches!(
             command,
-            RuntimeCommand::Core(CoreCommand::DigBlock {
+            RuntimeCommand::Core(CoreCommand::Gameplay(GameplayCommand::DigBlock {
                 player_id: decoded_player,
                 position,
                 status,
                 face: Some(BlockFace::Top),
-            }) if decoded_player == player_id
+            })) if decoded_player == player_id
                 && position == BlockPos::new(2, 4, 0)
                 && status == expected_status
         ));

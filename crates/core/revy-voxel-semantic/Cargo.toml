@@ -14,5 +14,8 @@ revy-core = { path = "../revy-core" }
 num-traits.workspace = true
 serde.workspace = true
 
+[dev-dependencies]
+uuid.workspace = true
+
 [lints]
 workspace = true

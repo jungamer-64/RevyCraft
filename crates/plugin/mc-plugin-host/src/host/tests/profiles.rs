@@ -355,7 +355,10 @@ fn gameplay_prepare_command_conflict_does_not_reinvoke_callback() {
         )
         .expect("counting gameplay profile should prepare a detached effect batch");
 
-    let _ = core.apply_command(CoreCommand::SetHeldSlot { player_id, slot: 1 }, 0);
+    let _ = core.apply_command(
+        GameplayCommand::SetHeldSlot { player_id, slot: 1 }.into(),
+        0,
+    );
 
     assert_eq!(
         core.validate_and_apply_gameplay_effects(batch),
