@@ -4,7 +4,6 @@ use bedrock_jwt::verifier::{
     build_public_key_from_b64, decode_b64_url_nopad, decode_header_get_x5u, jose_sig_to_der,
     verify_chain,
 };
-use bedrockrs_proto::info::MOJANG_PUBLIC_KEY;
 use mc_plugin_contract::codec::auth::{AuthDescriptor, AuthMode, BedrockAuthResult};
 use mc_plugin_sdk_rust::auth::RustAuthPlugin;
 use mc_plugin_sdk_rust::capabilities::auth_capabilities;
@@ -14,6 +13,9 @@ use mc_plugin_sdk_rust::{AuthCapability, AuthCapabilitySet, PlayerId};
 use p384::ecdsa::{Signature as EcdsaSignature, VerifyingKey, signature::Verifier};
 use serde_json::Value;
 use uuid::Uuid;
+
+// Fixed trust root for authenticating the token chain before accepting its identity key.
+const BEDROCK_TOKEN_AUTHORITY_PUBLIC_KEY: &str = "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAECRXueJeTDqNRRgJi/vlRufByu/2G0i2Ebt6YMar5QX/R0DIIyrJMcUpruK4QveTfJSTp3Shlq4Gk34cD/4GUWwkv0DVuzeuB+tXija7HBxii03NHDbPAD0AKnLr2wdAp";
 
 pub const BEDROCK_XBL_AUTH_PROFILE_ID: &str = "bedrock-xbl-v1";
 pub const BEDROCK_XBL_AUTH_PLUGIN_ID: &str = "auth-bedrock-xbl";
@@ -43,7 +45,7 @@ impl RustAuthPlugin for BedrockXblAuthPlugin {
         client_data_jwt: &str,
     ) -> Result<BedrockAuthResult, String> {
         let token_refs = chain_jwts.iter().map(String::as_str).collect::<Vec<_>>();
-        let claims = verify_chain(&token_refs, MOJANG_PUBLIC_KEY)
+        let claims = verify_chain(&token_refs, BEDROCK_TOKEN_AUTHORITY_PUBLIC_KEY)
             .map_err(|error| format!("bedrock jwt chain verification failed: {error}"))?;
         let identity_public_key = identity_public_key(chain_jwts)
             .map_err(|error| format!("missing bedrock identity public key: {error}"))?;

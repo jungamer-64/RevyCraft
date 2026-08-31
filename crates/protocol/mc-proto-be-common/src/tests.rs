@@ -1,3 +1,4 @@
+use crate::BEDROCK_RAKNET_MAGIC;
 use crate::login::{ParsedBedrockLogin, parse_bedrock_login_payload};
 use crate::probe::detects_bedrock_datagram;
 use base64::Engine;
@@ -49,7 +50,7 @@ fn recognises_raknet_bedrock_probe() {
     let mut datagram = Vec::new();
     datagram.push(0x01);
     datagram.extend_from_slice(&123_i64.to_be_bytes());
-    datagram.extend_from_slice(&bedrockrs_proto::info::MAGIC);
+    datagram.extend_from_slice(&BEDROCK_RAKNET_MAGIC);
     datagram.extend_from_slice(&456_i64.to_be_bytes());
     assert!(detects_bedrock_datagram(&datagram));
 }

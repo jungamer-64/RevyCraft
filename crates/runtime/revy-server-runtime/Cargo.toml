@@ -11,7 +11,7 @@ description = "Protocol-agnostic dedicated server runtime for the RevyCraft work
 
 [dependencies]
 aes.workspace = true
-bedrockrs_proto.workspace = true
+bedrock_protocol.workspace = true
 bytes.workspace = true
 libloading.workspace = true
 mc-content-canonical = { path = "../../content/mc-content-canonical" }
@@ -25,6 +25,7 @@ mc-proto-common = { path = "../../protocol/mc-proto-common" }
 revy-server-config = { path = "../revy-server-config" }
 revy-server-gameplay-bridge = { path = "../revy-server-gameplay-bridge" }
 revy-server-types = { path = "../revy-server-types" }
+revy-raknet = { path = "../../network/revy-raknet" }
 num-bigint.workspace = true
 rsa.workspace = true
 serde.workspace = true
@@ -35,11 +36,9 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-bedrockrs_proto_core.workspace = true
+bedrock_protocol_core.workspace = true
 mc-plugin-auth-bedrock-offline = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-offline" }
 mc-plugin-auth-bedrock-xbl = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-xbl" }
-mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline" }
-mc-plugin-auth-online-stub = { path = "../../../plugins/auth/mc-plugin-auth-online-stub" }
 mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gameplay-canonical" }
 mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly" }
 mc-plugin-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-plugin-proto-be-924" }
@@ -50,8 +49,6 @@ mc-plugin-proto-je-775 = { path = "../../../plugins/protocol/je-775/mc-plugin-pr
 mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-plugin-proto-je-5" }
 mc-plugin-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-plugin-proto-je-47" }
 mc-storage-je-anvil-1_7_10 = { path = "../../storage/mc-storage-je-anvil-1_7_10" }
-mc-plugin-storage-je-anvil-1_18_2 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_18_2" }
-mc-plugin-storage-je-anvil-26_1 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-26_1" }
 mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10" }
 mc-plugin-test-support = { path = "../../testing/mc-plugin-test-support" }
 mc-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-proto-be-924" }

@@ -3,18 +3,12 @@ use crate::inventory::{
     request_transaction, translate_drop_action, translate_place_action, translate_swap_action,
     translate_take_action,
 };
-use bedrockrs_proto::V924;
-use bedrockrs_proto::v662::enums::{
+use bedrock_protocol::V924;
+use bedrock_protocol::v662::enums::{
     ComplexInventoryTransactionType, ItemUseInventoryTransactionType, PlayerActionType,
 };
-use bedrockrs_proto::v662::packets::{
-    ClientCacheStatusPacket, ItemStackRequestPacket, LoginPacket, MobEquipmentPacket,
-    MovePlayerPacket, PlayerActionPacket, RequestNetworkSettingsPacket,
-    ResourcePackClientResponsePacket,
-};
-use bedrockrs_proto::v712::enums::ItemStackRequestActionType;
-use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
-use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecVAR};
+use bedrock_protocol::v712::enums::ItemStackRequestActionType;
+use bedrock_protocol_core::{PacketHeader, ProtoCodec, ProtoCodecVAR};
 use mc_proto_be_common::__version_support::{
     login::parse_bedrock_login_payload,
     world::{block_face_from_i32, block_pos_from_network, protocol_error},
@@ -36,26 +30,22 @@ pub(crate) fn decode_login_request(frame: &[u8]) -> Result<LoginRequest, Protoco
         .next()
         .ok_or_else(|| protocol_error("bedrock login frame was empty"))?;
     match packet {
-        V924::RequestNetworkSettingsPacket(RequestNetworkSettingsPacket {
-            client_network_version,
-        }) => Ok(LoginRequest::BedrockNetworkSettingsRequest {
-            protocol_number: client_network_version,
-        }),
-        V924::LoginPacket(LoginPacket {
-            client_network_version,
-            connection_request,
-        }) => {
-            let login = parse_bedrock_login_payload(&connection_request)
+        V924::RequestNetworkSettingsPacket(packet) => {
+            Ok(LoginRequest::BedrockNetworkSettingsRequest {
+                protocol_number: packet.client_network_version,
+            })
+        }
+        V924::LoginPacket(packet) => {
+            let login = parse_bedrock_login_payload(&packet.connection_request)
                 .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
             Ok(LoginRequest::BedrockLogin {
-                protocol_number: client_network_version,
+                protocol_number: packet.client_network_version,
                 display_name: login.display_name,
                 chain_jwts: login.chain_jwts,
                 client_data_jwt: login.client_data_jwt,
             })
         }
-        V924::ClientCacheStatusPacket(ClientCacheStatusPacket { .. })
-        | V924::ResourcePackClientResponsePacket(ResourcePackClientResponsePacket { .. }) => Err(
+        V924::ClientCacheStatusPacket(_) | V924::ResourcePackClientResponsePacket(_) => Err(
             protocol_error("bedrock login control packet arrived in login phase"),
         ),
         _ => Err(protocol_error("unsupported bedrock login packet")),
@@ -79,94 +69,76 @@ pub(crate) fn decode_play_packet(
         return Ok(None);
     };
     match packet {
-        V924::MovePlayerPacket(MovePlayerPacket {
-            position,
-            rotation,
-            on_ground,
-            ..
-        }) => Ok(Some(runtime_gameplay(GameplayCommand::MoveIntent {
-            player_id,
-            position: Some(Vec3::new(
-                f64::from(position.x),
-                f64::from(position.y),
-                f64::from(position.z),
-            )),
-            yaw: Some(rotation.x),
-            pitch: Some(rotation.y),
-            on_ground,
-        }))),
-        V924::MobEquipmentPacket(MobEquipmentPacket { slot, .. }) => {
-            Ok(Some(runtime_gameplay(GameplayCommand::SetHeldSlot {
+        V924::MovePlayerPacket(packet) => {
+            let (x, y, z) = packet.position;
+            let (yaw, pitch) = packet.rotation;
+            Ok(Some(runtime_gameplay(GameplayCommand::MoveIntent {
                 player_id,
-                slot: i16::from(slot),
+                position: Some(Vec3::new(f64::from(x), f64::from(y), f64::from(z))),
+                yaw: Some(yaw),
+                pitch: Some(pitch),
+                on_ground: packet.on_ground,
             })))
         }
-        V924::PlayerActionPacket(PlayerActionPacket {
-            action,
-            block_position,
-            face,
-            ..
-        }) => match action {
+        V924::MobEquipmentPacket(packet) => {
+            Ok(Some(runtime_gameplay(GameplayCommand::SetHeldSlot {
+                player_id,
+                slot: i16::from(packet.slot),
+            })))
+        }
+        V924::PlayerActionPacket(packet) => match packet.action {
             PlayerActionType::StartDestroyBlock | PlayerActionType::ContinueDestroyBlock => {
                 Ok(Some(runtime_gameplay(GameplayCommand::DigBlock {
                     player_id,
-                    position: block_pos_from_network(&block_position),
+                    position: block_pos_from_network(&packet.block_position),
                     status: 0,
-                    face: block_face_from_i32(face),
+                    face: block_face_from_i32(packet.face),
                 })))
             }
             PlayerActionType::AbortDestroyBlock | PlayerActionType::StopDestroyBlock => {
                 Ok(Some(runtime_gameplay(GameplayCommand::DigBlock {
                     player_id,
-                    position: block_pos_from_network(&block_position),
+                    position: block_pos_from_network(&packet.block_position),
                     status: 1,
-                    face: block_face_from_i32(face),
+                    face: block_face_from_i32(packet.face),
                 })))
             }
             PlayerActionType::CreativeDestroyBlock | PlayerActionType::PredictDestroyBlock => {
                 Ok(Some(runtime_gameplay(GameplayCommand::DigBlock {
                     player_id,
-                    position: block_pos_from_network(&block_position),
+                    position: block_pos_from_network(&packet.block_position),
                     status: 2,
-                    face: block_face_from_i32(face),
+                    face: block_face_from_i32(packet.face),
                 })))
             }
             _ => Ok(None),
         },
-        V924::ItemStackRequestPacket(ItemStackRequestPacket { requests }) => {
-            decode_item_stack_request_packet(session, sessions, player_id, &requests)
+        V924::ItemStackRequestPacket(packet) => {
+            decode_item_stack_request_packet(session, sessions, player_id, &packet.requests)
                 .map(|command| command.map(RuntimeCommand::Core))
         }
-        V924::PlayerAuthInputPacket(PlayerAuthInputPacket {
-            item_stack_request,
-            item_use_transaction,
-            player_position,
-            player_rotation,
-            ..
-        }) => {
-            if let Some(request) = item_stack_request {
+        V924::PlayerAuthInputPacket(packet) => {
+            if let Some(request) = packet.item_stack_request {
                 return decode_auth_input_stack_request(session, sessions, player_id, &request)
                     .map(|command| command.map(RuntimeCommand::Core));
             }
-            if let Some(transaction) = item_use_transaction {
+            if let Some(transaction) = packet.item_use_transaction {
                 return decode_item_use_transaction(player_id, &transaction)
                     .map(|command| command.map(RuntimeCommand::Core));
             }
+            let (x, y, z) = packet.player_position;
+            let (yaw, pitch) = packet.player_rotation;
             Ok(Some(runtime_gameplay(GameplayCommand::MoveIntent {
                 player_id,
-                position: Some(Vec3::new(
-                    f64::from(player_position.x),
-                    f64::from(player_position.y),
-                    f64::from(player_position.z),
-                )),
-                yaw: Some(player_rotation.x),
-                pitch: Some(player_rotation.y),
+                position: Some(Vec3::new(f64::from(x), f64::from(y), f64::from(z))),
+                yaw: Some(yaw),
+                pitch: Some(pitch),
                 on_ground: true,
             })))
         }
         V924::ContainerClosePacket(packet) => Ok(matches!(
             packet.container_id,
-            bedrockrs_proto::v662::enums::ContainerID::First
+            bedrock_protocol::v662::enums::ContainerID::First
         )
         .then(|| sessions.active_window_id(session))
         .flatten()
@@ -191,7 +163,7 @@ fn runtime_gameplay(command: GameplayCommand) -> RuntimeCommand {
 
 fn decode_item_use_transaction(
     player_id: PlayerId,
-    transaction: &bedrockrs_proto::v712::types::PackedItemUseLegacyInventoryTransaction<V924>,
+    transaction: &bedrock_protocol::v712::types::PackedItemUseLegacyInventoryTransaction<V924>,
 ) -> Result<Option<CoreCommand>, ProtocolError> {
     Ok(Some(gameplay(match transaction.action_type {
         ItemUseInventoryTransactionType::Place => GameplayCommand::PlaceBlock {
@@ -242,8 +214,8 @@ fn decode_inventory_transaction_frame(
 
     let _raw_id = <i32 as ProtoCodecVAR>::deserialize(&mut packet_cursor)
         .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
-    let _: Vec<bedrockrs_proto::v662::packets::LegacySetItemSlotsEntry> =
-        <Vec<bedrockrs_proto::v662::packets::LegacySetItemSlotsEntry> as ProtoCodec>::deserialize(
+    let _: Vec<bedrock_protocol::v662::packets::LegacySetItemSlotsEntry> =
+        <Vec<bedrock_protocol::v662::packets::LegacySetItemSlotsEntry> as ProtoCodec>::deserialize(
             &mut packet_cursor,
         )
         .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
@@ -257,7 +229,7 @@ fn decode_inventory_transaction_frame(
     }
 
     let transaction =
-        bedrockrs_proto::v712::types::PackedItemUseLegacyInventoryTransaction::<V924>::deserialize(
+        bedrock_protocol::v712::types::PackedItemUseLegacyInventoryTransaction::<V924>::deserialize(
             &mut packet_cursor,
         )
         .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
@@ -268,7 +240,7 @@ fn decode_item_stack_request_packet(
     session: &ProtocolSessionSnapshot,
     sessions: &BedrockProtocolSessionStore,
     player_id: PlayerId,
-    requests: &[bedrockrs_proto::v662::packets::RequestsEntry<V924>],
+    requests: &[bedrock_protocol::v662::packets::RequestsEntry<V924>],
 ) -> Result<Option<CoreCommand>, ProtocolError> {
     let Some(request) = requests.first() else {
         return Ok(None);
@@ -287,7 +259,7 @@ fn decode_auth_input_stack_request(
     session: &ProtocolSessionSnapshot,
     sessions: &BedrockProtocolSessionStore,
     player_id: PlayerId,
-    request: &bedrockrs_proto::v766::packets::player_auth_input_packet::PerformItemStackRequestData<
+    request: &bedrock_protocol::v766::packets::player_auth_input_packet::PerformItemStackRequestData<
         V924,
     >,
 ) -> Result<Option<CoreCommand>, ProtocolError> {

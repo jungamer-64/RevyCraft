@@ -1,9 +1,9 @@
 use super::*;
 use crate::runtime::RunningServer;
-use bedrockrs_proto::ProtoVersion;
-use bedrockrs_proto::V924;
-use bedrockrs_proto::compression::Compression as BedrockCompression;
+use bedrock_protocol::ProtoVersion;
+use bedrock_protocol::V924;
 use binary_util::interfaces::{Reader, Writer};
+use mc_proto_be_common::BedrockCompression;
 use rak_rs::client::DEFAULT_MTU;
 use rak_rs::connection::queue::{RecvQueue, SendQueue};
 use rak_rs::protocol::Magic;
@@ -667,10 +667,7 @@ impl BedrockTestClient {
         let V924::NetworkSettingsPacket(settings) = packet else {
             unreachable!("network settings packet classification should match");
         };
-        self.compression = Some(BedrockCompression::Zlib {
-            threshold: settings.compression_threshold,
-            compression_level: 6,
-        });
+        self.compression = Some(BedrockCompression::zlib(settings.compression_threshold));
 
         self.send_bedrock_payload(&bedrock_transport_payload(&bedrock_login_packet(
             username,
@@ -683,7 +680,7 @@ impl BedrockTestClient {
     pub(crate) async fn send_play_payload(&mut self, payload: &[u8]) -> Result<(), RuntimeError> {
         let payload = if let Some(compression) = self.compression.as_ref() {
             compression
-                .compress(payload.to_vec())
+                .compress(payload)
                 .map_err(|error| RuntimeError::Config(error.to_string()))?
         } else {
             payload.to_vec()

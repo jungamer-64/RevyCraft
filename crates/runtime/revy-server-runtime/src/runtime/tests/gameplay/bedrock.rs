@@ -1,5 +1,5 @@
 use super::*;
-use bedrockrs_proto::V924;
+use bedrock_protocol::V924;
 use revy_voxel_semantic::BlockPos;
 
 const BEDROCK_STONE_RUNTIME_ID: u32 = 2_532;
@@ -444,9 +444,9 @@ async fn survival_world_drop_is_visible_to_bedrock_observers_and_despawns_after_
             let (item_id, count, _aux) = bedrock_stack_descriptor_summary(&packet.item)?;
             assert_ne!(item_id, 0);
             assert_eq!(count, 1);
-            assert_eq!(packet.position.x, 1.5);
-            assert_eq!(packet.position.y, 4.5);
-            assert_eq!(packet.position.z, 0.5);
+            assert_eq!(packet.position.0, 1.5);
+            assert_eq!(packet.position.1, 4.5);
+            assert_eq!(packet.position.2, 0.5);
             packet.target_actor_id.0
         }
         other => panic!("expected add item actor packet, got {other:?}"),
@@ -517,9 +517,9 @@ async fn survival_dropped_items_do_not_persist_across_restart_for_bedrock_late_j
             let (item_id, count, _aux) = bedrock_stack_descriptor_summary(&packet.item)?;
             assert_ne!(item_id, 0);
             assert_eq!(count, 1);
-            assert_eq!(packet.position.x, 4.5);
-            assert_eq!(packet.position.y, 4.5);
-            assert_eq!(packet.position.z, 0.5);
+            assert_eq!(packet.position.0, 4.5);
+            assert_eq!(packet.position.1, 4.5);
+            assert_eq!(packet.position.2, 0.5);
         }
         other => panic!("expected add item actor packet, got {other:?}"),
     }

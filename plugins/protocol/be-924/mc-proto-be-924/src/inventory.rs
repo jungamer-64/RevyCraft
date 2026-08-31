@@ -1,16 +1,16 @@
 use crate::codec::encode_v924;
 use crate::runtime_ids::block_runtime_id;
-use bedrockrs_proto::V924;
-use bedrockrs_proto::v662::enums::{ContainerEnumName, ContainerID, ContainerType};
-use bedrockrs_proto::v662::types::{
+use bedrock_protocol::V924;
+use bedrock_protocol::v662::enums::{ContainerEnumName, ContainerID, ContainerType};
+use bedrock_protocol::v662::types::{
     ActorUniqueID, NetworkItemInstanceDescriptor, NetworkItemStackDescriptor,
 };
-use bedrockrs_proto::v685::packets::ContainerClosePacket;
-use bedrockrs_proto::v712::types::ItemStackRequestSlotInfo;
-use bedrockrs_proto::v729::types::FullContainerName;
-use bedrockrs_proto::v748::packets::{InventoryContentPacket, InventorySlotPacket};
-use bedrockrs_proto::v776::packets::{CreativeContentPacket, CreativeItemData};
-use bedrockrs_proto_core::{ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
+use bedrock_protocol::v685::packets::ContainerClosePacket;
+use bedrock_protocol::v712::types::ItemStackRequestSlotInfo;
+use bedrock_protocol::v729::types::FullContainerName;
+use bedrock_protocol::v748::packets::{InventoryContentPacket, InventorySlotPacket};
+use bedrock_protocol::v776::packets::{CreativeContentPacket, CreativeItemData};
+use bedrock_protocol_core::{ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use mc_proto_common::ProtocolError;
 use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use revy_voxel_semantic::{
@@ -56,10 +56,10 @@ pub(crate) fn encode_creative_content_packet() -> Result<Vec<Vec<u8>>, ProtocolE
         })
         .collect::<Result<Vec<_>, ProtocolError>>()?;
     Ok(vec![encode_v924(&[V924::CreativeContentPacket(
-        CreativeContentPacket {
+        Box::new(CreativeContentPacket {
             groups: Vec::new(),
             contents,
-        },
+        }),
     )])?])
 }
 
@@ -75,15 +75,17 @@ pub(crate) fn encode_inventory_contents_packets(
             .iter()
             .map(|stack: &Option<ItemStack>| network_item_stack_descriptor(stack.as_ref()))
             .collect::<Result<Vec<_>, _>>()?;
-        packets.push(V924::InventoryContentPacket(InventoryContentPacket {
-            inventory_id: ACTIVE_CONTAINER_INVENTORY_ID,
-            slots: local_slots,
-            container_name_data: full_container_name(
-                active_container_enum_name(container),
-                NO_DYNAMIC_CONTAINER_ID,
-            )?,
-            storage_item: network_item_stack_descriptor(None)?,
-        }));
+        packets.push(V924::InventoryContentPacket(Box::new(
+            InventoryContentPacket {
+                inventory_id: ACTIVE_CONTAINER_INVENTORY_ID,
+                slots: local_slots,
+                container_name_data: full_container_name(
+                    active_container_enum_name(container),
+                    NO_DYNAMIC_CONTAINER_ID,
+                )?,
+                storage_item: network_item_stack_descriptor(None)?,
+            },
+        )));
     }
 
     let storage_slots = (0..PLAYER_STORAGE_SLOT_COUNT)
@@ -93,26 +95,30 @@ pub(crate) fn encode_inventory_contents_packets(
             network_item_stack_descriptor(contents.get_slot(slot))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    packets.push(V924::InventoryContentPacket(InventoryContentPacket {
-        inventory_id: PLAYER_INVENTORY_ID,
-        slots: storage_slots,
-        container_name_data: full_container_name(
-            ContainerEnumName::CombinedHotbarAndInventoryContainer,
-            NO_DYNAMIC_CONTAINER_ID,
-        )?,
-        storage_item: network_item_stack_descriptor(None)?,
-    }));
-    packets.push(V924::InventoryContentPacket(InventoryContentPacket {
-        inventory_id: OFFHAND_INVENTORY_ID,
-        slots: vec![network_item_stack_descriptor(
-            contents.get_slot(InventorySlot::Offhand),
-        )?],
-        container_name_data: full_container_name(
-            ContainerEnumName::OffhandContainer,
-            NO_DYNAMIC_CONTAINER_ID,
-        )?,
-        storage_item: network_item_stack_descriptor(None)?,
-    }));
+    packets.push(V924::InventoryContentPacket(Box::new(
+        InventoryContentPacket {
+            inventory_id: PLAYER_INVENTORY_ID,
+            slots: storage_slots,
+            container_name_data: full_container_name(
+                ContainerEnumName::CombinedHotbarAndInventoryContainer,
+                NO_DYNAMIC_CONTAINER_ID,
+            )?,
+            storage_item: network_item_stack_descriptor(None)?,
+        },
+    )));
+    packets.push(V924::InventoryContentPacket(Box::new(
+        InventoryContentPacket {
+            inventory_id: OFFHAND_INVENTORY_ID,
+            slots: vec![network_item_stack_descriptor(
+                contents.get_slot(InventorySlot::Offhand),
+            )?],
+            container_name_data: full_container_name(
+                ContainerEnumName::OffhandContainer,
+                NO_DYNAMIC_CONTAINER_ID,
+            )?,
+            storage_item: network_item_stack_descriptor(None)?,
+        },
+    )));
 
     Ok(vec![encode_v924(&packets)?])
 }
@@ -128,7 +134,7 @@ pub(crate) fn encode_inventory_slot_changed_packets(
     else {
         return Ok(Vec::new());
     };
-    Ok(vec![encode_v924(&[V924::InventorySlotPacket(
+    Ok(vec![encode_v924(&[V924::InventorySlotPacket(Box::new(
         InventorySlotPacket {
             container_id,
             slot: network_slot,
@@ -136,19 +142,19 @@ pub(crate) fn encode_inventory_slot_changed_packets(
             storage_item: network_item_stack_descriptor(None)?,
             item: network_item_stack_descriptor(stack)?,
         },
-    )])?])
+    ))])?])
 }
 
 pub(crate) fn encode_selected_hotbar_slot_changed_packets(
     slot: u8,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
-    Ok(vec![encode_v924(&[V924::PlayerHotbarPacket(
-        bedrockrs_proto::v662::packets::PlayerHotbarPacket {
+    Ok(vec![encode_v924(&[V924::PlayerHotbarPacket(Box::new(
+        bedrock_protocol::v662::packets::PlayerHotbarPacket {
             selected_slot: u32::from(slot),
             container_id: ContainerID::Inventory,
             should_select_slot: true,
         },
-    )])?])
+    ))])?])
 }
 
 pub(crate) fn encode_container_opened_packets(
@@ -158,14 +164,14 @@ pub(crate) fn encode_container_opened_packets(
     if window_id == 0 || is_player_container(container) {
         return Ok(Vec::new());
     }
-    Ok(vec![encode_v924(&[V924::ContainerOpenPacket(
-        bedrockrs_proto::v662::packets::ContainerOpenPacket {
+    Ok(vec![encode_v924(&[V924::ContainerOpenPacket(Box::new(
+        bedrock_protocol::v662::packets::ContainerOpenPacket {
             container_id: ContainerID::First,
             container_type: container_type(container),
-            position: bedrockrs_proto::v662::types::NetworkBlockPosition { x: 0, y: 0, z: 0 },
+            position: bedrock_protocol::v662::types::NetworkBlockPosition { x: 0, y: 0, z: 0 },
             target_actor_id: ActorUniqueID(0),
         },
-    )])?])
+    ))])?])
 }
 
 pub(crate) fn encode_container_closed_packets(
@@ -174,13 +180,13 @@ pub(crate) fn encode_container_closed_packets(
     if window_id == 0 {
         return Ok(Vec::new());
     }
-    Ok(vec![encode_v924(&[V924::ContainerClosePacket(
+    Ok(vec![encode_v924(&[V924::ContainerClosePacket(Box::new(
         ContainerClosePacket {
             container_id: ContainerID::First,
             container_type: ContainerType::None,
             server_initiated_close: true,
         },
-    )])?])
+    ))])?])
 }
 
 pub(crate) fn encode_container_property_changed_packets(
@@ -195,11 +201,11 @@ pub(crate) fn encode_container_property_changed_packets(
         return Ok(Vec::new());
     };
     Ok(vec![encode_v924(&[V924::ContainerSetDataPacket(
-        bedrockrs_proto::v662::packets::ContainerSetDataPacket {
+        Box::new(bedrock_protocol::v662::packets::ContainerSetDataPacket {
             container_id: ContainerID::First,
             id: i32::from(property_id),
             value: i32::from(value),
-        },
+        }),
     )])?])
 }
 
@@ -328,11 +334,12 @@ pub(crate) fn translate_drop_action(
 
 pub(crate) fn request_transaction(
     window_id: u8,
-    client_request_id: u32,
+    client_request_id: i32,
 ) -> InventoryTransactionContext {
+    let bounded_request_id = client_request_id.clamp(i32::from(i16::MIN), i32::from(i16::MAX));
     InventoryTransactionContext {
         window_id,
-        action_number: i16::try_from(client_request_id.min(i16::MAX as u32))
+        action_number: i16::try_from(bounded_request_id)
             .expect("bounded request id should fit into i16"),
     }
 }

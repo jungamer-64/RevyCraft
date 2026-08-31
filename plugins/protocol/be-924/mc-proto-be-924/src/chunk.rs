@@ -1,6 +1,6 @@
-use bedrockrs_proto::V924;
-use bedrockrs_proto::v662::packets::LevelChunkPacket;
-use bedrockrs_proto::v662::types::ChunkPos as BedrockChunkPos;
+use bedrock_protocol::V924;
+use bedrock_protocol::v662::packets::LevelChunkPacket;
+use bedrock_protocol::v662::types::ChunkPos as BedrockChunkPos;
 use mc_content_canonical::catalog;
 use mc_proto_common::ProtocolError;
 use nbtx::Value;
@@ -25,7 +25,7 @@ struct BedrockBlockPaletteEntry {
 
 pub(crate) fn level_chunk_packet(chunk: &ChunkColumn) -> Result<V924, ProtocolError> {
     let serialized_chunk_data = encode_chunk_payload(chunk)?;
-    Ok(V924::LevelChunkPacket(LevelChunkPacket {
+    Ok(V924::LevelChunkPacket(Box::new(LevelChunkPacket {
         chunk_position: BedrockChunkPos {
             x: chunk.pos.x,
             z: chunk.pos.z,
@@ -37,7 +37,7 @@ pub(crate) fn level_chunk_packet(chunk: &ChunkColumn) -> Result<V924, ProtocolEr
         cache_enabled: false,
         cache_blobs: Vec::new(),
         serialized_chunk_data,
-    }))
+    })))
 }
 
 fn encode_chunk_payload(chunk: &ChunkColumn) -> Result<Vec<u8>, ProtocolError> {

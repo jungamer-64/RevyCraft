@@ -16,32 +16,17 @@ exceptions = [
 confidence-threshold = 0.8
 
 [[licenses.clarify]]
-crate = "bedrockrs_addon"
+crate = "bedrock_macros"
 expression = "Apache-2.0"
 license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
 
 [[licenses.clarify]]
-crate = "bedrockrs_macros"
+crate = "bedrock_protocol"
 expression = "Apache-2.0"
 license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
 
 [[licenses.clarify]]
-crate = "bedrockrs_network"
-expression = "Apache-2.0"
-license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
-
-[[licenses.clarify]]
-crate = "bedrockrs_proto"
-expression = "Apache-2.0"
-license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
-
-[[licenses.clarify]]
-crate = "bedrockrs_proto_core"
-expression = "Apache-2.0"
-license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
-
-[[licenses.clarify]]
-crate = "bedrockrs_shared"
+crate = "bedrock_protocol_core"
 expression = "Apache-2.0"
 license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
 

@@ -2,13 +2,12 @@ use mc_proto_common::ProtocolError;
 use num_traits::ToPrimitive;
 use revy_voxel_semantic::EntityId;
 use revy_voxel_semantic::{BlockFace, BlockPos, Vec3 as ModelVec3};
-use vek::Vec3;
 
 #[must_use]
 pub(crate) fn block_pos_to_network(
     position: BlockPos,
-) -> bedrockrs_proto::v662::types::NetworkBlockPosition {
-    bedrockrs_proto::v662::types::NetworkBlockPosition {
+) -> bedrock_protocol::v662::types::NetworkBlockPosition {
+    bedrock_protocol::v662::types::NetworkBlockPosition {
         x: position.x,
         y: position.y.max(0).cast_unsigned(),
         z: position.z,
@@ -17,7 +16,7 @@ pub(crate) fn block_pos_to_network(
 
 #[must_use]
 pub(crate) fn block_pos_from_network(
-    position: &bedrockrs_proto::v662::types::NetworkBlockPosition,
+    position: &bedrock_protocol::v662::types::NetworkBlockPosition,
 ) -> BlockPos {
     BlockPos::new(
         position.x,
@@ -27,8 +26,8 @@ pub(crate) fn block_pos_from_network(
 }
 
 #[must_use]
-pub(crate) fn vec3_to_bedrock(position: ModelVec3) -> Vec3<f32> {
-    Vec3::new(
+pub(crate) fn vec3_to_bedrock(position: ModelVec3) -> (f32, f32, f32) {
+    (
         f64_to_bedrock_component(position.x),
         f64_to_bedrock_component(position.y),
         f64_to_bedrock_component(position.z),
@@ -54,8 +53,13 @@ pub(crate) const fn block_face_from_i32(face: i32) -> Option<BlockFace> {
 }
 
 #[must_use]
-pub(crate) fn bedrock_actor_id(entity_id: EntityId) -> u64 {
+pub(crate) fn bedrock_actor_runtime_id(entity_id: EntityId) -> u64 {
     u64::try_from(entity_id.0).expect("bedrock entity id should be non-negative")
+}
+
+#[must_use]
+pub(crate) fn bedrock_actor_unique_id(entity_id: EntityId) -> i64 {
+    i64::from(entity_id.0)
 }
 
 fn f64_to_bedrock_component(value: f64) -> f32 {

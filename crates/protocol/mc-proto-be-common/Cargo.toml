@@ -11,7 +11,9 @@ description = "Shared Bedrock/RakNet helpers for the RevyCraft protocol plugins.
 
 [dependencies]
 base64.workspace = true
-bedrockrs_proto.workspace = true
+bedrock_protocol.workspace = true
+bedrock_protocol_core.workspace = true
+flate2.workspace = true
 mc-content-canonical = { path = "../../content/mc-content-canonical" }
 revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 mc-proto-common = { path = "../mc-proto-common" }
@@ -19,7 +21,6 @@ num-traits.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-vek.workspace = true
 
 [lints]
 workspace = true

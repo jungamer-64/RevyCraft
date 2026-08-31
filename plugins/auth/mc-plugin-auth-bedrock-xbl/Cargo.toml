@@ -17,7 +17,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 base64.workspace = true
 bedrock-jwt.workspace = true
-bedrockrs_proto.workspace = true
 mc-plugin-contract = { path = "../../../crates/plugin/mc-plugin-contract" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
 p384.workspace = true

@@ -2,17 +2,14 @@ use crate::config::ServerConfig;
 use crate::{ListenerBinding, RuntimeError};
 use aes::Aes128;
 use aes::cipher::{BlockEncrypt, KeyInit};
-use bedrockrs_network::connection::Connection as BedrockConnection;
-use bedrockrs_network::error::{
-    ConnectionError as BedrockConnectionError, RakNetError as BedrockRakNetError,
-    TransportLayerError as BedrockTransportLayerError,
-};
-use bedrockrs_network::listener::Listener as BedrockListener;
-use bedrockrs_proto::Unknown as BedrockUnknown;
-use bedrockrs_proto::compression::Compression as BedrockCompression;
 use bytes::BytesMut;
 use mc_plugin_host::registry::ProtocolRegistry;
+use mc_proto_be_common::{BEDROCK_GAME_PACKET_ID, BedrockCompression};
 use mc_proto_common::{MinecraftWireCodec, TransportKind, WireCodec};
+use revy_raknet::{
+    Bound as RakNetBound, RakNetBudgets, RakNetPeer, RakNetServer,
+    RunningPeer as RunningRakNetPeer, ServerConfig as RakNetServerConfig, Serving as RakNetServing,
+};
 use revy_voxel_core::AdapterId;
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -61,7 +58,7 @@ pub enum TransportSessionIo {
         encryption: Box<Option<TransportEncryptionState>>,
     },
     Bedrock {
-        connection: BedrockConnection<BedrockUnknown>,
+        connection: RakNetPeer<RunningRakNetPeer>,
         compression: Option<BedrockCompression>,
     },
 }
@@ -86,25 +83,23 @@ impl TransportSessionIo {
                 connection,
                 compression,
             } => {
-                let mut packet_stream = loop {
-                    match connection.recv_raw().await {
-                        Ok(packet_stream) => break packet_stream,
-                        Err(BedrockConnectionError::TransportError(
-                            BedrockTransportLayerError::RakNetError(
-                                BedrockRakNetError::InvalidRakNetHeader(header),
-                            ),
-                        )) if header == 0x13 => {
-                            // RakNet sessions are accepted before the final online handshake fully
-                            // drains, so early reads can still observe control packets like
-                            // `NewConnection` instead of a 0xfe-prefixed Bedrock game payload.
-                            continue;
-                        }
-                        Err(error) => return Err(std::io::Error::other(error)),
-                    }
+                let packet_stream = connection.recv_raw().await.map_err(std::io::Error::other)?;
+                let Some((&packet_id, packet_stream)) = packet_stream.split_first() else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "empty RakNet application payload",
+                    ));
                 };
+                if packet_id != BEDROCK_GAME_PACKET_ID {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("invalid Bedrock RakNet payload id 0x{packet_id:02x}"),
+                    ));
+                }
+                let mut packet_stream = packet_stream.to_vec();
                 if let Some(compression) = compression.as_ref() {
                     packet_stream = compression
-                        .decompress(packet_stream)
+                        .decompress(&packet_stream)
                         .map_err(std::io::Error::other)?;
                 }
                 let bytes_read = packet_stream.len();
@@ -128,14 +123,15 @@ impl TransportSessionIo {
                 compression,
             } => {
                 let packet_stream = if let Some(compression) = compression.as_ref() {
-                    compression
-                        .compress(bytes.to_vec())
-                        .map_err(std::io::Error::other)?
+                    compression.compress(bytes).map_err(std::io::Error::other)?
                 } else {
                     bytes.to_vec()
                 };
+                let mut transport_payload = Vec::with_capacity(packet_stream.len() + 1);
+                transport_payload.push(BEDROCK_GAME_PACKET_ID);
+                transport_payload.extend_from_slice(&packet_stream);
                 connection
-                    .send_raw(&packet_stream)
+                    .send_raw(&transport_payload)
                     .await
                     .map_err(std::io::Error::other)
             }
@@ -155,10 +151,7 @@ impl TransportSessionIo {
 
     pub const fn enable_bedrock_compression(&mut self, compression_threshold: u16) {
         if let Self::Bedrock { compression, .. } = self {
-            *compression = Some(BedrockCompression::Zlib {
-                threshold: compression_threshold,
-                compression_level: 6,
-            });
+            *compression = Some(BedrockCompression::zlib(compression_threshold));
         }
     }
 
@@ -197,7 +190,7 @@ pub enum BoundTransportListener {
         adapter_ids: Vec<AdapterId>,
     },
     Bedrock {
-        listener: Box<BedrockListener>,
+        listener: Box<RakNetServer<RakNetServing>>,
         adapter_ids: Vec<AdapterId>,
         bind_addr: SocketAddr,
     },
@@ -429,32 +422,33 @@ pub async fn bind_transport_listener(
                     "udp listener plan is missing bedrock listener metadata".to_string(),
                 )
             })?;
-            let mut listener = BedrockListener::new_raknet(
-                plan.bind_addr,
-                config.network.motd.clone(),
-                "RevyCraft".to_string(),
-                metadata.game_version,
-                u32::try_from(metadata.protocol_number).map_err(|_| {
+            let listener = RakNetServer::<RakNetBound>::bind(RakNetServerConfig {
+                bind_addr: plan.bind_addr,
+                motd: config.network.motd.clone(),
+                server_name: "RevyCraft".to_string(),
+                game_version: metadata.game_version,
+                protocol_number: u32::try_from(metadata.protocol_number).map_err(|_| {
                     RuntimeError::Config(format!(
                         "bedrock protocol number {} must be non-negative",
                         metadata.protocol_number
                     ))
                 })?,
-                metadata.raknet_version,
-                u32::from(config.network.max_players),
-                0,
-                false,
-            )
+                raknet_version: metadata.raknet_version,
+                max_players: u32::from(config.network.max_players),
+                online_players: 0,
+                server_guid: 0,
+                budgets: RakNetBudgets::default(),
+            })
             .await
             .map_err(|error| {
                 RuntimeError::Unsupported(format!("failed to bind bedrock listener: {error}"))
             })?;
-            listener.start().await.map_err(|error| {
-                RuntimeError::Unsupported(format!("failed to start bedrock listener: {error}"))
+            let bind_addr = listener.local_addr().map_err(|error| {
+                RuntimeError::Unsupported(format!("failed to inspect bedrock listener: {error}"))
             })?;
             Ok(BoundTransportListener::Bedrock {
-                listener: Box::new(listener),
-                bind_addr: plan.bind_addr,
+                listener: Box::new(listener.start()),
+                bind_addr,
                 adapter_ids: plan.adapter_ids,
             })
         }

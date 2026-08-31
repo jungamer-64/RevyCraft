@@ -5,14 +5,8 @@ use crate::RuntimeError;
 use crate::config::{BEDROCK_OFFLINE_AUTH_PROFILE_ID, LevelType, ServerConfig, ServerConfigSource};
 use crate::transport::{MinecraftStreamCipher, build_listener_plans, default_wire_codec};
 use bytes::BytesMut;
-use mc_plugin_auth_offline::OFFLINE_AUTH_PROFILE_ID;
-use mc_plugin_auth_online_stub::{ONLINE_STUB_AUTH_PLUGIN_ID, ONLINE_STUB_AUTH_PROFILE_ID};
 use mc_plugin_host::host::PluginHost;
 use mc_plugin_host::registry::{LoadedPluginSet, ProtocolRegistry};
-use mc_plugin_storage_je_anvil_1_18_2::{
-    JE_1_18_2_STORAGE_PLUGIN_ID, JE_1_18_2_STORAGE_PROFILE_ID,
-};
-use mc_plugin_storage_je_anvil_26_1::{JE_26_1_STORAGE_PLUGIN_ID, JE_26_1_STORAGE_PROFILE_ID};
 use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_be_924::BE_924_ADAPTER_ID;
 use mc_proto_be_placeholder::BE_PLACEHOLDER_ADAPTER_ID;
@@ -53,6 +47,14 @@ mod multiversion;
 mod selection;
 
 mod reload;
+
+const OFFLINE_AUTH_PROFILE_ID: &str = "offline-v1";
+const ONLINE_STUB_AUTH_PLUGIN_ID: &str = "auth-online-stub";
+const ONLINE_STUB_AUTH_PROFILE_ID: &str = "mojang-online-v1";
+const JE_1_18_2_STORAGE_PLUGIN_ID: &str = "storage-je-anvil-1_18_2";
+const JE_1_18_2_STORAGE_PROFILE_ID: &str = "je-anvil-1_18_2";
+const JE_26_1_STORAGE_PLUGIN_ID: &str = "storage-je-anvil-26_1";
+const JE_26_1_STORAGE_PROFILE_ID: &str = "je-anvil-26_1";
 
 impl From<TestJavaProtocolError> for RuntimeError {
     fn from(error: TestJavaProtocolError) -> Self {

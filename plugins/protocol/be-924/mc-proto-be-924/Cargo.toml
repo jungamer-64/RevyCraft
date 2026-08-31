@@ -10,8 +10,8 @@ categories.workspace = true
 description = "Bedrock 26.3 baseline protocol adapter for the RevyCraft workspace."
 
 [dependencies]
-bedrockrs_proto.workspace = true
-bedrockrs_proto_core.workspace = true
+bedrock_protocol.workspace = true
+bedrock_protocol_core.workspace = true
 mc-content-canonical = { path = "../../../../crates/content/mc-content-canonical" }
 mc-proto-be-common = { path = "../../../../crates/protocol/mc-proto-be-common" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }
@@ -20,7 +20,6 @@ revy-voxel-semantic = { path = "../../../../crates/core/revy-voxel-semantic" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
-vek.workspace = true
 
 [dev-dependencies]
 base64.workspace = true

@@ -1,4 +1,4 @@
-use bedrockrs_proto::info::MAGIC as BEDROCK_MAGIC;
+use crate::BEDROCK_RAKNET_MAGIC;
 use mc_proto_common::{Edition, HandshakeIntent, HandshakeNextState};
 
 pub(crate) const RAKNET_UNCONNECTED_PING: u8 = 0x01;
@@ -7,8 +7,8 @@ pub(crate) const RAKNET_OPEN_CONNECTION_REQUEST_2: u8 = 0x07;
 
 fn has_magic_at(frame: &[u8], offset: usize) -> bool {
     frame
-        .get(offset..offset + BEDROCK_MAGIC.len())
-        .is_some_and(|slice| slice == BEDROCK_MAGIC)
+        .get(offset..offset + BEDROCK_RAKNET_MAGIC.len())
+        .is_some_and(|slice| slice == BEDROCK_RAKNET_MAGIC)
 }
 
 #[must_use]

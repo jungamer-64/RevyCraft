@@ -7,30 +7,30 @@ use crate::runtime_ids::{
 };
 use crate::{BE_924_PROTOCOL_NUMBER, Bedrock924Adapter};
 use base64::Engine;
-use bedrockrs_proto::V924;
-use bedrockrs_proto::codec::{decode_packets, encode_packets};
-use bedrockrs_proto::v662::enums::{
+use bedrock_protocol::V924;
+use bedrock_protocol::v662::enums::{
     ComplexInventoryTransactionType, ContainerEnumName, InputMode, ItemUseInventoryTransactionType,
     LevelEvent as BedrockLevelEvent, NewInteractionModel, PlayerActionType,
     TextProcessingEventOrigin,
 };
-use bedrockrs_proto::v662::packets::{
+use bedrock_protocol::v662::packets::{
     ItemStackRequestPacket, LegacySetItemSlotsEntry, LoginPacket, PlayerActionPacket,
     RequestNetworkSettingsPacket, RequestsEntry,
 };
-use bedrockrs_proto::v662::types::{
+use bedrock_protocol::v662::types::{
     ActorRuntimeID, NetworkBlockPosition, NetworkItemStackDescriptor,
 };
-use bedrockrs_proto::v712::enums::ItemStackRequestActionType;
-use bedrockrs_proto::v712::types::{
+use bedrock_protocol::v712::enums::ItemStackRequestActionType;
+use bedrock_protocol::v712::types::{
     ItemStackRequestSlotInfo, PackedItemUseLegacyInventoryTransaction, PredictedResult, TriggerType,
 };
-use bedrockrs_proto::v729::types::FullContainerName;
-use bedrockrs_proto::v766::packets::ClientPlayMode;
-use bedrockrs_proto::v766::packets::PlayerAuthInputPacket;
-use bedrockrs_proto::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
-use bedrockrs_proto_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
-use mc_proto_be_common::__version_support::world::bedrock_actor_id;
+use bedrock_protocol::v729::types::FullContainerName;
+use bedrock_protocol::v766::packets::ClientPlayMode;
+use bedrock_protocol::v766::packets::PlayerAuthInputPacket;
+use bedrock_protocol::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
+use bedrock_protocol_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
+use mc_proto_be_common::__version_support::world::bedrock_actor_unique_id;
+use mc_proto_be_common::{BEDROCK_RAKNET_MAGIC, decode_packet_batch, encode_packet_batch};
 use mc_proto_common::{
     ConnectionId, ConnectionPhase, CoreCommand, CoreEvent, EntityId, HandshakeProbe, LoginRequest,
     PlayEncodingContext, PlaySyncAdapter, PlayerId, ProtocolError, ProtocolSessionSnapshot,
@@ -45,7 +45,6 @@ use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use serde_json::json;
 use std::io::Cursor;
 use uuid::Uuid;
-use vek::{Vec2, Vec3};
 
 fn test_jwt(payload: &serde_json::Value) -> String {
     let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
@@ -73,7 +72,7 @@ fn encode_session(context: &PlayEncodingContext) -> ProtocolSessionSnapshot {
 }
 
 fn item_instance_summary(
-    descriptor: &bedrockrs_proto::v662::types::NetworkItemInstanceDescriptor,
+    descriptor: &bedrock_protocol::v662::types::NetworkItemInstanceDescriptor,
 ) -> Result<(i32, u16, u32, i32), ProtocolError> {
     let mut bytes = Vec::new();
     descriptor
@@ -134,13 +133,12 @@ fn furnace_burn_max_property() -> ContainerPropertyKey {
 #[test]
 fn request_network_settings_maps_to_login_request() {
     let adapter = Bedrock924Adapter::new();
-    let frame = encode_packets(
-        &[V924::RequestNetworkSettingsPacket(
+    let frame = encode_packet_batch(
+        &[V924::RequestNetworkSettingsPacket(Box::new(
             RequestNetworkSettingsPacket {
                 client_network_version: BE_924_PROTOCOL_NUMBER,
             },
-        )],
-        None,
+        ))],
         None,
     )
     .expect("request should encode");
@@ -167,12 +165,11 @@ fn login_packet_maps_to_bedrock_login_request() {
         u32::try_from(client_jwt.len()).expect("test client jwt should fit in u32");
     connection_request.extend_from_slice(&client_jwt_len.to_le_bytes());
     connection_request.extend_from_slice(client_jwt.as_bytes());
-    let frame = encode_packets(
-        &[V924::LoginPacket(LoginPacket {
+    let frame = encode_packet_batch(
+        &[V924::LoginPacket(Box::new(LoginPacket {
             client_network_version: BE_924_PROTOCOL_NUMBER,
             connection_request,
-        })],
-        None,
+        }))],
         None,
     )
     .expect("login packet should encode");
@@ -196,7 +193,7 @@ fn probe_matches_raknet_datagram() {
     let mut datagram = Vec::new();
     datagram.push(0x01);
     datagram.extend_from_slice(&123_i64.to_be_bytes());
-    datagram.extend_from_slice(&bedrockrs_proto::info::MAGIC);
+    datagram.extend_from_slice(&BEDROCK_RAKNET_MAGIC);
     datagram.extend_from_slice(&456_i64.to_be_bytes());
     assert!(
         adapter
@@ -265,7 +262,7 @@ fn encodes_chunk_and_block_packets() {
         )
         .expect("chunk batch should encode");
     let packets =
-        decode_packets::<V924>(frames[0].clone(), None, None).expect("chunk packet should decode");
+        decode_packet_batch::<V924>(&frames[0], None).expect("chunk packet should decode");
     match packets.as_slice() {
         [V924::LevelChunkPacket(packet)] => {
             assert_eq!(packet.chunk_position.x, 0);
@@ -285,7 +282,7 @@ fn encodes_chunk_and_block_packets() {
         )
         .expect("block change should encode");
     let packets =
-        decode_packets::<V924>(frames[0].clone(), None, None).expect("block packet should decode");
+        decode_packet_batch::<V924>(&frames[0], None).expect("block packet should decode");
     match packets.as_slice() {
         [V924::UpdateBlockPacket(packet)] => {
             assert_eq!(packet.block_position.x, 2);
@@ -320,7 +317,7 @@ fn encodes_inventory_and_container_packets() {
             &play_context(),
         )
         .expect("inventory contents should encode");
-    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+    let packets = decode_packet_batch::<V924>(&frames[0], None)
         .expect("inventory contents packet should decode");
     assert!(
         packets.iter().any(|packet| matches!(
@@ -355,8 +352,8 @@ fn encodes_inventory_and_container_packets() {
             &play_context(),
         )
         .expect("inventory slot change should encode");
-    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
-        .expect("inventory slot packet should decode");
+    let packets =
+        decode_packet_batch::<V924>(&frames[0], None).expect("inventory slot packet should decode");
     match packets.as_slice() {
         [V924::InventorySlotPacket(packet)] => {
             assert_eq!(packet.container_id, 1);
@@ -372,7 +369,7 @@ fn encodes_inventory_and_container_packets() {
         )
         .expect("selected hotbar slot should encode");
     let packets =
-        decode_packets::<V924>(frames[0].clone(), None, None).expect("hotbar packet should decode");
+        decode_packet_batch::<V924>(&frames[0], None).expect("hotbar packet should decode");
     assert!(matches!(
         packets.as_slice(),
         [V924::PlayerHotbarPacket(packet)] if packet.selected_slot == 4
@@ -388,13 +385,12 @@ fn encodes_inventory_and_container_packets() {
             &play_context(),
         )
         .expect("container open should encode");
-    let packets =
-        decode_packets::<V924>(frames[0].clone(), None, None).expect("open packet should decode");
+    let packets = decode_packet_batch::<V924>(&frames[0], None).expect("open packet should decode");
     assert!(matches!(
         packets.as_slice(),
         [V924::ContainerOpenPacket(packet)]
-            if matches!(packet.container_id, bedrockrs_proto::v662::enums::ContainerID::First)
-                && matches!(packet.container_type, bedrockrs_proto::v662::enums::ContainerType::Workbench)
+            if matches!(packet.container_id, bedrock_protocol::v662::enums::ContainerID::First)
+                && matches!(packet.container_type, bedrock_protocol::v662::enums::ContainerType::Workbench)
     ));
 
     let frames = adapter
@@ -404,7 +400,7 @@ fn encodes_inventory_and_container_packets() {
         )
         .expect("container close should encode");
     let packets =
-        decode_packets::<V924>(frames[0].clone(), None, None).expect("close packet should decode");
+        decode_packet_batch::<V924>(&frames[0], None).expect("close packet should decode");
     assert!(matches!(
         packets.as_slice(),
         [V924::ContainerClosePacket(packet)] if packet.server_initiated_close
@@ -420,8 +416,8 @@ fn encodes_inventory_and_container_packets() {
             &play_context(),
         )
         .expect("container property should encode");
-    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
-        .expect("property packet should decode");
+    let packets =
+        decode_packet_batch::<V924>(&frames[0], None).expect("property packet should decode");
     assert!(matches!(
         packets.as_slice(),
         [V924::ContainerSetDataPacket(packet)] if packet.id == 1 && packet.value == 200
@@ -432,8 +428,8 @@ fn encodes_inventory_and_container_packets() {
 fn creative_content_packet_includes_crafting_table_and_furnace_items() {
     let frames =
         crate::inventory::encode_creative_content_packet().expect("creative content should encode");
-    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
-        .expect("creative packet should decode");
+    let packets =
+        decode_packet_batch::<V924>(&frames[0], None).expect("creative packet should decode");
 
     let V924::CreativeContentPacket(packet) = &packets[0] else {
         panic!("unexpected creative packets: {packets:?}");
@@ -475,7 +471,7 @@ fn inventory_slot_packets_encode_crafting_table_and_furnace_items() {
                 &play_context(),
             )
             .expect("inventory slot change should encode");
-        let packets = decode_packets::<V924>(frames[0].clone(), None, None)
+        let packets = decode_packet_batch::<V924>(&frames[0], None)
             .expect("inventory slot packet should decode");
         let V924::InventorySlotPacket(packet) = &packets[0] else {
             panic!("unexpected slot packets: {packets:?}");
@@ -525,17 +521,17 @@ fn decodes_player_auth_input_item_use() {
     let adapter = Bedrock924Adapter::new();
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"bedrock-auth-item-use"));
     let frame = encode_player_auth_input(PlayerAuthInputPacket {
-        player_rotation: Vec2::new(0.0, 0.0),
-        player_position: Vec3::new(0.0, 0.0, 0.0),
-        move_vector: Vec3::new(0.0, 0.0, 0.0),
+        player_rotation: (0.0, 0.0),
+        player_position: (0.0, 0.0, 0.0),
+        move_vector: (0.0, 0.0),
         player_head_rotation: 0.0,
         input_data: PlayerAuthInputFlags::PerformItemInteraction as u128,
         input_mode: InputMode::Mouse,
         play_mode: ClientPlayMode::Normal,
         new_interaction_model: NewInteractionModel::Crosshair,
-        interact_rotation: Vec3::new(0.0, 0.0, 0.0),
+        interact_rotation: (0.0, 0.0),
         client_tick: 0,
-        velocity: Vec3::new(0.0, 0.0, 0.0),
+        velocity: (0.0, 0.0, 0.0),
         item_use_transaction: Some(sample_item_use_transaction(
             ItemUseInventoryTransactionType::Destroy,
             BlockPos::new(5, 6, 7),
@@ -544,9 +540,9 @@ fn decodes_player_auth_input_item_use() {
         item_stack_request: None,
         player_block_actions: None,
         client_predicted_vehicle: None,
-        analog_move_vector: Vec2::new(0.0, 0.0),
-        camera_orientation: Vec3::new(0.0, 0.0, 0.0),
-        raw_move_vector: Vec2::new(0.0, 0.0),
+        analog_move_vector: (0.0, 0.0),
+        camera_orientation: (0.0, 0.0, 0.0),
+        raw_move_vector: (0.0, 0.0),
     });
 
     let command = adapter
@@ -568,20 +564,21 @@ fn decodes_player_auth_input_item_use() {
 fn decodes_item_stack_request_take_action() {
     let adapter = Bedrock924Adapter::new();
     let player_id = PlayerId(Uuid::new_v3(&Uuid::NAMESPACE_OID, b"bedrock-stack-request"));
-    let frame = encode_packets(
-        &[V924::ItemStackRequestPacket(ItemStackRequestPacket {
-            requests: vec![RequestsEntry {
-                client_request_id: 12,
-                actions: vec![ItemStackRequestActionType::Take {
-                    amount: 64,
-                    source: request_slot(ContainerEnumName::HotbarContainer, 0),
-                    destination: request_slot(ContainerEnumName::CursorContainer, 0),
+    let frame = encode_packet_batch(
+        &[V924::ItemStackRequestPacket(Box::new(
+            ItemStackRequestPacket {
+                requests: vec![RequestsEntry {
+                    client_request_id: 12,
+                    actions: vec![ItemStackRequestActionType::Take {
+                        amount: 64,
+                        source: request_slot(ContainerEnumName::HotbarContainer, 0),
+                        destination: request_slot(ContainerEnumName::CursorContainer, 0),
+                    }],
+                    strings_to_filter: Vec::new(),
+                    strings_to_filter_origin: TextProcessingEventOrigin::Unknown,
                 }],
-                strings_to_filter: Vec::new(),
-                strings_to_filter_origin: TextProcessingEventOrigin::Unknown,
-            }],
-        })],
-        None,
+            },
+        ))],
         None,
     )
     .expect("item stack request should encode");
@@ -621,14 +618,16 @@ fn encodes_dropped_item_spawn_and_despawn_packets() {
             &play_context(),
         )
         .expect("dropped item should encode");
-    let packets =
-        decode_packets::<V924>(frames[0].clone(), None, None).expect("item actor should decode");
+    let packets = decode_packet_batch::<V924>(&frames[0], None).expect("item actor should decode");
     match packets.as_slice() {
         [V924::AddItemActorPacket(packet)] => {
-            assert_eq!(packet.target_actor_id.0, bedrock_actor_id(EntityId(77)));
-            assert_eq!(packet.position.x, 1.5);
-            assert_eq!(packet.position.y, 4.5);
-            assert_eq!(packet.position.z, 0.5);
+            assert_eq!(
+                packet.target_actor_id.0,
+                bedrock_actor_unique_id(EntityId(77))
+            );
+            assert_eq!(packet.position.0, 1.5);
+            assert_eq!(packet.position.1, 4.5);
+            assert_eq!(packet.position.2, 0.5);
 
             let mut item_bytes = Vec::new();
             packet
@@ -654,11 +653,14 @@ fn encodes_dropped_item_spawn_and_despawn_packets() {
             &play_context(),
         )
         .expect("despawn should encode");
-    let packets = decode_packets::<V924>(frames[0].clone(), None, None)
-        .expect("despawn packet should decode");
+    let packets =
+        decode_packet_batch::<V924>(&frames[0], None).expect("despawn packet should decode");
     match packets.as_slice() {
         [V924::RemoveActorPacket(packet)] => {
-            assert_eq!(packet.target_actor_id.0, bedrock_actor_id(EntityId(77)));
+            assert_eq!(
+                packet.target_actor_id.0,
+                bedrock_actor_unique_id(EntityId(77))
+            );
         }
         other => panic!("unexpected despawn packets: {other:?}"),
     }
@@ -679,17 +681,16 @@ fn encodes_block_break_progress_packets() {
             &play_context(),
         )
         .expect("break start should encode");
-    let packets =
-        decode_packets::<V924>(start[0].clone(), None, None).expect("level event should decode");
+    let packets = decode_packet_batch::<V924>(&start[0], None).expect("level event should decode");
     match packets.as_slice() {
         [V924::LevelEventPacket(packet)] => {
             assert_eq!(
                 packet.event_id,
                 BedrockLevelEvent::StartBlockCracking as i32
             );
-            assert_eq!(packet.position.x, 2.0);
-            assert_eq!(packet.position.y, 4.0);
-            assert_eq!(packet.position.z, 0.0);
+            assert_eq!(packet.position.0, 2.0);
+            assert_eq!(packet.position.1, 4.0);
+            assert_eq!(packet.position.2, 0.0);
             assert!(packet.data > 0);
         }
         other => panic!("unexpected break start packets: {other:?}"),
@@ -706,8 +707,7 @@ fn encodes_block_break_progress_packets() {
             &play_context(),
         )
         .expect("break update should encode");
-    let packets =
-        decode_packets::<V924>(update[0].clone(), None, None).expect("level event should decode");
+    let packets = decode_packet_batch::<V924>(&update[0], None).expect("level event should decode");
     match packets.as_slice() {
         [V924::LevelEventPacket(packet)] => {
             assert_eq!(
@@ -730,8 +730,7 @@ fn encodes_block_break_progress_packets() {
             &play_context(),
         )
         .expect("break stop should encode");
-    let packets =
-        decode_packets::<V924>(stop[0].clone(), None, None).expect("level event should decode");
+    let packets = decode_packet_batch::<V924>(&stop[0], None).expect("level event should decode");
     match packets.as_slice() {
         [V924::LevelEventPacket(packet)] => {
             assert_eq!(packet.event_id, BedrockLevelEvent::StopBlockCracking as i32);
@@ -754,15 +753,14 @@ fn decodes_player_action_destroy_packets_to_dig_statuses() {
         (PlayerActionType::CreativeDestroyBlock, 2_u8),
         (PlayerActionType::PredictDestroyBlock, 2_u8),
     ] {
-        let frame = encode_packets(
-            &[V924::PlayerActionPacket(PlayerActionPacket {
+        let frame = encode_packet_batch(
+            &[V924::PlayerActionPacket(Box::new(PlayerActionPacket {
                 player_runtime_id: ActorRuntimeID(1),
                 action,
                 block_position: NetworkBlockPosition { x: 2, y: 4, z: 0 },
                 result_pos: NetworkBlockPosition { x: 2, y: 4, z: 0 },
                 face: 1,
-            })],
-            None,
+            }))],
             None,
         )
         .expect("player action should encode");
@@ -832,7 +830,7 @@ fn sample_item_use_transaction(
     PackedItemUseLegacyInventoryTransaction {
         id: 0,
         container_slots: None,
-        action: bedrockrs_proto::v662::types::InventoryTransaction { action: Vec::new() },
+        action: bedrock_protocol::v662::types::InventoryTransaction { action: Vec::new() },
         action_type,
         trigger_type: TriggerType::PlayerInput,
         position: NetworkBlockPosition {
@@ -843,8 +841,8 @@ fn sample_item_use_transaction(
         face,
         slot: 0,
         item: empty_item_stack_descriptor(),
-        from_position: Vec3::new(0.0, 0.0, 0.0),
-        click_position: Vec3::new(0.5, 0.5, 0.5),
+        from_position: (0.0, 0.0, 0.0),
+        click_position: (0.5, 0.5, 0.5),
         target_block_id: 0,
         predicted_result: PredictedResult::Success,
     }
@@ -893,9 +891,6 @@ fn encode_player_auth_input(packet: PlayerAuthInputPacket<V924>) -> Vec<u8> {
     packet
         .serialize(&mut body)
         .expect("player auth input should serialize");
-    <Vec2<f32> as ProtoCodecLE>::serialize(&packet.raw_move_vector, &mut body)
-        .expect("raw move vector should serialize");
-
     let mut frame = Vec::new();
     <u32 as ProtoCodecVAR>::serialize(
         &u32::try_from(body.len()).expect("packet length should fit into u32"),
