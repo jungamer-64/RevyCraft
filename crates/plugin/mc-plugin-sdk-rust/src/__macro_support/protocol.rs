@@ -1,6 +1,8 @@
 use crate::protocol::RustProtocolPlugin;
 use bytes::BytesMut;
-use mc_plugin_api::codec::protocol::{ProtocolRequest, ProtocolResponse, WireFrameDecodeResult};
+use mc_plugin_contract::codec::protocol::{
+    ProtocolRequest, ProtocolResponse, WireFrameDecodeResult,
+};
 
 pub fn handle_protocol_request<P: RustProtocolPlugin>(
     plugin: &P,

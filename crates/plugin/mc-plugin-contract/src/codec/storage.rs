@@ -1,4 +1,3 @@
-use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
 use crate::codec::__internal::binary::{
     Decoder, Encoder, EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope,
     encode_envelope,
@@ -7,6 +6,7 @@ use crate::codec::__internal::storage_semantic::{
     decode_storage_request_payload, decode_storage_response_payload,
     encode_storage_request_payload, encode_storage_response_payload,
 };
+use crate::plugin::{CURRENT_PLUGIN_ABI, PluginKind};
 use revy_voxel_semantic::{
     CapabilityAnnouncement, StorageCapability, StorageProfileId, WorldSnapshot,
 };

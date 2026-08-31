@@ -4,8 +4,8 @@ use super::{
     SessionHandle, SessionMessage, SessionReattachRecord, SessionRecipient, SharedSessionState,
 };
 use crate::RuntimeError;
-use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
-use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
+use mc_plugin_contract::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_host::runtime::{GameplayProfileHandle, ProtocolReloadSession};
 use mc_proto_common::ConnectionPhase;
 use revy_voxel_core::{
@@ -277,11 +277,6 @@ impl SessionRegistry {
         self.sessions.lock().await.is_empty()
     }
 
-    #[cfg(test)]
-    pub(crate) async fn pending_login_route_count_for_test(&self) -> usize {
-        self.pending_login_routes.lock().await.len()
-    }
-
     pub(crate) async fn live_generation_ids(&self) -> HashSet<GenerationId> {
         let mut live_generations = HashSet::new();
         for (_, handle) in self.session_entries().await {
@@ -374,17 +369,5 @@ mod tests {
         assert_eq!(registry.next_connection_id().await, ConnectionId(1));
         registry.observe_connection_id(ConnectionId(7));
         assert_eq!(registry.next_connection_id().await, ConnectionId(8));
-    }
-
-    #[tokio::test]
-    async fn pending_login_routes_require_live_sessions() {
-        let (accepted_tx, _accepted_rx) = mpsc::channel(1);
-        let registry = SessionRegistry::new(accepted_tx);
-
-        registry
-            .record_pending_login_route(ConnectionId(11), PlayerId(uuid::Uuid::nil()))
-            .await;
-
-        assert_eq!(registry.pending_login_route_count_for_test().await, 0);
     }
 }

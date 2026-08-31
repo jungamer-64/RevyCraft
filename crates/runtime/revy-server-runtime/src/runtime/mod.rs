@@ -10,8 +10,6 @@ mod session_registry;
 mod status;
 mod supervisor;
 #[cfg(test)]
-mod test_hooks;
-#[cfg(test)]
 mod tests;
 mod topology_manager;
 mod upgrade;
@@ -31,10 +29,6 @@ pub use crate::{
     PluginHostStatusSnapshot, RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole,
     RuntimeUpgradeStateView,
 };
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
-#[cfg(test)]
-use tokio::sync::Mutex as AsyncMutex;
 
 pub use self::admin::{
     AdminAuthError, AdminCommandError, AdminControlPlaneHandle, AdminSubject,
@@ -60,8 +54,6 @@ pub use self::supervisor::{
     AdminSurfaceSelection, ArtifactsReloadResult, CoreReloadResult, FullReloadResult,
     RuntimeReloadResult, ServerSupervisor, TopologyReloadResult,
 };
-#[cfg(test)]
-use self::test_hooks::{LoginAcceptCommitPauseHook, ReloadStagePauseHook};
 pub use self::upgrade::{
     RuntimeUpgradeCommitHold, RuntimeUpgradeGuard, RuntimeUpgradeImport,
     RuntimeUpgradeLoginChallenge, RuntimeUpgradePayload, RuntimeUpgradeQueuedMessage,
@@ -79,10 +71,4 @@ pub(crate) struct RuntimeServer {
     pub(crate) topology: TopologyManager,
     pub(crate) kernel: RuntimeKernel,
     pub(crate) sessions: SessionRegistry,
-    #[cfg(test)]
-    pub(crate) fail_nth_reattach_send: AtomicUsize,
-    #[cfg(test)]
-    reload_stage_pause_hook: AsyncMutex<Option<ReloadStagePauseHook>>,
-    #[cfg(test)]
-    login_accept_commit_pause_hook: AsyncMutex<Option<LoginAcceptCommitPauseHook>>,
 }

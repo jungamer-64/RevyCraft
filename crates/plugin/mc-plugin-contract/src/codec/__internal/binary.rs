@@ -1,4 +1,4 @@
-use crate::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind};
+use crate::plugin::{CURRENT_PLUGIN_ABI, PluginAbiVersion, PluginKind};
 use thiserror::Error;
 
 pub(crate) const PROTOCOL_FLAG_RESPONSE: u16 = 0x0001;
@@ -256,7 +256,9 @@ pub(crate) fn decode_envelope(bytes: &[u8]) -> Result<(EnvelopeHeader, &[u8]), P
         major: decoder.read_u16()?,
         minor: decoder.read_u16()?,
     };
-    let plugin_kind = PluginKind::try_from(decoder.read_u8()?)?;
+    let kind_tag = decoder.read_u8()?;
+    let plugin_kind = PluginKind::try_from(kind_tag)
+        .map_err(|_| ProtocolCodecError::InvalidPluginKind(kind_tag))?;
     let op_code = decoder.read_u8()?;
     let flags = decoder.read_u16()?;
     let payload_len = decoder.read_u32()?;

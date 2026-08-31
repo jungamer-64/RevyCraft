@@ -8,39 +8,39 @@ use crate::runtime::{
 };
 use bytes::BytesMut;
 use libloading::Library;
-use mc_plugin_api::abi::{
-    ByteSlice, CURRENT_PLUGIN_ABI, OwnedBuffer, PluginAbiVersion, PluginErrorCode, PluginKind,
+use mc_plugin_abi::host::{
+    AdminSurfaceHostApiV9, AdminSurfacePluginApiV9, AdminSurfacePluginInvokeV9Fn, AuthPluginApiV9,
+    GameplayPluginApiV9, GameplayPluginInvokeV9Fn, PluginApiHeaderV9, PluginFreeBufferFn,
+    PluginInvokeFn, ProtocolPluginApiV9, StoragePluginApiV9,
 };
-use mc_plugin_api::codec::admin_surface::{
+use mc_plugin_abi::manifest::{
+    PLUGIN_ADMIN_SURFACE_API_SYMBOL_V9, PLUGIN_AUTH_API_SYMBOL_V9, PLUGIN_GAMEPLAY_API_SYMBOL_V9,
+    PLUGIN_MANIFEST_SYMBOL_V9, PLUGIN_PROTOCOL_API_SYMBOL_V9, PLUGIN_STORAGE_API_SYMBOL_V9,
+    PluginManifestV9,
+};
+use mc_plugin_abi::raw::{ByteSlice, OwnedBuffer, PluginStatus};
+use mc_plugin_abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use mc_plugin_contract::codec::admin_surface::{
     AdminSurfaceDescriptor, AdminSurfaceInstanceDeclaration, AdminSurfacePauseView,
     AdminSurfaceRequest, AdminSurfaceResponse, AdminSurfaceStatusView,
     decode_admin_surface_response, encode_admin_surface_request,
 };
-use mc_plugin_api::codec::auth::{
+use mc_plugin_contract::codec::auth::{
     AuthMode, AuthRequest, AuthResponse, BedrockAuthResult, decode_auth_response,
     encode_auth_request,
 };
-use mc_plugin_api::codec::gameplay::{
+use mc_plugin_contract::codec::gameplay::{
     GameplayRequest, GameplayResponse, GameplaySessionSnapshot, decode_gameplay_response,
     encode_gameplay_request,
 };
-use mc_plugin_api::codec::protocol::{
+use mc_plugin_contract::codec::protocol::{
     ProtocolRequest, ProtocolResponse, WireFrameDecodeResult, decode_protocol_response,
     encode_protocol_request,
 };
-use mc_plugin_api::codec::storage::{
+use mc_plugin_contract::codec::storage::{
     StorageRequest, StorageResponse, decode_storage_response, encode_storage_request,
 };
-use mc_plugin_api::host_api::{
-    AdminSurfaceHostApiV1, AdminSurfacePluginApiV1, AdminSurfacePluginInvokeV1Fn, AuthPluginApiV1,
-    GameplayPluginApiV4, GameplayPluginInvokeV4Fn, PluginFreeBufferFn, PluginInvokeFn,
-    ProtocolPluginApiV3, StoragePluginApiV1,
-};
-use mc_plugin_api::manifest::{
-    PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1, PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V5,
-    PLUGIN_MANIFEST_SYMBOL_V1, PLUGIN_PROTOCOL_API_SYMBOL_V5, PLUGIN_STORAGE_API_SYMBOL_V2,
-    PluginManifestV1,
-};
+use mc_plugin_contract::plugin::PluginKind;
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, Edition, HandshakeIntent, HandshakeProbe,
     LoginRequest, PlayEncodingContext, ProtocolAdapter, ProtocolDescriptor, ProtocolError,
@@ -75,28 +75,16 @@ mod topology;
 pub(crate) use self::callbacks::GameplayInvocationScope;
 use self::callbacks::admin_surface_host_api;
 use self::callbacks::gameplay_host_api;
-#[cfg(test)]
-pub(crate) use self::callbacks::with_current_gameplay_query;
-pub(crate) use self::callbacks::with_gameplay_invocation_and_limits;
+use self::callbacks::gameplay_metadata_host_api;
 pub(crate) use self::catalog::PluginCatalog;
-#[cfg(test)]
-pub(crate) use self::catalog::current_artifact_key;
-use self::catalog::{
-    ArtifactIdentity, DynamicCatalogSource, PluginPackage, PluginSource, system_time_ms,
-};
-#[cfg(any(test, feature = "in-process-testing"))]
-pub use self::catalog::{
-    InProcessAdminSurfacePlugin, InProcessAuthPlugin, InProcessGameplayPlugin,
-    InProcessProtocolPlugin, InProcessStoragePlugin,
-};
+use self::catalog::{ArtifactIdentity, DynamicCatalogSource, PluginPackage, system_time_ms};
 pub(crate) use self::failure::{
     ArtifactQuarantineRecord, PluginFailureDispatch, PluginFailureStage,
 };
 pub(crate) use self::generation::{
-    AdminSurfaceGeneration, AdminSurfaceInvocationBackend, AuthGeneration, AuthInvocationBackend,
-    GameplayGeneration, GameplayInvocationBackend, GenerationManager, ProtocolGeneration,
-    ProtocolInvocationBackend, StorageGeneration, StorageInvocationBackend, decode_plugin_error,
-    write_owned_buffer,
+    AdminSurfaceGeneration, AdminSurfaceInvocation, AuthGeneration, AuthInvocation,
+    GameplayGeneration, GameplayInvocation, GenerationManager, ProtocolGeneration,
+    ProtocolInvocation, StorageGeneration, StorageInvocation, write_owned_buffer,
 };
 pub(crate) use self::loader::PluginLoader;
 pub(crate) use self::profiles::{
@@ -117,8 +105,9 @@ use self::support::{
     expect_gameplay_capabilities, expect_gameplay_descriptor,
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
-    import_storage_runtime_state, protocol_reload_compatible, read_byte_slice, take_owned_buffer,
-    validate_gameplay_session_migration, validate_protocol_session_migration,
+    import_storage_runtime_state, protocol_reload_compatible, read_byte_slice,
+    release_owned_buffer, take_owned_buffer, validate_gameplay_session_migration,
+    validate_protocol_session_migration,
 };
 pub(crate) use self::topology::PreparedProtocolTopology;
 pub use revy_server_types::{PluginFailureAction, PluginFailureMatrix};
@@ -191,23 +180,6 @@ impl PluginHost {
     }
 
     #[must_use]
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn new(
-        catalog: PluginCatalog,
-        bootstrap_config: BootstrapConfig,
-        abi_range: PluginAbiRange,
-        failure_matrix: PluginFailureMatrix,
-    ) -> Self {
-        Self::new_with_dynamic_catalog_source(
-            catalog,
-            bootstrap_config,
-            abi_range,
-            failure_matrix,
-            None,
-        )
-    }
-
-    #[must_use]
     pub(crate) fn new_with_dynamic_catalog_source(
         catalog: PluginCatalog,
         bootstrap_config: BootstrapConfig,
@@ -239,115 +211,6 @@ impl PluginHost {
         }
     }
 
-    /// Resolves an active gameplay profile by id.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the gameplay plugin registry mutex is poisoned.
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn resolve_gameplay_profile(
-        &self,
-        profile_id: &str,
-    ) -> Option<Arc<HotSwappableGameplayProfile>> {
-        self.gameplay
-            .lock()
-            .expect("plugin host mutex should not be poisoned")
-            .get(&GameplayProfileId::new(profile_id))
-            .map(|managed| Arc::clone(&managed.profile))
-    }
-
-    /// Resolves an active storage profile by id.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the storage plugin registry mutex is poisoned.
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn resolve_storage_profile(
-        &self,
-        profile_id: &str,
-    ) -> Option<Arc<HotSwappableStorageProfile>> {
-        self.storage
-            .lock()
-            .expect("plugin host mutex should not be poisoned")
-            .get(&StorageProfileId::new(profile_id))
-            .map(|managed| Arc::clone(&managed.profile))
-    }
-
-    /// Resolves an active auth profile by id.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the auth plugin registry mutex is poisoned.
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn resolve_auth_profile(
-        &self,
-        profile_id: &str,
-    ) -> Option<Arc<HotSwappableAuthProfile>> {
-        self.auth
-            .lock()
-            .expect("plugin host mutex should not be poisoned")
-            .get(&AuthProfileId::new(profile_id))
-            .map(|managed| Arc::clone(&managed.profile))
-    }
-
-    /// Resolves an active admin-surface profile by id.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the admin-surface plugin registry mutex is poisoned.
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn resolve_admin_surface_profile(
-        &self,
-        profile_id: &str,
-    ) -> Option<Arc<HotSwappableAdminSurfaceProfile>> {
-        self.admin_surface
-            .lock()
-            .expect("plugin host mutex should not be poisoned")
-            .get(&AdminSurfaceProfileId::new(profile_id))
-            .map(|managed| Arc::clone(&managed.profile))
-    }
-
-    /// Replaces a managed protocol plugin with a new in-process implementation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the plugin is not managed by this host or the replacement
-    /// generation cannot be loaded.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the protocol plugin registry mutex is poisoned.
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn replace_in_process_protocol_plugin(
-        &self,
-        plugin: InProcessProtocolPlugin,
-    ) -> Result<PluginGenerationId, RuntimeError> {
-        let plugin_id = plugin.plugin_id.clone();
-        let mut protocols = self
-            .protocols
-            .lock()
-            .expect("plugin host mutex should not be poisoned");
-        let managed = protocols.get_mut(&plugin_id).ok_or_else(|| {
-            RuntimeError::Config(format!(
-                "protocol plugin `{}` is not managed by this host",
-                plugin_id
-            ))
-        })?;
-        managed.package.source = PluginSource::InProcessProtocol(plugin);
-        let generation_id = self.generations.next_generation_id();
-        let generation = Arc::new(self.loader.load_protocol_generation(
-            &managed.package,
-            generation_id,
-            self.current_runtime_selection().buffer_limits,
-        )?);
-        managed.adapter.swap_generation(generation);
-        self.failures.clear_plugin_state(&plugin_id);
-        managed.loaded_at = managed.package.modified_at()?;
-        managed.active_loaded_at = managed.loaded_at;
-        drop(protocols);
-        Ok(generation_id)
-    }
-
     pub(crate) fn take_pending_fatal_error(&self) -> Option<RuntimeError> {
         self.failures.take_pending_fatal_error()
     }
@@ -372,13 +235,6 @@ impl PluginHost {
             .collect::<Vec<_>>();
         ids.sort();
         ids
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn artifact_quarantine_reason(&self, plugin_id: &str) -> Option<String> {
-        self.failures
-            .artifact_record(plugin_id)
-            .and_then(|record| record.reason.into())
     }
 }
 

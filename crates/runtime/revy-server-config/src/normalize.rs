@@ -9,7 +9,7 @@ use crate::types::{
     NetworkConfig, PluginBufferLimits, PluginsConfig, ProfilesConfig, ServerConfig, TopologyConfig,
 };
 use crate::{AdminPermission, PluginFailureAction, PluginFailureMatrix};
-use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use mc_plugin_contract::plugin::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use revy_voxel_semantic::{AdapterId, AuthProfileId, GameplayProfileId, StorageProfileId};
 use std::collections::HashMap;
 use std::net::IpAddr;

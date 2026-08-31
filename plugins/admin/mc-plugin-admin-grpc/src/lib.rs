@@ -9,18 +9,18 @@ use crate::admin::{
     ShutdownResponse, UpgradeRuntimeResponse,
     admin_control_plane_server::{AdminControlPlane, AdminControlPlaneServer},
 };
-use mc_plugin_api::codec::admin::{
+use mc_plugin_contract::codec::admin::{
     self as surface_admin, AdminArtifactsReloadView, AdminFullReloadView, AdminNamedCountView,
     AdminRuntimeReloadDetail, AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionsView,
     AdminStatusView, AdminTopologyReloadView, AdminUpgradeRuntimeView, RuntimeReloadMode,
     RuntimeUpgradePhase, RuntimeUpgradeRole,
 };
-use mc_plugin_api::codec::admin_surface::{
+use mc_plugin_contract::codec::admin_surface::{
     AdminSurfaceEndpointView, AdminSurfaceInstanceDeclaration, AdminSurfacePauseView,
     AdminSurfaceResource, AdminSurfaceStatusView,
 };
 use mc_plugin_sdk_rust::admin_surface::{
-    AdminSurfaceHost, RustAdminSurfacePlugin, SdkAdminSurfaceHost,
+    AdminSurfaceHost, AdminSurfaceHostLease, RustAdminSurfacePlugin, SdkAdminSurfaceHost,
 };
 use mc_plugin_sdk_rust::capabilities;
 use mc_plugin_sdk_rust::export_plugin;
@@ -70,7 +70,7 @@ enum GrpcSurfaceInstanceState {
 
 #[derive(Clone)]
 struct AdminGrpcService {
-    host: SdkAdminSurfaceHost,
+    host: AdminSurfaceHostLease,
     auth: ArcAuthMap,
     serve_mode: Arc<AtomicU8>,
 }
@@ -133,7 +133,7 @@ struct LoadedGrpcSurfaceConfig {
 }
 
 impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
-    fn descriptor(&self) -> mc_plugin_api::codec::admin_surface::AdminSurfaceDescriptor {
+    fn descriptor(&self) -> mc_plugin_contract::codec::admin_surface::AdminSurfaceDescriptor {
         mc_plugin_sdk_rust::admin_surface::admin_surface_descriptor("grpc-v1")
     }
 
@@ -157,10 +157,11 @@ impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
     fn start(
         &self,
         instance_id: &str,
-        host: SdkAdminSurfaceHost,
+        host: SdkAdminSurfaceHost<'_>,
         surface_config_path: Option<&str>,
     ) -> Result<AdminSurfaceStatusView, String> {
         let config = load_surface_config(surface_config_path)?;
+        let host = host.acquire_lease()?;
         let handle = self.block_on_async(spawn_admin_grpc_server(
             self.runtime_handle()?,
             &config,
@@ -184,7 +185,7 @@ impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
     fn pause_for_upgrade(
         &self,
         instance_id: &str,
-        host: SdkAdminSurfaceHost,
+        host: SdkAdminSurfaceHost<'_>,
     ) -> Result<AdminSurfacePauseView, String> {
         let state = self
             .instances
@@ -226,12 +227,13 @@ impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
     fn resume_from_upgrade(
         &self,
         instance_id: &str,
-        host: SdkAdminSurfaceHost,
+        host: SdkAdminSurfaceHost<'_>,
         surface_config_path: Option<&str>,
         _resume_payload: &[u8],
     ) -> Result<AdminSurfaceStatusView, String> {
         let config = load_surface_config(surface_config_path)?;
         let listener = take_handoff_listener(&host)?;
+        let host = host.acquire_lease()?;
         let handle = self.block_on_async(spawn_admin_grpc_server(
             self.runtime_handle()?,
             &config,
@@ -264,7 +266,7 @@ impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
     fn activate_after_upgrade_commit(
         &self,
         instance_id: &str,
-        _host: SdkAdminSurfaceHost,
+        _host: SdkAdminSurfaceHost<'_>,
     ) -> Result<(), String> {
         let instances = self
             .instances
@@ -280,7 +282,7 @@ impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
     fn resume_after_upgrade_rollback(
         &self,
         instance_id: &str,
-        _host: SdkAdminSurfaceHost,
+        _host: SdkAdminSurfaceHost<'_>,
     ) -> Result<AdminSurfaceStatusView, String> {
         let mut instances = self
             .instances
@@ -308,7 +310,7 @@ impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
         }
     }
 
-    fn shutdown(&self, instance_id: &str, _host: SdkAdminSurfaceHost) -> Result<(), String> {
+    fn shutdown(&self, instance_id: &str, _host: SdkAdminSurfaceHost<'_>) -> Result<(), String> {
         let state = self
             .instances
             .lock()
@@ -439,7 +441,7 @@ fn load_surface_config(path: Option<&str>) -> Result<LoadedGrpcSurfaceConfig, St
     })
 }
 
-fn take_handoff_listener(host: &SdkAdminSurfaceHost) -> Result<std::net::TcpListener, String> {
+fn take_handoff_listener(host: &SdkAdminSurfaceHost<'_>) -> Result<std::net::TcpListener, String> {
     let resource = host.take_handoff_resource("listener")?.ok_or_else(|| {
         "gRPC admin surface did not receive a listener handoff resource".to_string()
     })?;
@@ -613,7 +615,7 @@ impl AdminControlPlane for AdminGrpcService {
 async fn spawn_admin_grpc_server(
     runtime_handle: tokio::runtime::Handle,
     config: &LoadedGrpcSurfaceConfig,
-    host: SdkAdminSurfaceHost,
+    host: AdminSurfaceHostLease,
     listener_source: ListenerSource,
     initial_accept_mode: AcceptLoopMode,
 ) -> Result<AdminGrpcServerHandle, String> {

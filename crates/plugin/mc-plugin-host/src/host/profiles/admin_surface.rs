@@ -1,5 +1,5 @@
 use super::{
-    AdminSurfaceCapabilitySet, AdminSurfaceGeneration, AdminSurfaceHostApiV1,
+    AdminSurfaceCapabilitySet, AdminSurfaceGeneration, AdminSurfaceHostApiV9,
     AdminSurfaceInstanceDeclaration, AdminSurfacePauseView, AdminSurfaceProfileId,
     AdminSurfaceStatusView, Arc, Path, PluginFailureAction, PluginFailureDispatch,
     PluginGenerationId, PluginKind, ReloadableGenerationSlot, RuntimeError,
@@ -83,7 +83,7 @@ impl HotSwappableAdminSurfaceProfile {
         &self,
         instance_id: &str,
         surface_config_path: Option<&Path>,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, RuntimeError> {
         self.generation.with_reload_read(|generation| {
             self.handle_error(generation.start(instance_id, surface_config_path, host_api))
@@ -93,7 +93,7 @@ impl HotSwappableAdminSurfaceProfile {
     fn pause_for_upgrade(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfacePauseView, RuntimeError> {
         self.generation.with_reload_read(|generation| {
             self.handle_error(generation.pause_for_upgrade(instance_id, host_api))
@@ -105,7 +105,7 @@ impl HotSwappableAdminSurfaceProfile {
         instance_id: &str,
         surface_config_path: Option<&Path>,
         resume_payload: &[u8],
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, RuntimeError> {
         self.generation.with_reload_read(|generation| {
             self.handle_error(generation.resume_from_upgrade(
@@ -120,7 +120,7 @@ impl HotSwappableAdminSurfaceProfile {
     fn activate_after_upgrade_commit(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<(), RuntimeError> {
         self.generation.with_reload_read(|generation| {
             self.handle_error(generation.activate_after_upgrade_commit(instance_id, host_api))
@@ -130,7 +130,7 @@ impl HotSwappableAdminSurfaceProfile {
     fn resume_after_upgrade_rollback(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, RuntimeError> {
         self.generation.with_reload_read(|generation| {
             self.handle_error(generation.resume_after_upgrade_rollback(instance_id, host_api))
@@ -140,7 +140,7 @@ impl HotSwappableAdminSurfaceProfile {
     fn shutdown(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<(), RuntimeError> {
         self.generation.with_reload_read(|generation| {
             self.handle_error(generation.shutdown(instance_id, host_api))
@@ -173,7 +173,7 @@ impl crate::runtime::AdminSurfaceProfileHandle for HotSwappableAdminSurfaceProfi
         &self,
         instance_id: &str,
         surface_config_path: Option<&Path>,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, crate::PluginHostError> {
         Self::start(self, instance_id, surface_config_path, host_api)
     }
@@ -181,7 +181,7 @@ impl crate::runtime::AdminSurfaceProfileHandle for HotSwappableAdminSurfaceProfi
     fn pause_for_upgrade(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfacePauseView, crate::PluginHostError> {
         Self::pause_for_upgrade(self, instance_id, host_api)
     }
@@ -191,7 +191,7 @@ impl crate::runtime::AdminSurfaceProfileHandle for HotSwappableAdminSurfaceProfi
         instance_id: &str,
         surface_config_path: Option<&Path>,
         resume_payload: &[u8],
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, crate::PluginHostError> {
         Self::resume_from_upgrade(
             self,
@@ -205,7 +205,7 @@ impl crate::runtime::AdminSurfaceProfileHandle for HotSwappableAdminSurfaceProfi
     fn activate_after_upgrade_commit(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<(), crate::PluginHostError> {
         Self::activate_after_upgrade_commit(self, instance_id, host_api)
     }
@@ -213,7 +213,7 @@ impl crate::runtime::AdminSurfaceProfileHandle for HotSwappableAdminSurfaceProfi
     fn resume_after_upgrade_rollback(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, crate::PluginHostError> {
         Self::resume_after_upgrade_rollback(self, instance_id, host_api)
     }
@@ -221,7 +221,7 @@ impl crate::runtime::AdminSurfaceProfileHandle for HotSwappableAdminSurfaceProfi
     fn shutdown(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<(), crate::PluginHostError> {
         Self::shutdown(self, instance_id, host_api)
     }

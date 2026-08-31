@@ -18,9 +18,6 @@ use std::time::Duration;
 use tokio::sync::{OwnedMutexGuard, OwnedRwLockWriteGuard, oneshot};
 
 #[cfg(debug_assertions)]
-const UPGRADE_TEST_HOLD_AFTER_SESSION_FREEZE_MS_ENV: &str =
-    "REVY_UPGRADE_TEST_HOLD_AFTER_SESSION_FREEZE_MS";
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OnlineAuthKeysSnapshot {
     pub private_key_pkcs8_der: Vec<u8>,
@@ -308,8 +305,6 @@ impl RunningServer {
                 return Err(error);
             }
         };
-        #[cfg(debug_assertions)]
-        maybe_hold_after_session_freeze_for_test().await;
         let consistency_guard = self.runtime.reload.write_consistency_owned().await;
         let sessions = match self
             .runtime
@@ -369,19 +364,6 @@ impl RunningServer {
 
     async fn finish_child_runtime_upgrade_commit(&self) -> Result<(), RuntimeError> {
         self.runtime.finish_child_runtime_upgrade_commit().await
-    }
-}
-
-#[cfg(debug_assertions)]
-async fn maybe_hold_after_session_freeze_for_test() {
-    let Ok(value) = std::env::var(UPGRADE_TEST_HOLD_AFTER_SESSION_FREEZE_MS_ENV) else {
-        return;
-    };
-    let Ok(delay_ms) = value.parse::<u64>() else {
-        return;
-    };
-    if delay_ms != 0 {
-        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
     }
 }
 

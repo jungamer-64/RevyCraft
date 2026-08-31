@@ -5,7 +5,7 @@ use revy_voxel_core::PlayerId;
 #[derive(Clone)]
 pub(crate) struct LoadedPluginTestEnvironment {
     pub(crate) loaded_plugins: LoadedPluginSet,
-    pub(crate) plugin_host: Option<TestPluginHost>,
+    pub(crate) plugin_host: Option<Arc<PluginHost>>,
 }
 
 impl LoadedPluginTestEnvironment {
@@ -30,13 +30,7 @@ pub(crate) async fn build_test_server_from_source(
             let config = source.load()?;
             let runtime_selection = plugin_host_runtime_selection_test_config(&config);
             let loaded_plugins = plugin_host.load_plugin_set(&runtime_selection)?;
-            Ok(boot_server(
-                source,
-                config,
-                loaded_plugins,
-                Some(plugin_host.runtime_host()),
-            )
-            .await?)
+            Ok(boot_server(source, config, loaded_plugins, Some(plugin_host)).await?)
         }
         None => Ok(boot_server(
             source.clone(),
@@ -70,13 +64,7 @@ pub(crate) async fn build_reloadable_test_server_from_source(
     let config = source.load()?;
     let runtime_selection = plugin_host_runtime_selection_test_config(&config);
     let loaded_plugins = plugin_host.load_plugin_set(&runtime_selection)?;
-    Ok(boot_server(
-        source,
-        config,
-        loaded_plugins,
-        Some(plugin_host.runtime_host()),
-    )
-    .await?)
+    Ok(boot_server(source, config, loaded_plugins, Some(plugin_host)).await?)
 }
 
 pub(crate) fn active_protocol_registry(server: &RunningServer) -> ProtocolRegistry {

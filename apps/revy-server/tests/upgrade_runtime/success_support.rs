@@ -421,10 +421,7 @@ async fn spawn_freeze_runtime() -> TestResult<(
     AdminClient,
 )> {
     let server = PreparedServer::remote_admin("grpc-upgrade-freeze-phase")?;
-    let (child, logs) = server.spawn_logged_with_envs(
-        "grpc-upgrade-freeze-phase",
-        &[("REVY_UPGRADE_TEST_HOLD_AFTER_SESSION_FREEZE_MS", "600")],
-    )?;
+    let (child, logs) = server.spawn_logged("grpc-upgrade-freeze-phase")?;
     let (mut upgrade_client, status_client, reload_client, shutdown_client, second_upgrade_client) =
         connect_freeze_admin_clients(&server).await?;
     let game_addr = fetch_runtime_tcp_listener_addr(&mut upgrade_client).await?;

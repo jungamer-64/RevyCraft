@@ -1,33 +1,28 @@
 mod buffers;
 mod describe;
-mod invoke;
 mod manifest;
 mod profiles;
 mod reload;
 
 use super::{
-    AdminSurfaceCapability, AdminSurfaceDescriptor, AdminSurfacePluginApiV1, AdminSurfaceRequest,
-    AdminSurfaceResponse, Arc, AuthCapability, AuthPluginApiV1, AuthRequest, AuthResponse,
-    BedrockListenerDescriptor, GameplayCapability, GameplayGeneration, GameplayPluginApiV4,
+    AdminSurfaceCapability, AdminSurfaceDescriptor, AdminSurfaceResponse, Arc, AuthCapability,
+    AuthResponse, BedrockListenerDescriptor, GameplayCapability, GameplayGeneration,
     GameplayProfileId, GameplayRequest, GameplayResponse, GameplaySessionSnapshot, HashMap,
     HashSet, ManagedGameplayPlugin, ManagedProtocolPlugin, OwnedBuffer, PluginAbiVersion,
-    PluginErrorCode, PluginFreeBufferFn, PluginKind, PluginManifestV1, ProtocolCapability,
-    ProtocolDescriptor, ProtocolGeneration, ProtocolPluginApiV3, ProtocolRequest, ProtocolResponse,
-    RuntimeError, RuntimeReloadContext, StorageCapability, StorageGeneration, StoragePluginApiV1,
-    StorageRequest, StorageResponse, admin_surface_host_api, decode_admin_surface_response,
-    decode_auth_response, decode_gameplay_response, decode_plugin_error, decode_protocol_response,
-    decode_storage_response, encode_admin_surface_request, encode_auth_request,
-    encode_gameplay_request, encode_protocol_request, encode_storage_request, gameplay_host_api,
+    PluginFreeBufferFn, PluginKind, PluginManifestV9, ProtocolCapability, ProtocolDescriptor,
+    ProtocolGeneration, ProtocolRequest, ProtocolResponse, RuntimeError, RuntimeReloadContext,
+    StorageCapability, StorageGeneration, StorageRequest, StorageResponse,
 };
 use crate::runtime::ProtocolReloadSession;
-use mc_plugin_api::abi::{ByteSlice, Utf8Slice};
-use mc_plugin_api::codec::auth::AuthDescriptor;
-use mc_plugin_api::codec::gameplay::GameplayDescriptor;
-use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
-use mc_plugin_api::codec::storage::StorageDescriptor;
+use mc_plugin_abi::raw::{ByteSlice, Utf8Slice};
+use mc_plugin_contract::codec::auth::AuthDescriptor;
+use mc_plugin_contract::codec::gameplay::GameplayDescriptor;
+use mc_plugin_contract::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_contract::codec::storage::StorageDescriptor;
 
 pub(super) use self::buffers::{
-    decode_utf8_slice_with_limit, read_byte_slice, read_checked_slice, take_owned_buffer,
+    decode_utf8_slice_with_limit, read_byte_slice, read_checked_slice, release_owned_buffer,
+    take_owned_buffer,
 };
 pub(super) use self::describe::{
     expect_admin_surface_capabilities, expect_admin_surface_descriptor, expect_auth_capabilities,

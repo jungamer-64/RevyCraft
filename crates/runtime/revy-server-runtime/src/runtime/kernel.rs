@@ -1,5 +1,5 @@
 use crate::RuntimeError;
-use mc_plugin_api::abi::PluginKind;
+use mc_plugin_contract::plugin::PluginKind;
 use mc_plugin_host::host::PluginFailureAction;
 use mc_plugin_host::runtime::{GameplayProfileHandle, RuntimePluginHost, StorageProfileHandle};
 use revy_server_gameplay_bridge::GameplayReadView;
@@ -11,8 +11,6 @@ use revy_voxel_core::{
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-#[cfg(test)]
-use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 struct KernelStateData {
     core: ServerCore,
@@ -124,8 +122,6 @@ pub(crate) struct RuntimeKernel {
     storage_profile: Arc<dyn StorageProfileHandle>,
     world_dir: PathBuf,
     state: Mutex<Revisioned<KernelStateData>>,
-    #[cfg(test)]
-    detached_gameplay_pause_hook: AsyncMutex<Option<DetachedGameplayPauseHook>>,
 }
 
 impl RuntimeKernel {
@@ -138,8 +134,6 @@ impl RuntimeKernel {
             storage_profile,
             world_dir,
             state: Mutex::new(Revisioned::new(KernelStateData { core, dirty: false })),
-            #[cfg(test)]
-            detached_gameplay_pause_hook: AsyncMutex::new(None),
         }
     }
 
@@ -344,9 +338,6 @@ impl RuntimeKernel {
                 now_ms,
             )
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        #[cfg(test)]
-        self.maybe_pause_before_detached_gameplay_commit_for_test()
-            .await;
         let mut state = self.state.lock().await;
         let expected_revision = if revision == state.revision() {
             revision
@@ -431,20 +422,6 @@ impl RuntimeKernel {
             .state()
             .core
             .session_resync_events(player_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn arm_detached_gameplay_pause_for_test(&self) -> DetachedGameplayPauseHandle {
-        let (reached_tx, reached_rx) = oneshot::channel();
-        let (release_tx, release_rx) = oneshot::channel();
-        *self.detached_gameplay_pause_hook.lock().await = Some(DetachedGameplayPauseHook {
-            reached_tx: Some(reached_tx),
-            release_rx,
-        });
-        DetachedGameplayPauseHandle {
-            reached_rx,
-            release_tx: Some(release_tx),
-        }
     }
 
     pub(crate) fn world_dir(&self) -> &std::path::Path {
@@ -561,9 +538,6 @@ impl RuntimeKernel {
         should_persist: bool,
         stale_outcome: KernelCommandOutcome,
     ) -> Result<KernelCommandOutcome, RuntimeError> {
-        #[cfg(test)]
-        self.maybe_pause_before_detached_gameplay_commit_for_test()
-            .await;
         let mut state = self.state.lock().await;
         let expected_revision = if snapshot_revision == state.revision() {
             snapshot_revision
@@ -604,9 +578,6 @@ impl RuntimeKernel {
         should_persist: bool,
         stale_outcome: KernelCommandOutcome,
     ) -> Result<KernelCommandOutcome, RuntimeError> {
-        #[cfg(test)]
-        self.maybe_pause_before_detached_gameplay_commit_for_test()
-            .await;
         let mut state = self.state.lock().await;
         let expected_revision = if snapshot_revision == state.revision() {
             snapshot_revision
@@ -649,49 +620,12 @@ impl RuntimeKernel {
         }
         force_dirty || !events.is_empty()
     }
-
-    #[cfg(test)]
-    async fn maybe_pause_before_detached_gameplay_commit_for_test(&self) {
-        let hook = self.detached_gameplay_pause_hook.lock().await.take();
-        let Some(mut hook) = hook else {
-            return;
-        };
-        if let Some(reached_tx) = hook.reached_tx.take() {
-            let _ = reached_tx.send(());
-        }
-        let _ = hook.release_rx.await;
-    }
-}
-
-#[cfg(test)]
-struct DetachedGameplayPauseHook {
-    reached_tx: Option<oneshot::Sender<()>>,
-    release_rx: oneshot::Receiver<()>,
-}
-
-#[cfg(test)]
-pub(crate) struct DetachedGameplayPauseHandle {
-    reached_rx: oneshot::Receiver<()>,
-    release_tx: Option<oneshot::Sender<()>>,
-}
-
-#[cfg(test)]
-impl DetachedGameplayPauseHandle {
-    pub(crate) async fn wait_until_reached(&mut self) {
-        let _ = (&mut self.reached_rx).await;
-    }
-
-    pub(crate) fn release(mut self) {
-        if let Some(release_tx) = self.release_tx.take() {
-            let _ = release_tx.send(());
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+    use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
     use mc_plugin_host::PluginHostError;
     use mc_storage_common::StorageError;
     use revy_voxel_core::{
@@ -701,7 +635,9 @@ mod tests {
     };
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex as StdMutex, mpsc};
     use std::time::Duration;
+    use tokio::sync::oneshot;
     use uuid::Uuid;
 
     struct NullStorage;
@@ -740,6 +676,57 @@ mod tests {
         command_invocations: AtomicUsize,
         join_invocations: AtomicUsize,
         tick_invocations: AtomicUsize,
+        callback_pause: StdMutex<Option<CallbackPauseGate>>,
+    }
+
+    struct CallbackPauseGate {
+        reached_tx: oneshot::Sender<()>,
+        release_rx: mpsc::Receiver<()>,
+    }
+
+    struct CallbackPauseHandle {
+        reached_rx: oneshot::Receiver<()>,
+        release_tx: mpsc::Sender<()>,
+    }
+
+    impl TrackingGameplayProfile {
+        fn arm_callback_pause(&self) -> CallbackPauseHandle {
+            let (reached_tx, reached_rx) = oneshot::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            *self
+                .callback_pause
+                .lock()
+                .expect("callback pause mutex should not be poisoned") = Some(CallbackPauseGate {
+                reached_tx,
+                release_rx,
+            });
+            CallbackPauseHandle {
+                reached_rx,
+                release_tx,
+            }
+        }
+
+        fn pause_callback_if_armed(&self) {
+            let pause = self
+                .callback_pause
+                .lock()
+                .expect("callback pause mutex should not be poisoned")
+                .take();
+            if let Some(pause) = pause {
+                let _ = pause.reached_tx.send(());
+                let _ = pause.release_rx.recv();
+            }
+        }
+    }
+
+    impl CallbackPauseHandle {
+        async fn wait_until_reached(&mut self) {
+            let _ = (&mut self.reached_rx).await;
+        }
+
+        fn release(self) {
+            let _ = self.release_tx.send(());
+        }
     }
 
     impl GameplayProfileHandle for TrackingGameplayProfile {
@@ -763,6 +750,7 @@ mod tests {
             now_ms: u64,
         ) -> Result<GameplayEffectBatch, PluginHostError> {
             self.join_invocations.fetch_add(1, Ordering::SeqCst);
+            self.pause_callback_if_armed();
             let mut reads = GameplayReadSet::default();
             reads.world_meta = Some(read_view.world_meta());
             Ok(GameplayEffectBatch {
@@ -780,6 +768,7 @@ mod tests {
             now_ms: u64,
         ) -> Result<GameplayEffectBatch, PluginHostError> {
             self.command_invocations.fetch_add(1, Ordering::SeqCst);
+            self.pause_callback_if_armed();
             match command {
                 GameplayCommand::SetHeldSlot { player_id, slot } => {
                     let player_snapshot =
@@ -820,6 +809,7 @@ mod tests {
             now_ms: u64,
         ) -> Result<GameplayEffectBatch, PluginHostError> {
             self.tick_invocations.fetch_add(1, Ordering::SeqCst);
+            self.pause_callback_if_armed();
             let player_snapshot = read_view.player_snapshot(player_id).ok_or_else(|| {
                 PluginHostError::Config("tracking tick expected a live player".to_string())
             })?;
@@ -911,7 +901,7 @@ mod tests {
     -> Result<(), RuntimeError> {
         let (kernel, player_id, session) = logged_in_kernel("detached-direct");
         let gameplay = Arc::new(TrackingGameplayProfile::default());
-        let mut pause = kernel.arm_detached_gameplay_pause_for_test().await;
+        let mut pause = gameplay.arm_callback_pause();
         let task_kernel = Arc::clone(&kernel);
         let task_gameplay = Arc::clone(&gameplay);
         let task_session = session.clone();
@@ -954,7 +944,7 @@ mod tests {
     -> Result<(), RuntimeError> {
         let (kernel, player_id, session) = logged_in_kernel("detached-stale");
         let gameplay = Arc::new(TrackingGameplayProfile::default());
-        let mut pause = kernel.arm_detached_gameplay_pause_for_test().await;
+        let mut pause = gameplay.arm_callback_pause();
         let task_kernel = Arc::clone(&kernel);
         let task_gameplay = Arc::clone(&gameplay);
         let task_session = session.clone();
@@ -1013,7 +1003,7 @@ mod tests {
         ));
         let gameplay = Arc::new(TrackingGameplayProfile::default());
         let player_id = tracking_player_id("detached-login");
-        let mut pause = kernel.arm_detached_gameplay_pause_for_test().await;
+        let mut pause = gameplay.arm_callback_pause();
         let task_kernel = Arc::clone(&kernel);
         let task_gameplay = Arc::clone(&gameplay);
         let task = tokio::spawn(async move {
@@ -1093,7 +1083,7 @@ mod tests {
     -> Result<(), RuntimeError> {
         let (kernel, player_id, session) = logged_in_kernel("detached-tick");
         let gameplay = Arc::new(TrackingGameplayProfile::default());
-        let mut pause = kernel.arm_detached_gameplay_pause_for_test().await;
+        let mut pause = gameplay.arm_callback_pause();
         let task_kernel = Arc::clone(&kernel);
         let task_gameplay = Arc::clone(&gameplay);
         let task_session = session.clone();

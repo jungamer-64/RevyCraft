@@ -1,34 +1,74 @@
 use super::{
-    AdminSurfaceCapability, AdminSurfaceGeneration, AdminSurfaceInvocationBackend,
-    AdminSurfacePluginApiV1, AdminSurfaceRequest, Arc, AuthCapability, AuthGeneration,
-    AuthInvocationBackend, AuthPluginApiV1, AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest,
-    GameplayCapability, GameplayGeneration, GameplayInvocationBackend, GameplayPluginApiV4,
-    GameplayRequest, Library, ManifestCapabilities, Mutex, PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1,
-    PLUGIN_AUTH_API_SYMBOL_V1, PLUGIN_GAMEPLAY_API_SYMBOL_V5, PLUGIN_MANIFEST_SYMBOL_V1,
-    PLUGIN_PROTOCOL_API_SYMBOL_V5, PLUGIN_STORAGE_API_SYMBOL_V2, Path, PluginGenerationId,
-    PluginManifestV1, PluginPackage, PluginSource, ProtocolCapability, ProtocolGeneration,
-    ProtocolInvocationBackend, ProtocolPluginApiV3, ProtocolRequest, RuntimeError,
-    StorageCapability, StorageGeneration, StorageInvocationBackend, StoragePluginApiV1,
-    StorageRequest, admin_surface_host_api, decode_manifest, expect_admin_surface_capabilities,
+    AdminSurfaceCapability, AdminSurfaceGeneration, AdminSurfaceInvocation,
+    AdminSurfacePluginApiV9, AdminSurfaceRequest, Arc, AuthCapability, AuthGeneration,
+    AuthInvocation, AuthPluginApiV9, AuthRequest, CURRENT_PLUGIN_ABI, DecodedManifest,
+    GameplayCapability, GameplayGeneration, GameplayInvocation, GameplayPluginApiV9,
+    GameplayRequest, Library, ManifestCapabilities, Mutex, PLUGIN_ADMIN_SURFACE_API_SYMBOL_V9,
+    PLUGIN_AUTH_API_SYMBOL_V9, PLUGIN_GAMEPLAY_API_SYMBOL_V9, PLUGIN_MANIFEST_SYMBOL_V9,
+    PLUGIN_PROTOCOL_API_SYMBOL_V9, PLUGIN_STORAGE_API_SYMBOL_V9, Path, PluginApiHeaderV9,
+    PluginGenerationId, PluginManifestV9, PluginPackage, ProtocolCapability, ProtocolGeneration,
+    ProtocolInvocation, ProtocolPluginApiV9, ProtocolRequest, RuntimeError, StorageCapability,
+    StorageGeneration, StorageInvocation, StoragePluginApiV9, StorageRequest,
+    admin_surface_host_api, decode_manifest, expect_admin_surface_capabilities,
     expect_admin_surface_descriptor, expect_auth_capabilities, expect_auth_descriptor,
     expect_gameplay_capabilities, expect_gameplay_descriptor,
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
-    gameplay_host_api,
+    gameplay_metadata_host_api,
 };
 use crate::config::PluginBufferLimits;
 
-type LibraryGuard = Option<Arc<Mutex<Library>>>;
-type LoadedDynamicProtocolApi = (LibraryGuard, DecodedManifest, ProtocolPluginApiV3);
-type LoadedDynamicGameplayApi = (LibraryGuard, DecodedManifest, GameplayPluginApiV4);
-type LoadedDynamicStorageApi = (LibraryGuard, DecodedManifest, StoragePluginApiV1);
-type LoadedDynamicAuthApi = (LibraryGuard, DecodedManifest, AuthPluginApiV1);
-type LoadedDynamicAdminSurfaceApi = (LibraryGuard, DecodedManifest, AdminSurfacePluginApiV1);
-type LoadedProtocolBackend = (DecodedManifest, ProtocolInvocationBackend);
-type LoadedGameplayBackend = (DecodedManifest, GameplayInvocationBackend);
-type LoadedStorageBackend = (DecodedManifest, StorageInvocationBackend);
-type LoadedAuthBackend = (DecodedManifest, AuthInvocationBackend);
-type LoadedAdminSurfaceBackend = (DecodedManifest, AdminSurfaceInvocationBackend);
+type LibraryLease = Arc<Mutex<Library>>;
+type LoadedDynamicProtocolApi = (LibraryLease, DecodedManifest, ProtocolPluginApiV9);
+type LoadedDynamicGameplayApi = (LibraryLease, DecodedManifest, GameplayPluginApiV9);
+type LoadedDynamicStorageApi = (LibraryLease, DecodedManifest, StoragePluginApiV9);
+type LoadedDynamicAuthApi = (LibraryLease, DecodedManifest, AuthPluginApiV9);
+type LoadedDynamicAdminSurfaceApi = (LibraryLease, DecodedManifest, AdminSurfacePluginApiV9);
+type LoadedProtocolBackend = (DecodedManifest, ProtocolInvocation);
+type LoadedGameplayBackend = (DecodedManifest, GameplayInvocation);
+type LoadedStorageBackend = (DecodedManifest, StorageInvocation);
+type LoadedAuthBackend = (DecodedManifest, AuthInvocation);
+type LoadedAdminSurfaceBackend = (DecodedManifest, AdminSurfaceInvocation);
+
+fn required_api_entry<T: Copy>(
+    entry: Option<T>,
+    plugin_id: &str,
+    entry_name: &str,
+) -> Result<T, RuntimeError> {
+    entry.ok_or_else(|| {
+        RuntimeError::Config(format!(
+            "plugin `{plugin_id}` ABI 9 API omitted required `{entry_name}` entry"
+        ))
+    })
+}
+
+unsafe fn read_plugin_api<T: Copy>(api: *const T, api_name: &str) -> Result<T, RuntimeError> {
+    if api.is_null() {
+        return Err(RuntimeError::Config(format!(
+            "{api_name} plugin API pointer was null"
+        )));
+    }
+    if !(api as usize).is_multiple_of(std::mem::align_of::<T>()) {
+        return Err(RuntimeError::Config(format!(
+            "{api_name} plugin API pointer was not properly aligned"
+        )));
+    }
+    let header = unsafe { api.cast::<PluginApiHeaderV9>().read() };
+    if header.abi != CURRENT_PLUGIN_ABI {
+        return Err(RuntimeError::Config(format!(
+            "{api_name} plugin API ABI {} did not match host ABI {}",
+            header.abi, CURRENT_PLUGIN_ABI
+        )));
+    }
+    if header.struct_size < std::mem::size_of::<T>() {
+        return Err(RuntimeError::Config(format!(
+            "{api_name} plugin API size {} was smaller than ABI 9 size {}",
+            header.struct_size,
+            std::mem::size_of::<T>()
+        )));
+    }
+    Ok(unsafe { api.read() })
+}
 
 pub(crate) struct PluginLoader {
     abi_range: super::PluginAbiRange,
@@ -46,175 +86,100 @@ impl PluginLoader {
         package: &PluginPackage,
         buffer_limits: PluginBufferLimits,
     ) -> Result<LoadedProtocolBackend, RuntimeError> {
-        match &package.source {
-            PluginSource::DynamicLibrary { library_path, .. } => {
-                let (guard, manifest, api) =
-                    unsafe { Self::load_dynamic_protocol(library_path, buffer_limits) }?;
-                Ok((
-                    manifest,
-                    ProtocolInvocationBackend::Dynamic {
-                        invoke: api.invoke,
-                        free_buffer: api.free_buffer,
-                        _library_guard: guard,
-                    },
-                ))
-            }
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessProtocol(plugin) => Ok((
-                decode_manifest(plugin.manifest, buffer_limits)?,
-                ProtocolInvocationBackend::InProcess {
-                    handler: Arc::from((plugin.factory)()),
-                },
-            )),
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminSurface(_) => Err(RuntimeError::Config(format!(
-                "plugin `{}` is not a protocol plugin",
-                package.plugin_id
-            ))),
-        }
+        let (guard, manifest, api) =
+            unsafe { Self::load_dynamic_protocol(&package.library_path, buffer_limits) }?;
+        Ok((
+            manifest,
+            ProtocolInvocation {
+                invoke: required_api_entry(api.invoke, &package.plugin_id, "invoke")?,
+                free_buffer: required_api_entry(
+                    api.free_buffer,
+                    &package.plugin_id,
+                    "free_buffer",
+                )?,
+                _library_lease: guard,
+            },
+        ))
     }
 
     fn load_gameplay_backend(
         package: &PluginPackage,
         buffer_limits: PluginBufferLimits,
     ) -> Result<LoadedGameplayBackend, RuntimeError> {
-        match &package.source {
-            PluginSource::DynamicLibrary { library_path, .. } => {
-                let (guard, manifest, api) =
-                    unsafe { Self::load_dynamic_gameplay(library_path, buffer_limits) }?;
-                Ok((
-                    manifest,
-                    GameplayInvocationBackend::Dynamic {
-                        invoke: api.invoke,
-                        free_buffer: api.free_buffer,
-                        _library_guard: guard,
-                    },
-                ))
-            }
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessGameplay(plugin) => Ok((
-                decode_manifest(plugin.manifest, buffer_limits)?,
-                GameplayInvocationBackend::InProcess {
-                    handler: Arc::from((plugin.factory)()),
-                },
-            )),
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessProtocol(_)
-            | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminSurface(_) => Err(RuntimeError::Config(format!(
-                "plugin `{}` is not a gameplay plugin",
-                package.plugin_id
-            ))),
-        }
+        let (guard, manifest, api) =
+            unsafe { Self::load_dynamic_gameplay(&package.library_path, buffer_limits) }?;
+        Ok((
+            manifest,
+            GameplayInvocation {
+                invoke: required_api_entry(api.invoke, &package.plugin_id, "invoke")?,
+                free_buffer: required_api_entry(
+                    api.free_buffer,
+                    &package.plugin_id,
+                    "free_buffer",
+                )?,
+                _library_lease: guard,
+            },
+        ))
     }
 
     fn load_storage_backend(
         package: &PluginPackage,
         buffer_limits: PluginBufferLimits,
     ) -> Result<LoadedStorageBackend, RuntimeError> {
-        match &package.source {
-            PluginSource::DynamicLibrary { library_path, .. } => {
-                let (guard, manifest, api) =
-                    unsafe { Self::load_dynamic_storage(library_path, buffer_limits) }?;
-                Ok((
-                    manifest,
-                    StorageInvocationBackend::Dynamic {
-                        invoke: api.invoke,
-                        free_buffer: api.free_buffer,
-                        _library_guard: guard,
-                    },
-                ))
-            }
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessStorage(plugin) => Ok((
-                decode_manifest(plugin.manifest, buffer_limits)?,
-                StorageInvocationBackend::InProcess {
-                    handler: Arc::from((plugin.factory)()),
-                },
-            )),
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessProtocol(_)
-            | PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminSurface(_) => Err(RuntimeError::Config(format!(
-                "plugin `{}` is not a storage plugin",
-                package.plugin_id
-            ))),
-        }
+        let (guard, manifest, api) =
+            unsafe { Self::load_dynamic_storage(&package.library_path, buffer_limits) }?;
+        Ok((
+            manifest,
+            StorageInvocation {
+                invoke: required_api_entry(api.invoke, &package.plugin_id, "invoke")?,
+                free_buffer: required_api_entry(
+                    api.free_buffer,
+                    &package.plugin_id,
+                    "free_buffer",
+                )?,
+                _library_lease: guard,
+            },
+        ))
     }
 
     fn load_auth_backend(
         package: &PluginPackage,
         buffer_limits: PluginBufferLimits,
     ) -> Result<LoadedAuthBackend, RuntimeError> {
-        match &package.source {
-            PluginSource::DynamicLibrary { library_path, .. } => {
-                let (guard, manifest, api) =
-                    unsafe { Self::load_dynamic_auth(library_path, buffer_limits) }?;
-                Ok((
-                    manifest,
-                    AuthInvocationBackend::Dynamic {
-                        invoke: api.invoke,
-                        free_buffer: api.free_buffer,
-                        _library_guard: guard,
-                    },
-                ))
-            }
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessAuth(plugin) => Ok((
-                decode_manifest(plugin.manifest, buffer_limits)?,
-                AuthInvocationBackend::InProcess {
-                    handler: Arc::from((plugin.factory)()),
-                },
-            )),
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessProtocol(_)
-            | PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAdminSurface(_) => Err(RuntimeError::Config(format!(
-                "plugin `{}` is not an auth plugin",
-                package.plugin_id
-            ))),
-        }
+        let (guard, manifest, api) =
+            unsafe { Self::load_dynamic_auth(&package.library_path, buffer_limits) }?;
+        Ok((
+            manifest,
+            AuthInvocation {
+                invoke: required_api_entry(api.invoke, &package.plugin_id, "invoke")?,
+                free_buffer: required_api_entry(
+                    api.free_buffer,
+                    &package.plugin_id,
+                    "free_buffer",
+                )?,
+                _library_lease: guard,
+            },
+        ))
     }
 
     fn load_admin_surface_backend(
         package: &PluginPackage,
         buffer_limits: PluginBufferLimits,
     ) -> Result<LoadedAdminSurfaceBackend, RuntimeError> {
-        match &package.source {
-            PluginSource::DynamicLibrary { library_path, .. } => {
-                let (guard, manifest, api) =
-                    unsafe { Self::load_dynamic_admin_surface(library_path, buffer_limits) }?;
-                Ok((
-                    manifest,
-                    AdminSurfaceInvocationBackend::Dynamic {
-                        invoke: api.invoke,
-                        free_buffer: api.free_buffer,
-                        _library_guard: guard,
-                    },
-                ))
-            }
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessAdminSurface(plugin) => Ok((
-                decode_manifest(plugin.manifest, buffer_limits)?,
-                AdminSurfaceInvocationBackend::InProcess {
-                    handler: Arc::from((plugin.factory)()),
-                },
-            )),
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessProtocol(_)
-            | PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_) => Err(RuntimeError::Config(format!(
-                "plugin `{}` is not an admin-surface plugin",
-                package.plugin_id
-            ))),
-        }
+        let (guard, manifest, api) =
+            unsafe { Self::load_dynamic_admin_surface(&package.library_path, buffer_limits) }?;
+        Ok((
+            manifest,
+            AdminSurfaceInvocation {
+                invoke: required_api_entry(api.invoke, &package.plugin_id, "invoke")?,
+                free_buffer: required_api_entry(
+                    api.free_buffer,
+                    &package.plugin_id,
+                    "free_buffer",
+                )?,
+                _library_lease: guard,
+            },
+        ))
     }
 
     pub(super) fn load_protocol_generation(
@@ -276,7 +241,7 @@ impl PluginLoader {
             capabilities: capabilities.capabilities,
             buffer_limits,
             build_tag: capabilities.build_tag,
-            backend,
+            invocation: backend,
         })
     }
 
@@ -302,7 +267,7 @@ impl PluginLoader {
                     &package.plugin_id,
                     &GameplayRequest::Describe,
                     buffer_limits,
-                    gameplay_host_api(),
+                    gameplay_metadata_host_api(),
                 )
                 .map_err(RuntimeError::Config)?,
         )?;
@@ -321,7 +286,7 @@ impl PluginLoader {
                     &package.plugin_id,
                     &GameplayRequest::CapabilitySet,
                     buffer_limits,
-                    gameplay_host_api(),
+                    gameplay_metadata_host_api(),
                 )
                 .map_err(RuntimeError::Config)?,
         )?;
@@ -339,7 +304,7 @@ impl PluginLoader {
             capabilities: capabilities.capabilities,
             buffer_limits,
             build_tag: capabilities.build_tag,
-            backend,
+            invocation: backend,
         })
     }
 
@@ -394,7 +359,7 @@ impl PluginLoader {
             capabilities: capabilities.capabilities,
             buffer_limits,
             build_tag: capabilities.build_tag,
-            backend,
+            invocation: backend,
         })
     }
 
@@ -450,7 +415,7 @@ impl PluginLoader {
             capabilities: capabilities.capabilities,
             buffer_limits,
             build_tag: capabilities.build_tag,
-            backend,
+            invocation: backend,
         })
     }
 
@@ -514,7 +479,7 @@ impl PluginLoader {
             capabilities: capabilities.capabilities,
             buffer_limits,
             build_tag: capabilities.build_tag,
-            backend,
+            invocation: backend,
         })
     }
 
@@ -527,8 +492,8 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
-                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV9> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V9) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve plugin manifest symbol in {}: {error}",
                         library_path.display()
@@ -540,20 +505,16 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const ProtocolPluginApiV3> =
-                unsafe { library.get(PLUGIN_PROTOCOL_API_SYMBOL_V5) }.map_err(|error| {
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const ProtocolPluginApiV9> =
+                unsafe { library.get(PLUGIN_PROTOCOL_API_SYMBOL_V9) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve protocol api symbol in {}: {error}",
                         library_path.display()
                     ))
                 })?;
-            unsafe { *api_fn() }
+            unsafe { read_plugin_api(api_fn(), "protocol") }?
         };
-        Ok((
-            Some(library),
-            decode_manifest(manifest_ptr, buffer_limits)?,
-            api,
-        ))
+        Ok((library, decode_manifest(manifest_ptr, buffer_limits)?, api))
     }
 
     unsafe fn load_dynamic_gameplay(
@@ -565,8 +526,8 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
-                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV9> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V9) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve plugin manifest symbol in {}: {error}",
                         library_path.display()
@@ -578,20 +539,16 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const GameplayPluginApiV4> =
-                unsafe { library.get(PLUGIN_GAMEPLAY_API_SYMBOL_V5) }.map_err(|error| {
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const GameplayPluginApiV9> =
+                unsafe { library.get(PLUGIN_GAMEPLAY_API_SYMBOL_V9) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve gameplay api symbol in {}: {error}",
                         library_path.display()
                     ))
                 })?;
-            unsafe { *api_fn() }
+            unsafe { read_plugin_api(api_fn(), "gameplay") }?
         };
-        Ok((
-            Some(library),
-            decode_manifest(manifest_ptr, buffer_limits)?,
-            api,
-        ))
+        Ok((library, decode_manifest(manifest_ptr, buffer_limits)?, api))
     }
 
     unsafe fn load_dynamic_storage(
@@ -603,8 +560,8 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
-                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV9> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V9) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve plugin manifest symbol in {}: {error}",
                         library_path.display()
@@ -616,20 +573,16 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const StoragePluginApiV1> =
-                unsafe { library.get(PLUGIN_STORAGE_API_SYMBOL_V2) }.map_err(|error| {
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const StoragePluginApiV9> =
+                unsafe { library.get(PLUGIN_STORAGE_API_SYMBOL_V9) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve storage api symbol in {}: {error}",
                         library_path.display()
                     ))
                 })?;
-            unsafe { *api_fn() }
+            unsafe { read_plugin_api(api_fn(), "storage") }?
         };
-        Ok((
-            Some(library),
-            decode_manifest(manifest_ptr, buffer_limits)?,
-            api,
-        ))
+        Ok((library, decode_manifest(manifest_ptr, buffer_limits)?, api))
     }
 
     unsafe fn load_dynamic_auth(
@@ -641,8 +594,8 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
-                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV9> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V9) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve plugin manifest symbol in {}: {error}",
                         library_path.display()
@@ -654,20 +607,16 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const AuthPluginApiV1> =
-                unsafe { library.get(PLUGIN_AUTH_API_SYMBOL_V1) }.map_err(|error| {
+            let api_fn: libloading::Symbol<unsafe extern "C" fn() -> *const AuthPluginApiV9> =
+                unsafe { library.get(PLUGIN_AUTH_API_SYMBOL_V9) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve auth api symbol in {}: {error}",
                         library_path.display()
                     ))
                 })?;
-            unsafe { *api_fn() }
+            unsafe { read_plugin_api(api_fn(), "auth") }?
         };
-        Ok((
-            Some(library),
-            decode_manifest(manifest_ptr, buffer_limits)?,
-            api,
-        ))
+        Ok((library, decode_manifest(manifest_ptr, buffer_limits)?, api))
     }
 
     unsafe fn load_dynamic_admin_surface(
@@ -679,8 +628,8 @@ impl PluginLoader {
             let library = library
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
-            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV1> =
-                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V1) }.map_err(|error| {
+            let manifest_fn: libloading::Symbol<unsafe extern "C" fn() -> *const PluginManifestV9> =
+                unsafe { library.get(PLUGIN_MANIFEST_SYMBOL_V9) }.map_err(|error| {
                     RuntimeError::Config(format!(
                         "failed to resolve plugin manifest symbol in {}: {error}",
                         library_path.display()
@@ -693,20 +642,16 @@ impl PluginLoader {
                 .lock()
                 .expect("dynamic library mutex should not be poisoned");
             let api_fn: libloading::Symbol<
-                unsafe extern "C" fn() -> *const AdminSurfacePluginApiV1,
-            > = unsafe { library.get(PLUGIN_ADMIN_SURFACE_API_SYMBOL_V1) }.map_err(|error| {
+                unsafe extern "C" fn() -> *const AdminSurfacePluginApiV9,
+            > = unsafe { library.get(PLUGIN_ADMIN_SURFACE_API_SYMBOL_V9) }.map_err(|error| {
                 RuntimeError::Config(format!(
                     "failed to resolve admin-surface api symbol in {}: {error}",
                     library_path.display()
                 ))
             })?;
-            unsafe { *api_fn() }
+            unsafe { read_plugin_api(api_fn(), "admin-surface") }?
         };
-        Ok((
-            Some(library),
-            decode_manifest(manifest_ptr, buffer_limits)?,
-            api,
-        ))
+        Ok((library, decode_manifest(manifest_ptr, buffer_limits)?, api))
     }
 
     fn validate_manifest(
@@ -730,6 +675,12 @@ impl PluginLoader {
             return Err(RuntimeError::Config(format!(
                 "plugin `{}` ABI {} did not match current host ABI {}",
                 package.plugin_id, manifest.plugin_abi, CURRENT_PLUGIN_ABI
+            )));
+        }
+        if manifest.min_host_abi > manifest.max_host_abi {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` declared an inverted host ABI range {}..={}",
+                package.plugin_id, manifest.min_host_abi, manifest.max_host_abi
             )));
         }
         if !self.abi_range.contains(manifest.plugin_abi) {

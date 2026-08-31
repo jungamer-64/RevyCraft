@@ -1716,7 +1716,7 @@ mod tests {
             vec![DependencyBoundaryRule::StorageNoVersionedProtocol]
         );
         assert_eq!(
-            matching_dependency_rules("mc-plugin-api", "revy-voxel-core"),
+            matching_dependency_rules("mc-plugin-contract", "revy-core"),
             vec![DependencyBoundaryRule::SurfaceNoEngine]
         );
     }

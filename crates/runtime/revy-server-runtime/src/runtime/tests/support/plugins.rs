@@ -1,51 +1,8 @@
 use super::*;
 
-pub(crate) mod failing_storage_plugin {
-    use mc_plugin_api::codec::storage::StorageDescriptor;
-    use mc_plugin_sdk_rust::export_plugin;
-    use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
-    use mc_plugin_sdk_rust::storage::RustStoragePlugin;
-    use mc_storage_common::StorageError;
-    use revy_voxel_core::{StorageCapability, StorageCapabilitySet, WorldSnapshot};
-    use std::path::Path;
-
-    pub const PLUGIN_ID: &str = "storage-failing-runtime";
-    pub const PROFILE_ID: &str = "failing-storage";
-
-    #[derive(Default)]
-    pub struct FailingStoragePlugin;
-
-    impl RustStoragePlugin for FailingStoragePlugin {
-        fn descriptor(&self) -> StorageDescriptor {
-            StorageDescriptor {
-                storage_profile: PROFILE_ID.into(),
-            }
-        }
-
-        fn capability_set(&self) -> StorageCapabilitySet {
-            let mut capabilities = StorageCapabilitySet::new();
-            let _ = capabilities.insert(StorageCapability::RuntimeReload);
-            capabilities
-        }
-
-        fn load_snapshot(&self, _world_dir: &Path) -> Result<Option<WorldSnapshot>, StorageError> {
-            Ok(None)
-        }
-
-        fn save_snapshot(
-            &self,
-            _world_dir: &Path,
-            _snapshot: &WorldSnapshot,
-        ) -> Result<(), StorageError> {
-            Err(StorageError::Plugin("storage runtime failure".to_string()))
-        }
-    }
-
-    const MANIFEST: StaticPluginManifest =
-        StaticPluginManifest::storage(PLUGIN_ID, "Failing Storage Plugin", PROFILE_ID);
-
-    export_plugin!(storage, FailingStoragePlugin, MANIFEST);
-}
+const FAILING_STORAGE_PLUGIN_ID: &str = "storage-failing-runtime";
+pub(crate) const FAILING_STORAGE_PROFILE_ID: &str = "failing-storage";
+const FAILING_STORAGE_CARGO_PACKAGE: &str = "mc-plugin-fixture-storage-failing";
 
 pub(crate) const ALL_PROTOCOL_PLUGIN_IDS: &[&str] = &[
     JE_5_ADAPTER_ID,
@@ -148,9 +105,10 @@ pub(crate) fn plugin_test_registries_from_dist_with_supporting_plugins(
     }
     let bootstrap = plugin_host_bootstrap_test_config(&config);
     let runtime_selection = plugin_host_runtime_selection_test_config(&config);
-    let plugin_host = TestPluginHost::discover(&bootstrap)?.ok_or_else(|| {
-        RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
-    })?;
+    let plugin_host =
+        mc_plugin_host::host::plugin_host_from_config(&bootstrap)?.ok_or_else(|| {
+            RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
+        })?;
     Ok(LoadedPluginTestEnvironment {
         loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
         plugin_host: Some(plugin_host),
@@ -162,9 +120,10 @@ pub(crate) fn plugin_test_registries_from_config(
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
     let bootstrap = plugin_host_bootstrap_test_config(config);
     let runtime_selection = plugin_host_runtime_selection_test_config(config);
-    let plugin_host = TestPluginHost::discover(&bootstrap)?.ok_or_else(|| {
-        RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
-    })?;
+    let plugin_host =
+        mc_plugin_host::host::plugin_host_from_config(&bootstrap)?.ok_or_else(|| {
+            RuntimeError::Config("packaged protocol plugins should be discovered".to_string())
+        })?;
     Ok(LoadedPluginTestEnvironment {
         loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
         plugin_host: Some(plugin_host),
@@ -197,222 +156,62 @@ pub(crate) fn plugin_test_registries_all() -> Result<LoadedPluginTestEnvironment
     plugin_test_registries_with_allowlist(ALL_PROTOCOL_PLUGIN_IDS)
 }
 
-pub(crate) fn register_in_process_protocol_adapter(
-    builder: TestPluginHostBuilder,
-    adapter_id: &str,
-) -> Result<TestPluginHostBuilder, RuntimeError> {
-    let plugin = match adapter_id {
-        JE_5_ADAPTER_ID => {
-            let entrypoints = je_1_7_10_entrypoints();
-            InProcessProtocolPlugin {
-                plugin_id: JE_5_ADAPTER_ID.to_string(),
-                manifest: entrypoints.manifest,
-                factory: entrypoints.factory,
-            }
-        }
-        JE_47_ADAPTER_ID => {
-            let entrypoints = je_1_8_x_entrypoints();
-            InProcessProtocolPlugin {
-                plugin_id: JE_47_ADAPTER_ID.to_string(),
-                manifest: entrypoints.manifest,
-                factory: entrypoints.factory,
-            }
-        }
-        JE_340_ADAPTER_ID => {
-            let entrypoints = je_1_12_2_entrypoints();
-            InProcessProtocolPlugin {
-                plugin_id: JE_340_ADAPTER_ID.to_string(),
-                manifest: entrypoints.manifest,
-                factory: entrypoints.factory,
-            }
-        }
-        JE_404_ADAPTER_ID => {
-            let entrypoints = je_1_13_2_entrypoints();
-            InProcessProtocolPlugin {
-                plugin_id: JE_404_ADAPTER_ID.to_string(),
-                manifest: entrypoints.manifest,
-                factory: entrypoints.factory,
-            }
-        }
-        JE_775_ADAPTER_ID => {
-            let entrypoints = je_26_1_entrypoints();
-            InProcessProtocolPlugin {
-                plugin_id: JE_775_ADAPTER_ID.to_string(),
-                manifest: entrypoints.manifest,
-                factory: entrypoints.factory,
-            }
-        }
-        BE_924_ADAPTER_ID => {
-            let entrypoints = be_26_3_entrypoints();
-            InProcessProtocolPlugin {
-                plugin_id: BE_924_ADAPTER_ID.to_string(),
-                manifest: entrypoints.manifest,
-                factory: entrypoints.factory,
-            }
-        }
-        BE_PLACEHOLDER_ADAPTER_ID => {
-            let entrypoints = be_placeholder_entrypoints();
-            InProcessProtocolPlugin {
-                plugin_id: BE_PLACEHOLDER_ADAPTER_ID.to_string(),
-                manifest: entrypoints.manifest,
-                factory: entrypoints.factory,
-            }
-        }
-        other => {
-            return Err(RuntimeError::Config(format!(
-                "unknown in-process adapter `{other}`"
-            )));
-        }
-    };
-    Ok(builder.protocol_raw(plugin))
-}
-
-pub(crate) fn register_in_process_supporting_plugins(
-    builder: TestPluginHostBuilder,
-) -> TestPluginHostBuilder {
-    let canonical = canonical_gameplay_entrypoints();
-    let readonly = readonly_gameplay_entrypoints();
-    let storage = storage_entrypoints();
-    let online_auth = online_stub_auth_entrypoints();
-    builder
-        .gameplay_raw(InProcessGameplayPlugin {
-            plugin_id: "gameplay-canonical".to_string(),
-            manifest: canonical.manifest,
-            factory: canonical.factory,
-        })
-        .gameplay_raw(InProcessGameplayPlugin {
-            plugin_id: "gameplay-readonly".to_string(),
-            manifest: readonly.manifest,
-            factory: readonly.factory,
-        })
-        .storage_raw(InProcessStoragePlugin {
-            plugin_id: "storage-je-anvil-1_7_10".to_string(),
-            manifest: storage.manifest,
-            factory: storage.factory,
-        })
-        .auth_raw(InProcessAuthPlugin {
-            plugin_id: ONLINE_STUB_AUTH_PLUGIN_ID.to_string(),
-            manifest: online_auth.manifest,
-            factory: online_auth.factory,
-        })
-}
-
-pub(crate) fn register_in_process_default_supporting_plugins(
-    builder: TestPluginHostBuilder,
-) -> TestPluginHostBuilder {
-    let canonical = canonical_gameplay_entrypoints();
-    let readonly = readonly_gameplay_entrypoints();
-    let storage = storage_entrypoints();
-    let offline_auth = offline_auth_entrypoints();
-    builder
-        .gameplay_raw(InProcessGameplayPlugin {
-            plugin_id: "gameplay-canonical".to_string(),
-            manifest: canonical.manifest,
-            factory: canonical.factory,
-        })
-        .gameplay_raw(InProcessGameplayPlugin {
-            plugin_id: "gameplay-readonly".to_string(),
-            manifest: readonly.manifest,
-            factory: readonly.factory,
-        })
-        .storage_raw(InProcessStoragePlugin {
-            plugin_id: "storage-je-anvil-1_7_10".to_string(),
-            manifest: storage.manifest,
-            factory: storage.factory,
-        })
-        .auth_raw(InProcessAuthPlugin {
-            plugin_id: "auth-offline".to_string(),
-            manifest: offline_auth.manifest,
-            factory: offline_auth.factory,
-        })
-}
-
-pub(crate) fn in_process_online_auth_registries(
+pub(crate) fn packaged_online_auth_registries(
     allowlist: &[&str],
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
-    let mut builder = TestPluginHostBuilder::new();
-    for adapter_id in allowlist {
-        builder = register_in_process_protocol_adapter(builder, adapter_id)?;
-    }
-    let plugin_host = register_in_process_supporting_plugins(builder)
-        .abi_range(PluginAbiRange::default())
-        .failure_matrix(PluginFailureMatrix::default())
-        .build();
-    let mut config = ServerConfig::default();
-    config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.into();
-    let runtime_selection = plugin_host_runtime_selection_test_config(&config);
-    Ok(LoadedPluginTestEnvironment {
-        loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
-        plugin_host: Some(plugin_host),
-    })
+    plugin_test_registries_from_dist_with_supporting_plugins(
+        PackagedPluginHarness::shared()
+            .map_err(|error| RuntimeError::Config(error.to_string()))?
+            .dist_dir()
+            .to_path_buf(),
+        allowlist,
+        &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
+    )
 }
 
-pub(crate) fn in_process_default_registries(
+pub(crate) fn packaged_default_registries(
     allowlist: &[&str],
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
-    let mut builder = TestPluginHostBuilder::new();
-    for adapter_id in allowlist {
-        builder = register_in_process_protocol_adapter(builder, adapter_id)?;
-    }
-    let plugin_host = register_in_process_default_supporting_plugins(builder)
-        .abi_range(PluginAbiRange::default())
-        .failure_matrix(PluginFailureMatrix::default())
-        .build();
-    let config = ServerConfig::default();
-    let runtime_selection = plugin_host_runtime_selection_test_config(&config);
-    Ok(LoadedPluginTestEnvironment {
-        loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
-        plugin_host: Some(plugin_host),
-    })
+    plugin_test_registries_with_allowlist(allowlist)
 }
 
-pub(crate) fn in_process_failing_storage_registries(
+pub(crate) fn packaged_failing_storage_registries(
     failure_action: PluginFailureAction,
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
-    let builder =
-        register_in_process_protocol_adapter(TestPluginHostBuilder::new(), JE_5_ADAPTER_ID)?;
-    let canonical = canonical_gameplay_entrypoints();
-    let readonly = readonly_gameplay_entrypoints();
-    let failing_storage = failing_storage_plugin::in_process_plugin_entrypoints();
-    let offline_auth = offline_auth_entrypoints();
-    let plugin_host = builder
-        .gameplay_raw(InProcessGameplayPlugin {
-            plugin_id: "gameplay-canonical".to_string(),
-            manifest: canonical.manifest,
-            factory: canonical.factory,
-        })
-        .gameplay_raw(InProcessGameplayPlugin {
-            plugin_id: "gameplay-readonly".to_string(),
-            manifest: readonly.manifest,
-            factory: readonly.factory,
-        })
-        .storage_raw(InProcessStoragePlugin {
-            plugin_id: failing_storage_plugin::PLUGIN_ID.to_string(),
-            manifest: failing_storage.manifest,
-            factory: failing_storage.factory,
-        })
-        .auth_raw(InProcessAuthPlugin {
-            plugin_id: "auth-offline".to_string(),
-            manifest: offline_auth.manifest,
-            factory: offline_auth.factory,
-        })
-        .bootstrap_config(mc_plugin_host::config::BootstrapConfig {
-            storage_profile: failing_storage_plugin::PROFILE_ID.into(),
-            ..mc_plugin_host::config::BootstrapConfig::default()
-        })
-        .abi_range(PluginAbiRange::default())
-        .failure_matrix(PluginFailureMatrix {
-            storage: failure_action,
-            ..PluginFailureMatrix::default()
-        })
-        .build();
+    let harness =
+        PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let scope = format!(
+        "failing-storage-{}",
+        uuid::Uuid::new_v3(
+            &uuid::Uuid::NAMESPACE_OID,
+            format!("{:?}", failure_action).as_bytes()
+        )
+    );
+    let dist_dir = workspace_test_temp_root()
+        .join(&scope)
+        .join("runtime")
+        .join("plugins");
+    let supporting_plugin_ids = &["auth-offline", "auth-bedrock-offline", "auth-bedrock-xbl"];
+    seed_runtime_plugins(&dist_dir, &[JE_5_ADAPTER_ID], supporting_plugin_ids)?;
+    harness
+        .install_storage_plugin(
+            FAILING_STORAGE_CARGO_PACKAGE,
+            FAILING_STORAGE_PLUGIN_ID,
+            &dist_dir,
+            &harness.scoped_target_dir(&scope),
+            PACKAGED_PLUGIN_TEST_HARNESS_TAG,
+        )
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+
     let mut config = ServerConfig::default();
-    config.bootstrap.storage_profile = failing_storage_plugin::PROFILE_ID.into();
-    let runtime_selection = plugin_host_runtime_selection_test_config(&config);
-    Ok(LoadedPluginTestEnvironment {
-        loaded_plugins: plugin_host.load_plugin_set(&runtime_selection)?,
-        plugin_host: Some(plugin_host),
-    })
+    config.bootstrap.plugins_dir = dist_dir;
+    config.bootstrap.storage_profile = FAILING_STORAGE_PROFILE_ID.into();
+    config.plugins.failure_policy.storage = failure_action;
+    let mut allowlist =
+        plugin_allowlist_with_supporting_plugins(&[JE_5_ADAPTER_ID], supporting_plugin_ids);
+    allowlist.push(FAILING_STORAGE_PLUGIN_ID.to_string());
+    config.plugins.allowlist = Some(allowlist);
+    plugin_test_registries_from_config(&config)
 }
 
 pub(crate) fn gameplay_profile_map(

@@ -43,15 +43,6 @@ impl HotSwappableProtocolAdapter {
             .clone())
     }
 
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn swap_generation(&self, generation: Arc<ProtocolGeneration>) {
-        let _guard = self
-            .reload_gate
-            .write()
-            .expect("protocol reload gate should not be poisoned");
-        self.swap_generation_while_reloading(generation);
-    }
-
     pub(crate) fn swap_generation_while_reloading(&self, generation: Arc<ProtocolGeneration>) {
         *self
             .generation

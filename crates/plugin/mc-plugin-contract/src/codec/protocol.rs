@@ -1,4 +1,3 @@
-use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
 #[cfg(test)]
 use crate::codec::__internal::binary::PLUGIN_ENVELOPE_HEADER_LEN;
 pub use crate::codec::__internal::binary::ProtocolCodecError;
@@ -9,6 +8,7 @@ use crate::codec::__internal::protocol_semantic::{
     decode_protocol_request_payload, decode_protocol_response_payload,
     encode_protocol_request_payload, encode_protocol_response_payload,
 };
+use crate::plugin::{CURRENT_PLUGIN_ABI, PluginKind};
 pub use mc_proto_common::ProtocolSessionSnapshot;
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionPhase, HandshakeIntent, LoginRequest, PlayEncodingContext,

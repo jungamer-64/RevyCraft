@@ -3,14 +3,13 @@ use crate::{
     GameplayCanEditBlockKey, GameplayEffect, GameplayEffectBatch, GameplayReadSet, PlayerId,
     PlayerSnapshot, TargetedEvent,
 };
-use mc_plugin_api::abi::{ByteSlice, OwnedBuffer, PluginErrorCode, Utf8Slice};
-use mc_plugin_api::codec::gameplay::host_blob::{
-    decode_block_entity, decode_block_state, decode_gameplay_effect_blob, decode_player_snapshot,
-    decode_targeted_event_blob, decode_world_meta, encode_block_pos, encode_can_edit_block_key,
-    encode_gameplay_effect_blob, encode_player_id,
+use mc_plugin_abi::host::{GameplayHostApiV9, HostFreeBufferFn};
+use mc_plugin_abi::raw::{ByteSlice, OwnedBuffer, PluginStatus, Utf8Slice};
+use mc_plugin_contract::codec::gameplay::host_blob::{
+    decode_block_entity, decode_block_state, decode_player_snapshot, decode_world_meta,
+    encode_block_pos, encode_can_edit_block_key, encode_gameplay_effect_blob, encode_player_id,
 };
-use mc_plugin_api::codec::gameplay::{GameplayRequest, GameplayResponse};
-use mc_plugin_api::host_api::GameplayHostApiV3;
+use mc_plugin_contract::codec::gameplay::{GameplayRequest, GameplayResponse};
 use revy_voxel_semantic::{BlockEntityState, ContainerKindId};
 use revy_voxel_semantic::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};
 use std::cell::RefCell;
@@ -71,12 +70,12 @@ impl GameplayInvocationRecorder {
 }
 
 struct SdkGameplayHost {
-    api: GameplayHostApiV3,
+    api: GameplayHostApiV9,
     recorder: RefCell<GameplayInvocationRecorder>,
 }
 
 impl SdkGameplayHost {
-    fn new(api: GameplayHostApiV3, now_ms: u64) -> Self {
+    fn new(api: GameplayHostApiV9, now_ms: u64) -> Self {
         Self {
             api,
             recorder: RefCell::new(GameplayInvocationRecorder::new(now_ms)),
@@ -88,13 +87,19 @@ impl SdkGameplayHost {
             return Err("gameplay host did not provide push_effect".to_string());
         };
         let payload = encode_gameplay_effect_blob(&effect).map_err(|error| error.to_string())?;
-        call_host_mutation(self.api.context, &payload, callback)?;
+        call_host_mutation(self.api.context, &payload, callback, self.free_buffer()?)?;
         self.recorder.borrow_mut().push_effect(effect);
         Ok(())
     }
 
     fn finish(self) -> GameplayEffectBatch {
         self.recorder.into_inner().finish()
+    }
+
+    fn free_buffer(&self) -> Result<HostFreeBufferFn, String> {
+        self.api
+            .free_buffer
+            .ok_or_else(|| "gameplay host did not provide free_buffer".to_string())
     }
 }
 
@@ -105,6 +110,7 @@ impl GameplayHost for SdkGameplayHost {
         };
         unsafe {
             log(
+                self.api.context,
                 level,
                 Utf8Slice {
                     ptr: message.as_ptr(),
@@ -120,7 +126,7 @@ impl GameplayHost for SdkGameplayHost {
             return Err("gameplay host did not provide read_player_snapshot".to_string());
         };
         let payload = encode_player_id(player_id);
-        let bytes = call_host_buffer(self.api.context, &payload, callback)?;
+        let bytes = call_host_buffer(self.api.context, &payload, callback, self.free_buffer()?)?;
         let snapshot = decode_player_snapshot(&bytes).map_err(|error| error.to_string())?;
         self.recorder
             .borrow_mut()
@@ -132,7 +138,7 @@ impl GameplayHost for SdkGameplayHost {
         let Some(callback) = self.api.read_world_meta else {
             return Err("gameplay host did not provide read_world_meta".to_string());
         };
-        let bytes = call_host_zero_arg(self.api.context, callback)?;
+        let bytes = call_host_zero_arg(self.api.context, callback, self.free_buffer()?)?;
         let world_meta = decode_world_meta(&bytes).map_err(|error| error.to_string())?;
         self.recorder
             .borrow_mut()
@@ -145,7 +151,7 @@ impl GameplayHost for SdkGameplayHost {
             return Err("gameplay host did not provide read_block_state".to_string());
         };
         let payload = encode_block_pos(position);
-        let bytes = call_host_buffer(self.api.context, &payload, callback)?;
+        let bytes = call_host_buffer(self.api.context, &payload, callback, self.free_buffer()?)?;
         let block_state = decode_block_state(&bytes).map_err(|error| error.to_string())?;
         self.recorder
             .borrow_mut()
@@ -158,7 +164,7 @@ impl GameplayHost for SdkGameplayHost {
             return Err("gameplay host did not provide read_block_entity".to_string());
         };
         let payload = encode_block_pos(position);
-        let bytes = call_host_buffer(self.api.context, &payload, callback)?;
+        let bytes = call_host_buffer(self.api.context, &payload, callback, self.free_buffer()?)?;
         let block_entity = decode_block_entity(&bytes).map_err(|error| error.to_string())?;
         self.recorder
             .borrow_mut()
@@ -171,7 +177,7 @@ impl GameplayHost for SdkGameplayHost {
             return Err("gameplay host did not provide can_edit_block".to_string());
         };
         let payload = encode_can_edit_block_key(player_id, position);
-        let allowed = call_host_bool(self.api.context, &payload, callback)?;
+        let allowed = call_host_bool(self.api.context, &payload, callback, self.free_buffer()?)?;
         self.recorder
             .borrow_mut()
             .record_can_edit_block(player_id, position, allowed);
@@ -261,7 +267,7 @@ impl GameplayHost for SdkGameplayHost {
 }
 
 fn with_gameplay_host_api<T>(
-    api: GameplayHostApiV3,
+    api: GameplayHostApiV9,
     now_ms: u64,
     f: impl FnOnce(&dyn GameplayHost) -> Result<T, String>,
 ) -> Result<(T, GameplayEffectBatch), String> {
@@ -278,7 +284,8 @@ fn call_host_buffer(
         ByteSlice,
         *mut OwnedBuffer,
         *mut OwnedBuffer,
-    ) -> PluginErrorCode,
+    ) -> PluginStatus,
+    free_buffer: HostFreeBufferFn,
 ) -> Result<Vec<u8>, String> {
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
@@ -293,14 +300,16 @@ fn call_host_buffer(
             &raw mut error,
         )
     };
-    if status != PluginErrorCode::Ok {
-        return Err(read_error_buffer(error));
+    if status != PluginStatus::OK {
+        crate::__macro_support::buffers::release_host_owned_buffer(output, free_buffer);
+        return Err(read_error_buffer(error, free_buffer));
     }
-    let bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
-    unsafe {
-        crate::__macro_support::buffers::free_owned_buffer(output);
-    }
-    Ok(bytes)
+    crate::__macro_support::buffers::release_host_owned_buffer(error, free_buffer);
+    crate::__macro_support::buffers::copy_host_owned_buffer(
+        output,
+        free_buffer,
+        "gameplay host output",
+    )
 }
 
 fn call_host_zero_arg(
@@ -309,19 +318,22 @@ fn call_host_zero_arg(
         *mut std::ffi::c_void,
         *mut OwnedBuffer,
         *mut OwnedBuffer,
-    ) -> PluginErrorCode,
+    ) -> PluginStatus,
+    free_buffer: HostFreeBufferFn,
 ) -> Result<Vec<u8>, String> {
     let mut output = OwnedBuffer::empty();
     let mut error = OwnedBuffer::empty();
     let status = unsafe { callback(context, &raw mut output, &raw mut error) };
-    if status != PluginErrorCode::Ok {
-        return Err(read_error_buffer(error));
+    if status != PluginStatus::OK {
+        crate::__macro_support::buffers::release_host_owned_buffer(output, free_buffer);
+        return Err(read_error_buffer(error, free_buffer));
     }
-    let bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec();
-    unsafe {
-        crate::__macro_support::buffers::free_owned_buffer(output);
-    }
-    Ok(bytes)
+    crate::__macro_support::buffers::release_host_owned_buffer(error, free_buffer);
+    crate::__macro_support::buffers::copy_host_owned_buffer(
+        output,
+        free_buffer,
+        "gameplay host output",
+    )
 }
 
 fn call_host_bool(
@@ -332,7 +344,8 @@ fn call_host_bool(
         ByteSlice,
         *mut bool,
         *mut OwnedBuffer,
-    ) -> PluginErrorCode,
+    ) -> PluginStatus,
+    free_buffer: HostFreeBufferFn,
 ) -> Result<bool, String> {
     let mut value = false;
     let mut error = OwnedBuffer::empty();
@@ -347,9 +360,10 @@ fn call_host_bool(
             &raw mut error,
         )
     };
-    if status != PluginErrorCode::Ok {
-        return Err(read_error_buffer(error));
+    if status != PluginStatus::OK {
+        return Err(read_error_buffer(error, free_buffer));
     }
+    crate::__macro_support::buffers::release_host_owned_buffer(error, free_buffer);
     Ok(value)
 }
 
@@ -360,7 +374,8 @@ fn call_host_mutation(
         *mut std::ffi::c_void,
         ByteSlice,
         *mut OwnedBuffer,
-    ) -> PluginErrorCode,
+    ) -> PluginStatus,
+    free_buffer: HostFreeBufferFn,
 ) -> Result<(), String> {
     let mut error = OwnedBuffer::empty();
     let status = unsafe {
@@ -373,31 +388,24 @@ fn call_host_mutation(
             &raw mut error,
         )
     };
-    if status != PluginErrorCode::Ok {
-        return Err(read_error_buffer(error));
+    if status != PluginStatus::OK {
+        return Err(read_error_buffer(error, free_buffer));
     }
+    crate::__macro_support::buffers::release_host_owned_buffer(error, free_buffer);
     Ok(())
 }
 
-fn read_error_buffer(buffer: OwnedBuffer) -> String {
-    if buffer.ptr.is_null() {
-        return "host callback failed".to_string();
+fn read_error_buffer(buffer: OwnedBuffer, free_buffer: HostFreeBufferFn) -> String {
+    match crate::__macro_support::buffers::copy_host_owned_buffer(
+        buffer,
+        free_buffer,
+        "gameplay host error",
+    ) {
+        Ok(bytes) if bytes.is_empty() => "host callback failed".to_string(),
+        Ok(bytes) => String::from_utf8(bytes)
+            .unwrap_or_else(|_| "host callback returned invalid utf-8".to_string()),
+        Err(error) => format!("host callback returned invalid error buffer: {error}"),
     }
-    let bytes = unsafe { std::slice::from_raw_parts(buffer.ptr, buffer.len) }.to_vec();
-    unsafe {
-        crate::__macro_support::buffers::free_owned_buffer(buffer);
-    }
-    String::from_utf8(bytes).unwrap_or_else(|_| "host callback returned invalid utf-8".to_string())
-}
-
-#[allow(dead_code)]
-fn _decode_targeted_event_for_tests(bytes: &[u8]) -> Result<TargetedEvent, String> {
-    decode_targeted_event_blob(bytes).map_err(|error| error.to_string())
-}
-
-#[allow(dead_code)]
-fn _decode_gameplay_effect_for_tests(bytes: &[u8]) -> Result<GameplayEffect, String> {
-    decode_gameplay_effect_blob(bytes).map_err(|error| error.to_string())
 }
 
 pub fn handle_gameplay_request<P: RustGameplayPlugin>(
@@ -410,7 +418,7 @@ pub fn handle_gameplay_request<P: RustGameplayPlugin>(
 pub fn handle_gameplay_request_with_host_api<P: RustGameplayPlugin>(
     plugin: &P,
     request: GameplayRequest,
-    host_api: Option<GameplayHostApiV3>,
+    host_api: Option<GameplayHostApiV9>,
 ) -> Result<GameplayResponse, String> {
     let require_host_api =
         || host_api.ok_or_else(|| "gameplay host api is not configured".to_string());

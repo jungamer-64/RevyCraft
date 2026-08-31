@@ -47,14 +47,14 @@ macro_rules! delegate_protocol_adapter {
         impl $crate::protocol::RustProtocolPlugin for $plugin_ty {
             fn export_session_state(
                 &self,
-                session: &mc_plugin_api::codec::protocol::ProtocolSessionSnapshot,
+                session: &mc_plugin_contract::codec::protocol::ProtocolSessionSnapshot,
             ) -> Result<Vec<u8>, mc_proto_common::ProtocolError> {
                 mc_proto_common::ProtocolAdapter::export_session_state(&self.$field, session)
             }
 
             fn import_session_state(
                 &self,
-                session: &mc_plugin_api::codec::protocol::ProtocolSessionSnapshot,
+                session: &mc_plugin_contract::codec::protocol::ProtocolSessionSnapshot,
                 blob: &[u8],
             ) -> Result<(), mc_proto_common::ProtocolError> {
                 mc_proto_common::ProtocolAdapter::import_session_state(&self.$field, session, blob)

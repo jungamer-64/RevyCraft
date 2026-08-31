@@ -3,14 +3,14 @@ use crate::config::RuntimeSelectionConfig;
 use crate::host::PreparedProtocolTopology;
 use crate::host::{PluginFailureAction, PluginHostInventoryStatusSnapshot};
 use crate::registry::{LoadedPluginSet, ProtocolRegistry};
-use mc_plugin_api::abi::PluginKind;
-use mc_plugin_api::codec::admin_surface::{
+use mc_plugin_abi::host::AdminSurfaceHostApiV9;
+use mc_plugin_contract::codec::admin_surface::{
     AdminSurfaceInstanceDeclaration, AdminSurfacePauseView, AdminSurfaceStatusView,
 };
-use mc_plugin_api::codec::auth::{AuthMode, BedrockAuthResult};
-use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
-use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
-use mc_plugin_api::host_api::AdminSurfaceHostApiV1;
+use mc_plugin_contract::codec::auth::{AuthMode, BedrockAuthResult};
+use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
+use mc_plugin_contract::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_contract::plugin::PluginKind;
 use mc_storage_common::StorageError;
 use revy_server_gameplay_bridge::{GameplayEffectBatch, GameplayReadView};
 use revy_voxel_semantic::{
@@ -198,13 +198,13 @@ pub trait AdminSurfaceProfileHandle: Send + Sync {
         &self,
         instance_id: &str,
         surface_config_path: Option<&Path>,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, PluginHostError>;
 
     fn pause_for_upgrade(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfacePauseView, PluginHostError>;
 
     fn resume_from_upgrade(
@@ -212,25 +212,25 @@ pub trait AdminSurfaceProfileHandle: Send + Sync {
         instance_id: &str,
         surface_config_path: Option<&Path>,
         resume_payload: &[u8],
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, PluginHostError>;
 
     fn activate_after_upgrade_commit(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<(), PluginHostError>;
 
     fn resume_after_upgrade_rollback(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, PluginHostError>;
 
     fn shutdown(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<(), PluginHostError>;
 }
 

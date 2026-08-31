@@ -7,7 +7,7 @@ use super::{
     RuntimeReloadResult, RuntimeServer,
 };
 use crate::RuntimeError;
-use mc_plugin_api::codec::admin as surface_admin;
+use mc_plugin_contract::codec::admin as surface_admin;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;

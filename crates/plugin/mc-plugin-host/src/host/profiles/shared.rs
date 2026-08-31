@@ -164,7 +164,7 @@ impl ProfileGenerationMetadata for StorageGeneration {
 mod tests {
     use super::ReloadableGenerationSlot;
     use super::{Arc, GenerationSlot, PluginGenerationId, ProfileGenerationMetadata};
-    use revy_voxel_core::{ProtocolCapability, ProtocolCapabilitySet};
+    use revy_voxel_semantic::{ProtocolCapability, ProtocolCapabilitySet};
 
     #[derive(Clone)]
     struct TestGeneration {

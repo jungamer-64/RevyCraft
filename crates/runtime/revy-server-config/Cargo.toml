@@ -10,7 +10,7 @@ categories.workspace = true
 description = "Validated server configuration loading and parsing for RevyCraft."
 
 [dependencies]
-mc-plugin-api = { path = "../../plugin/mc-plugin-api" }
+mc-plugin-contract = { path = "../../plugin/mc-plugin-contract" }
 revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 revy-server-types = { path = "../revy-server-types" }
 serde.workspace = true

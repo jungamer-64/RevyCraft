@@ -15,6 +15,11 @@ fn checked_byte_len(
             "{what} exceeded configured limit: {byte_len} bytes > {max_bytes} bytes"
         ));
     }
+    if byte_len > isize::MAX as usize {
+        return Err(format!(
+            "{what} exceeded the maximum addressable slice length"
+        ));
+    }
     Ok(byte_len)
 }
 
@@ -63,30 +68,93 @@ pub(crate) fn read_checked_slice<'a, T>(
         };
     }
     checked_byte_len(len, size_of::<T>(), max_bytes, what).map_err(RuntimeError::Config)?;
+    if !(ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
+        return Err(RuntimeError::Config(format!(
+            "{what} pointer was not properly aligned"
+        )));
+    }
     Ok(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
-pub(crate) fn take_owned_buffer(
+struct ForeignOwnedBuffer<L> {
+    buffer: Option<OwnedBuffer>,
     free_buffer: PluginFreeBufferFn,
+    _generation_lease: L,
+}
+
+impl<L> ForeignOwnedBuffer<L> {
+    fn new(buffer: OwnedBuffer, free_buffer: PluginFreeBufferFn, generation_lease: L) -> Self {
+        Self {
+            buffer: Some(buffer),
+            free_buffer,
+            _generation_lease: generation_lease,
+        }
+    }
+
+    fn copy_with_limit(&self, max_bytes: usize, what: &str) -> Result<Vec<u8>, String> {
+        let buffer = self
+            .buffer
+            .as_ref()
+            .expect("foreign buffer is present until its guard is dropped");
+        if buffer.ptr.is_null() {
+            return if buffer.len == 0 && buffer.cap == 0 {
+                Ok(Vec::new())
+            } else {
+                Err(format!(
+                    "{what} pointer was null with non-zero length or capacity"
+                ))
+            };
+        }
+        if buffer.len > buffer.cap {
+            return Err(format!(
+                "{what} length {} exceeded capacity {}",
+                buffer.len, buffer.cap
+            ));
+        }
+        if buffer.cap > isize::MAX as usize {
+            return Err(format!(
+                "{what} capacity exceeded the addressable allocation limit"
+            ));
+        }
+        let byte_len = checked_byte_len(buffer.len, size_of::<u8>(), max_bytes, what)?;
+        Ok(unsafe { std::slice::from_raw_parts(buffer.ptr, byte_len) }.to_vec())
+    }
+}
+
+impl<L> Drop for ForeignOwnedBuffer<L> {
+    fn drop(&mut self) {
+        let Some(buffer) = self.buffer.take() else {
+            return;
+        };
+        if buffer.ptr.is_null() && buffer.len == 0 && buffer.cap == 0 {
+            return;
+        }
+        unsafe {
+            (self.free_buffer)(buffer);
+        }
+    }
+}
+
+pub(crate) fn take_owned_buffer<L>(
+    free_buffer: PluginFreeBufferFn,
+    generation_lease: L,
     buffer: OwnedBuffer,
     max_bytes: usize,
     what: &str,
 ) -> Result<Vec<u8>, String> {
-    if buffer.ptr.is_null() {
-        return if buffer.len == 0 {
-            Ok(Vec::new())
-        } else {
-            Err(format!("{what} pointer was null with non-zero length"))
-        };
-    }
-    let result = match checked_byte_len(buffer.len, size_of::<u8>(), max_bytes, what) {
-        Ok(byte_len) => Ok(unsafe { std::slice::from_raw_parts(buffer.ptr, byte_len) }.to_vec()),
-        Err(error) => Err(error),
-    };
-    unsafe {
-        (free_buffer)(buffer);
-    }
-    result
+    ForeignOwnedBuffer::new(buffer, free_buffer, generation_lease).copy_with_limit(max_bytes, what)
+}
+
+pub(crate) fn release_owned_buffer<L>(
+    free_buffer: PluginFreeBufferFn,
+    generation_lease: L,
+    buffer: OwnedBuffer,
+) {
+    drop(ForeignOwnedBuffer::new(
+        buffer,
+        free_buffer,
+        generation_lease,
+    ));
 }
 
 #[cfg(test)]
@@ -114,7 +182,7 @@ mod tests {
         if buffer.ptr.is_null() {
             return;
         }
-        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap) };
+        let _ = unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len.min(buffer.cap), buffer.cap) };
     }
 
     #[test]
@@ -123,6 +191,7 @@ mod tests {
 
         let bytes = take_owned_buffer(
             counting_free_buffer,
+            (),
             owned_buffer(vec![1, 2, 3]),
             16,
             "test buffer",
@@ -139,6 +208,7 @@ mod tests {
 
         let error = take_owned_buffer(
             counting_free_buffer,
+            (),
             owned_buffer(vec![1, 2, 3]),
             2,
             "test buffer",
@@ -146,6 +216,19 @@ mod tests {
         .expect_err("oversized buffer should fail");
 
         assert!(error.contains("exceeded configured limit"));
+        FREE_COUNT.with(|count| assert_eq!(count.get(), 1));
+    }
+
+    #[test]
+    fn take_owned_buffer_rejects_length_larger_than_capacity_and_frees_once() {
+        FREE_COUNT.with(|count| count.set(0));
+        let mut buffer = owned_buffer(vec![1, 2, 3]);
+        buffer.len = buffer.cap + 1;
+
+        let error = take_owned_buffer(counting_free_buffer, (), buffer, 16, "test buffer")
+            .expect_err("invalid length and capacity must fail");
+
+        assert!(error.contains("exceeded capacity"));
         FREE_COUNT.with(|count| assert_eq!(count.get(), 1));
     }
 }

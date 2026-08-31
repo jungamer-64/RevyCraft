@@ -1,4 +1,4 @@
-use mc_plugin_api::codec::admin_surface::AdminSurfaceResource;
+use mc_plugin_contract::codec::admin_surface::AdminSurfaceResource;
 use revy_server_runtime::RuntimeError;
 use tokio::sync::oneshot;
 

@@ -1,4 +1,4 @@
-use mc_plugin_api::abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use mc_plugin_abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
 use revy_server_types::{
     PluginFailureAction, PluginFailureMatrix, PluginHostBootstrapSelectionView,
     PluginHostBufferLimitsView, PluginHostRuntimeSelectionView,
@@ -182,12 +182,12 @@ impl From<&PluginHostRuntimeSelectionView> for RuntimeSelectionConfig {
 #[cfg(test)]
 mod tests {
     use super::{BootstrapConfig, PluginBufferLimits, RuntimeSelectionConfig};
-    use revy_voxel_semantic::AdapterId;
     use revy_server_types::{
         PluginFailureAction, PluginFailureMatrix, PluginHostAdminSurfaceSelectionView,
         PluginHostBootstrapSelectionView, PluginHostBufferLimitsView,
         PluginHostRuntimeSelectionView,
     };
+    use revy_voxel_semantic::AdapterId;
     use std::collections::HashMap;
     use std::path::PathBuf;
 

@@ -1,5 +1,5 @@
 [package]
-name = "mc-plugin-api"
+name = "mc-plugin-contract"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Stable C ABI and binary envelope contract for RevyCraft runtime plugins."
+description = "Safe semantic and binary envelope contract for RevyCraft runtime plugins."
 
 [dependencies]
 revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }

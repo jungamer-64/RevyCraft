@@ -19,7 +19,7 @@ mc-content-canonical = { path = "../../content/mc-content-canonical" }
 revy-voxel-core = { path = "../../core/revy-voxel-core" }
 revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 mc-storage-common = { path = "../../storage/mc-storage-common" }
-mc-plugin-api = { path = "../../plugin/mc-plugin-api" }
+mc-plugin-contract = { path = "../../plugin/mc-plugin-contract" }
 mc-plugin-host = { path = "../../plugin/mc-plugin-host" }
 mc-proto-be-common = { path = "../../protocol/mc-proto-be-common" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
@@ -37,25 +37,23 @@ tokio.workspace = true
 
 [dev-dependencies]
 bedrockrs_proto_core.workspace = true
-mc-plugin-auth-bedrock-offline = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-offline", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-auth-bedrock-xbl = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-xbl", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-auth-online-stub = { path = "../../../plugins/auth/mc-plugin-auth-online-stub", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gameplay-canonical", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-host-test-support = { path = "../../testing/mc-plugin-host-test-support" }
-mc-plugin-sdk-rust = { path = "../../plugin/mc-plugin-sdk-rust", features = ["in-process-testing"] }
-mc-plugin-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-plugin-proto-be-924", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/be-placeholder/mc-plugin-proto-be-placeholder", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-340 = { path = "../../../plugins/protocol/je-340/mc-plugin-proto-je-340", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-404 = { path = "../../../plugins/protocol/je-404/mc-plugin-proto-je-404", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-775 = { path = "../../../plugins/protocol/je-775/mc-plugin-proto-je-775", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-plugin-proto-je-5", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-plugin-proto-je-47", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-auth-bedrock-offline = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-offline" }
+mc-plugin-auth-bedrock-xbl = { path = "../../../plugins/auth/mc-plugin-auth-bedrock-xbl" }
+mc-plugin-auth-offline = { path = "../../../plugins/auth/mc-plugin-auth-offline" }
+mc-plugin-auth-online-stub = { path = "../../../plugins/auth/mc-plugin-auth-online-stub" }
+mc-plugin-gameplay-canonical = { path = "../../../plugins/gameplay/mc-plugin-gameplay-canonical" }
+mc-plugin-gameplay-readonly = { path = "../../../plugins/gameplay/mc-plugin-gameplay-readonly" }
+mc-plugin-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-plugin-proto-be-924" }
+mc-plugin-proto-be-placeholder = { path = "../../../plugins/protocol/be-placeholder/mc-plugin-proto-be-placeholder" }
+mc-plugin-proto-je-340 = { path = "../../../plugins/protocol/je-340/mc-plugin-proto-je-340" }
+mc-plugin-proto-je-404 = { path = "../../../plugins/protocol/je-404/mc-plugin-proto-je-404" }
+mc-plugin-proto-je-775 = { path = "../../../plugins/protocol/je-775/mc-plugin-proto-je-775" }
+mc-plugin-proto-je-5 = { path = "../../../plugins/protocol/je-5/mc-plugin-proto-je-5" }
+mc-plugin-proto-je-47 = { path = "../../../plugins/protocol/je-47/mc-plugin-proto-je-47" }
 mc-storage-je-anvil-1_7_10 = { path = "../../storage/mc-storage-je-anvil-1_7_10" }
-mc-plugin-storage-je-anvil-1_18_2 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_18_2", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-storage-je-anvil-26_1 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-26_1", features = ["disable-exported-symbols", "in-process-testing"] }
-mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10", features = ["disable-exported-symbols", "in-process-testing"] }
+mc-plugin-storage-je-anvil-1_18_2 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_18_2" }
+mc-plugin-storage-je-anvil-26_1 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-26_1" }
+mc-plugin-storage-je-anvil-1_7_10 = { path = "../../../plugins/storage/mc-plugin-storage-je-anvil-1_7_10" }
 mc-plugin-test-support = { path = "../../testing/mc-plugin-test-support" }
 mc-proto-be-924 = { path = "../../../plugins/protocol/be-924/mc-proto-be-924" }
 mc-proto-be-placeholder = { path = "../../../plugins/protocol/be-placeholder/mc-proto-be-placeholder" }

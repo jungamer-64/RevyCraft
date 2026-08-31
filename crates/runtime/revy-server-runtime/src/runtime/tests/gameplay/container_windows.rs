@@ -6,7 +6,7 @@ async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
-        in_process_default_registries(ALL_PROTOCOL_PLUGIN_IDS)?,
+        packaged_default_registries(ALL_PROTOCOL_PLUGIN_IDS)?,
     )
     .await?;
     let addr = listener_addr(&server);
@@ -279,7 +279,7 @@ async fn world_backed_crafting_table_opens_and_crafts_chest_via_protocol()
     let temp_dir = tempdir()?;
     let server = build_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
-        in_process_default_registries(ALL_PROTOCOL_PLUGIN_IDS)?,
+        packaged_default_registries(ALL_PROTOCOL_PLUGIN_IDS)?,
     )
     .await?;
     let addr = listener_addr(&server);

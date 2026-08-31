@@ -13,11 +13,9 @@ description = "Bedrock 26.3 protocol plugin for the RevyCraft runtime host."
 crate-type = ["cdylib", "rlib"]
 
 [features]
-disable-exported-symbols = []
-in-process-testing = ["mc-plugin-sdk-rust/in-process-testing"]
 
 [dependencies]
-mc-plugin-api = { path = "../../../../crates/plugin/mc-plugin-api" }
+mc-plugin-contract = { path = "../../../../crates/plugin/mc-plugin-contract" }
 mc-plugin-sdk-rust = { path = "../../../../crates/plugin/mc-plugin-sdk-rust" }
 mc-proto-be-924 = { path = "../mc-proto-be-924" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }

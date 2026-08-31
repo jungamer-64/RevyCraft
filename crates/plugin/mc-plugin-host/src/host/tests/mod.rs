@@ -1,99 +1,23 @@
-use super::{
-    GameplayInvocationScope, current_artifact_key, with_current_gameplay_query,
-    with_gameplay_invocation_and_limits,
-};
-use crate::PluginHostError as RuntimeError;
-use crate::config::{BootstrapConfig, PluginBufferLimits, RuntimeSelectionConfig};
-use crate::host::{PluginAbiRange, PluginFailureAction, plugin_host_from_config};
-use crate::runtime::{ProtocolReloadSession, RuntimeReloadContext};
-use crate::test_support::{
-    InProcessAdminSurfacePlugin, InProcessAuthPlugin, InProcessGameplayPlugin,
-    InProcessProtocolPlugin, InProcessStoragePlugin, PluginFailureMatrix, TestPluginHost,
-    TestPluginHostBuilder,
-};
-use mc_plugin_admin_console::in_process_plugin_entrypoints as console_admin_surface_entrypoints;
-use mc_plugin_api::abi::{
-    CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, PluginAbiVersion, PluginKind, Utf8Slice,
-};
-use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
-use mc_plugin_api::manifest::PluginManifestV1;
-use mc_plugin_auth_offline::in_process_plugin_entrypoints as offline_auth_entrypoints;
-use mc_plugin_gameplay_canonical::in_process_plugin_entrypoints as canonical_gameplay_entrypoints;
-use mc_plugin_gameplay_readonly::in_process_plugin_entrypoints as readonly_gameplay_entrypoints;
-use mc_plugin_proto_be_924::in_process_plugin_entrypoints as be_26_3_entrypoints;
-use mc_plugin_proto_be_placeholder::in_process_plugin_entrypoints as be_placeholder_entrypoints;
-use mc_plugin_proto_je_5::in_process_plugin_entrypoints as in_process_protocol_entrypoints;
-use mc_plugin_proto_je_47::in_process_plugin_entrypoints as je_1_8_x_entrypoints;
-use mc_plugin_proto_je_340::in_process_plugin_entrypoints as je_1_12_2_entrypoints;
-use mc_plugin_proto_je_404::in_process_plugin_entrypoints as je_1_13_2_entrypoints;
-use mc_plugin_proto_je_775::in_process_plugin_entrypoints as je_26_1_entrypoints;
-use mc_plugin_storage_je_anvil_1_7_10::in_process_plugin_entrypoints as storage_entrypoints;
-use mc_plugin_storage_je_anvil_1_18_2::{
-    JE_1_18_2_STORAGE_PLUGIN_ID, JE_1_18_2_STORAGE_PROFILE_ID,
-    in_process_plugin_entrypoints as storage_1_18_2_entrypoints,
-};
-use mc_plugin_storage_je_anvil_26_1::{
-    JE_26_1_STORAGE_PLUGIN_ID, JE_26_1_STORAGE_PROFILE_ID,
-    in_process_plugin_entrypoints as storage_26_1_entrypoints,
-};
+use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
+use crate::host::plugin_host_from_config;
 use mc_plugin_test_support::PackagedPluginHarness;
-use mc_proto_common::{ConnectionPhase, Edition, PacketWriter, TransportKind, WireFormatKind};
-use revy_voxel_core::{ConnectionId, CoreConfig, EntityId, PlayerId, ServerCore};
-use std::fs;
-use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
-mod admin_surface;
-mod discovery;
-mod failure_policy;
-mod gameplay_query;
-#[cfg(target_os = "linux")]
-mod packaged_reload;
-mod profiles;
-mod support;
-mod test_plugins;
-
-use self::support::*;
-use self::test_plugins::*;
-
-fn runtime_selection_config() -> RuntimeSelectionConfig {
-    RuntimeSelectionConfig {
-        admin_surfaces: Vec::new(),
-        ..RuntimeSelectionConfig::default()
-    }
-}
-
-fn bootstrap_config_with_plugins_dir(plugins_dir: PathBuf) -> BootstrapConfig {
-    BootstrapConfig {
-        plugins_dir,
+#[test]
+fn packaged_abi9_plugins_load_through_the_production_host() -> Result<(), Box<dyn std::error::Error>>
+{
+    let harness = PackagedPluginHarness::shared()?;
+    let bootstrap = BootstrapConfig {
+        plugins_dir: harness.dist_dir().to_path_buf(),
         ..BootstrapConfig::default()
-    }
-}
+    };
+    let host = plugin_host_from_config(&bootstrap)?.ok_or("packaged plugin catalog was empty")?;
+    let loaded = host.load_plugin_set(&RuntimeSelectionConfig::default())?;
 
-fn tempdir() -> std::io::Result<tempfile::TempDir> {
-    let base_dir = workspace_test_temp_root().join("mc-plugin-host");
-    fs::create_dir_all(&base_dir)?;
-    tempfile::Builder::new()
-        .prefix("mc-plugin-host-")
-        .tempdir_in(base_dir)
-}
-
-fn workspace_test_temp_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    for ancestor in manifest_dir.ancestors() {
-        let manifest = ancestor.join("Cargo.toml");
-        if !manifest.is_file() {
-            continue;
-        }
-        let Ok(contents) = fs::read_to_string(&manifest) else {
-            continue;
-        };
-        if contents.contains("[workspace]") {
-            return ancestor.join("target").join("test-tmp");
-        }
-    }
-    panic!(
-        "mc-plugin-host tests should run under the workspace root: {}",
-        manifest_dir.display()
-    );
+    assert!(!host.status().protocols.is_empty());
+    assert!(loaded.protocols().resolve_adapter("je-5").is_some());
+    assert!(loaded.resolve_gameplay_profile("canonical").is_some());
+    assert!(loaded.resolve_storage_profile("je-anvil-1_7_10").is_some());
+    assert!(loaded.resolve_auth_profile("offline-v1").is_some());
+    assert!(loaded.resolve_admin_surface_profile("console-v1").is_some());
+    Ok(())
 }

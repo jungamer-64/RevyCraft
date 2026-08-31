@@ -2,7 +2,7 @@ use crate::process_surfaces::{
     PausedAdminSurfaceInstance, PausedAdminSurfaceResource, PausedProcessSurfaces,
     ProcessSurfaceCommand,
 };
-use mc_plugin_api::codec::admin_surface::AdminSurfaceResource;
+use mc_plugin_contract::codec::admin_surface::AdminSurfaceResource;
 use rand::random;
 use revy_server_runtime::RuntimeError;
 use revy_server_runtime::runtime::{

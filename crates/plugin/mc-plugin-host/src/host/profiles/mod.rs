@@ -7,7 +7,7 @@ mod shared;
 mod storage;
 
 use super::{
-    AdminSurfaceCapabilitySet, AdminSurfaceGeneration, AdminSurfaceHostApiV1,
+    AdminSurfaceCapabilitySet, AdminSurfaceGeneration, AdminSurfaceHostApiV9,
     AdminSurfaceInstanceDeclaration, AdminSurfacePauseView, AdminSurfaceProfileId,
     AdminSurfaceStatusView, Arc, AuthCapabilitySet, AuthGeneration, AuthGenerationHandle, AuthMode,
     AuthProfileId, BedrockAuthResult, BedrockListenerDescriptor, BytesMut, ConnectionPhase,
@@ -19,7 +19,7 @@ use super::{
     ProtocolResponse, RuntimeError, RwLock, ServerListStatus, SessionCapabilitySet, StatusRequest,
     StorageAdapter, StorageCapabilitySet, StorageError, StorageGeneration, StorageProfileHandle,
     StorageProfileId, StorageRequest, StorageResponse, SystemTime, TransportKind, WireCodec,
-    WireFormatKind, WireFrameDecodeResult, WorldSnapshot, with_gameplay_invocation_and_limits,
+    WireFormatKind, WireFrameDecodeResult, WorldSnapshot,
 };
 use mc_proto_common::Edition;
 

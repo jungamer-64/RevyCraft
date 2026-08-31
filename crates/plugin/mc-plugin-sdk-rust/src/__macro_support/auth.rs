@@ -1,5 +1,5 @@
 use crate::auth::RustAuthPlugin;
-use mc_plugin_api::codec::auth::{AuthRequest, AuthResponse};
+use mc_plugin_contract::codec::auth::{AuthRequest, AuthResponse};
 
 pub fn handle_auth_request<P: RustAuthPlugin>(
     plugin: &P,

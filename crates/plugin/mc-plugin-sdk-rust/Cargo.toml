@@ -12,7 +12,8 @@ description = "Rust authoring SDK for RevyCraft runtime plugins."
 [dependencies]
 bytes.workspace = true
 mc-storage-common = { path = "../../storage/mc-storage-common" }
-mc-plugin-api = { path = "../mc-plugin-api" }
+mc-plugin-abi = { path = "../mc-plugin-abi" }
+mc-plugin-contract = { path = "../mc-plugin-contract" }
 mc-proto-common = { path = "../../protocol/mc-proto-common" }
 revy-voxel-semantic = { path = "../../core/revy-voxel-semantic" }
 serde.workspace = true

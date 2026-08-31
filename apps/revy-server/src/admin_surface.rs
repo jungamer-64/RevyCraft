@@ -1,10 +1,10 @@
 use crate::process_surfaces::{
     PausedAdminSurfaceInstance, PausedAdminSurfaceResource, ProcessSurfaceCommand,
 };
-use mc_plugin_api::abi::{ByteSlice, OwnedBuffer, PluginErrorCode, Utf8Slice};
-use mc_plugin_api::codec::admin as plugin_admin;
-use mc_plugin_api::codec::admin_surface::AdminSurfaceResource;
-use mc_plugin_api::host_api::AdminSurfaceHostApiV1;
+use mc_plugin_abi::host::AdminSurfaceHostApiV9;
+use mc_plugin_abi::raw::{ByteSlice, OwnedBuffer, PluginStatus, Utf8Slice};
+use mc_plugin_contract::codec::admin as plugin_admin;
+use mc_plugin_contract::codec::admin_surface::AdminSurfaceResource;
 use revy_server_runtime::RuntimeError;
 use revy_server_runtime::runtime::{AdminControlPlaneHandle, ServerSupervisor};
 use std::collections::{BTreeMap, HashMap};
@@ -356,10 +356,14 @@ fn same_surface(
 }
 
 impl InstanceAdminSurfaceHostContext {
-    fn host_api(self: &Arc<Self>) -> AdminSurfaceHostApiV1 {
-        AdminSurfaceHostApiV1 {
-            abi: mc_plugin_api::abi::CURRENT_PLUGIN_ABI,
+    fn host_api(self: &Arc<Self>) -> AdminSurfaceHostApiV9 {
+        AdminSurfaceHostApiV9 {
+            abi: mc_plugin_abi::CURRENT_PLUGIN_ABI,
+            struct_size: std::mem::size_of::<AdminSurfaceHostApiV9>(),
             context: Arc::as_ptr(self) as *mut c_void,
+            free_buffer: Some(host_free_buffer),
+            retain_context: Some(host_retain_context),
+            release_context: Some(host_release_context),
             log: Some(host_log),
             execute: Some(host_execute),
             permissions: Some(host_permissions),
@@ -367,6 +371,40 @@ impl InstanceAdminSurfaceHostContext {
             publish_handoff_resource: Some(host_publish_handoff_resource),
             take_handoff_resource: Some(host_take_handoff_resource),
         }
+    }
+}
+
+unsafe extern "C" fn host_free_buffer(buffer: OwnedBuffer) {
+    if buffer.ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let _ = Vec::from_raw_parts(buffer.ptr, buffer.len.min(buffer.cap), buffer.cap);
+    }
+}
+
+unsafe extern "C" fn host_retain_context(context: *mut c_void) -> bool {
+    if context.is_null()
+        || !(context as usize)
+            .is_multiple_of(std::mem::align_of::<InstanceAdminSurfaceHostContext>())
+    {
+        return false;
+    }
+    unsafe {
+        Arc::increment_strong_count(context.cast::<InstanceAdminSurfaceHostContext>());
+    }
+    true
+}
+
+unsafe extern "C" fn host_release_context(context: *mut c_void) {
+    if context.is_null()
+        || !(context as usize)
+            .is_multiple_of(std::mem::align_of::<InstanceAdminSurfaceHostContext>())
+    {
+        return;
+    }
+    unsafe {
+        Arc::decrement_strong_count(context.cast::<InstanceAdminSurfaceHostContext>());
     }
 }
 
@@ -416,7 +454,7 @@ unsafe fn byte_slice_to_vec(slice: ByteSlice) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(slice.ptr, slice.len) }.to_vec()
 }
 
-unsafe extern "C" fn host_log(level: u32, message: Utf8Slice) {
+unsafe extern "C" fn host_log(_context: *mut c_void, level: u32, message: Utf8Slice) {
     if let Ok(message) = unsafe { utf8_slice_to_string(message) } {
         eprintln!("admin-surface[{level}]: {message}");
     }
@@ -428,13 +466,13 @@ unsafe extern "C" fn host_execute(
     request: ByteSlice,
     output: *mut OwnedBuffer,
     error_out: *mut OwnedBuffer,
-) -> PluginErrorCode {
+) -> PluginStatus {
     let context = unsafe { context_from_ptr(context) };
     let principal_id = match unsafe { utf8_slice_to_string(principal_id) } {
         Ok(principal_id) => principal_id,
         Err(error) => {
             write_error_buffer(error_out, error);
-            return PluginErrorCode::Internal;
+            return PluginStatus::INTERNAL;
         }
     };
     let request = match serde_json::from_slice::<plugin_admin::AdminRequest>(&unsafe {
@@ -446,7 +484,7 @@ unsafe extern "C" fn host_execute(
                 error_out,
                 format!("failed to decode admin request: {error}"),
             );
-            return PluginErrorCode::Internal;
+            return PluginStatus::INTERNAL;
         }
     };
     let response = match context.shared.runtime_handle.block_on(
@@ -463,14 +501,14 @@ unsafe extern "C" fn host_execute(
     match serde_json::to_vec(&response) {
         Ok(bytes) => {
             write_owned_buffer(output, bytes);
-            PluginErrorCode::Ok
+            PluginStatus::OK
         }
         Err(error) => {
             write_error_buffer(
                 error_out,
                 format!("failed to encode admin response: {error}"),
             );
-            PluginErrorCode::Internal
+            PluginStatus::INTERNAL
         }
     }
 }
@@ -480,13 +518,13 @@ unsafe extern "C" fn host_permissions(
     principal_id: Utf8Slice,
     output: *mut OwnedBuffer,
     error_out: *mut OwnedBuffer,
-) -> PluginErrorCode {
+) -> PluginStatus {
     let context = unsafe { context_from_ptr(context) };
     let principal_id = match unsafe { utf8_slice_to_string(principal_id) } {
         Ok(principal_id) => principal_id,
         Err(error) => {
             write_error_buffer(error_out, error);
-            return PluginErrorCode::Internal;
+            return PluginStatus::INTERNAL;
         }
     };
     let permissions = match context.shared.runtime_handle.block_on(
@@ -498,20 +536,20 @@ unsafe extern "C" fn host_permissions(
         Ok(permissions) => permissions,
         Err(error) => {
             write_error_buffer(error_out, error.to_string());
-            return PluginErrorCode::Internal;
+            return PluginStatus::INTERNAL;
         }
     };
     match serde_json::to_vec(&permissions) {
         Ok(bytes) => {
             write_owned_buffer(output, bytes);
-            PluginErrorCode::Ok
+            PluginStatus::OK
         }
         Err(error) => {
             write_error_buffer(
                 error_out,
                 format!("failed to encode admin permissions: {error}"),
             );
-            PluginErrorCode::Internal
+            PluginStatus::INTERNAL
         }
     }
 }
@@ -522,13 +560,13 @@ unsafe extern "C" fn host_take_process_resource(
     present_out: *mut bool,
     output: *mut OwnedBuffer,
     error_out: *mut OwnedBuffer,
-) -> PluginErrorCode {
+) -> PluginStatus {
     let context = unsafe { context_from_ptr(context) };
     let name = match unsafe { utf8_slice_to_string(name) } {
         Ok(name) => name,
         Err(error) => {
             write_error_buffer(error_out, error);
-            return PluginErrorCode::Internal;
+            return PluginStatus::INTERNAL;
         }
     };
     let resource = context
@@ -543,19 +581,19 @@ unsafe extern "C" fn host_take_process_resource(
         }
     }
     let Some(resource) = resource else {
-        return PluginErrorCode::Ok;
+        return PluginStatus::OK;
     };
     match serde_json::to_vec(&resource) {
         Ok(bytes) => {
             write_owned_buffer(output, bytes);
-            PluginErrorCode::Ok
+            PluginStatus::OK
         }
         Err(error) => {
             write_error_buffer(
                 error_out,
                 format!("failed to encode process resource: {error}"),
             );
-            PluginErrorCode::Internal
+            PluginStatus::INTERNAL
         }
     }
 }
@@ -565,13 +603,13 @@ unsafe extern "C" fn host_publish_handoff_resource(
     name: Utf8Slice,
     resource: ByteSlice,
     error_out: *mut OwnedBuffer,
-) -> PluginErrorCode {
+) -> PluginStatus {
     let context = unsafe { context_from_ptr(context) };
     let name = match unsafe { utf8_slice_to_string(name) } {
         Ok(name) => name,
         Err(error) => {
             write_error_buffer(error_out, error);
-            return PluginErrorCode::Internal;
+            return PluginStatus::INTERNAL;
         }
     };
     let resource = match serde_json::from_slice::<AdminSurfaceResource>(&unsafe {
@@ -583,7 +621,7 @@ unsafe extern "C" fn host_publish_handoff_resource(
                 error_out,
                 format!("failed to decode handoff resource: {error}"),
             );
-            return PluginErrorCode::Internal;
+            return PluginStatus::INTERNAL;
         }
     };
     context
@@ -594,7 +632,7 @@ unsafe extern "C" fn host_publish_handoff_resource(
         .entry(context.instance_id.clone())
         .or_default()
         .insert(name, resource);
-    PluginErrorCode::Ok
+    PluginStatus::OK
 }
 
 unsafe extern "C" fn host_take_handoff_resource(
@@ -603,13 +641,13 @@ unsafe extern "C" fn host_take_handoff_resource(
     present_out: *mut bool,
     output: *mut OwnedBuffer,
     error_out: *mut OwnedBuffer,
-) -> PluginErrorCode {
+) -> PluginStatus {
     let context = unsafe { context_from_ptr(context) };
     let name = match unsafe { utf8_slice_to_string(name) } {
         Ok(name) => name,
         Err(error) => {
             write_error_buffer(error_out, error);
-            return PluginErrorCode::Internal;
+            return PluginStatus::INTERNAL;
         }
     };
     let resource = context
@@ -626,19 +664,19 @@ unsafe extern "C" fn host_take_handoff_resource(
         }
     }
     let Some(resource) = resource else {
-        return PluginErrorCode::Ok;
+        return PluginStatus::OK;
     };
     match serde_json::to_vec(&resource) {
         Ok(bytes) => {
             write_owned_buffer(output, bytes);
-            PluginErrorCode::Ok
+            PluginStatus::OK
         }
         Err(error) => {
             write_error_buffer(
                 error_out,
                 format!("failed to encode handoff resource: {error}"),
             );
-            PluginErrorCode::Internal
+            PluginStatus::INTERNAL
         }
     }
 }

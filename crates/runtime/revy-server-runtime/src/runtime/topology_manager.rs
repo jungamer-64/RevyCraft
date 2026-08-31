@@ -14,14 +14,10 @@ use mc_proto_common::{BedrockListenerDescriptor, Edition, TransportKind, WireFor
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-#[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::oneshot;
 
 pub(crate) struct TopologyManager {
     state: std::sync::RwLock<RuntimeGenerationState>,
-    #[cfg(test)]
-    fail_next_precommit: AtomicBool,
 }
 
 pub(crate) enum PreparedTopologyReload {
@@ -88,8 +84,6 @@ impl TopologyManager {
                 listener_workers,
                 next_generation_id,
             }),
-            #[cfg(test)]
-            fail_next_precommit: AtomicBool::new(false),
         }
     }
 
@@ -176,11 +170,6 @@ impl TopologyManager {
         let generation_id = GenerationId(generation_state.next_generation_id);
         generation_state.next_generation_id = generation_state.next_generation_id.saturating_add(1);
         generation_id
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_next_precommit_for_test(&self) {
-        self.fail_next_precommit.store(true, Ordering::SeqCst);
     }
 
     pub(crate) async fn shutdown_listener_workers(&self) {
@@ -576,14 +565,6 @@ impl TopologyManager {
                                 .to_string(),
                         ));
                     }
-                }
-                #[cfg(test)]
-                if self.fail_next_precommit.swap(false, Ordering::SeqCst) {
-                    Self::shutdown_workers(new_listener_workers.into_values().collect::<Vec<_>>())
-                        .await;
-                    return Err(RuntimeError::Config(
-                        "injected topology precommit failure".to_string(),
-                    ));
                 }
                 Ok(PrecommittedTopologyReload::Generation {
                     candidate_generation,

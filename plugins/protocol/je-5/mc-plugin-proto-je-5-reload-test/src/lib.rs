@@ -1,5 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_contract::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_sdk_rust::capabilities::{build_tag_contains, protocol_capabilities};
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;

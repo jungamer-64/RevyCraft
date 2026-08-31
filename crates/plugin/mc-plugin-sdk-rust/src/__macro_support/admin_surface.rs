@@ -1,6 +1,6 @@
 use crate::admin_surface::{RustAdminSurfacePlugin, SdkAdminSurfaceHost};
-use mc_plugin_api::codec::admin_surface::{AdminSurfaceRequest, AdminSurfaceResponse};
-use mc_plugin_api::host_api::AdminSurfaceHostApiV1;
+use mc_plugin_abi::host::AdminSurfaceHostApiV9;
+use mc_plugin_contract::codec::admin_surface::{AdminSurfaceRequest, AdminSurfaceResponse};
 
 pub fn handle_admin_surface_request<P: RustAdminSurfacePlugin>(
     plugin: &P,
@@ -12,7 +12,7 @@ pub fn handle_admin_surface_request<P: RustAdminSurfacePlugin>(
 pub fn handle_admin_surface_request_with_host_api<P: RustAdminSurfacePlugin>(
     plugin: &P,
     request: AdminSurfaceRequest,
-    host_api: Option<AdminSurfaceHostApiV1>,
+    host_api: Option<AdminSurfaceHostApiV9>,
 ) -> Result<AdminSurfaceResponse, String> {
     let host_api = host_api.ok_or_else(|| "admin-surface host api was unavailable".to_string())?;
     let host = SdkAdminSurfaceHost::new(host_api);

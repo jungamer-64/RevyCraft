@@ -1,4 +1,3 @@
-use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
 use crate::codec::__internal::binary::{
     Decoder, Encoder, EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope,
     encode_envelope,
@@ -12,6 +11,7 @@ use crate::codec::__internal::shared::{
     decode_player_snapshot, decode_world_meta, encode_block_pos, encode_option,
     encode_optional_block_state, encode_player_id, encode_player_snapshot, encode_world_meta,
 };
+use crate::plugin::{CURRENT_PLUGIN_ABI, PluginKind};
 use mc_proto_common::ConnectionPhase;
 use revy_voxel_semantic::{BlockEntityState, ContainerKindId};
 use revy_voxel_semantic::{BlockPos, BlockState, InventorySlot, ItemStack, Vec3, WorldMeta};

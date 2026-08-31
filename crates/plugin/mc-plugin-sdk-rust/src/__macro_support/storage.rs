@@ -1,5 +1,5 @@
 use crate::storage::RustStoragePlugin;
-use mc_plugin_api::codec::storage::{StorageRequest, StorageResponse};
+use mc_plugin_contract::codec::storage::{StorageRequest, StorageResponse};
 use mc_storage_common::StorageError;
 use std::path::Path;
 

@@ -2,7 +2,7 @@ use crate::RuntimeError;
 use crate::runtime::{
     RuntimeServer, SessionRuntimeContext, SessionState, SessionView, SharedSessionState,
 };
-use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
 use mc_proto_common::ProtocolSessionSnapshot;
 use revy_voxel_core::{ConnectionId, SessionCapabilitySet};
 

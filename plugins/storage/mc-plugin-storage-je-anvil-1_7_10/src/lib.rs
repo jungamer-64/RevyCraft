@@ -1,5 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_plugin_api::codec::storage::StorageDescriptor;
+use mc_plugin_contract::codec::storage::StorageDescriptor;
 use mc_plugin_sdk_rust::capabilities::{build_tag_contains, storage_capabilities};
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;

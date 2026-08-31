@@ -2,8 +2,8 @@ use super::{AdminPermission, OnlineAuthKeys};
 use crate::RuntimeError;
 use crate::config::ServerConfig;
 use mc_content_canonical::canonical_content;
-use mc_plugin_api::codec::auth::AuthMode;
-use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+use mc_plugin_contract::codec::auth::AuthMode;
+use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_host::registry::LoadedPluginSet;
 use mc_plugin_host::runtime::{
     AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,

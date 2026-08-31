@@ -22,7 +22,7 @@ fn player_container_kind() -> ContainerKindId {
 }
 
 impl RustGameplayPlugin for CanonicalGameplayPlugin {
-    fn descriptor(&self) -> mc_plugin_api::codec::gameplay::GameplayDescriptor {
+    fn descriptor(&self) -> mc_plugin_contract::codec::gameplay::GameplayDescriptor {
         gameplay::gameplay_descriptor("canonical")
     }
 
@@ -33,7 +33,7 @@ impl RustGameplayPlugin for CanonicalGameplayPlugin {
     fn handle_player_join(
         &self,
         _host: &dyn GameplayHost,
-        _session: &mc_plugin_api::codec::gameplay::GameplaySessionSnapshot,
+        _session: &mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot,
         _player_id: PlayerId,
     ) -> Result<(), String> {
         Ok(())
@@ -42,7 +42,7 @@ impl RustGameplayPlugin for CanonicalGameplayPlugin {
     fn handle_command(
         &self,
         host: &dyn GameplayHost,
-        _session: &mc_plugin_api::codec::gameplay::GameplaySessionSnapshot,
+        _session: &mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot,
         command: &GameplayCommand,
     ) -> Result<(), String> {
         match command {
@@ -101,7 +101,7 @@ impl RustGameplayPlugin for CanonicalGameplayPlugin {
     fn handle_tick(
         &self,
         _host: &dyn GameplayHost,
-        _session: &mc_plugin_api::codec::gameplay::GameplaySessionSnapshot,
+        _session: &mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot,
         _now_ms: u64,
     ) -> Result<(), String> {
         Ok(())
@@ -110,7 +110,7 @@ impl RustGameplayPlugin for CanonicalGameplayPlugin {
     fn export_session_state(
         &self,
         _host: &dyn GameplayHost,
-        _session: &mc_plugin_api::codec::gameplay::GameplaySessionSnapshot,
+        _session: &mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot,
     ) -> Result<Vec<u8>, String> {
         Ok(option_env!("REVY_PLUGIN_BUILD_TAG")
             .unwrap_or("canonical")
@@ -121,7 +121,7 @@ impl RustGameplayPlugin for CanonicalGameplayPlugin {
     fn import_session_state(
         &self,
         _host: &dyn GameplayHost,
-        _session: &mc_plugin_api::codec::gameplay::GameplaySessionSnapshot,
+        _session: &mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot,
         _blob: &[u8],
     ) -> Result<(), String> {
         if capabilities::build_tag_contains("reload-fail") {

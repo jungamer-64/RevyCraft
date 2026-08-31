@@ -1161,6 +1161,8 @@ fn packaged_plugin_test_run_xtask_package_all_plugins(
     command
         .current_dir(packaged_plugin_test_workspace_root())
         .env("CARGO_TARGET_DIR", target_dir)
+        .env("CARGO_INCREMENTAL", "0")
+        .env("CARGO_PROFILE_DEV_DEBUG", "0")
         .env("REVY_PLUGIN_BUILD_TAG", build_tag)
         .arg("run")
         .arg("-p")
@@ -1189,6 +1191,8 @@ fn packaged_plugin_test_run_cargo_build(
     command
         .current_dir(packaged_plugin_test_workspace_root())
         .env("CARGO_TARGET_DIR", target_dir)
+        .env("CARGO_INCREMENTAL", "0")
+        .env("CARGO_PROFILE_DEV_DEBUG", "0")
         .env("REVY_PLUGIN_BUILD_TAG", build_tag)
         .arg("build")
         .arg("-p")

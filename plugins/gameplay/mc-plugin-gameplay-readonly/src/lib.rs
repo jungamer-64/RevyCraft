@@ -1,5 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_sdk_rust::export_plugin;
 use mc_plugin_sdk_rust::gameplay::{self, GameplayHost, RustGameplayPlugin};
 use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
@@ -13,7 +13,7 @@ pub struct ReadonlyGameplayPlugin;
 const HOTBAR_SLOT_COUNT: u8 = 9;
 
 impl RustGameplayPlugin for ReadonlyGameplayPlugin {
-    fn descriptor(&self) -> mc_plugin_api::codec::gameplay::GameplayDescriptor {
+    fn descriptor(&self) -> mc_plugin_contract::codec::gameplay::GameplayDescriptor {
         gameplay::gameplay_descriptor("readonly")
     }
 

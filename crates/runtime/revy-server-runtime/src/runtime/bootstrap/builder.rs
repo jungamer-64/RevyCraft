@@ -14,7 +14,7 @@ use crate::runtime::{
     ACCEPT_QUEUE_CAPACITY, ActiveGeneration, GenerationId, RunningServer, RuntimeServer,
     RuntimeUpgradeImport, RuntimeUpgradePhase, RuntimeUpgradeRole,
 };
-use mc_plugin_api::codec::gameplay::GameplaySessionSnapshot;
+use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_host::registry::LoadedPluginSet;
 use mc_plugin_host::runtime::RuntimePluginHost;
 use mc_proto_common::TransportKind;
@@ -68,12 +68,6 @@ pub(crate) async fn boot_server(
         topology: TopologyManager::new(active_generation, listener_workers, 2),
         kernel: RuntimeKernel::new(core, storage_profile, config.bootstrap.world_dir.clone()),
         sessions,
-        #[cfg(test)]
-        fail_nth_reattach_send: std::sync::atomic::AtomicUsize::new(0),
-        #[cfg(test)]
-        reload_stage_pause_hook: tokio::sync::Mutex::new(None),
-        #[cfg(test)]
-        login_accept_commit_pause_hook: tokio::sync::Mutex::new(None),
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -186,12 +180,6 @@ pub(crate) async fn boot_server_from_upgrade(
         ),
         kernel: RuntimeKernel::new(core, storage_profile, config.bootstrap.world_dir.clone()),
         sessions,
-        #[cfg(test)]
-        fail_nth_reattach_send: std::sync::atomic::AtomicUsize::new(0),
-        #[cfg(test)]
-        reload_stage_pause_hook: tokio::sync::Mutex::new(None),
-        #[cfg(test)]
-        login_accept_commit_pause_hook: tokio::sync::Mutex::new(None),
     });
     server.reload.set_upgrade_state(
         RuntimeUpgradeRole::Child,

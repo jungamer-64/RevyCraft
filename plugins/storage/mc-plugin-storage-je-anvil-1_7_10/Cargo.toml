@@ -13,11 +13,9 @@ description = "JE 1.7.10 Anvil storage plugin for the RevyCraft runtime host."
 crate-type = ["cdylib", "rlib"]
 
 [features]
-disable-exported-symbols = []
-in-process-testing = ["mc-plugin-sdk-rust/in-process-testing"]
 
 [dependencies]
-mc-plugin-api = { path = "../../../crates/plugin/mc-plugin-api" }
+mc-plugin-contract = { path = "../../../crates/plugin/mc-plugin-contract" }
 mc-plugin-sdk-rust = { path = "../../../crates/plugin/mc-plugin-sdk-rust" }
 mc-storage-common = { path = "../../../crates/storage/mc-storage-common" }
 mc-storage-je-anvil-1_7_10 = { path = "../../../crates/storage/mc-storage-je-anvil-1_7_10" }

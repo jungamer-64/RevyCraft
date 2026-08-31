@@ -1,34 +1,20 @@
 use super::{
-    AdminSurfaceCapabilitySet, AdminSurfaceHostApiV1, AdminSurfaceInstanceDeclaration,
-    AdminSurfacePauseView, AdminSurfacePluginInvokeV1Fn, AdminSurfaceProfileId,
+    AdminSurfaceCapabilitySet, AdminSurfaceHostApiV9, AdminSurfaceInstanceDeclaration,
+    AdminSurfacePauseView, AdminSurfacePluginInvokeV9Fn, AdminSurfaceProfileId,
     AdminSurfaceRequest, AdminSurfaceResponse, AdminSurfaceStatusView, Arc, AuthCapabilitySet,
     AuthGenerationHandle, AuthMode, AuthProfileId, AuthRequest, AuthResponse, BedrockAuthResult,
-    BedrockListenerDescriptor, ByteSlice, GameplayCapabilitySet, GameplayPluginInvokeV4Fn,
+    BedrockListenerDescriptor, ByteSlice, GameplayCapabilitySet, GameplayPluginInvokeV9Fn,
     GameplayProfileId, GameplayRequest, GameplayResponse, Library, Mutex, OwnedBuffer, PlayerId,
-    PluginBuildTag, PluginErrorCode, PluginFreeBufferFn, PluginGenerationId, PluginInvokeFn,
+    PluginBuildTag, PluginFreeBufferFn, PluginGenerationId, PluginInvokeFn, PluginStatus,
     ProtocolCapabilitySet, ProtocolDescriptor, ProtocolError, ProtocolRequest, ProtocolResponse,
     RuntimeError, StorageCapabilitySet, StorageError, StorageProfileId, StorageRequest,
     StorageResponse, admin_surface_host_api, decode_admin_surface_response, decode_auth_response,
     decode_gameplay_response, decode_protocol_response, decode_storage_response,
     encode_admin_surface_request, encode_auth_request, encode_gameplay_request,
-    encode_protocol_request, encode_storage_request, take_owned_buffer,
+    encode_protocol_request, encode_storage_request, gameplay_host_api, gameplay_metadata_host_api,
+    release_owned_buffer, take_owned_buffer,
 };
 use crate::config::PluginBufferLimits;
-#[cfg(any(test, feature = "in-process-testing"))]
-use mc_plugin_api::codec::admin_surface::encode_admin_surface_response;
-#[cfg(any(test, feature = "in-process-testing"))]
-use mc_plugin_api::codec::auth::encode_auth_response;
-#[cfg(any(test, feature = "in-process-testing"))]
-use mc_plugin_api::codec::gameplay::encode_gameplay_response;
-#[cfg(any(test, feature = "in-process-testing"))]
-use mc_plugin_api::codec::protocol::encode_protocol_response;
-#[cfg(any(test, feature = "in-process-testing"))]
-use mc_plugin_api::codec::storage::encode_storage_response;
-#[cfg(any(test, feature = "in-process-testing"))]
-use mc_plugin_sdk_rust::test_support::{
-    AdminSurfacePluginHandler, AuthPluginHandler, GameplayPluginHandler, ProtocolPluginHandler,
-    StoragePluginHandler,
-};
 
 #[derive(Default)]
 pub(crate) struct GenerationManager {
@@ -48,66 +34,38 @@ impl GenerationManager {
 }
 
 #[derive(Clone)]
-pub(crate) enum ProtocolInvocationBackend {
-    Dynamic {
-        invoke: PluginInvokeFn,
-        free_buffer: PluginFreeBufferFn,
-        _library_guard: Option<Arc<Mutex<Library>>>,
-    },
-    #[cfg(any(test, feature = "in-process-testing"))]
-    InProcess {
-        handler: Arc<dyn ProtocolPluginHandler>,
-    },
+pub(crate) struct ProtocolInvocation {
+    pub(crate) invoke: PluginInvokeFn,
+    pub(crate) free_buffer: PluginFreeBufferFn,
+    pub(crate) _library_lease: Arc<Mutex<Library>>,
 }
 
 #[derive(Clone)]
-pub(crate) enum GameplayInvocationBackend {
-    Dynamic {
-        invoke: GameplayPluginInvokeV4Fn,
-        free_buffer: PluginFreeBufferFn,
-        _library_guard: Option<Arc<Mutex<Library>>>,
-    },
-    #[cfg(any(test, feature = "in-process-testing"))]
-    InProcess {
-        handler: Arc<dyn GameplayPluginHandler>,
-    },
+pub(crate) struct StorageInvocation {
+    pub(crate) invoke: PluginInvokeFn,
+    pub(crate) free_buffer: PluginFreeBufferFn,
+    pub(crate) _library_lease: Arc<Mutex<Library>>,
 }
 
 #[derive(Clone)]
-pub(crate) enum StorageInvocationBackend {
-    Dynamic {
-        invoke: PluginInvokeFn,
-        free_buffer: PluginFreeBufferFn,
-        _library_guard: Option<Arc<Mutex<Library>>>,
-    },
-    #[cfg(any(test, feature = "in-process-testing"))]
-    InProcess {
-        handler: Arc<dyn StoragePluginHandler>,
-    },
+pub(crate) struct AuthInvocation {
+    pub(crate) invoke: PluginInvokeFn,
+    pub(crate) free_buffer: PluginFreeBufferFn,
+    pub(crate) _library_lease: Arc<Mutex<Library>>,
 }
 
 #[derive(Clone)]
-pub(crate) enum AuthInvocationBackend {
-    Dynamic {
-        invoke: PluginInvokeFn,
-        free_buffer: PluginFreeBufferFn,
-        _library_guard: Option<Arc<Mutex<Library>>>,
-    },
-    #[cfg(any(test, feature = "in-process-testing"))]
-    InProcess { handler: Arc<dyn AuthPluginHandler> },
+pub(crate) struct GameplayInvocation {
+    pub(crate) invoke: GameplayPluginInvokeV9Fn,
+    pub(crate) free_buffer: PluginFreeBufferFn,
+    pub(crate) _library_lease: Arc<Mutex<Library>>,
 }
 
 #[derive(Clone)]
-pub(crate) enum AdminSurfaceInvocationBackend {
-    Dynamic {
-        invoke: AdminSurfacePluginInvokeV1Fn,
-        free_buffer: PluginFreeBufferFn,
-        _library_guard: Option<Arc<Mutex<Library>>>,
-    },
-    #[cfg(any(test, feature = "in-process-testing"))]
-    InProcess {
-        handler: Arc<dyn AdminSurfacePluginHandler>,
-    },
+pub(crate) struct AdminSurfaceInvocation {
+    pub(crate) invoke: AdminSurfacePluginInvokeV9Fn,
+    pub(crate) free_buffer: PluginFreeBufferFn,
+    pub(crate) _library_lease: Arc<Mutex<Library>>,
 }
 
 #[derive(Clone)]
@@ -119,25 +77,36 @@ pub(crate) struct ProtocolGeneration {
     pub(crate) capabilities: ProtocolCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) backend: ProtocolInvocationBackend,
+    pub(crate) invocation: ProtocolInvocation,
 }
 
 pub(crate) fn decode_plugin_error(
     plugin_id: &str,
-    status: PluginErrorCode,
+    status: PluginStatus,
     free_buffer: PluginFreeBufferFn,
+    generation_lease: Arc<Mutex<Library>>,
     error: OwnedBuffer,
     max_bytes: usize,
 ) -> String {
-    if error.ptr.is_null() {
-        format!("plugin `{plugin_id}` returned {status:?}")
+    let status = match mc_plugin_abi::raw::ValidatedPluginStatus::try_from(status) {
+        Ok(status) => format!("{status:?}"),
+        Err(error) => format!("invalid status tag {}", error.0),
+    };
+    let bytes = match take_owned_buffer(
+        free_buffer,
+        generation_lease,
+        error,
+        max_bytes,
+        "plugin error buffer",
+    ) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return format!("plugin `{plugin_id}` returned invalid error buffer: {error}");
+        }
+    };
+    if bytes.is_empty() {
+        format!("plugin `{plugin_id}` returned {status}")
     } else {
-        let bytes = match take_owned_buffer(free_buffer, error, max_bytes, "plugin error buffer") {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                return format!("plugin `{plugin_id}` returned invalid error buffer: {error}");
-            }
-        };
         String::from_utf8(bytes)
             .unwrap_or_else(|_| format!("plugin `{plugin_id}` returned invalid utf-8"))
     }
@@ -157,79 +126,47 @@ pub(crate) fn write_owned_buffer(output: *mut OwnedBuffer, mut bytes: Vec<u8>) {
     }
 }
 
-#[cfg(any(test, feature = "in-process-testing"))]
-fn ensure_direct_response_fits(
-    byte_len: usize,
-    max_bytes: usize,
-    what: &str,
-) -> Result<(), String> {
-    if byte_len > max_bytes {
-        return Err(format!(
-            "{what} exceeded configured limit: {byte_len} bytes > {max_bytes} bytes"
-        ));
-    }
-    Ok(())
-}
-
-impl ProtocolInvocationBackend {
+impl ProtocolInvocation {
     pub(crate) fn invoke(
         &self,
         plugin_id: &str,
         request: &ProtocolRequest,
         buffer_limits: PluginBufferLimits,
     ) -> Result<ProtocolResponse, String> {
-        match self {
-            Self::Dynamic {
-                invoke,
-                free_buffer,
-                ..
-            } => {
-                let request_bytes =
-                    encode_protocol_request(request).map_err(|error| error.to_string())?;
-                let mut output = OwnedBuffer::empty();
-                let mut error = OwnedBuffer::empty();
-                let status = unsafe {
-                    (invoke)(
-                        ByteSlice {
-                            ptr: request_bytes.as_ptr(),
-                            len: request_bytes.len(),
-                        },
-                        &raw mut output,
-                        &raw mut error,
-                    )
-                };
-                if status != PluginErrorCode::Ok {
-                    return Err(decode_plugin_error(
-                        plugin_id,
-                        status,
-                        *free_buffer,
-                        error,
-                        buffer_limits.metadata_bytes,
-                    ));
-                }
-
-                let response_bytes = take_owned_buffer(
-                    *free_buffer,
-                    output,
-                    buffer_limits.protocol_response_bytes,
-                    "protocol response buffer",
-                )?;
-                decode_protocol_response(request, &response_bytes)
-                    .map_err(|error| error.to_string())
-            }
-            #[cfg(any(test, feature = "in-process-testing"))]
-            Self::InProcess { handler } => {
-                let response = handler.handle(request.clone())?;
-                let bytes = encode_protocol_response(request, &response)
-                    .map_err(|error| error.to_string())?;
-                ensure_direct_response_fits(
-                    bytes.len(),
-                    buffer_limits.protocol_response_bytes,
-                    "protocol response buffer",
-                )?;
-                Ok(response)
-            }
+        let request_bytes = encode_protocol_request(request).map_err(|error| error.to_string())?;
+        let mut output = OwnedBuffer::empty();
+        let mut error = OwnedBuffer::empty();
+        let status = unsafe {
+            (self.invoke)(
+                ByteSlice {
+                    ptr: request_bytes.as_ptr(),
+                    len: request_bytes.len(),
+                },
+                &raw mut output,
+                &raw mut error,
+            )
+        };
+        if status != PluginStatus::OK {
+            release_owned_buffer(self.free_buffer, Arc::clone(&self._library_lease), output);
+            return Err(decode_plugin_error(
+                plugin_id,
+                status,
+                self.free_buffer,
+                Arc::clone(&self._library_lease),
+                error,
+                buffer_limits.metadata_bytes,
+            ));
         }
+        release_owned_buffer(self.free_buffer, Arc::clone(&self._library_lease), error);
+
+        let response_bytes = take_owned_buffer(
+            self.free_buffer,
+            Arc::clone(&self._library_lease),
+            output,
+            buffer_limits.protocol_response_bytes,
+            "protocol response buffer",
+        )?;
+        decode_protocol_response(request, &response_bytes).map_err(|error| error.to_string())
     }
 }
 
@@ -238,7 +175,7 @@ impl ProtocolGeneration {
         &self,
         request: &ProtocolRequest,
     ) -> Result<ProtocolResponse, ProtocolError> {
-        self.backend
+        self.invocation
             .invoke(&self.plugin_id, request, self.buffer_limits)
             .map_err(ProtocolError::Plugin)
     }
@@ -252,79 +189,74 @@ pub(crate) struct GameplayGeneration {
     pub(crate) capabilities: GameplayCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) backend: GameplayInvocationBackend,
+    pub(crate) invocation: GameplayInvocation,
 }
 
-impl GameplayInvocationBackend {
+impl GameplayInvocation {
     pub(crate) fn invoke(
         &self,
         plugin_id: &str,
         request: &GameplayRequest,
         buffer_limits: PluginBufferLimits,
-        host_api: mc_plugin_api::host_api::GameplayHostApiV3,
+        host_api: mc_plugin_abi::host::GameplayHostApiV9,
     ) -> Result<GameplayResponse, String> {
-        match self {
-            Self::Dynamic {
-                invoke,
-                free_buffer,
-                ..
-            } => {
-                let request_bytes =
-                    encode_gameplay_request(request).map_err(|error| error.to_string())?;
-                let mut output = OwnedBuffer::empty();
-                let mut error = OwnedBuffer::empty();
-                let status = unsafe {
-                    (invoke)(
-                        ByteSlice {
-                            ptr: request_bytes.as_ptr(),
-                            len: request_bytes.len(),
-                        },
-                        &raw const host_api,
-                        &raw mut output,
-                        &raw mut error,
-                    )
-                };
-                if status != PluginErrorCode::Ok {
-                    return Err(decode_plugin_error(
-                        plugin_id,
-                        status,
-                        *free_buffer,
-                        error,
-                        buffer_limits.metadata_bytes,
-                    ));
-                }
-                let response_bytes = take_owned_buffer(
-                    *free_buffer,
-                    output,
-                    buffer_limits.gameplay_response_bytes,
-                    "gameplay response buffer",
-                )?;
-                decode_gameplay_response(request, &response_bytes)
-                    .map_err(|error| error.to_string())
-            }
-            #[cfg(any(test, feature = "in-process-testing"))]
-            Self::InProcess { handler } => {
-                let response = handler.handle(request.clone(), Some(host_api))?;
-                let bytes = encode_gameplay_response(request, &response)
-                    .map_err(|error| error.to_string())?;
-                ensure_direct_response_fits(
-                    bytes.len(),
-                    buffer_limits.gameplay_response_bytes,
-                    "gameplay response buffer",
-                )?;
-                Ok(response)
-            }
+        let request_bytes = encode_gameplay_request(request).map_err(|error| error.to_string())?;
+        let mut output = OwnedBuffer::empty();
+        let mut error = OwnedBuffer::empty();
+        let status = unsafe {
+            (self.invoke)(
+                ByteSlice {
+                    ptr: request_bytes.as_ptr(),
+                    len: request_bytes.len(),
+                },
+                &raw const host_api,
+                &raw mut output,
+                &raw mut error,
+            )
+        };
+        if status != PluginStatus::OK {
+            release_owned_buffer(self.free_buffer, Arc::clone(&self._library_lease), output);
+            return Err(decode_plugin_error(
+                plugin_id,
+                status,
+                self.free_buffer,
+                Arc::clone(&self._library_lease),
+                error,
+                buffer_limits.metadata_bytes,
+            ));
         }
+        release_owned_buffer(self.free_buffer, Arc::clone(&self._library_lease), error);
+        let response_bytes = take_owned_buffer(
+            self.free_buffer,
+            Arc::clone(&self._library_lease),
+            output,
+            buffer_limits.gameplay_response_bytes,
+            "gameplay response buffer",
+        )?;
+        decode_gameplay_response(request, &response_bytes).map_err(|error| error.to_string())
     }
 }
 
 impl GameplayGeneration {
     pub(crate) fn invoke(&self, request: &GameplayRequest) -> Result<GameplayResponse, String> {
-        self.backend.invoke(
+        self.invocation.invoke(
             &self.plugin_id,
             request,
             self.buffer_limits,
-            super::gameplay_host_api(),
+            gameplay_metadata_host_api(),
+        )
+    }
+
+    pub(crate) fn invoke_with_scope(
+        &self,
+        request: &GameplayRequest,
+        scope: &mut super::GameplayInvocationScope,
+    ) -> Result<GameplayResponse, String> {
+        self.invocation.invoke(
+            &self.plugin_id,
+            request,
+            self.buffer_limits,
+            gameplay_host_api(scope),
         )
     }
 }
@@ -337,72 +269,55 @@ pub(crate) struct StorageGeneration {
     pub(crate) capabilities: StorageCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) backend: StorageInvocationBackend,
+    pub(crate) invocation: StorageInvocation,
 }
 
-impl StorageInvocationBackend {
+impl StorageInvocation {
     pub(crate) fn invoke(
         &self,
         plugin_id: &str,
         request: &StorageRequest,
         buffer_limits: PluginBufferLimits,
     ) -> Result<StorageResponse, String> {
-        match self {
-            Self::Dynamic {
-                invoke,
-                free_buffer,
-                ..
-            } => {
-                let request_bytes =
-                    encode_storage_request(request).map_err(|error| error.to_string())?;
-                let mut output = OwnedBuffer::empty();
-                let mut error = OwnedBuffer::empty();
-                let status = unsafe {
-                    (invoke)(
-                        ByteSlice {
-                            ptr: request_bytes.as_ptr(),
-                            len: request_bytes.len(),
-                        },
-                        &raw mut output,
-                        &raw mut error,
-                    )
-                };
-                if status != PluginErrorCode::Ok {
-                    return Err(decode_plugin_error(
-                        plugin_id,
-                        status,
-                        *free_buffer,
-                        error,
-                        buffer_limits.metadata_bytes,
-                    ));
-                }
-                let response_bytes = take_owned_buffer(
-                    *free_buffer,
-                    output,
-                    buffer_limits.storage_response_bytes,
-                    "storage response buffer",
-                )?;
-                decode_storage_response(request, &response_bytes).map_err(|error| error.to_string())
-            }
-            #[cfg(any(test, feature = "in-process-testing"))]
-            Self::InProcess { handler } => {
-                let response = handler.handle(request.clone())?;
-                let bytes = encode_storage_response(request, &response)
-                    .map_err(|error| error.to_string())?;
-                ensure_direct_response_fits(
-                    bytes.len(),
-                    buffer_limits.storage_response_bytes,
-                    "storage response buffer",
-                )?;
-                Ok(response)
-            }
+        let request_bytes = encode_storage_request(request).map_err(|error| error.to_string())?;
+        let mut output = OwnedBuffer::empty();
+        let mut error = OwnedBuffer::empty();
+        let status = unsafe {
+            (self.invoke)(
+                ByteSlice {
+                    ptr: request_bytes.as_ptr(),
+                    len: request_bytes.len(),
+                },
+                &raw mut output,
+                &raw mut error,
+            )
+        };
+        if status != PluginStatus::OK {
+            release_owned_buffer(self.free_buffer, Arc::clone(&self._library_lease), output);
+            return Err(decode_plugin_error(
+                plugin_id,
+                status,
+                self.free_buffer,
+                Arc::clone(&self._library_lease),
+                error,
+                buffer_limits.metadata_bytes,
+            ));
         }
+        release_owned_buffer(self.free_buffer, Arc::clone(&self._library_lease), error);
+        let response_bytes = take_owned_buffer(
+            self.free_buffer,
+            Arc::clone(&self._library_lease),
+            output,
+            buffer_limits.storage_response_bytes,
+            "storage response buffer",
+        )?;
+        decode_storage_response(request, &response_bytes).map_err(|error| error.to_string())
     }
 }
 
 impl StorageGeneration {
     pub(crate) fn invoke(&self, request: &StorageRequest) -> Result<StorageResponse, StorageError> {
-        self.backend
+        self.invocation
             .invoke(&self.plugin_id, request, self.buffer_limits)
             .map_err(StorageError::Plugin)
     }
@@ -417,7 +332,7 @@ pub(crate) struct AuthGeneration {
     pub(crate) capabilities: AuthCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) backend: AuthInvocationBackend,
+    pub(crate) invocation: AuthInvocation,
 }
 
 #[derive(Clone)]
@@ -428,137 +343,103 @@ pub(crate) struct AdminSurfaceGeneration {
     pub(crate) capabilities: AdminSurfaceCapabilitySet,
     pub(crate) buffer_limits: PluginBufferLimits,
     pub(crate) build_tag: Option<PluginBuildTag>,
-    pub(crate) backend: AdminSurfaceInvocationBackend,
+    pub(crate) invocation: AdminSurfaceInvocation,
 }
 
-impl AuthInvocationBackend {
+impl AuthInvocation {
     pub(crate) fn invoke(
         &self,
         plugin_id: &str,
         request: &AuthRequest,
         buffer_limits: PluginBufferLimits,
     ) -> Result<AuthResponse, String> {
-        match self {
-            Self::Dynamic {
-                invoke,
-                free_buffer,
-                ..
-            } => {
-                let request_bytes =
-                    encode_auth_request(request).map_err(|error| error.to_string())?;
-                let mut output = OwnedBuffer::empty();
-                let mut error = OwnedBuffer::empty();
-                let status = unsafe {
-                    (invoke)(
-                        ByteSlice {
-                            ptr: request_bytes.as_ptr(),
-                            len: request_bytes.len(),
-                        },
-                        &raw mut output,
-                        &raw mut error,
-                    )
-                };
-                if status != PluginErrorCode::Ok {
-                    return Err(decode_plugin_error(
-                        plugin_id,
-                        status,
-                        *free_buffer,
-                        error,
-                        buffer_limits.metadata_bytes,
-                    ));
-                }
-
-                let response_bytes = take_owned_buffer(
-                    *free_buffer,
-                    output,
-                    buffer_limits.auth_response_bytes,
-                    "auth response buffer",
-                )?;
-                decode_auth_response(request, &response_bytes).map_err(|error| error.to_string())
-            }
-            #[cfg(any(test, feature = "in-process-testing"))]
-            Self::InProcess { handler } => {
-                let response = handler.handle(request.clone())?;
-                let bytes =
-                    encode_auth_response(request, &response).map_err(|error| error.to_string())?;
-                ensure_direct_response_fits(
-                    bytes.len(),
-                    buffer_limits.auth_response_bytes,
-                    "auth response buffer",
-                )?;
-                Ok(response)
-            }
+        let request_bytes = encode_auth_request(request).map_err(|error| error.to_string())?;
+        let mut output = OwnedBuffer::empty();
+        let mut error = OwnedBuffer::empty();
+        let status = unsafe {
+            (self.invoke)(
+                ByteSlice {
+                    ptr: request_bytes.as_ptr(),
+                    len: request_bytes.len(),
+                },
+                &raw mut output,
+                &raw mut error,
+            )
+        };
+        if status != PluginStatus::OK {
+            release_owned_buffer(self.free_buffer, Arc::clone(&self._library_lease), output);
+            return Err(decode_plugin_error(
+                plugin_id,
+                status,
+                self.free_buffer,
+                Arc::clone(&self._library_lease),
+                error,
+                buffer_limits.metadata_bytes,
+            ));
         }
+        release_owned_buffer(self.free_buffer, Arc::clone(&self._library_lease), error);
+
+        let response_bytes = take_owned_buffer(
+            self.free_buffer,
+            Arc::clone(&self._library_lease),
+            output,
+            buffer_limits.auth_response_bytes,
+            "auth response buffer",
+        )?;
+        decode_auth_response(request, &response_bytes).map_err(|error| error.to_string())
     }
 }
 
-impl AdminSurfaceInvocationBackend {
+impl AdminSurfaceInvocation {
     pub(crate) fn invoke(
         &self,
         plugin_id: &str,
         request: &AdminSurfaceRequest,
         buffer_limits: PluginBufferLimits,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceResponse, String> {
-        match self {
-            Self::Dynamic {
-                invoke,
-                free_buffer,
-                ..
-            } => {
-                let request_bytes =
-                    encode_admin_surface_request(request).map_err(|error| error.to_string())?;
-                let mut output = OwnedBuffer::empty();
-                let mut error = OwnedBuffer::empty();
-                let status = unsafe {
-                    (invoke)(
-                        ByteSlice {
-                            ptr: request_bytes.as_ptr(),
-                            len: request_bytes.len(),
-                        },
-                        &raw const host_api,
-                        &raw mut output,
-                        &raw mut error,
-                    )
-                };
-                if status != PluginErrorCode::Ok {
-                    return Err(decode_plugin_error(
-                        plugin_id,
-                        status,
-                        *free_buffer,
-                        error,
-                        buffer_limits.metadata_bytes,
-                    ));
-                }
-
-                let response_bytes = take_owned_buffer(
-                    *free_buffer,
-                    output,
-                    buffer_limits.admin_surface_response_bytes,
-                    "admin-surface response buffer",
-                )?;
-                decode_admin_surface_response(request, &response_bytes)
-                    .map_err(|error| error.to_string())
-            }
-            #[cfg(any(test, feature = "in-process-testing"))]
-            Self::InProcess { handler } => {
-                let response = handler.handle(request.clone(), Some(host_api))?;
-                let bytes = encode_admin_surface_response(request, &response)
-                    .map_err(|error| error.to_string())?;
-                ensure_direct_response_fits(
-                    bytes.len(),
-                    buffer_limits.admin_surface_response_bytes,
-                    "admin-surface response buffer",
-                )?;
-                Ok(response)
-            }
+        let request_bytes =
+            encode_admin_surface_request(request).map_err(|error| error.to_string())?;
+        let mut output = OwnedBuffer::empty();
+        let mut error = OwnedBuffer::empty();
+        let status = unsafe {
+            (self.invoke)(
+                ByteSlice {
+                    ptr: request_bytes.as_ptr(),
+                    len: request_bytes.len(),
+                },
+                &raw const host_api,
+                &raw mut output,
+                &raw mut error,
+            )
+        };
+        if status != PluginStatus::OK {
+            release_owned_buffer(self.free_buffer, Arc::clone(&self._library_lease), output);
+            return Err(decode_plugin_error(
+                plugin_id,
+                status,
+                self.free_buffer,
+                Arc::clone(&self._library_lease),
+                error,
+                buffer_limits.metadata_bytes,
+            ));
         }
+        release_owned_buffer(self.free_buffer, Arc::clone(&self._library_lease), error);
+
+        let response_bytes = take_owned_buffer(
+            self.free_buffer,
+            Arc::clone(&self._library_lease),
+            output,
+            buffer_limits.admin_surface_response_bytes,
+            "admin-surface response buffer",
+        )?;
+        decode_admin_surface_response(request, &response_bytes).map_err(|error| error.to_string())
     }
 }
 
 impl AuthGeneration {
     fn invoke(&self, request: &AuthRequest) -> Result<AuthResponse, String> {
-        self.backend
+        self.invocation
             .invoke(&self.plugin_id, request, self.buffer_limits)
     }
 
@@ -640,9 +521,9 @@ impl AdminSurfaceGeneration {
     pub(crate) fn invoke(
         &self,
         request: &AdminSurfaceRequest,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceResponse, String> {
-        self.backend
+        self.invocation
             .invoke(&self.plugin_id, request, self.buffer_limits, host_api)
     }
 
@@ -669,7 +550,7 @@ impl AdminSurfaceGeneration {
         &self,
         instance_id: &str,
         surface_config_path: Option<&std::path::Path>,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, String> {
         match self.invoke(
             &AdminSurfaceRequest::Start {
@@ -686,7 +567,7 @@ impl AdminSurfaceGeneration {
     pub(crate) fn pause_for_upgrade(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfacePauseView, String> {
         match self.invoke(
             &AdminSurfaceRequest::PauseForUpgrade {
@@ -704,7 +585,7 @@ impl AdminSurfaceGeneration {
         instance_id: &str,
         surface_config_path: Option<&std::path::Path>,
         resume_payload: &[u8],
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, String> {
         match self.invoke(
             &AdminSurfaceRequest::ResumeFromUpgrade {
@@ -724,7 +605,7 @@ impl AdminSurfaceGeneration {
     pub(crate) fn activate_after_upgrade_commit(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<(), String> {
         match self.invoke(
             &AdminSurfaceRequest::ActivateAfterUpgradeCommit {
@@ -742,7 +623,7 @@ impl AdminSurfaceGeneration {
     pub(crate) fn resume_after_upgrade_rollback(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<AdminSurfaceStatusView, String> {
         match self.invoke(
             &AdminSurfaceRequest::ResumeAfterUpgradeRollback {
@@ -760,7 +641,7 @@ impl AdminSurfaceGeneration {
     pub(crate) fn shutdown(
         &self,
         instance_id: &str,
-        host_api: AdminSurfaceHostApiV1,
+        host_api: AdminSurfaceHostApiV9,
     ) -> Result<(), String> {
         match self.invoke(
             &AdminSurfaceRequest::Shutdown {

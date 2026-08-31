@@ -10,8 +10,6 @@ use mc_plugin_host::runtime::{
     PreparedRuntimeSelection, RuntimePluginHost, RuntimeReloadContext, StagedRuntimeSelection,
 };
 use std::sync::Arc;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
 use tokio::sync::RwLockWriteGuard;
 use tokio::sync::oneshot;
 
@@ -40,11 +38,6 @@ struct CoreReloadPlanFailure {
 }
 
 impl RuntimeServer {
-    #[cfg(test)]
-    pub(crate) fn fail_nth_reattach_send_for_test(&self, ordinal: usize) {
-        self.fail_nth_reattach_send.store(ordinal, Ordering::SeqCst);
-    }
-
     pub(in crate::runtime) fn take_pending_plugin_fatal_error(&self) -> Option<RuntimeError> {
         self.reload.reload_host().and_then(|reload_host| {
             reload_host
@@ -169,8 +162,6 @@ impl RuntimeServer {
         reload_host: &dyn RuntimePluginHost,
     ) -> Result<ArtifactsReloadResult, RuntimeError> {
         let staged_selection = reload_host.stage_runtime_artifacts()?;
-        #[cfg(test)]
-        self.maybe_pause_after_reload_stage_for_test().await;
         let consistency_guard = self.reload.write_consistency().await;
         let context = self.reload_context(&consistency_guard).await;
         let previous_selection = self.selection_state().await;
@@ -252,8 +243,6 @@ impl RuntimeServer {
         let staged = self
             .stage_selection_reload(reload_host, active_selection, &reload_plan)
             .await?;
-        #[cfg(test)]
-        self.maybe_pause_after_reload_stage_for_test().await;
         let consistency_guard = self.reload.write_consistency().await;
         let context = self.reload_context(&consistency_guard).await;
         let prepared_selection = match reload_host
@@ -543,13 +532,6 @@ impl RuntimeServer {
         record: &SessionReattachRecord,
         instruction: SessionReattachInstruction,
     ) -> Result<(), RuntimeError> {
-        #[cfg(test)]
-        if self.should_fail_reattach_send() {
-            return Err(RuntimeError::Config(format!(
-                "injected reattach failure for session {:?}",
-                record.connection_id
-            )));
-        }
         let (ack_tx, ack_rx) = oneshot::channel();
         record
             .control_tx
@@ -570,24 +552,5 @@ impl RuntimeServer {
                 record.connection_id
             ))
         })?
-    }
-}
-
-#[cfg(test)]
-impl RuntimeServer {
-    fn should_fail_reattach_send(&self) -> bool {
-        loop {
-            let current = self.fail_nth_reattach_send.load(Ordering::SeqCst);
-            if current == 0 {
-                return false;
-            }
-            if self
-                .fail_nth_reattach_send
-                .compare_exchange(current, current - 1, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                return current == 1;
-            }
-        }
     }
 }

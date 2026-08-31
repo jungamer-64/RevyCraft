@@ -230,8 +230,10 @@ fn full_reload_plan_adopts_candidate_config() -> Result<(), ServerConfigError> {
 #[test]
 fn validate_rejects_plugin_abi_range_when_min_exceeds_max() {
     let mut config = configured_server_config();
-    config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 5, minor: 1 };
-    config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 5, minor: 0 };
+    config.bootstrap.plugin_abi_min =
+        mc_plugin_contract::plugin::PluginAbiVersion { major: 5, minor: 1 };
+    config.bootstrap.plugin_abi_max =
+        mc_plugin_contract::plugin::PluginAbiVersion { major: 5, minor: 0 };
 
     let error = config
         .validate_owned()
@@ -242,8 +244,10 @@ fn validate_rejects_plugin_abi_range_when_min_exceeds_max() {
 #[test]
 fn validate_rejects_plugin_abi_range_when_current_host_abi_is_excluded() {
     let mut config = configured_server_config();
-    config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 4, minor: 0 };
-    config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 4, minor: 9 };
+    config.bootstrap.plugin_abi_min =
+        mc_plugin_contract::plugin::PluginAbiVersion { major: 4, minor: 0 };
+    config.bootstrap.plugin_abi_max =
+        mc_plugin_contract::plugin::PluginAbiVersion { major: 4, minor: 9 };
 
     let error = config
         .validate_owned()
@@ -288,8 +292,10 @@ fn full_reload_plan_rejects_restart_required_static_diff() {
 #[test]
 fn plugin_host_bootstrap_view_exposes_bootstrap_selection_fields() {
     let mut config = configured_server_config();
-    config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 0 };
-    config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 1 };
+    config.bootstrap.plugin_abi_min =
+        mc_plugin_contract::plugin::PluginAbiVersion { major: 3, minor: 0 };
+    config.bootstrap.plugin_abi_max =
+        mc_plugin_contract::plugin::PluginAbiVersion { major: 3, minor: 1 };
 
     let view = config.plugin_host_bootstrap_view();
 

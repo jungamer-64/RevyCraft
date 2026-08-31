@@ -48,7 +48,7 @@ async fn offline_mode_rejects_online_auth_profile() -> Result<(), RuntimeError> 
     config.bootstrap.world_dir = temp_dir.path().join("world");
     assert_spawn_fails_with_message(
         config,
-        in_process_online_auth_registries(&[JE_5_ADAPTER_ID])?,
+        packaged_online_auth_registries(&[JE_5_ADAPTER_ID])?,
         "requires an offline auth profile",
     )
     .await
@@ -65,7 +65,7 @@ async fn online_auth_supports_encrypted_login_across_java_versions() -> Result<(
     ];
     let server = build_test_server(
         online_auth_server_config(temp_dir.path().join("world"), &enabled_adapters),
-        in_process_online_auth_registries(&enabled_adapters)?,
+        packaged_online_auth_registries(&enabled_adapters)?,
     )
     .await?;
     let addr = listener_addr(&server);
@@ -113,7 +113,7 @@ async fn encrypted_play_packets_are_processed_after_online_login() -> Result<(),
     let temp_dir = tempdir()?;
     let server = build_test_server(
         online_auth_server_config(temp_dir.path().join("world"), &[JE_5_ADAPTER_ID]),
-        in_process_online_auth_registries(&[JE_5_ADAPTER_ID])?,
+        packaged_online_auth_registries(&[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let addr = listener_addr(&server);
@@ -168,7 +168,7 @@ async fn verify_token_mismatch_disconnects_in_online_mode() -> Result<(), Runtim
     let temp_dir = tempdir()?;
     let server = build_test_server(
         online_auth_server_config(temp_dir.path().join("world"), &[JE_5_ADAPTER_ID]),
-        in_process_online_auth_registries(&[JE_5_ADAPTER_ID])?,
+        packaged_online_auth_registries(&[JE_5_ADAPTER_ID])?,
     )
     .await?;
     let addr = listener_addr(&server);

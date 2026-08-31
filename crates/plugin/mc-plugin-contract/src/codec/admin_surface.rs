@@ -1,8 +1,8 @@
-use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
 use crate::codec::__internal::binary::{
     EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope, encode_envelope,
 };
 use crate::codec::admin::{AdminPermission, RuntimeReloadMode};
+use crate::plugin::{CURRENT_PLUGIN_ABI, PluginKind};
 use revy_voxel_semantic::{AdminSurfaceCapability, AdminSurfaceProfileId, CapabilityAnnouncement};
 use serde::{Deserialize, Serialize};
 

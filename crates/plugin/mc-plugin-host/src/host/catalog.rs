@@ -1,12 +1,5 @@
 use crate::PluginHostError as RuntimeError;
-use mc_plugin_api::abi::PluginKind;
-#[cfg(any(test, feature = "in-process-testing"))]
-use mc_plugin_api::manifest::PluginManifestV1;
-#[cfg(any(test, feature = "in-process-testing"))]
-use mc_plugin_sdk_rust::test_support::{
-    AdminSurfacePluginFactory, AuthPluginFactory, GameplayPluginFactory, ProtocolPluginFactory,
-    StoragePluginFactory,
-};
+use mc_plugin_contract::plugin::PluginKind;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -19,71 +12,12 @@ pub(crate) struct ArtifactIdentity {
     pub(crate) modified_at: SystemTime,
 }
 
-#[cfg(any(test, feature = "in-process-testing"))]
-#[derive(Clone, Debug)]
-pub struct InProcessProtocolPlugin {
-    pub plugin_id: String,
-    pub manifest: &'static PluginManifestV1,
-    pub factory: ProtocolPluginFactory,
-}
-
-#[cfg(any(test, feature = "in-process-testing"))]
-#[derive(Clone, Debug)]
-pub struct InProcessGameplayPlugin {
-    pub plugin_id: String,
-    pub manifest: &'static PluginManifestV1,
-    pub factory: GameplayPluginFactory,
-}
-
-#[cfg(any(test, feature = "in-process-testing"))]
-#[derive(Clone, Debug)]
-pub struct InProcessStoragePlugin {
-    pub plugin_id: String,
-    pub manifest: &'static PluginManifestV1,
-    pub factory: StoragePluginFactory,
-}
-
-#[cfg(any(test, feature = "in-process-testing"))]
-#[derive(Clone, Debug)]
-pub struct InProcessAuthPlugin {
-    pub plugin_id: String,
-    pub manifest: &'static PluginManifestV1,
-    pub factory: AuthPluginFactory,
-}
-
-#[cfg(any(test, feature = "in-process-testing"))]
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub struct InProcessAdminSurfacePlugin {
-    pub plugin_id: String,
-    pub manifest: &'static PluginManifestV1,
-    pub factory: AdminSurfacePluginFactory,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum PluginSource {
-    DynamicLibrary {
-        manifest_path: PathBuf,
-        library_path: PathBuf,
-    },
-    #[cfg(any(test, feature = "in-process-testing"))]
-    InProcessProtocol(InProcessProtocolPlugin),
-    #[cfg(any(test, feature = "in-process-testing"))]
-    InProcessGameplay(InProcessGameplayPlugin),
-    #[cfg(any(test, feature = "in-process-testing"))]
-    InProcessStorage(InProcessStoragePlugin),
-    #[cfg(any(test, feature = "in-process-testing"))]
-    InProcessAuth(InProcessAuthPlugin),
-    #[cfg(any(test, feature = "in-process-testing"))]
-    #[allow(dead_code)]
-    InProcessAdminSurface(InProcessAdminSurfacePlugin),
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct PluginPackage {
     pub(crate) plugin_id: String,
     pub(crate) plugin_kind: PluginKind,
-    pub(crate) source: PluginSource,
+    pub(crate) manifest_path: PathBuf,
+    pub(crate) library_path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -93,36 +27,17 @@ pub(crate) struct DynamicCatalogSource {
 
 impl PluginPackage {
     pub(crate) fn modified_at(&self) -> Result<SystemTime, RuntimeError> {
-        match &self.source {
-            PluginSource::DynamicLibrary {
-                manifest_path,
-                library_path,
-            } => Ok(fs::metadata(manifest_path)?
-                .modified()?
-                .max(fs::metadata(library_path)?.modified()?)),
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessProtocol(_)
-            | PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminSurface(_) => Ok(SystemTime::UNIX_EPOCH),
-        }
+        Ok(fs::metadata(&self.manifest_path)?
+            .modified()?
+            .max(fs::metadata(&self.library_path)?.modified()?))
     }
 
     pub(crate) fn refresh_dynamic_manifest(&mut self) -> Result<(), RuntimeError> {
-        let (manifest_path, library_path) = match &mut self.source {
-            PluginSource::DynamicLibrary {
-                manifest_path,
-                library_path,
-            } => (manifest_path, library_path),
-            #[cfg(any(test, feature = "in-process-testing"))]
-            _ => return Ok(()),
-        };
-        let document: PluginPackageDocument = toml::from_str(&fs::read_to_string(&*manifest_path)?)
-            .map_err(|error| {
+        let document: PluginPackageDocument =
+            toml::from_str(&fs::read_to_string(&self.manifest_path)?).map_err(|error| {
                 RuntimeError::Config(format!(
                     "failed to parse plugin manifest {}: {error}",
-                    manifest_path.display()
+                    self.manifest_path.display()
                 ))
             })?;
         let plugin_kind = parse_plugin_kind(&document.plugin.kind)?;
@@ -149,7 +64,8 @@ impl PluginPackage {
                         current_artifact_key()
                     ))
                 })?;
-        *library_path = manifest_path
+        self.library_path = self
+            .manifest_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join(relative_library_path);
@@ -157,20 +73,12 @@ impl PluginPackage {
     }
 
     pub(crate) fn artifact_identity(&self, modified_at: SystemTime) -> ArtifactIdentity {
-        let source = match &self.source {
-            PluginSource::DynamicLibrary {
-                manifest_path,
-                library_path,
-            } => format!("{}|{}", manifest_path.display(), library_path.display()),
-            #[cfg(any(test, feature = "in-process-testing"))]
-            PluginSource::InProcessProtocol(_)
-            | PluginSource::InProcessGameplay(_)
-            | PluginSource::InProcessStorage(_)
-            | PluginSource::InProcessAuth(_)
-            | PluginSource::InProcessAdminSurface(_) => "in-process".to_string(),
-        };
         ArtifactIdentity {
-            source,
+            source: format!(
+                "{}|{}",
+                self.manifest_path.display(),
+                self.library_path.display()
+            ),
             modified_at,
         }
     }
@@ -212,70 +120,6 @@ impl PluginCatalog {
         Ok(Self { packages })
     }
 
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn register_in_process_protocol_plugin(&mut self, plugin: InProcessProtocolPlugin) {
-        self.packages.insert(
-            plugin.plugin_id.clone(),
-            PluginPackage {
-                plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::Protocol,
-                source: PluginSource::InProcessProtocol(plugin),
-            },
-        );
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn register_in_process_gameplay_plugin(&mut self, plugin: InProcessGameplayPlugin) {
-        self.packages.insert(
-            plugin.plugin_id.clone(),
-            PluginPackage {
-                plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::Gameplay,
-                source: PluginSource::InProcessGameplay(plugin),
-            },
-        );
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn register_in_process_storage_plugin(&mut self, plugin: InProcessStoragePlugin) {
-        self.packages.insert(
-            plugin.plugin_id.clone(),
-            PluginPackage {
-                plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::Storage,
-                source: PluginSource::InProcessStorage(plugin),
-            },
-        );
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn register_in_process_auth_plugin(&mut self, plugin: InProcessAuthPlugin) {
-        self.packages.insert(
-            plugin.plugin_id.clone(),
-            PluginPackage {
-                plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::Auth,
-                source: PluginSource::InProcessAuth(plugin),
-            },
-        );
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    #[allow(dead_code)]
-    pub(crate) fn register_in_process_admin_surface_plugin(
-        &mut self,
-        plugin: InProcessAdminSurfacePlugin,
-    ) {
-        self.packages.insert(
-            plugin.plugin_id.clone(),
-            PluginPackage {
-                plugin_id: plugin.plugin_id.clone(),
-                plugin_kind: PluginKind::AdminSurface,
-                source: PluginSource::InProcessAdminSurface(plugin),
-            },
-        );
-    }
-
     pub(crate) fn packages(&self) -> impl Iterator<Item = &PluginPackage> {
         self.packages.values()
     }
@@ -308,13 +152,11 @@ fn discover_dynamic_plugin_package(
     Ok(Some(PluginPackage {
         plugin_id: document.plugin.id.clone(),
         plugin_kind: parse_plugin_kind(&document.plugin.kind)?,
-        source: PluginSource::DynamicLibrary {
-            manifest_path: manifest_path.clone(),
-            library_path: manifest_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(relative_library_path),
-        },
+        manifest_path: manifest_path.clone(),
+        library_path: manifest_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(relative_library_path),
     }))
 }
 

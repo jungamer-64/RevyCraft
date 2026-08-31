@@ -609,8 +609,10 @@ fn plugin_host_config_splits_bootstrap_and_runtime_selection_fields() {
         "grpc-v1",
         PathBuf::from("runtime").join("grpc.toml"),
     );
-    config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 0 };
-    config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 3, minor: 1 };
+    config.bootstrap.plugin_abi_min =
+        mc_plugin_contract::plugin::PluginAbiVersion { major: 3, minor: 0 };
+    config.bootstrap.plugin_abi_max =
+        mc_plugin_contract::plugin::PluginAbiVersion { major: 3, minor: 1 };
 
     let bootstrap = plugin_host_bootstrap_test_config(&config);
     let runtime_selection = plugin_host_runtime_selection_test_config(&config);
@@ -927,8 +929,10 @@ fn plugin_abi_range_must_include_current_host_abi() -> Result<(), RuntimeError> 
         TCP_ONLY_PROTOCOL_PLUGIN_IDS,
         STORAGE_AND_AUTH_PLUGIN_IDS,
     ));
-    config.bootstrap.plugin_abi_min = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 0 };
-    config.bootstrap.plugin_abi_max = mc_plugin_api::abi::PluginAbiVersion { major: 2, minor: 9 };
+    config.bootstrap.plugin_abi_min =
+        mc_plugin_contract::plugin::PluginAbiVersion { major: 2, minor: 0 };
+    config.bootstrap.plugin_abi_max =
+        mc_plugin_contract::plugin::PluginAbiVersion { major: 2, minor: 9 };
     let error = match plugin_test_registries_from_config(&config) {
         Ok(_) => panic!("plugin ABI range should reject configs that exclude the current host ABI"),
         Err(error) => error,

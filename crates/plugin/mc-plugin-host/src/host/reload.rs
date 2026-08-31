@@ -949,67 +949,6 @@ impl PluginHost {
         self.finalize_profile_artifact_updates::<AdminSurfaceArtifactOps>(updates, runtime)
     }
 
-    /// Reloads modified protocol plugins in place.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a modified protocol plugin cannot be reloaded.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the protocol plugin registry mutex is poisoned.
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn reload_modified(&self) -> Result<Vec<String>, RuntimeError> {
-        let current_topology = self.current_protocol_topology_candidate()?;
-        let loaded_plugins = {
-            let gameplay = self
-                .gameplay
-                .lock()
-                .expect("plugin host mutex should not be poisoned");
-            let storage = self
-                .storage
-                .lock()
-                .expect("plugin host mutex should not be poisoned");
-            let auth = self
-                .auth
-                .lock()
-                .expect("plugin host mutex should not be poisoned");
-            let admin_surface = self
-                .admin_surface
-                .lock()
-                .expect("plugin host mutex should not be poisoned");
-            Self::loaded_plugin_set_from_parts(
-                current_topology.registry().clone(),
-                &gameplay,
-                &storage,
-                &auth,
-                &admin_surface,
-            )
-        };
-        let protocol_updates =
-            self.finalize_protocol_artifact_updates(self.stage_protocol_artifact_updates()?, &[])?;
-        let reloaded_plugin_ids = protocol_updates
-            .iter()
-            .map(|update| update.plugin_id.clone())
-            .collect::<Vec<_>>();
-        let prepared = PreparedRuntimeSelection::new(
-            loaded_plugins,
-            reloaded_plugin_ids.clone(),
-            current_topology,
-            RuntimeSelectionStage::Prepared(PreparedRuntimeSelectionState::Artifacts(
-                PreparedArtifactRuntimeSelection {
-                    protocol_updates,
-                    gameplay_updates: Vec::new(),
-                    storage_updates: Vec::new(),
-                    auth_updates: Vec::new(),
-                    admin_surface_updates: Vec::new(),
-                },
-            )),
-        );
-        self.commit_runtime_selection(prepared);
-        Ok(reloaded_plugin_ids)
-    }
-
     pub(crate) fn stage_runtime_artifacts(&self) -> Result<StagedRuntimeSelection, RuntimeError> {
         let protocol_updates = self.stage_protocol_artifact_updates()?;
         let gameplay_updates = self.stage_gameplay_artifact_updates()?;
@@ -1305,16 +1244,5 @@ impl PluginHost {
                 {}
             }
         }
-    }
-
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn reload_modified_with_context(
-        &self,
-        runtime: &RuntimeReloadContext,
-    ) -> Result<Vec<String>, RuntimeError> {
-        let prepared = self.prepare_runtime_artifacts(runtime)?;
-        let reloaded = prepared.reloaded_plugin_ids().to_vec();
-        self.commit_runtime_selection(prepared);
-        Ok(reloaded)
     }
 }

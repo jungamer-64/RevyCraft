@@ -1,4 +1,3 @@
-use crate::abi::{CURRENT_PLUGIN_ABI, PluginKind};
 use crate::codec::__internal::auth_semantic::{
     decode_auth_request_payload, decode_auth_response_payload, encode_auth_request_payload,
     encode_auth_response_payload,
@@ -7,6 +6,7 @@ use crate::codec::__internal::binary::{
     Decoder, Encoder, EnvelopeHeader, PROTOCOL_FLAG_RESPONSE, ProtocolCodecError, decode_envelope,
     encode_envelope,
 };
+use crate::plugin::{CURRENT_PLUGIN_ABI, PluginKind};
 use revy_voxel_semantic::{AuthCapability, AuthProfileId, CapabilityAnnouncement, PlayerId};
 use serde::{Deserialize, Serialize};
 

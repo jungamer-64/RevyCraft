@@ -1,9 +1,9 @@
 use super::{
-    GameplayProfileId, PluginAbiVersion, PluginKind, PluginManifestV1, RuntimeError, Utf8Slice,
+    GameplayProfileId, PluginAbiVersion, PluginKind, PluginManifestV9, RuntimeError, Utf8Slice,
     decode_utf8_slice_with_limit, read_checked_slice,
 };
 use crate::config::PluginBufferLimits;
-use mc_plugin_api::abi::CapabilityDescriptorV1;
+use mc_plugin_abi::raw::{CapabilityDescriptorV9, PluginKindTag};
 use revy_voxel_semantic::{AdminSurfaceProfileId, AuthProfileId, StorageProfileId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,19 +37,46 @@ pub(crate) struct DecodedManifest {
 }
 
 pub(crate) fn decode_manifest(
-    manifest: *const PluginManifestV1,
+    manifest: *const PluginManifestV9,
     limits: PluginBufferLimits,
 ) -> Result<DecodedManifest, RuntimeError> {
-    let manifest = unsafe {
+    if manifest.is_null() {
+        return Err(RuntimeError::Config(
+            "plugin manifest pointer was null".to_string(),
+        ));
+    }
+    if !(manifest as usize).is_multiple_of(std::mem::align_of::<PluginManifestV9>()) {
+        return Err(RuntimeError::Config(
+            "plugin manifest pointer was not properly aligned".to_string(),
+        ));
+    }
+    let header = unsafe {
         manifest
-            .as_ref()
-            .ok_or_else(|| RuntimeError::Config("plugin manifest pointer was null".to_string()))?
+            .cast::<mc_plugin_abi::manifest::PluginManifestHeaderV9>()
+            .read()
     };
+    if header.struct_size < std::mem::size_of::<PluginManifestV9>() {
+        return Err(RuntimeError::Config(format!(
+            "plugin manifest size {} was smaller than ABI 9 size {}",
+            header.struct_size,
+            std::mem::size_of::<PluginManifestV9>()
+        )));
+    }
+    let manifest = unsafe { manifest.read() };
+    let plugin_kind = PluginKind::try_from(PluginKindTag(manifest.plugin_kind.0))
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
     let plugin_id = decode_utf8_slice(manifest.plugin_id, limits.metadata_bytes)?;
+    let _display_name = decode_utf8_slice(manifest.display_name, limits.metadata_bytes)?;
+    if manifest.max_session_handoff_bytes > limits.callback_payload_bytes {
+        return Err(RuntimeError::Config(format!(
+            "plugin `{plugin_id}` session handoff limit {} exceeded configured callback payload limit {}",
+            manifest.max_session_handoff_bytes, limits.callback_payload_bytes
+        )));
+    }
     let raw_capabilities = if manifest.capabilities.is_null() || manifest.capabilities_len == 0 {
         Vec::new()
     } else {
-        let descriptors = read_checked_slice::<CapabilityDescriptorV1>(
+        let descriptors = read_checked_slice::<CapabilityDescriptorV9>(
             manifest.capabilities,
             manifest.capabilities_len,
             limits.metadata_bytes,
@@ -61,11 +88,10 @@ pub(crate) fn decode_manifest(
         }
         capabilities
     };
-    let capabilities =
-        decode_manifest_capabilities(&plugin_id, manifest.plugin_kind, &raw_capabilities)?;
+    let capabilities = decode_manifest_capabilities(&plugin_id, plugin_kind, &raw_capabilities)?;
     Ok(DecodedManifest {
         plugin_id,
-        plugin_kind: manifest.plugin_kind,
+        plugin_kind,
         plugin_abi: manifest.plugin_abi,
         min_host_abi: manifest.min_host_abi,
         max_host_abi: manifest.max_host_abi,

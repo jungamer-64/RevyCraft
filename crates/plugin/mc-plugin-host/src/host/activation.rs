@@ -738,16 +738,6 @@ impl PluginHost {
         result
     }
 
-    /// Activates a single auth profile.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the requested auth profile cannot be activated.
-    #[cfg(any(test, feature = "in-process-testing"))]
-    pub(crate) fn activate_auth_profile(&self, auth_profile: &str) -> Result<(), RuntimeError> {
-        self.activate_auth_profiles(&[AuthProfileId::new(auth_profile)])
-    }
-
     /// Activates gameplay, storage, and auth profiles needed by the runtime.
     ///
     /// # Errors

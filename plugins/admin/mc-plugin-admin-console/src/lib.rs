@@ -1,16 +1,16 @@
 #![allow(clippy::multiple_crate_versions)]
 
-use mc_plugin_api::codec::admin::{
+use mc_plugin_contract::codec::admin::{
     AdminNamedCountView, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
     AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionsView, AdminStatusView,
     AdminTopologyReloadView, RuntimeReloadMode,
 };
-use mc_plugin_api::codec::admin_surface::{
+use mc_plugin_contract::codec::admin_surface::{
     AdminSurfaceEndpointView, AdminSurfaceInstanceDeclaration, AdminSurfacePauseView,
     AdminSurfaceResource, AdminSurfaceStatusView,
 };
 use mc_plugin_sdk_rust::admin_surface::{
-    AdminSurfaceHost, RustAdminSurfacePlugin, SdkAdminSurfaceHost,
+    AdminSurfaceHost, AdminSurfaceHostLease, RustAdminSurfacePlugin, SdkAdminSurfaceHost,
 };
 use mc_plugin_sdk_rust::capabilities;
 use mc_plugin_sdk_rust::export_plugin;
@@ -79,7 +79,7 @@ struct ConsoleWorker {
 }
 
 impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
-    fn descriptor(&self) -> mc_plugin_api::codec::admin_surface::AdminSurfaceDescriptor {
+    fn descriptor(&self) -> mc_plugin_contract::codec::admin_surface::AdminSurfaceDescriptor {
         mc_plugin_sdk_rust::admin_surface::admin_surface_descriptor("console-v1")
     }
 
@@ -102,11 +102,12 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
     fn start(
         &self,
         instance_id: &str,
-        host: SdkAdminSurfaceHost,
+        host: SdkAdminSurfaceHost<'_>,
         _surface_config_path: Option<&str>,
     ) -> Result<AdminSurfaceStatusView, String> {
         let stdin_handle = take_native_resource(&host, "stdio.stdin")?;
         let stdout_handle = take_native_resource(&host, "stdio.stdout")?;
+        let host = host.acquire_lease()?;
         let principal_id = console_principal_id(instance_id);
         let worker = start_worker(
             instance_id.to_string(),
@@ -138,7 +139,7 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
     fn pause_for_upgrade(
         &self,
         instance_id: &str,
-        _host: SdkAdminSurfaceHost,
+        _host: SdkAdminSurfaceHost<'_>,
     ) -> Result<AdminSurfacePauseView, String> {
         let instances = self
             .instances
@@ -155,7 +156,7 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
     fn resume_from_upgrade(
         &self,
         instance_id: &str,
-        host: SdkAdminSurfaceHost,
+        host: SdkAdminSurfaceHost<'_>,
         _surface_config_path: Option<&str>,
         _resume_payload: &[u8],
     ) -> Result<AdminSurfaceStatusView, String> {
@@ -170,7 +171,7 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
                     instance.principal_id.clone(),
                     instance.stdin_handle,
                     instance.stdout_handle,
-                    host,
+                    host.acquire_lease()?,
                 )?);
             }
             return Ok(console_status());
@@ -194,7 +195,7 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
     fn activate_after_upgrade_commit(
         &self,
         instance_id: &str,
-        host: SdkAdminSurfaceHost,
+        host: SdkAdminSurfaceHost<'_>,
     ) -> Result<(), String> {
         let mut instances = self
             .instances
@@ -209,7 +210,7 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
                 instance.principal_id.clone(),
                 instance.stdin_handle,
                 instance.stdout_handle,
-                host,
+                host.acquire_lease()?,
             )?);
         }
         Ok(())
@@ -218,7 +219,7 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
     fn resume_after_upgrade_rollback(
         &self,
         instance_id: &str,
-        host: SdkAdminSurfaceHost,
+        host: SdkAdminSurfaceHost<'_>,
     ) -> Result<AdminSurfaceStatusView, String> {
         let mut instances = self
             .instances
@@ -233,13 +234,13 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
                 instance.principal_id.clone(),
                 instance.stdin_handle,
                 instance.stdout_handle,
-                host,
+                host.acquire_lease()?,
             )?);
         }
         Ok(console_status())
     }
 
-    fn shutdown(&self, instance_id: &str, _host: SdkAdminSurfaceHost) -> Result<(), String> {
+    fn shutdown(&self, instance_id: &str, _host: SdkAdminSurfaceHost<'_>) -> Result<(), String> {
         let mut instances = self
             .instances
             .lock()
@@ -271,7 +272,7 @@ fn start_worker(
     principal_id: String,
     stdin_handle: NativeHandle,
     stdout_handle: NativeHandle,
-    host: SdkAdminSurfaceHost,
+    host: AdminSurfaceHostLease,
 ) -> Result<ConsoleWorker, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_thread = Arc::clone(&stop);
@@ -314,7 +315,7 @@ fn detach_worker(worker: Option<ConsoleWorker>) {
 }
 
 fn run_console_loop(
-    host: &SdkAdminSurfaceHost,
+    host: &AdminSurfaceHostLease,
     principal_id: &str,
     stdin_handle: NativeHandle,
     stdout: &mut std::fs::File,
@@ -341,7 +342,7 @@ fn run_console_loop(
 }
 
 fn handle_line(
-    host: &SdkAdminSurfaceHost,
+    host: &AdminSurfaceHostLease,
     principal_id: &str,
     stdout: &mut std::fs::File,
     line: &str,
@@ -632,7 +633,10 @@ fn take_line(buffer: &mut Vec<u8>) -> Result<Option<String>, String> {
         .map_err(|_| "console input was not valid utf-8".to_string())
 }
 
-fn take_native_resource(host: &SdkAdminSurfaceHost, name: &str) -> Result<NativeHandle, String> {
+fn take_native_resource(
+    host: &SdkAdminSurfaceHost<'_>,
+    name: &str,
+) -> Result<NativeHandle, String> {
     match host.take_process_resource(name)? {
         Some(AdminSurfaceResource::NativeHandle {
             handle_kind,

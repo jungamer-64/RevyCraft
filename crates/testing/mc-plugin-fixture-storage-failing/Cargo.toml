@@ -1,0 +1,21 @@
+[package]
+name = "mc-plugin-fixture-storage-failing"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Packaged storage failure fixture for RevyCraft plugin boundary tests."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mc-plugin-contract = { path = "../../plugin/mc-plugin-contract" }
+mc-plugin-sdk-rust = { path = "../../plugin/mc-plugin-sdk-rust" }
+mc-storage-common = { path = "../../storage/mc-storage-common" }
+
+[lints]
+workspace = true

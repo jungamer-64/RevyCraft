@@ -1,5 +1,5 @@
 #![allow(clippy::multiple_crate_versions)]
-use mc_plugin_api::codec::auth::{AuthDescriptor, AuthMode, BedrockAuthResult};
+use mc_plugin_contract::codec::auth::{AuthDescriptor, AuthMode, BedrockAuthResult};
 use mc_plugin_sdk_rust::auth::RustAuthPlugin;
 use mc_plugin_sdk_rust::capabilities::auth_capabilities;
 use mc_plugin_sdk_rust::export_plugin;

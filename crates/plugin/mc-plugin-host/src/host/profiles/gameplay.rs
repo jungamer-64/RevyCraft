@@ -2,7 +2,7 @@ use super::{
     Arc, ConnectionPhase, GameplayCapabilitySet, GameplayCommand, GameplayProfileHandle,
     GameplayProfileId, GameplayRequest, GameplayResponse, GameplaySessionSnapshot, PlayerId,
     PluginFailureAction, PluginFailureDispatch, PluginGenerationId, PluginKind,
-    ReloadableGenerationSlot, SessionCapabilitySet, with_gameplay_invocation_and_limits,
+    ReloadableGenerationSlot, SessionCapabilitySet,
 };
 use crate::PluginHostError;
 use crate::host::GameplayInvocationScope;
@@ -87,8 +87,7 @@ impl HotSwappableGameplayProfile {
                 return Ok(GameplayEffectBatch::empty(now_ms));
             }
 
-            let response =
-                with_gameplay_invocation_and_limits(&mut scope, || generation.invoke(&request));
+            let response = generation.invoke_with_scope(&request, &mut scope);
             let recorded_batch = scope.finish(now_ms);
             match response {
                 Ok(GameplayResponse::EffectBatch(batch)) => {

@@ -1,14 +1,13 @@
 #![allow(clippy::multiple_crate_versions)]
 
-use mc_plugin_api::abi::{
-    CURRENT_PLUGIN_ABI, CapabilityDescriptorV1, OwnedBuffer, PluginAbiVersion, PluginKind,
-    Utf8Slice,
-};
-use mc_plugin_api::codec::auth::{AuthDescriptor, BedrockAuthResult};
-use mc_plugin_api::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
-use mc_plugin_api::codec::protocol::ProtocolSessionSnapshot;
-use mc_plugin_api::codec::storage::StorageDescriptor;
-use mc_plugin_api::manifest::PluginManifestV1;
+use mc_plugin_abi::manifest::PluginManifestV9;
+use mc_plugin_abi::raw::{CapabilityDescriptorV9, OwnedBuffer, Utf8Slice};
+use mc_plugin_abi::{CURRENT_PLUGIN_ABI, PluginAbiVersion};
+use mc_plugin_contract::codec::auth::{AuthDescriptor, BedrockAuthResult};
+use mc_plugin_contract::codec::gameplay::{GameplayDescriptor, GameplaySessionSnapshot};
+use mc_plugin_contract::codec::protocol::ProtocolSessionSnapshot;
+use mc_plugin_contract::codec::storage::StorageDescriptor;
+use mc_plugin_contract::plugin::PluginKind;
 use mc_proto_common::{HandshakeProbe, ProtocolAdapter, ProtocolError};
 use mc_storage_common::StorageError;
 use std::path::Path;
@@ -24,8 +23,6 @@ mod macros;
 pub mod manifest;
 pub mod protocol;
 pub mod storage;
-#[cfg(test)]
-mod tests;
 
 pub use revy_voxel_semantic::{
     AdapterId, AdminSurfaceCapability, AdminSurfaceCapabilitySet, AdminSurfaceProfileId,

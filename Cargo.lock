@@ -1713,11 +1713,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-plugin-abi"
+version = "0.1.0"
+dependencies = [
+ "mc-plugin-contract",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "mc-plugin-admin-console"
 version = "0.1.0"
 dependencies = [
  "libc",
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "windows-sys 0.59.0",
 ]
@@ -1726,7 +1734,7 @@ dependencies = [
 name = "mc-plugin-admin-grpc"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "prost",
@@ -1741,24 +1749,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "mc-plugin-api"
-version = "0.1.0"
-dependencies = [
- "mc-content-canonical",
- "mc-proto-common",
- "revy-server-types",
- "revy-voxel-semantic",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
 name = "mc-plugin-auth-bedrock-offline"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "sha2 0.11.0",
  "uuid",
@@ -1771,7 +1765,7 @@ dependencies = [
  "base64",
  "bedrock-jwt",
  "bedrockrs_proto",
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "p384",
  "serde_json",
@@ -1782,7 +1776,7 @@ dependencies = [
 name = "mc-plugin-auth-mojang-online"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "reqwest",
  "serde",
@@ -1793,7 +1787,7 @@ dependencies = [
 name = "mc-plugin-auth-offline"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "md-5 0.11.0",
  "uuid",
@@ -1803,9 +1797,32 @@ dependencies = [
 name = "mc-plugin-auth-online-stub"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "uuid",
+]
+
+[[package]]
+name = "mc-plugin-contract"
+version = "0.1.0"
+dependencies = [
+ "mc-content-canonical",
+ "mc-proto-common",
+ "revy-server-types",
+ "revy-voxel-semantic",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "mc-plugin-fixture-storage-failing"
+version = "0.1.0"
+dependencies = [
+ "mc-plugin-contract",
+ "mc-plugin-sdk-rust",
+ "mc-storage-common",
 ]
 
 [[package]]
@@ -1813,7 +1830,7 @@ name = "mc-plugin-gameplay-canonical"
 version = "0.1.0"
 dependencies = [
  "mc-content-canonical",
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
 ]
 
@@ -1821,7 +1838,7 @@ dependencies = [
 name = "mc-plugin-gameplay-readonly"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
 ]
 
@@ -1831,62 +1848,25 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "libloading",
- "mc-content-canonical",
- "mc-plugin-admin-console",
- "mc-plugin-api",
- "mc-plugin-auth-offline",
- "mc-plugin-gameplay-canonical",
- "mc-plugin-gameplay-readonly",
- "mc-plugin-proto-be-924",
- "mc-plugin-proto-be-placeholder",
- "mc-plugin-proto-je-340",
- "mc-plugin-proto-je-404",
- "mc-plugin-proto-je-47",
- "mc-plugin-proto-je-5",
- "mc-plugin-proto-je-775",
- "mc-plugin-sdk-rust",
- "mc-plugin-storage-je-anvil-1_18_2",
- "mc-plugin-storage-je-anvil-1_7_10",
- "mc-plugin-storage-je-anvil-26_1",
+ "mc-plugin-abi",
+ "mc-plugin-contract",
  "mc-plugin-test-support",
- "mc-proto-be-924",
- "mc-proto-be-placeholder",
  "mc-proto-common",
- "mc-proto-je-340",
- "mc-proto-je-404",
- "mc-proto-je-47",
- "mc-proto-je-5",
- "mc-proto-je-775",
  "mc-storage-common",
  "revy-server-gameplay-bridge",
  "revy-server-types",
- "revy-voxel-core",
  "revy-voxel-semantic",
  "serde",
- "tempfile",
  "thiserror 2.0.18",
  "toml",
  "uuid",
 ]
 
 [[package]]
-name = "mc-plugin-host-test-support"
-version = "0.1.0"
-dependencies = [
- "mc-content-canonical",
- "mc-plugin-host",
- "mc-plugin-proto-je-5",
- "mc-plugin-test-support",
- "mc-proto-je-5",
- "revy-voxel-core",
- "tempfile",
-]
-
-[[package]]
 name = "mc-plugin-proto-be-924"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-proto-be-924",
  "mc-proto-common",
@@ -1896,7 +1876,7 @@ dependencies = [
 name = "mc-plugin-proto-be-placeholder"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-proto-be-placeholder",
  "mc-proto-common",
@@ -1906,7 +1886,7 @@ dependencies = [
 name = "mc-plugin-proto-je-340"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-340",
@@ -1916,7 +1896,7 @@ dependencies = [
 name = "mc-plugin-proto-je-404"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-404",
@@ -1926,7 +1906,7 @@ dependencies = [
 name = "mc-plugin-proto-je-47"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-47",
@@ -1936,7 +1916,7 @@ dependencies = [
 name = "mc-plugin-proto-je-5"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-5",
@@ -1946,7 +1926,7 @@ dependencies = [
 name = "mc-plugin-proto-je-5-reload-test"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-5",
@@ -1956,7 +1936,7 @@ dependencies = [
 name = "mc-plugin-proto-je-775"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-proto-common",
  "mc-proto-je-775",
@@ -1967,7 +1947,8 @@ name = "mc-plugin-sdk-rust"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "mc-plugin-api",
+ "mc-plugin-abi",
+ "mc-plugin-contract",
  "mc-proto-common",
  "mc-storage-common",
  "revy-voxel-semantic",
@@ -1981,7 +1962,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "mc-content-canonical",
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-storage-common",
  "revy-voxel-semantic",
@@ -1993,7 +1974,7 @@ dependencies = [
 name = "mc-plugin-storage-je-anvil-1_7_10"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-storage-common",
  "mc-storage-je-anvil-1_7_10",
@@ -2005,7 +1986,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "mc-content-canonical",
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-sdk-rust",
  "mc-storage-common",
  "revy-voxel-semantic",
@@ -3084,8 +3065,9 @@ dependencies = [
  "aes",
  "bytes",
  "libc",
+ "mc-plugin-abi",
  "mc-plugin-admin-grpc",
- "mc-plugin-api",
+ "mc-plugin-contract",
  "mc-plugin-host",
  "mc-plugin-test-support",
  "mc-proto-common",
@@ -3107,7 +3089,7 @@ dependencies = [
 name = "revy-server-config"
 version = "0.1.0"
 dependencies = [
- "mc-plugin-api",
+ "mc-plugin-contract",
  "revy-server-types",
  "revy-voxel-semantic",
  "serde",
@@ -3135,15 +3117,14 @@ dependencies = [
  "bytes",
  "libloading",
  "mc-content-canonical",
- "mc-plugin-api",
  "mc-plugin-auth-bedrock-offline",
  "mc-plugin-auth-bedrock-xbl",
  "mc-plugin-auth-offline",
  "mc-plugin-auth-online-stub",
+ "mc-plugin-contract",
  "mc-plugin-gameplay-canonical",
  "mc-plugin-gameplay-readonly",
  "mc-plugin-host",
- "mc-plugin-host-test-support",
  "mc-plugin-proto-be-924",
  "mc-plugin-proto-be-placeholder",
  "mc-plugin-proto-je-340",
@@ -3151,7 +3132,6 @@ dependencies = [
  "mc-plugin-proto-je-47",
  "mc-plugin-proto-je-5",
  "mc-plugin-proto-je-775",
- "mc-plugin-sdk-rust",
  "mc-plugin-storage-je-anvil-1_18_2",
  "mc-plugin-storage-je-anvil-1_7_10",
  "mc-plugin-storage-je-anvil-26_1",
