@@ -283,20 +283,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bedrockrs_network"
-version = "0.1.0"
-source = "git+https://github.com/bedrock-crustaceans/bedrock-rs.git?rev=eab6d74e2ac6faa68589df9af0a76f793fd7ddd5#eab6d74e2ac6faa68589df9af0a76f793fd7ddd5"
-dependencies = [
- "bedrockrs_proto",
- "bedrockrs_proto_core",
- "byteorder",
- "rak-rs",
- "rand 0.10.0",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "bedrockrs_proto"
 version = "0.1.0"
 source = "git+https://github.com/bedrock-crustaceans/bedrock-rs.git?rev=eab6d74e2ac6faa68589df9af0a76f793fd7ddd5#eab6d74e2ac6faa68589df9af0a76f793fd7ddd5"
@@ -3110,7 +3096,6 @@ version = "0.1.0"
 dependencies = [
  "aes",
  "base64",
- "bedrockrs_network",
  "bedrockrs_proto",
  "bedrockrs_proto_core",
  "binary-util",

@@ -11,7 +11,6 @@ description = "Protocol-agnostic dedicated server runtime for the RevyCraft work
 
 [dependencies]
 aes.workspace = true
-bedrockrs_network.workspace = true
 bedrockrs_proto.workspace = true
 bytes.workspace = true
 libloading.workspace = true
