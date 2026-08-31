@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use aes::Aes128;
-use aes::cipher::{BlockEncrypt, KeyInit};
+use aes::cipher::{BlockCipherEncrypt, KeyInit};
 use bytes::BytesMut;
 use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_common::{MinecraftWireCodec, PacketReader, PacketWriter, WireCodec};

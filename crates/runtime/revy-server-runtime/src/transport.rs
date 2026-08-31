@@ -1,7 +1,7 @@
 use crate::config::ServerConfig;
 use crate::{ListenerBinding, RuntimeError};
 use aes::Aes128;
-use aes::cipher::{BlockEncrypt, KeyInit};
+use aes::cipher::{BlockCipherEncrypt, KeyInit};
 use bytes::BytesMut;
 use mc_plugin_host::registry::ProtocolRegistry;
 use mc_proto_be_common::{BEDROCK_GAME_PACKET_ID, BedrockCompression};

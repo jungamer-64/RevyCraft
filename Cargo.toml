@@ -20,18 +20,18 @@ keywords = ["minecraft", "voxel", "server", "protocol", "sandbox"]
 categories = ["game-development", "network-programming"]
 
 [workspace.dependencies]
-aes = "0.8"
-base64 = "0.22"
+aes = "0.9"
+base64 = "0.23"
 bedrock-jwt = "0.1"
 bedrock_protocol = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", rev = "2d9e4087a207bdcbad6e4cdc83de46e94712b2f4", features = ["v924"] }
 bedrock_protocol_core = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", rev = "2d9e4087a207bdcbad6e4cdc83de46e94712b2f4" }
 bytes = "1.10"
 flate2 = "1.1"
 md5 = { package = "md-5", version = "0.11" }
-nbtx = "2.0"
-num-bigint = "0.4"
+nbtx = "3.0"
+num-bigint = "0.5"
 num-traits = "0.2"
-p384 = { version = "0.13", features = ["pkcs8"] }
+p384 = { version = "0.14", features = ["pkcs8"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "query", "rustls"] }
 rsa = "0.9"
 serde = { version = "1.0", features = ["derive"] }

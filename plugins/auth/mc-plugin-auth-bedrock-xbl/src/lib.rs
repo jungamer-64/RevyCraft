@@ -101,7 +101,9 @@ fn verify_client_data_jwt(
     let signing_input = format!("{}.{}", parts[0], parts[1]);
     let sig_bytes = decode_b64_url_nopad(parts[2]).map_err(|error| error.to_string())?;
     let der_sig = jose_sig_to_der(&sig_bytes).map_err(|error| error.to_string())?;
-    let verifying_key = VerifyingKey::from(&public_key);
+    let public_key_sec1 = public_key.to_sec1_bytes();
+    let verifying_key =
+        VerifyingKey::from_sec1_bytes(&public_key_sec1).map_err(|error| error.to_string())?;
     let signature = EcdsaSignature::from_der(&der_sig).map_err(|error| error.to_string())?;
     verifying_key
         .verify(signing_input.as_bytes(), &signature)
