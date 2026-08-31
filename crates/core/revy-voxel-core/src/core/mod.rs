@@ -148,7 +148,7 @@ pub(super) struct SessionStore {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemScheduler;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ServerCore {
     pub(super) content_behavior: Arc<dyn ContentBehavior>,
     pub(super) world: WorldStore,
@@ -172,25 +172,6 @@ pub struct ActiveMiningState {
     pub duration_ms: u64,
     pub last_stage: Option<u8>,
     pub tool_context: Option<MiningToolSpec>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct OnlinePlayerRuntimeState {
-    pub player: PlayerSnapshot,
-    pub session: PlayerSessionState,
-    pub active_mining: Option<ActiveMiningState>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CoreRuntimeStateBlob {
-    pub snapshot: crate::WorldSnapshot,
-    pub online_players: BTreeMap<PlayerId, OnlinePlayerRuntimeState>,
-    pub dropped_items: BTreeMap<EntityId, DroppedItemState>,
-    pub container_viewers: BTreeMap<BlockPos, WorldContainerViewers>,
-    pub next_entity_id: i32,
-    pub next_keep_alive_id: i32,
-    pub keepalive_interval_ms: u64,
-    pub keepalive_timeout_ms: u64,
 }
 
 impl ServerCore {
@@ -271,90 +252,6 @@ impl ServerCore {
             block_entities: self.world.block_entities.clone(),
             players,
         }
-    }
-
-    #[must_use]
-    pub fn export_runtime_state(&self) -> CoreRuntimeStateBlob {
-        let online_players = self
-            .sessions
-            .player_sessions
-            .iter()
-            .filter_map(|(player_id, session)| {
-                Some((
-                    *player_id,
-                    OnlinePlayerRuntimeState {
-                        player: self.compose_player_snapshot_by_entity(session.entity_id)?,
-                        session: session.clone(),
-                        active_mining: self
-                            .entities
-                            .player_active_mining
-                            .get(&session.entity_id)
-                            .cloned(),
-                    },
-                ))
-            })
-            .collect();
-
-        CoreRuntimeStateBlob {
-            snapshot: self.snapshot(),
-            online_players,
-            dropped_items: self.entities.dropped_items.clone(),
-            container_viewers: self.world.container_viewers.clone(),
-            next_entity_id: self.entities.next_entity_id,
-            next_keep_alive_id: self.sessions.next_keep_alive_id,
-            keepalive_interval_ms: self.sessions.keepalive_interval_ms,
-            keepalive_timeout_ms: self.sessions.keepalive_timeout_ms,
-        }
-    }
-
-    #[must_use]
-    pub fn from_runtime_state(
-        config: CoreConfig,
-        blob: CoreRuntimeStateBlob,
-        content_behavior: Arc<dyn ContentBehavior>,
-    ) -> Self {
-        let mut core = Self::from_snapshot(config, blob.snapshot, content_behavior);
-        core.world.container_viewers = blob.container_viewers;
-        core.entities.dropped_items = blob.dropped_items;
-        core.entities.next_entity_id = blob.next_entity_id;
-        core.sessions.next_keep_alive_id = blob.next_keep_alive_id;
-        core.sessions.keepalive_interval_ms = blob.keepalive_interval_ms;
-        core.sessions.keepalive_timeout_ms = blob.keepalive_timeout_ms;
-        core.world.world_meta.level_name = core.world.config.level_name.clone();
-        core.world.world_meta.game_mode = core.world.config.game_mode;
-        core.world.world_meta.difficulty = core.world.config.difficulty;
-        core.world.world_meta.max_players = core.world.config.max_players;
-        core.entities.entity_kinds = core
-            .entities
-            .dropped_items
-            .keys()
-            .copied()
-            .map(|entity_id| (entity_id, EntityKind::DroppedItem))
-            .collect();
-
-        for player_id in blob.online_players.keys().copied().collect::<Vec<_>>() {
-            core.world.saved_players.remove(&player_id);
-        }
-
-        for (player_id, online) in blob.online_players {
-            let entity_id = {
-                let mut state = self::state_backend::BaseState::new(&mut core);
-                state.spawn_online_player(online.player, 0, Some(online.session.entity_id))
-            };
-            debug_assert_eq!(entity_id, online.session.entity_id);
-            if let Some(session) = core.sessions.player_sessions.get_mut(&player_id) {
-                *session = online.session;
-            }
-            if let Some(active_mining) = online.active_mining {
-                core.entities
-                    .player_active_mining
-                    .insert(entity_id, active_mining);
-            } else {
-                core.entities.player_active_mining.remove(&entity_id);
-            }
-        }
-
-        core
     }
 
     #[must_use]

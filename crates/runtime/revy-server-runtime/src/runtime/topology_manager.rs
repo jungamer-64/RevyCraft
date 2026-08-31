@@ -36,22 +36,6 @@ pub(crate) enum PreparedTopologyReload {
     },
 }
 
-pub(crate) enum PrecommittedTopologyReload {
-    Noop(TopologyReloadResult),
-    ProtocolOnly {
-        candidate_generation: Arc<ActiveGeneration>,
-        result: TopologyReloadResult,
-    },
-    Generation {
-        candidate_generation: Arc<ActiveGeneration>,
-        new_listener_workers: HashMap<TransportKind, TopologyListenerWorker>,
-        reused_transports: HashSet<TransportKind>,
-        applied_config_change: bool,
-        reconfigured_adapter_ids: Vec<String>,
-        drain_grace_secs: u64,
-    },
-}
-
 impl PreparedTopologyReload {
     pub(crate) fn candidate_generation(
         &self,
@@ -257,22 +241,6 @@ impl TopologyManager {
         Ok(())
     }
 
-    pub(crate) async fn reload_generation_with_config(
-        &self,
-        candidate_config: crate::config::ServerConfig,
-        force_generation: bool,
-        protocol_topology: &RuntimeProtocolTopologyCandidate,
-        kernel: &RuntimeKernel,
-        sessions: &SessionRegistry,
-    ) -> Result<TopologyReloadResult, RuntimeError> {
-        let prepared = self
-            .prepare_generation_reload(candidate_config, force_generation, protocol_topology)
-            .await?;
-        let prepared = self.precommit_generation_reload(prepared, sessions).await?;
-        self.commit_generation_reload(prepared, kernel, sessions)
-            .await
-    }
-
     async fn shutdown_workers(workers: Vec<TopologyListenerWorker>) {
         for mut worker in workers {
             if let Some(shutdown_tx) = worker.shutdown_tx.take() {
@@ -431,155 +399,6 @@ impl TopologyManager {
             reconfigured_adapter_ids,
             drain_grace_secs: candidate_config.topology.drain_grace_secs,
         })
-    }
-
-    pub(crate) async fn commit_generation_reload(
-        &self,
-        prepared_reload: PrecommittedTopologyReload,
-        kernel: &RuntimeKernel,
-        sessions: &SessionRegistry,
-    ) -> Result<TopologyReloadResult, RuntimeError> {
-        match prepared_reload {
-            PrecommittedTopologyReload::Noop(result) => Ok(result),
-            PrecommittedTopologyReload::ProtocolOnly {
-                candidate_generation,
-                result,
-            } => {
-                {
-                    let mut generation_state = self
-                        .state
-                        .write()
-                        .expect("runtime topology lock should not be poisoned");
-                    generation_state.active = candidate_generation;
-                }
-                Ok(result)
-            }
-            PrecommittedTopologyReload::Generation {
-                candidate_generation,
-                new_listener_workers,
-                reused_transports,
-                applied_config_change,
-                reconfigured_adapter_ids,
-                drain_grace_secs,
-            } => {
-                let new_generation_id = candidate_generation.generation_id;
-                let workers_to_shutdown = {
-                    let mut generation_state = self
-                        .state
-                        .write()
-                        .expect("runtime topology lock should not be poisoned");
-                    let previous_active = Arc::clone(&generation_state.active);
-                    let mut workers_to_shutdown = Vec::new();
-
-                    generation_state.active = Arc::clone(&candidate_generation);
-                    generation_state.draining.push(DrainingGeneration {
-                        generation: previous_active,
-                        drain_deadline_ms: now_ms()
-                            .saturating_add(drain_grace_secs.saturating_mul(1_000)),
-                    });
-
-                    for transport in [TransportKind::Tcp, TransportKind::Udp] {
-                        if reused_transports.contains(&transport) {
-                            if let Some(worker) = generation_state.listener_workers.get(&transport)
-                            {
-                                let _ = worker.generation_tx.send(new_generation_id);
-                            }
-                            continue;
-                        }
-                        if let Some(worker) = generation_state.listener_workers.remove(&transport) {
-                            workers_to_shutdown.push(worker);
-                        }
-                    }
-                    for worker in new_listener_workers.into_values() {
-                        generation_state
-                            .listener_workers
-                            .insert(worker.transport, worker);
-                    }
-                    workers_to_shutdown
-                };
-
-                kernel
-                    .set_max_players(candidate_generation.config.network.max_players)
-                    .await;
-                Self::shutdown_workers(workers_to_shutdown).await;
-                let retired_generation_ids = self.retire_drained_generations(sessions).await;
-                Ok(TopologyReloadResult {
-                    activated_generation_id: new_generation_id,
-                    retired_generation_ids,
-                    applied_config_change,
-                    reconfigured_adapter_ids,
-                })
-            }
-        }
-    }
-
-    pub(crate) async fn precommit_generation_reload(
-        &self,
-        prepared_reload: PreparedTopologyReload,
-        sessions: &SessionRegistry,
-    ) -> Result<PrecommittedTopologyReload, RuntimeError> {
-        match prepared_reload {
-            PreparedTopologyReload::Noop(result) => Ok(PrecommittedTopologyReload::Noop(result)),
-            PreparedTopologyReload::ProtocolOnly {
-                candidate_generation,
-                result,
-            } => Ok(PrecommittedTopologyReload::ProtocolOnly {
-                candidate_generation,
-                result,
-            }),
-            PreparedTopologyReload::Generation {
-                candidate_generation,
-                new_bound_listeners,
-                reused_transports,
-                applied_config_change,
-                reconfigured_adapter_ids,
-                drain_grace_secs,
-            } => {
-                let mut new_listener_workers = HashMap::new();
-                for listener in new_bound_listeners {
-                    let worker = match spawn_listener_worker(
-                        listener,
-                        candidate_generation.generation_id,
-                        sessions.accepted_sender(),
-                        sessions.queued_accepts(),
-                    ) {
-                        Ok(worker) => worker,
-                        Err(error) => {
-                            Self::shutdown_workers(
-                                new_listener_workers.into_values().collect::<Vec<_>>(),
-                            )
-                            .await;
-                            return Err(error);
-                        }
-                    };
-                    if new_listener_workers
-                        .insert(worker.transport, worker)
-                        .is_some()
-                    {
-                        Self::shutdown_workers(
-                            new_listener_workers.into_values().collect::<Vec<_>>(),
-                        )
-                        .await;
-                        return Err(RuntimeError::Config(
-                            "multiple listener workers for the same transport are not supported"
-                                .to_string(),
-                        ));
-                    }
-                }
-                Ok(PrecommittedTopologyReload::Generation {
-                    candidate_generation,
-                    new_listener_workers,
-                    reused_transports,
-                    applied_config_change,
-                    reconfigured_adapter_ids,
-                    drain_grace_secs,
-                })
-            }
-        }
-    }
-
-    pub(crate) fn rollback_generation_reload(&self, prepared_reload: PreparedTopologyReload) {
-        drop(prepared_reload);
     }
 
     pub(crate) async fn enforce_generation_drains(

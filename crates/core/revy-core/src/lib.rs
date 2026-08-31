@@ -17,7 +17,7 @@ pub use self::ids::{
     PlayerId, PluginBuildTag, PluginGenerationId, StorageProfileId,
 };
 pub use self::revision::{RevisionConflict, Revisioned};
-pub use self::routing::{ConnectionIdSource, SessionRoutes};
+pub use self::routing::ConnectionIdSource;
 
 #[cfg(test)]
 mod tests;

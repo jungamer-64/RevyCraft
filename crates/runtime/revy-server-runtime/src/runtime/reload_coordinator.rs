@@ -4,21 +4,17 @@ use crate::{RuntimeUpgradePhase, RuntimeUpgradeRole, RuntimeUpgradeStateView};
 use mc_plugin_host::runtime::RuntimePluginHost;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{
-    Mutex as AsyncMutex, OwnedMutexGuard, OwnedRwLockWriteGuard, RwLock as AsyncRwLock, oneshot,
-};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, oneshot};
 
 pub(crate) struct ReloadCoordinator {
     static_config: StaticConfig,
     config_source: ServerConfigSource,
     reload_host: Option<Arc<dyn RuntimePluginHost>>,
     reload_serial: Arc<AsyncMutex<()>>,
-    consistency_gate: Arc<AsyncRwLock<()>>,
     shutting_down: AtomicBool,
     shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
     upgrade_state: std::sync::Mutex<Option<RuntimeUpgradeStateView>>,
     child_upgrade_serial_hold: std::sync::Mutex<Option<OwnedMutexGuard<()>>>,
-    child_upgrade_commit_hold: std::sync::Mutex<Option<OwnedRwLockWriteGuard<()>>>,
 }
 
 impl ReloadCoordinator {
@@ -32,12 +28,10 @@ impl ReloadCoordinator {
             config_source,
             reload_host,
             reload_serial: Arc::new(AsyncMutex::new(())),
-            consistency_gate: Arc::new(AsyncRwLock::new(())),
             shutting_down: AtomicBool::new(false),
             shutdown_tx: std::sync::Mutex::new(None),
             upgrade_state: std::sync::Mutex::new(None),
             child_upgrade_serial_hold: std::sync::Mutex::new(None),
-            child_upgrade_commit_hold: std::sync::Mutex::new(None),
         }
     }
 
@@ -51,18 +45,6 @@ impl ReloadCoordinator {
 
     pub(crate) fn reload_host(&self) -> Option<&Arc<dyn RuntimePluginHost>> {
         self.reload_host.as_ref()
-    }
-
-    pub(crate) async fn read_consistency(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
-        self.consistency_gate.read().await
-    }
-
-    pub(crate) async fn write_consistency(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
-        self.consistency_gate.write().await
-    }
-
-    pub(crate) async fn write_consistency_owned(&self) -> OwnedRwLockWriteGuard<()> {
-        Arc::clone(&self.consistency_gate).write_owned().await
     }
 
     pub(crate) async fn lock_reload_serial(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -123,26 +105,11 @@ impl ReloadCoordinator {
             .expect("upgrade state mutex should not be poisoned") = None;
     }
 
-    pub(crate) fn install_child_upgrade_commit_hold(&self, hold: OwnedRwLockWriteGuard<()>) {
-        *self
-            .child_upgrade_commit_hold
-            .lock()
-            .expect("child upgrade hold mutex should not be poisoned") = Some(hold);
-    }
-
     pub(crate) fn install_child_upgrade_serial_hold(&self, hold: OwnedMutexGuard<()>) {
         *self
             .child_upgrade_serial_hold
             .lock()
             .expect("child upgrade serial mutex should not be poisoned") = Some(hold);
-    }
-
-    pub(crate) fn release_child_upgrade_commit_hold(&self) {
-        let _ = self
-            .child_upgrade_commit_hold
-            .lock()
-            .expect("child upgrade hold mutex should not be poisoned")
-            .take();
     }
 
     pub(crate) fn release_child_upgrade_serial_hold(&self) {

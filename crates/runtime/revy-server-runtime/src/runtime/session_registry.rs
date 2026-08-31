@@ -1,7 +1,7 @@
 use super::status::SessionStatusSnapshot;
 use super::{
     AcceptedGenerationSession, GenerationId, QueuedAcceptTracker, RuntimeServer, SessionControl,
-    SessionHandle, SessionMessage, SessionReattachRecord, SessionRecipient, SharedSessionState,
+    SessionHandle, SessionMessage, SessionRecipient, SharedSessionState,
 };
 use crate::RuntimeError;
 use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
@@ -9,7 +9,7 @@ use mc_plugin_contract::codec::protocol::ProtocolSessionSnapshot;
 use mc_plugin_host::runtime::{GameplayProfileHandle, ProtocolReloadSession};
 use mc_proto_common::ConnectionPhase;
 use revy_voxel_core::{
-    ConnectionId, ConnectionIdSource, EventTarget, PlayerId, SessionCapabilitySet, SessionRoutes,
+    ConnectionId, ConnectionIdSource, EventTarget, PlayerId, SessionCapabilitySet,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -19,7 +19,6 @@ use tokio::task::JoinSet;
 pub(crate) struct SessionRegistry {
     connection_ids: ConnectionIdSource,
     sessions: Mutex<HashMap<ConnectionId, SessionHandle>>,
-    pending_login_routes: Mutex<SessionRoutes<ConnectionId, PlayerId>>,
     session_tasks: Mutex<JoinSet<(ConnectionId, Result<(), RuntimeError>)>>,
     queued_accepts: QueuedAcceptTracker,
     accepted_tx: mpsc::Sender<AcceptedGenerationSession>,
@@ -30,7 +29,6 @@ impl SessionRegistry {
         Self {
             connection_ids: ConnectionIdSource::default(),
             sessions: Mutex::new(HashMap::new()),
-            pending_login_routes: Mutex::new(SessionRoutes::default()),
             session_tasks: Mutex::new(JoinSet::new()),
             queued_accepts: QueuedAcceptTracker::default(),
             accepted_tx,
@@ -70,30 +68,8 @@ impl SessionRegistry {
         );
     }
 
-    pub(crate) async fn record_pending_login_route(
-        &self,
-        connection_id: ConnectionId,
-        player_id: PlayerId,
-    ) {
-        let session_exists = self.sessions.lock().await.contains_key(&connection_id);
-        if session_exists {
-            self.pending_login_routes
-                .lock()
-                .await
-                .insert_pending_login_route(connection_id, player_id);
-        }
-    }
-
-    pub(crate) async fn clear_pending_login_route(&self, connection_id: ConnectionId) {
-        self.pending_login_routes
-            .lock()
-            .await
-            .clear_pending_login_route(connection_id);
-    }
-
     pub(crate) async fn remove(&self, connection_id: ConnectionId) {
         self.sessions.lock().await.remove(&connection_id);
-        self.clear_pending_login_route(connection_id).await;
     }
 
     async fn session_entries(&self) -> Vec<(ConnectionId, SessionHandle)> {
@@ -103,15 +79,6 @@ impl SessionRegistry {
             .iter()
             .map(|(connection_id, handle)| (*connection_id, handle.clone()))
             .collect()
-    }
-
-    async fn pending_login_routes_snapshot(
-        &self,
-    ) -> std::collections::BTreeMap<ConnectionId, PlayerId> {
-        self.pending_login_routes
-            .lock()
-            .await
-            .snapshot_pending_login_routes()
     }
 
     pub(crate) async fn recipients_for_target(&self, target: EventTarget) -> Vec<SessionRecipient> {
@@ -129,12 +96,9 @@ impl SessionRegistry {
                 .collect(),
             EventTarget::Player(target_player_id) => {
                 let mut recipients = Vec::new();
-                let pending_login_routes = self.pending_login_routes_snapshot().await;
-                for (connection_id, handle) in self.session_entries().await {
+                for (_, handle) in self.session_entries().await {
                     let committed_player_id = handle.shared_state.read().await.player_id;
-                    let routed_player_id = committed_player_id
-                        .or_else(|| pending_login_routes.get(&connection_id).copied());
-                    if routed_player_id == Some(target_player_id) {
+                    if committed_player_id == Some(target_player_id) {
                         recipients.push(SessionRecipient {
                             tx: handle.tx,
                             control_tx: handle.control_tx,
@@ -145,12 +109,11 @@ impl SessionRegistry {
             }
             EventTarget::EveryoneExcept(excluded_player_id) => {
                 let mut recipients = Vec::new();
-                let pending_login_routes = self.pending_login_routes_snapshot().await;
-                for (connection_id, handle) in self.session_entries().await {
+                for (_, handle) in self.session_entries().await {
                     let committed_player_id = handle.shared_state.read().await.player_id;
-                    let routed_player_id = committed_player_id
-                        .or_else(|| pending_login_routes.get(&connection_id).copied());
-                    if routed_player_id.is_some() && routed_player_id != Some(excluded_player_id) {
+                    if committed_player_id.is_some()
+                        && committed_player_id != Some(excluded_player_id)
+                    {
                         recipients.push(SessionRecipient {
                             tx: handle.tx,
                             control_tx: handle.control_tx,
@@ -242,29 +205,6 @@ impl SessionRegistry {
 
     pub(crate) async fn all_handles(&self) -> Vec<SessionHandle> {
         self.sessions.lock().await.values().cloned().collect()
-    }
-
-    pub(crate) async fn play_reattach_records(&self) -> Vec<SessionReattachRecord> {
-        let mut records = Vec::new();
-        for (connection_id, handle) in self.session_entries().await {
-            let view = RuntimeServer::read_session_view(&handle.shared_state).await;
-            if view.phase != ConnectionPhase::Play {
-                continue;
-            }
-            records.push(SessionReattachRecord {
-                connection_id,
-                control_tx: handle.control_tx,
-                transport: view.transport,
-                phase: view.phase,
-                adapter_id: view.adapter_id,
-                player_id: view.player_id,
-                entity_id: view.entity_id,
-                gameplay_profile: view.gameplay_profile,
-                protocol_generation: view.protocol_generation,
-                gameplay_generation: view.gameplay_generation,
-            });
-        }
-        records
     }
 
     #[cfg(test)]

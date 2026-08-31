@@ -10,10 +10,9 @@ mod tests;
 pub(crate) mod world;
 
 pub use self::core::{
-    ActiveMiningState, ClientView, CoreConfig, CoreRuntimeStateBlob, DroppedItemState,
-    GameplayEffectApplyResult, GameplayLoginPreview, GameplayLoginPreviewError,
-    OnlinePlayerRuntimeState, OpenInventoryWindow, PlayerSessionState, ServerCore,
-    WorldContainerViewers,
+    ActiveMiningState, ClientView, CoreConfig, DroppedItemState, GameplayEffectApplyResult,
+    GameplayLoginPreview, GameplayLoginPreviewError, OpenInventoryWindow, PlayerSessionState,
+    ServerCore, WorldContainerViewers,
 };
 pub use self::events::{
     CoreCommand, CoreEvent, EventTarget, GameplayCommand, PlayerSummary, RuntimeCommand,
@@ -27,7 +26,7 @@ pub use revy_core::{
     ClosedCapability, ClosedCapabilitySet, ConnectionId, ConnectionIdSource, EntityId,
     GameplayCapability, GameplayCapabilitySet, GameplayProfileId, PlayerId, PluginBuildTag,
     PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet, RevisionConflict, Revisioned,
-    SessionCapabilitySet, SessionRoutes, StorageCapability, StorageCapabilitySet, StorageProfileId,
+    SessionCapabilitySet, StorageCapability, StorageCapabilitySet, StorageProfileId,
 };
 pub use revy_voxel_semantic::{
     GameplayCanEditBlockKey, GameplayEffect, GameplayEffectBatch, GameplayReadSet,

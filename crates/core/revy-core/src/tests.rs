@@ -2,7 +2,7 @@ use crate::ConnectionId;
 use crate::event::{EventTarget, RoutedEvent};
 use crate::overlay::{apply_optional_entries, apply_optional_entry};
 use crate::revision::Revisioned;
-use crate::routing::{ConnectionIdSource, SessionRoutes};
+use crate::routing::ConnectionIdSource;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -59,20 +59,6 @@ fn connection_id_source_allocates_monotonically_and_observes_seen_ids() {
     assert_eq!(source.next_connection_id(), ConnectionId(2));
     source.observe_connection_id(ConnectionId(7));
     assert_eq!(source.next_connection_id(), ConnectionId(8));
-}
-
-#[test]
-fn session_routes_track_pending_login_connections() {
-    let mut routes = SessionRoutes::default();
-    routes.insert_pending_login_route(3_u64, 9_u64);
-    routes.insert_pending_login_route(4_u64, 10_u64);
-    assert_eq!(routes.pending_login_route(3), Some(9));
-    assert_eq!(
-        routes.snapshot_pending_login_routes(),
-        BTreeMap::from([(3_u64, 9_u64), (4_u64, 10_u64)])
-    );
-    assert_eq!(routes.clear_pending_login_route(3), Some(9));
-    assert_eq!(routes.pending_login_route(3), None);
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

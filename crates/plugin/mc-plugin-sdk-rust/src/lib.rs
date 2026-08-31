@@ -40,7 +40,7 @@ pub use revy_voxel_semantic::{
     OpaqueF64, OpenContainerState, PlayerId, PlayerInventory, PlayerSnapshot, PlayerSummary,
     PluginBuildTag, PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet,
     RevisionConflict, Revisioned, RuntimeCommand, SectionBlockIndex, SectionPos,
-    SessionCapabilitySet, SessionCommand, SessionRoutes, StorageCapability, StorageCapabilitySet,
+    SessionCapabilitySet, SessionCommand, StorageCapability, StorageCapabilitySet,
     StorageProfileId, TargetedEvent, ToolClass, Vec3, WorldMeta, WorldSnapshot, expand_block_index,
     flatten_block_index, required_chunks, section_local_y,
 };

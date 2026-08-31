@@ -2,13 +2,11 @@
 
 mod admin_surface;
 mod process_surfaces;
-mod upgrade;
 
 use crate::admin_surface::AdminSurfaceSupervisor;
 use crate::process_surfaces::{
     PausedAdminSurfaceInstance, PausedProcessSurfaces, ProcessSurfaceCommand,
 };
-use crate::upgrade::UpgradeCoordinator;
 use revy_server_runtime::RuntimeError;
 use revy_server_runtime::config::ServerConfigSource;
 use revy_server_runtime::runtime::{

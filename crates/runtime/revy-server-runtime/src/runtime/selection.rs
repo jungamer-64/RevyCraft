@@ -74,15 +74,6 @@ impl SelectionManager {
         self.state.read().await.clone()
     }
 
-    pub(crate) async fn replace(&self, selection: ResolvedRuntimeSelection) {
-        *self.state.write().await = selection;
-    }
-
-    pub(crate) async fn replace_config(&self, next_active_config: ServerConfig) {
-        let mut selection_state = self.state.write().await;
-        selection_state.config = next_active_config;
-    }
-
     pub(crate) async fn current_admin_surfaces(&self) -> Vec<ResolvedAdminSurfaceSelection> {
         self.current().await.admin_surfaces
     }

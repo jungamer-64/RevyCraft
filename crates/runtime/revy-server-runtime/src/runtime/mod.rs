@@ -12,7 +12,6 @@ mod supervisor;
 #[cfg(test)]
 mod tests;
 mod topology_manager;
-mod upgrade;
 
 use self::kernel::{KernelCommandOutcome, RuntimeKernel};
 use self::reload_coordinator::ReloadCoordinator;
@@ -40,9 +39,7 @@ pub(crate) use self::generation::{
     RuntimeGenerationState, TopologyListenerWorker, now_ms,
 };
 pub(crate) use self::session::{
-    LoginChallengeState, OnlineAuthKeys, SessionControl, SessionHandle, SessionMessage,
-    SessionReattachInstruction, SessionReattachRecord, SessionRecipient, SessionRuntimeContext,
-    SessionState, SessionView, SharedSessionState,
+    OnlineAuthKeys, SessionControl, SessionHandle, SessionMessage, SessionRecipient,
 };
 pub use self::status::{
     GenerationCountSnapshot, GenerationStatusSnapshot, GenerationStatusState,
@@ -54,12 +51,6 @@ pub use self::supervisor::{
     AdminSurfaceSelection, ArtifactsReloadResult, CoreReloadResult, FullReloadResult,
     RuntimeReloadResult, ServerSupervisor, TopologyReloadResult,
 };
-pub use self::upgrade::{
-    RuntimeUpgradeCommitHold, RuntimeUpgradeGuard, RuntimeUpgradeImport,
-    RuntimeUpgradeLoginChallenge, RuntimeUpgradePayload, RuntimeUpgradeQueuedMessage,
-    RuntimeUpgradeSessionHandle, RuntimeUpgradeSessionState,
-};
-
 pub(crate) const LOGIN_SERVER_ID: &str = "";
 pub(crate) const LOGIN_VERIFY_TOKEN_LEN: usize = 4;
 pub(crate) const ACCEPT_QUEUE_CAPACITY: usize = 256;

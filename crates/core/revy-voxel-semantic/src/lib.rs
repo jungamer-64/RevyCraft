@@ -37,5 +37,5 @@ pub use revy_core::{
     ClosedCapability, ClosedCapabilitySet, ConnectionId, ConnectionIdSource, EntityId,
     GameplayCapability, GameplayCapabilitySet, GameplayProfileId, PlayerId, PluginBuildTag,
     PluginGenerationId, ProtocolCapability, ProtocolCapabilitySet, RevisionConflict, Revisioned,
-    SessionCapabilitySet, SessionRoutes, StorageCapability, StorageCapabilitySet, StorageProfileId,
+    SessionCapabilitySet, StorageCapability, StorageCapabilitySet, StorageProfileId,
 };

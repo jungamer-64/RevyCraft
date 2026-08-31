@@ -1,47 +1,10 @@
 use crate::RuntimeError;
-use crate::runtime::{
-    RuntimeServer, SessionMessage, SessionReattachInstruction, SharedSessionState,
-};
+use crate::runtime::{RuntimeServer, SessionMessage, SharedSessionState};
 use crate::transport::{TransportSessionIo, write_payload};
 use mc_proto_common::{ConnectionPhase, PlayEncodingContext};
 use revy_voxel_core::CoreEvent;
 
 impl RuntimeServer {
-    pub(in crate::runtime::session) async fn handle_session_reattach(
-        &self,
-        connection_id: revy_voxel_core::ConnectionId,
-        transport_io: &mut TransportSessionIo,
-        shared_state: &SharedSessionState,
-        instruction: SessionReattachInstruction,
-    ) -> Result<(), RuntimeError> {
-        {
-            let mut session = shared_state.write().await;
-            session.generation = instruction.generation;
-            session.adapter = instruction.adapter;
-            session.gameplay = instruction.gameplay;
-            session.phase = instruction.phase;
-            session.player_id = instruction.player_id;
-            session.entity_id = instruction.entity_id;
-            Self::refresh_session_capabilities(&mut session);
-        }
-        for event in instruction.resync_events {
-            let should_close = self
-                .handle_outgoing_message(
-                    connection_id,
-                    transport_io,
-                    shared_state,
-                    SessionMessage::Event(event),
-                )
-                .await?;
-            if should_close {
-                return Err(RuntimeError::Config(
-                    "session terminated while applying reattach resync events".to_string(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
     pub(in crate::runtime::session) async fn handle_outgoing_message(
         &self,
         connection_id: revy_voxel_core::ConnectionId,
