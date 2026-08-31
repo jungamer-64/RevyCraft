@@ -23,8 +23,8 @@ categories = ["game-development", "network-programming"]
 aes = "0.8"
 base64 = "0.22"
 bedrock-jwt = "0.1"
-bedrockrs_proto = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_proto", rev = "eab6d74e2ac6faa68589df9af0a76f793fd7ddd5" }
-bedrockrs_proto_core = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", package = "bedrockrs_proto_core", rev = "eab6d74e2ac6faa68589df9af0a76f793fd7ddd5" }
+bedrock_protocol = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", rev = "2d9e4087a207bdcbad6e4cdc83de46e94712b2f4" }
+bedrock_protocol_core = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", rev = "2d9e4087a207bdcbad6e4cdc83de46e94712b2f4" }
 bytes = "1.10"
 flate2 = "1.1"
 md5 = { package = "md-5", version = "0.11" }
