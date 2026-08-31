@@ -24,7 +24,6 @@ mod macros;
 pub mod manifest;
 pub mod protocol;
 pub mod storage;
-pub mod test_support;
 #[cfg(test)]
 mod tests;
 

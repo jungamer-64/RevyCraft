@@ -9,10 +9,6 @@ keywords.workspace = true
 categories.workspace = true
 description = "Protocol-agnostic dedicated server runtime for the RevyCraft workspace."
 
-[features]
-disable-exported-symbols = []
-in-process-testing = []
-
 [dependencies]
 aes.workspace = true
 bedrockrs_network.workspace = true
