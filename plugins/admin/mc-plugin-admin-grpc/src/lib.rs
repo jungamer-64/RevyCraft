@@ -12,8 +12,8 @@ use crate::admin::{
 use mc_plugin_contract::codec::admin::{
     self as surface_admin, AdminArtifactsReloadView, AdminFullReloadView, AdminNamedCountView,
     AdminRuntimeReloadDetail, AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionsView,
-    AdminStatusView, AdminTopologyReloadView, AdminUpgradeRuntimeView, RuntimeReloadMode,
-    RuntimeUpgradePhase, RuntimeUpgradeRole,
+    AdminStatusView, AdminTopologyReloadView, AdminUpgradeRuntimeView, CutoverOperation,
+    CutoverOutcome, CutoverReport, RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole,
 };
 use mc_plugin_contract::codec::admin_surface::{
     AdminSurfaceEndpointView, AdminSurfaceInstanceDeclaration, AdminSurfacePauseView,
@@ -32,7 +32,7 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex, OnceLock,
+    Arc, Mutex,
     atomic::{AtomicU8, Ordering},
 };
 use tokio::net::{TcpListener, TcpStream};
@@ -53,7 +53,6 @@ const MANIFEST: StaticPluginManifest =
 
 #[derive(Default)]
 pub struct GrpcAdminSurfacePlugin {
-    runtime: OnceLock<Result<tokio::runtime::Runtime, String>>,
     instances: Mutex<HashMap<String, GrpcSurfaceInstanceState>>,
 }
 
@@ -325,33 +324,6 @@ impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
                 self.block_on_async(handle.join())
             }
         }
-    }
-}
-
-impl GrpcAdminSurfacePlugin {
-    fn runtime(&self) -> Result<&tokio::runtime::Runtime, String> {
-        match self.runtime.get_or_init(|| {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .thread_name("admin-surface-grpc")
-                .enable_all()
-                .build()
-                .map_err(|error| format!("failed to build admin gRPC runtime: {error}"))
-        }) {
-            Ok(runtime) => Ok(runtime),
-            Err(error) => Err(error.clone()),
-        }
-    }
-
-    fn runtime_handle(&self) -> Result<tokio::runtime::Handle, String> {
-        Ok(self.runtime()?.handle().clone())
-    }
-
-    fn block_on_async<F, T>(&self, future: F) -> Result<T, String>
-    where
-        F: std::future::Future<Output = Result<T, String>>,
-    {
-        self.runtime()?.block_on(future)
     }
 }
 
@@ -851,6 +823,32 @@ fn map_reload_mode(mode: RuntimeReloadMode) -> i32 {
     }
 }
 
+fn map_cutover_report(report: CutoverReport) -> proto::CutoverReport {
+    proto::CutoverReport {
+        operation: match report.operation {
+            CutoverOperation::Reload => proto::CutoverOperation::Reload as i32,
+            CutoverOperation::ExecutableUpgrade => {
+                proto::CutoverOperation::ExecutableUpgrade as i32
+            }
+        },
+        mode: report.mode.map(map_reload_mode),
+        connection_mix: Some(proto::CutoverConnectionMix {
+            java: count_to_u64(report.connection_mix.java),
+            bedrock: count_to_u64(report.connection_mix.bedrock),
+        }),
+        session_count: count_to_u64(report.session_count),
+        stage_us: report.stage_us,
+        prepare_us: report.prepare_us,
+        freeze_us: report.freeze_us,
+        resume_us: report.resume_us,
+        outcome: match report.outcome {
+            CutoverOutcome::Committed => proto::CutoverOutcome::Committed as i32,
+            CutoverOutcome::Aborted => proto::CutoverOutcome::Aborted as i32,
+        },
+        epoch_revision: report.epoch_revision,
+    }
+}
+
 fn map_reload_mode_request(mode: i32) -> Result<RuntimeReloadMode, Status> {
     let mode = proto::RuntimeReloadMode::try_from(mode)
         .map_err(|_| Status::invalid_argument("invalid reload runtime mode"))?;
@@ -931,7 +929,7 @@ fn map_status_view(status: AdminStatusView) -> proto::AdminStatusView {
         enabled_adapter_ids: status.enabled_adapter_ids,
         enabled_bedrock_adapter_ids: status.enabled_bedrock_adapter_ids,
         motd: status.motd,
-        max_players: u32::from(status.max_players),
+        max_players: status.max_players,
         session_summary: Some(map_session_summary(status.session_summary)),
         dirty: status.dirty,
         plugin_host: status
@@ -954,20 +952,36 @@ fn map_status_view(status: AdminStatusView) -> proto::AdminStatusView {
                     RuntimeUpgradeRole::Child => proto::RuntimeUpgradeRole::Child as i32,
                 },
                 phase: match upgrade.phase {
-                    RuntimeUpgradePhase::ParentFreezing => {
-                        proto::RuntimeUpgradePhase::ParentFreezing as i32
+                    RuntimeUpgradePhase::ParentStaging => {
+                        proto::RuntimeUpgradePhase::ParentStaging as i32
                     }
-                    RuntimeUpgradePhase::ParentWaitingChildReady => {
-                        proto::RuntimeUpgradePhase::ParentWaitingChildReady as i32
+                    RuntimeUpgradePhase::ParentPreparing => {
+                        proto::RuntimeUpgradePhase::ParentPreparing as i32
                     }
-                    RuntimeUpgradePhase::ParentRollingBack => {
-                        proto::RuntimeUpgradePhase::ParentRollingBack as i32
+                    RuntimeUpgradePhase::ParentFrozen => {
+                        proto::RuntimeUpgradePhase::ParentFrozen as i32
                     }
-                    RuntimeUpgradePhase::ChildWaitingCommit => {
-                        proto::RuntimeUpgradePhase::ChildWaitingCommit as i32
+                    RuntimeUpgradePhase::ParentOutcomeUncertain => {
+                        proto::RuntimeUpgradePhase::ParentOutcomeUncertain as i32
+                    }
+                    RuntimeUpgradePhase::ParentCommitted => {
+                        proto::RuntimeUpgradePhase::ParentCommitted as i32
+                    }
+                    RuntimeUpgradePhase::ChildBooting => {
+                        proto::RuntimeUpgradePhase::ChildBooting as i32
+                    }
+                    RuntimeUpgradePhase::ChildPrestaging => {
+                        proto::RuntimeUpgradePhase::ChildPrestaging as i32
+                    }
+                    RuntimeUpgradePhase::ChildReady => {
+                        proto::RuntimeUpgradePhase::ChildReady as i32
+                    }
+                    RuntimeUpgradePhase::ChildCommitting => {
+                        proto::RuntimeUpgradePhase::ChildCommitting as i32
                     }
                 },
             }),
+        last_cutover: status.last_cutover.map(map_cutover_report),
     }
 }
 
@@ -1030,12 +1044,14 @@ fn map_runtime_reload_view(result: AdminRuntimeReloadView) -> proto::AdminRuntim
     proto::AdminRuntimeReloadView {
         mode: map_reload_mode(result.mode),
         detail: Some(detail),
+        cutover: Some(map_cutover_report(result.cutover)),
     }
 }
 
 fn map_upgrade_runtime_view(result: AdminUpgradeRuntimeView) -> proto::AdminUpgradeRuntimeView {
     proto::AdminUpgradeRuntimeView {
         executable_path: result.executable_path,
+        cutover: Some(map_cutover_report(result.cutover)),
     }
 }
 
