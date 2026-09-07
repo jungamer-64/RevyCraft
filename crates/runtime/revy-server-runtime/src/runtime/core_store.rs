@@ -1,6 +1,6 @@
 mod journal;
 
-use self::journal::CoreJournal;
+use self::journal::{CoreJournal, ProcessDeltaSeal};
 use crate::RuntimeError;
 use mc_plugin_contract::plugin::PluginKind;
 use mc_plugin_host::host::PluginFailureAction;
@@ -8,21 +8,16 @@ use mc_plugin_host::runtime::{GameplayProfileHandle, RuntimePluginHost, StorageP
 use revy_server_gameplay_bridge::{GameplayEffectBatch, GameplayReadView};
 use revy_voxel_core::{
     ConnectionId, CoreCommand, CoreEvent, CoreHandoff, CoreMutation, CoreRevision,
-    CoreTransferDeltaDescriptor, CoreTransferError, CoreVersion, EncodedCoreTransferCommit,
-    EventTarget, GameplayEffectApplyResult, GameplayLoginPreview, GameplayLoginPreviewError,
-    PlayerId, PlayerSummary, PreparedCoreCommit, ServerCore, SessionCapabilitySet, TargetedEvent,
+    CoreTransferDeltaDescriptor, CoreTransferError, CoreVersion, EventTarget,
+    GameplayEffectApplyResult, GameplayLoginPreview, GameplayLoginPreviewError, PlayerId,
+    PlayerSummary, PreparedCoreCommit, ServerCore, SessionCapabilitySet, TargetedEvent,
 };
-use std::collections::VecDeque;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-const CORE_JOURNAL_EVENT_LIMIT: usize = 65_536;
-const CORE_JOURNAL_EVENT_BYTE_LIMIT: usize = 32 * 1024 * 1024;
-const CORE_JOURNAL_TRANSFER_ENTRY_BYTE_LIMIT: usize = 2 * 1024 * 1024;
-const CORE_JOURNAL_TRANSFER_BYTE_LIMIT: usize = 8 * 1024 * 1024;
-pub(crate) const CORE_PROCESS_DELTA_SLOT_BYTES: usize = CORE_JOURNAL_TRANSFER_BYTE_LIMIT
+pub(crate) const CORE_PROCESS_DELTA_SLOT_BYTES: usize = journal::PROCESS_BYTE_LIMIT
     + revy_voxel_core::CoreTransferDelta::MAX_COMMITS * std::mem::size_of::<u32>()
     + 8
     + std::mem::size_of::<u16>()
@@ -30,7 +25,6 @@ pub(crate) const CORE_PROCESS_DELTA_SLOT_BYTES: usize = CORE_JOURNAL_TRANSFER_BY
     + std::mem::size_of::<u32>();
 
 struct CoreStoreState {
-    active: Arc<CoreVersion>,
     persisted_revision: CoreRevision,
     latest_dirty_revision: Option<CoreRevision>,
     journal: CoreJournal,
@@ -70,15 +64,9 @@ pub(crate) struct CoreCandidatePlan {
     world_dir: PathBuf,
 }
 
-pub(crate) enum CoreDeltaSeal {
-    Ready {
-        precopy: CorePrecopy,
-        events: Vec<SharedCoreEvent>,
-    },
-    Outpaced {
-        requested_revision: CoreRevision,
-        earliest_revision: CoreRevision,
-    },
+pub(crate) struct CoreDeltaSeal {
+    pub(crate) precopy: CorePrecopy,
+    pub(crate) events: Vec<SharedCoreEvent>,
 }
 
 pub(crate) enum CoreProcessDeltaSeal {
@@ -237,12 +225,7 @@ impl CoreStore {
             world_dir,
             state: Mutex::new(CoreStoreState {
                 persisted_revision: active.revision(),
-                journal_active: false,
-                journal_floor: active.revision(),
-                journal_event_count: 0,
-                journal_event_bytes: 0,
-                journal_transfer_bytes: 0,
-                journal: VecDeque::new(),
+                journal: CoreJournal::Inactive,
                 active,
                 latest_dirty_revision: None,
             }),
@@ -263,23 +246,14 @@ impl CoreStore {
                 active: handoff.version(),
                 persisted_revision,
                 latest_dirty_revision,
-                journal_active: false,
-                journal_floor: handoff.version().revision(),
-                journal_event_count: 0,
-                journal_event_bytes: 0,
-                journal_transfer_bytes: 0,
-                journal: VecDeque::new(),
+                journal: CoreJournal::Inactive,
             }),
         }
     }
 
-    pub(crate) async fn version(&self) -> Arc<CoreVersion> {
-        Arc::clone(&self.state.lock().await.active)
-    }
-
     pub(crate) async fn process_precopy(&self) -> CoreProcessPrecopy {
         let mut state = self.state.lock().await;
-        Self::begin_journal(&mut state);
+        state.journal = CoreJournal::process(state.active.revision());
         CoreProcessPrecopy {
             version: Arc::clone(&state.active),
             persisted_revision: state.persisted_revision,
@@ -293,7 +267,7 @@ impl CoreStore {
         storage_profile: Arc<dyn StorageProfileHandle>,
     ) -> (CoreCandidatePlan, Arc<Self>) {
         let mut state = self.state.lock().await;
-        Self::begin_journal(&mut state);
+        state.journal = CoreJournal::resync(state.active.revision());
         let precopy = CorePrecopy {
             version: Arc::clone(&state.active),
             persisted_revision: state.persisted_revision,
@@ -309,29 +283,20 @@ impl CoreStore {
         (plan, candidate)
     }
 
-    pub(crate) async fn seal_delta_since(&self, revision: CoreRevision) -> CoreDeltaSeal {
+    pub(crate) async fn seal_delta_since(
+        &self,
+        revision: CoreRevision,
+    ) -> Result<CoreDeltaSeal, RuntimeError> {
         let mut state = self.state.lock().await;
-        state.journal_active = false;
-        if revision < state.journal_floor {
-            return CoreDeltaSeal::Outpaced {
-                requested_revision: revision,
-                earliest_revision: state.journal_floor,
-            };
-        }
-        let events = state
-            .journal
-            .iter()
-            .filter(|entry| entry.revision > revision)
-            .flat_map(|entry| entry.events.iter().cloned())
-            .collect();
-        CoreDeltaSeal::Ready {
+        let events = state.journal.seal_resync(revision)?;
+        Ok(CoreDeltaSeal {
             precopy: CorePrecopy {
                 version: Arc::clone(&state.active),
                 persisted_revision: state.persisted_revision,
                 latest_dirty_revision: state.latest_dirty_revision,
             },
             events,
-        }
+        })
     }
 
     pub(crate) async fn write_process_delta_since(
@@ -349,21 +314,17 @@ impl CoreStore {
                 state.active.revision().value(),
             )));
         }
-        if revision < state.journal_floor {
-            return Ok(CoreProcessDeltaSeal::Outpaced {
-                requested_revision: revision,
-                earliest_revision: state.journal_floor,
-            });
-        }
-        let commits = state
-            .journal
-            .iter()
-            .filter(|entry| entry.revision > revision)
-            .map(|entry| &entry.transfer);
+        let descriptor = match state.journal.write_process_delta(revision, writer)? {
+            ProcessDeltaSeal::Ready(descriptor) => descriptor,
+            ProcessDeltaSeal::Outpaced { earliest_revision } => {
+                return Ok(CoreProcessDeltaSeal::Outpaced {
+                    requested_revision: revision,
+                    earliest_revision,
+                });
+            }
+        };
         Ok(CoreProcessDeltaSeal::Ready {
-            descriptor: revy_voxel_core::CoreTransferDelta::seal_preencoded_into(
-                revision, commits, writer,
-            )?,
+            descriptor,
             persisted_revision: state.persisted_revision,
             latest_dirty_revision: state.latest_dirty_revision,
         })
@@ -375,7 +336,7 @@ impl CoreStore {
     /// recovering a freeze, and dropping the bounded journal must not extend the data-plane
     /// pause. The next mutation or pre-copy reclaims the retained storage outside that boundary.
     pub(crate) async fn end_precopy(&self) {
-        self.state.lock().await.journal_active = false;
+        self.state.lock().await.journal.stop();
     }
 
     pub(crate) async fn apply_command(
@@ -586,74 +547,12 @@ impl CoreStore {
             state.latest_dirty_revision = Some(next_version.revision());
         }
         if next_version.revision() > state.active.revision() {
-            if !state.journal_active {
-                Self::reset_journal(state, next_version.revision());
-                state.active = next_version;
-                return Ok(events);
-            }
-            let transfer = transfer.encode().ok();
-            let transfer_bytes = transfer
-                .as_ref()
-                .map(EncodedCoreTransferCommit::encoded_len);
-            let event_bytes = events.iter().try_fold(0_usize, |total, event| {
-                serde_json::to_vec(event.event.as_ref())
-                    .ok()
-                    .and_then(|encoded| total.checked_add(encoded.len()))
-            });
-            if transfer_bytes.is_none_or(|bytes| bytes > CORE_JOURNAL_TRANSFER_ENTRY_BYTE_LIMIT)
-                || event_bytes.is_none_or(|bytes| bytes > CORE_JOURNAL_EVENT_BYTE_LIMIT)
-            {
-                Self::reset_journal(state, next_version.revision());
-            } else if let (Some(transfer), Some(transfer_bytes), Some(event_bytes)) =
-                (transfer, transfer_bytes, event_bytes)
-            {
-                state.journal_event_count = state.journal_event_count.saturating_add(events.len());
-                state.journal_event_bytes = state.journal_event_bytes.saturating_add(event_bytes);
-                state.journal_transfer_bytes =
-                    state.journal_transfer_bytes.saturating_add(transfer_bytes);
-                state.journal.push_back(CoreJournalEntry {
-                    revision: next_version.revision(),
-                    events: events.clone(),
-                    transfer,
-                    event_bytes,
-                    transfer_bytes,
-                });
-                while state.journal.len() > revy_voxel_core::CoreTransferDelta::MAX_COMMITS
-                    || state.journal_event_count > CORE_JOURNAL_EVENT_LIMIT
-                    || state.journal_event_bytes > CORE_JOURNAL_EVENT_BYTE_LIMIT
-                    || state.journal_transfer_bytes > CORE_JOURNAL_TRANSFER_BYTE_LIMIT
-                {
-                    let Some(expired) = state.journal.pop_front() else {
-                        break;
-                    };
-                    state.journal_event_count = state
-                        .journal_event_count
-                        .saturating_sub(expired.events.len());
-                    state.journal_event_bytes = state
-                        .journal_event_bytes
-                        .saturating_sub(expired.event_bytes);
-                    state.journal_transfer_bytes = state
-                        .journal_transfer_bytes
-                        .saturating_sub(expired.transfer_bytes);
-                    state.journal_floor = expired.revision;
-                }
-            }
+            state
+                .journal
+                .record(next_version.revision(), &events, transfer);
         }
         state.active = next_version;
         Ok(events)
-    }
-
-    fn begin_journal(state: &mut CoreStoreState) {
-        Self::reset_journal(state, state.active.revision());
-        state.journal_active = true;
-    }
-
-    fn reset_journal(state: &mut CoreStoreState, floor: CoreRevision) {
-        state.journal.clear();
-        state.journal_event_count = 0;
-        state.journal_event_bytes = 0;
-        state.journal_transfer_bytes = 0;
-        state.journal_floor = floor;
     }
 
     pub(crate) async fn player_summary(&self) -> PlayerSummary {
