@@ -13,14 +13,9 @@ macro_rules! __export_plugin_non_gameplay {
         $panic_decode:literal,
         $panic_handle:literal $(,)?
     ) => {
-        static MC_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> = std::sync::OnceLock::new();
         static MC_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
         static MC_PLUGIN_API: std::sync::OnceLock<$api_ty> = std::sync::OnceLock::new();
-
-        fn mc_plugin_instance() -> &'static $plugin_ty {
-            MC_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
-        }
 
         unsafe extern "C" fn mc_plugin_invoke(
             request: $crate::__macro_support::ByteSlice,
@@ -108,16 +103,10 @@ macro_rules! __export_plugin_non_gameplay {
 #[macro_export]
 macro_rules! __export_plugin_gameplay {
     ($plugin_ty:ty, $manifest:expr $(,)?) => {
-        static MC_GAMEPLAY_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
-            std::sync::OnceLock::new();
         static MC_GAMEPLAY_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
         static MC_GAMEPLAY_PLUGIN_API: std::sync::OnceLock<$crate::__macro_support::GameplayPluginApiV9> =
             std::sync::OnceLock::new();
-
-        fn mc_gameplay_plugin_instance() -> &'static $plugin_ty {
-            MC_GAMEPLAY_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
-        }
 
         unsafe extern "C" fn mc_gameplay_plugin_invoke_v9(
             request: $crate::__macro_support::ByteSlice,
@@ -234,16 +223,10 @@ macro_rules! __export_plugin_gameplay {
 #[macro_export]
 macro_rules! __export_plugin_admin_surface {
     ($plugin_ty:ty, $manifest:expr $(,)?) => {
-        static MC_ADMIN_SURFACE_PLUGIN_INSTANCE: std::sync::OnceLock<$plugin_ty> =
-            std::sync::OnceLock::new();
         static MC_ADMIN_SURFACE_PLUGIN_MANIFEST: std::sync::OnceLock<$crate::manifest::ExportedPluginManifest> =
             std::sync::OnceLock::new();
         static MC_ADMIN_SURFACE_PLUGIN_API: std::sync::OnceLock<$crate::__macro_support::AdminSurfacePluginApiV9> =
             std::sync::OnceLock::new();
-
-        fn mc_admin_surface_plugin_instance() -> &'static $plugin_ty {
-            MC_ADMIN_SURFACE_PLUGIN_INSTANCE.get_or_init(<$plugin_ty>::default)
-        }
 
         unsafe extern "C" fn mc_admin_surface_plugin_invoke_v9(
             request: $crate::__macro_support::ByteSlice,
