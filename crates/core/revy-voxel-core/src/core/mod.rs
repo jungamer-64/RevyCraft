@@ -7,6 +7,7 @@ mod mutation;
 mod state_backend;
 mod tick;
 pub(crate) mod transaction;
+mod version;
 mod world;
 
 use crate::events::PlayerSummary;
@@ -21,12 +22,18 @@ use crate::{DEFAULT_KEEPALIVE_INTERVAL_MS, DEFAULT_KEEPALIVE_TIMEOUT_MS, EntityI
 use revy_voxel_semantic::{ContainerKindId, ContentBehavior, MiningToolSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 pub use self::inventory::OpenInventoryWindow;
-use self::state_backend::{CoreStateMut, CoreStateRead};
+use self::state_backend::CoreStateRead;
 pub use self::transaction::{
     GameplayEffectApplyResult, GameplayLoginPreview, GameplayLoginPreviewError,
+};
+pub use self::version::{
+    CoreHandoff, CoreMutation, CoreRevision, CoreTransferCommit, CoreTransferDelta,
+    CoreTransferDeltaDescriptor, CoreTransferError, CoreTransferMutation, CoreTransferSnapshot,
+    CoreVersion, EncodedCoreTransferCommit, PreparedCoreCommit,
 };
 pub use revy_voxel_semantic::CoreConfig;
 
@@ -71,10 +78,10 @@ impl ClientView {
 pub struct WorldStore {
     pub(super) config: CoreConfig,
     pub(super) world_meta: WorldMeta,
-    pub(super) chunks: BTreeMap<ChunkPos, ChunkColumn>,
-    pub(super) block_entities: BTreeMap<BlockPos, BlockEntityState>,
-    pub(super) container_viewers: BTreeMap<BlockPos, WorldContainerViewers>,
-    pub(super) saved_players: BTreeMap<PlayerId, PlayerSnapshot>,
+    pub(super) chunks: VersionComponent<BTreeMap<ChunkPos, VersionComponent<ChunkColumn>>>,
+    pub(super) block_entities: VersionComponent<BTreeMap<BlockPos, BlockEntityState>>,
+    pub(super) container_viewers: VersionComponent<BTreeMap<BlockPos, WorldContainerViewers>>,
+    pub(super) saved_players: VersionComponent<BTreeMap<PlayerId, PlayerSnapshot>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,19 +90,19 @@ pub struct WorldContainerViewers {
     pub viewers: BTreeMap<PlayerId, u8>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) enum EntityKind {
     Player,
     DroppedItem,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct PlayerIdentity {
     pub(super) player_id: PlayerId,
     pub(super) username: String,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(super) struct PlayerTransform {
     pub(super) position: crate::Vec3,
     pub(super) yaw: f32,
@@ -104,7 +111,7 @@ pub(super) struct PlayerTransform {
     pub(super) dimension: DimensionId,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub(super) struct PlayerVitals {
     pub(super) health: f32,
     pub(super) food: i16,
@@ -113,15 +120,15 @@ pub(super) struct PlayerVitals {
 
 #[derive(Clone, Debug)]
 pub(super) struct EntityStore {
-    pub(super) entity_kinds: BTreeMap<EntityId, EntityKind>,
-    pub(super) players_by_player_id: BTreeMap<PlayerId, EntityId>,
-    pub(super) player_identity: BTreeMap<EntityId, PlayerIdentity>,
-    pub(super) player_transform: BTreeMap<EntityId, PlayerTransform>,
-    pub(super) player_vitals: BTreeMap<EntityId, PlayerVitals>,
-    pub(super) player_inventory: BTreeMap<EntityId, PlayerInventory>,
-    pub(super) player_selected_hotbar: BTreeMap<EntityId, u8>,
-    pub(super) player_active_mining: BTreeMap<EntityId, ActiveMiningState>,
-    pub(super) dropped_items: BTreeMap<EntityId, DroppedItemState>,
+    pub(super) entity_kinds: VersionComponent<BTreeMap<EntityId, EntityKind>>,
+    pub(super) players_by_player_id: VersionComponent<BTreeMap<PlayerId, EntityId>>,
+    pub(super) player_identity: VersionComponent<BTreeMap<EntityId, PlayerIdentity>>,
+    pub(super) player_transform: VersionComponent<BTreeMap<EntityId, PlayerTransform>>,
+    pub(super) player_vitals: VersionComponent<BTreeMap<EntityId, PlayerVitals>>,
+    pub(super) player_inventory: VersionComponent<BTreeMap<EntityId, PlayerInventory>>,
+    pub(super) player_selected_hotbar: VersionComponent<BTreeMap<EntityId, u8>>,
+    pub(super) player_active_mining: VersionComponent<BTreeMap<EntityId, ActiveMiningState>>,
+    pub(super) dropped_items: VersionComponent<BTreeMap<EntityId, DroppedItemState>>,
     pub(super) next_entity_id: i32,
 }
 
@@ -139,7 +146,7 @@ pub struct PlayerSessionState {
 
 #[derive(Clone, Debug)]
 pub(super) struct SessionStore {
-    pub(super) player_sessions: BTreeMap<PlayerId, PlayerSessionState>,
+    pub(super) player_sessions: VersionComponent<BTreeMap<PlayerId, PlayerSessionState>>,
     pub(super) next_keep_alive_id: i32,
     pub(super) keepalive_interval_ms: u64,
     pub(super) keepalive_timeout_ms: u64,
@@ -149,11 +156,40 @@ pub(super) struct SessionStore {
 pub struct SystemScheduler;
 
 #[derive(Debug)]
+pub(super) struct VersionComponent<T>(Arc<T>);
+
+impl<T> VersionComponent<T> {
+    fn new(value: T) -> Self {
+        Self(Arc::new(value))
+    }
+}
+
+impl<T> Clone for VersionComponent<T> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<T> Deref for VersionComponent<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl<T: Clone> DerefMut for VersionComponent<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+#[derive(Debug)]
 pub struct ServerCore {
     pub(super) content_behavior: Arc<dyn ContentBehavior>,
-    pub(super) world: WorldStore,
-    pub(super) entities: EntityStore,
-    pub(super) sessions: SessionStore,
+    pub(super) world: VersionComponent<WorldStore>,
+    pub(super) entities: VersionComponent<EntityStore>,
+    pub(super) sessions: VersionComponent<SessionStore>,
     pub(super) scheduler: SystemScheduler,
 }
 
@@ -191,34 +227,60 @@ impl ServerCore {
         };
         Self {
             content_behavior,
-            world: WorldStore {
+            world: VersionComponent::new(WorldStore {
                 config,
                 world_meta,
-                chunks: BTreeMap::new(),
-                block_entities: BTreeMap::new(),
-                container_viewers: BTreeMap::new(),
-                saved_players: BTreeMap::new(),
-            },
-            entities: EntityStore {
-                entity_kinds: BTreeMap::new(),
-                players_by_player_id: BTreeMap::new(),
-                player_identity: BTreeMap::new(),
-                player_transform: BTreeMap::new(),
-                player_vitals: BTreeMap::new(),
-                player_inventory: BTreeMap::new(),
-                player_selected_hotbar: BTreeMap::new(),
-                player_active_mining: BTreeMap::new(),
-                dropped_items: BTreeMap::new(),
+                chunks: VersionComponent::new(BTreeMap::new()),
+                block_entities: VersionComponent::new(BTreeMap::new()),
+                container_viewers: VersionComponent::new(BTreeMap::new()),
+                saved_players: VersionComponent::new(BTreeMap::new()),
+            }),
+            entities: VersionComponent::new(EntityStore {
+                entity_kinds: VersionComponent::new(BTreeMap::new()),
+                players_by_player_id: VersionComponent::new(BTreeMap::new()),
+                player_identity: VersionComponent::new(BTreeMap::new()),
+                player_transform: VersionComponent::new(BTreeMap::new()),
+                player_vitals: VersionComponent::new(BTreeMap::new()),
+                player_inventory: VersionComponent::new(BTreeMap::new()),
+                player_selected_hotbar: VersionComponent::new(BTreeMap::new()),
+                player_active_mining: VersionComponent::new(BTreeMap::new()),
+                dropped_items: VersionComponent::new(BTreeMap::new()),
                 next_entity_id: 1,
-            },
-            sessions: SessionStore {
-                player_sessions: BTreeMap::new(),
+            }),
+            sessions: VersionComponent::new(SessionStore {
+                player_sessions: VersionComponent::new(BTreeMap::new()),
                 next_keep_alive_id: 1,
                 keepalive_interval_ms: DEFAULT_KEEPALIVE_INTERVAL_MS,
                 keepalive_timeout_ms: DEFAULT_KEEPALIVE_TIMEOUT_MS,
-            },
+            }),
             scheduler: SystemScheduler,
         }
+    }
+
+    pub(crate) fn fork_components(&self) -> Self {
+        Self {
+            content_behavior: Arc::clone(&self.content_behavior),
+            world: self.world.clone(),
+            entities: self.entities.clone(),
+            sessions: self.sessions.clone(),
+            scheduler: self.scheduler,
+        }
+    }
+
+    fn player_session_state(&self, player_id: PlayerId) -> Option<PlayerSessionState> {
+        self.sessions.player_sessions.get(&player_id).cloned()
+    }
+
+    pub(super) fn world_mut(&mut self) -> &mut WorldStore {
+        &mut self.world
+    }
+
+    pub(super) fn entities_mut(&mut self) -> &mut EntityStore {
+        &mut self.entities
+    }
+
+    pub(super) fn sessions_mut(&mut self) -> &mut SessionStore {
+        &mut self.sessions
     }
 
     #[must_use]
@@ -228,16 +290,17 @@ impl ServerCore {
         content_behavior: Arc<dyn ContentBehavior>,
     ) -> Self {
         let mut core = Self::new(config, content_behavior);
-        core.world.world_meta = snapshot.meta;
-        core.world.chunks = snapshot.chunks;
-        core.world.block_entities = snapshot.block_entities;
-        core.world.saved_players = snapshot.players;
+        let world = core.world_mut();
+        world.world_meta = snapshot.meta;
+        world.chunks = VersionComponent::new(snapshot.chunks);
+        world.block_entities = VersionComponent::new(snapshot.block_entities);
+        world.saved_players = VersionComponent::new(snapshot.players);
         core
     }
 
     #[must_use]
     pub fn snapshot(&self) -> crate::WorldSnapshot {
-        let mut players = self.world.saved_players.clone();
+        let mut players = (*self.world.saved_players).clone();
         for player_id in self.sessions.player_sessions.keys().copied() {
             let view = self::state_backend::BaseStateRef::new(self);
             if let Some(snapshot) =
@@ -248,8 +311,8 @@ impl ServerCore {
         }
         crate::WorldSnapshot {
             meta: self.world.world_meta.clone(),
-            chunks: self.world.chunks.clone(),
-            block_entities: self.world.block_entities.clone(),
+            chunks: (*self.world.chunks).clone(),
+            block_entities: (*self.world.block_entities).clone(),
             players,
         }
     }
@@ -408,9 +471,19 @@ impl ServerCore {
         }
     }
 
-    pub fn set_max_players(&mut self, max_players: u8) {
-        self.world.config.max_players = max_players;
-        self.world.world_meta.max_players = max_players;
+    pub fn set_max_players(&mut self, max_players: u32) {
+        let world = self.world_mut();
+        world.config.max_players = max_players;
+        world.world_meta.max_players = max_players;
+    }
+
+    fn reconfigure(&mut self, config: CoreConfig) {
+        let world = self.world_mut();
+        world.world_meta.level_name = config.level_name.clone();
+        world.world_meta.game_mode = config.game_mode;
+        world.world_meta.difficulty = config.difficulty;
+        world.world_meta.max_players = config.max_players;
+        world.config = config;
     }
 
     #[must_use]
@@ -457,7 +530,7 @@ impl ServerCore {
         &mut self,
         player_id: PlayerId,
     ) -> Option<&mut PlayerSessionState> {
-        self.sessions.player_sessions.get_mut(&player_id)
+        self.sessions_mut().player_sessions.get_mut(&player_id)
     }
 
     #[cfg(test)]
@@ -503,16 +576,17 @@ impl ServerCore {
         &mut self,
         player_id: PlayerId,
     ) -> Option<PlayerSessionState> {
-        let session = self.sessions.player_sessions.remove(&player_id)?;
+        let session = self.sessions_mut().player_sessions.remove(&player_id)?;
         let entity_id = session.entity_id;
-        self.entities.players_by_player_id.remove(&player_id);
-        self.entities.entity_kinds.remove(&entity_id);
-        self.entities.player_identity.remove(&entity_id);
-        self.entities.player_transform.remove(&entity_id);
-        self.entities.player_vitals.remove(&entity_id);
-        self.entities.player_inventory.remove(&entity_id);
-        self.entities.player_selected_hotbar.remove(&entity_id);
-        self.entities.player_active_mining.remove(&entity_id);
+        let entities = self.entities_mut();
+        entities.players_by_player_id.remove(&player_id);
+        entities.entity_kinds.remove(&entity_id);
+        entities.player_identity.remove(&entity_id);
+        entities.player_transform.remove(&entity_id);
+        entities.player_vitals.remove(&entity_id);
+        entities.player_inventory.remove(&entity_id);
+        entities.player_selected_hotbar.remove(&entity_id);
+        entities.player_active_mining.remove(&entity_id);
         Some(session)
     }
 }
