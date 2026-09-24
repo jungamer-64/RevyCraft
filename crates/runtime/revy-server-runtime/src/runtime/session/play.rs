@@ -1,28 +1,24 @@
 use crate::RuntimeError;
-use crate::runtime::{RuntimeServer, SharedSessionState};
+use crate::runtime::{RuntimeServer, SessionPhase};
 
 impl RuntimeServer {
     pub(in crate::runtime::session) async fn handle_play_frame(
         &self,
         connection_id: revy_voxel_core::ConnectionId,
-        shared_state: &SharedSessionState,
+        session: &SessionPhase,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let (current, snapshot, context) = {
-            let session = shared_state.read().await;
-            let current = session
-                .adapter
-                .clone()
-                .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
-            let snapshot =
-                Self::protocol_session_snapshot(connection_id, &Self::session_view(&session));
-            let context = Self::session_runtime_context(&session);
-            (current, snapshot, context)
+        let SessionPhase::Play(play) = session else {
+            return Err(RuntimeError::Config(
+                "play frame reached a non-play session".to_string(),
+            ));
         };
-        let Some(command) = current.decode_play(&snapshot, frame)? else {
+        let snapshot = session.protocol_snapshot(connection_id);
+        let Some(command) = play.binding.adapter.decode_play(&snapshot, frame)? else {
             return Ok(false);
         };
-        self.apply_runtime_command(command, Some(context)).await?;
+        self.apply_runtime_command(command, session.command_context())
+            .await?;
         Ok(false)
     }
 }

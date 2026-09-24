@@ -13,6 +13,7 @@ description = "Protocol-agnostic dedicated server runtime for the RevyCraft work
 aes.workspace = true
 bedrock_protocol.workspace = true
 bytes.workspace = true
+ciborium.workspace = true
 libloading.workspace = true
 mc-content-canonical = { path = "../../content/mc-content-canonical" }
 revy-voxel-core = { path = "../../core/revy-voxel-core" }
@@ -26,9 +27,12 @@ revy-server-config = { path = "../revy-server-config" }
 revy-server-gameplay-bridge = { path = "../revy-server-gameplay-bridge" }
 revy-server-types = { path = "../revy-server-types" }
 revy-raknet = { path = "../../network/revy-raknet" }
+revy-runtime-transfer = { path = "../revy-runtime-transfer" }
 num-bigint.workspace = true
+rand_core = { version = "0.6", features = ["getrandom"] }
 rsa.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 socket2.workspace = true

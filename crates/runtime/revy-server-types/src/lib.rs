@@ -120,6 +120,38 @@ pub enum RuntimeReloadMode {
     Full,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CutoverOperation {
+    Reload,
+    ExecutableUpgrade,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CutoverOutcome {
+    Committed,
+    Aborted,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CutoverConnectionMix {
+    pub java: usize,
+    pub bedrock: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CutoverReport {
+    pub operation: CutoverOperation,
+    pub mode: Option<RuntimeReloadMode>,
+    pub connection_mix: CutoverConnectionMix,
+    pub session_count: usize,
+    pub stage_us: u64,
+    pub prepare_us: u64,
+    pub freeze_us: u64,
+    pub resume_us: u64,
+    pub outcome: CutoverOutcome,
+    pub epoch_revision: u64,
+}
+
 impl RuntimeReloadMode {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -162,10 +194,15 @@ pub enum RuntimeUpgradeRole {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RuntimeUpgradePhase {
-    ParentFreezing,
-    ParentWaitingChildReady,
-    ParentRollingBack,
-    ChildWaitingCommit,
+    ParentStaging,
+    ParentPreparing,
+    ParentFrozen,
+    ParentOutcomeUncertain,
+    ParentCommitted,
+    ChildBooting,
+    ChildPrestaging,
+    ChildReady,
+    ChildCommitting,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,11 +298,12 @@ pub struct AdminStatusView {
     pub enabled_adapter_ids: Vec<String>,
     pub enabled_bedrock_adapter_ids: Vec<String>,
     pub motd: String,
-    pub max_players: u8,
+    pub max_players: u32,
     pub session_summary: AdminSessionSummaryView,
     pub dirty: bool,
     pub plugin_host: Option<AdminPluginHostView>,
     pub upgrade: Option<RuntimeUpgradeStateView>,
+    pub last_cutover: Option<CutoverReport>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,11 +360,13 @@ pub enum AdminRuntimeReloadDetail {
 pub struct AdminRuntimeReloadView {
     pub mode: RuntimeReloadMode,
     pub detail: AdminRuntimeReloadDetail,
+    pub cutover: CutoverReport,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminUpgradeRuntimeView {
     pub executable_path: String,
+    pub cutover: CutoverReport,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

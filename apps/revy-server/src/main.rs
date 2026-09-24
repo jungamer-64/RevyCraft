@@ -1,9 +1,14 @@
 #![allow(clippy::multiple_crate_versions)]
 
 mod admin_surface;
+mod executable_handoff;
 mod process_surfaces;
 
 use crate::admin_surface::AdminSurfaceSupervisor;
+use crate::executable_handoff::{
+    ChildStatusAuthority, ExecutableHandoffCoordinator, PendingExecutableChild,
+    try_prepare_executable_child,
+};
 use crate::process_surfaces::{
     PausedAdminSurfaceInstance, PausedProcessSurfaces, ProcessSurfaceCommand,
 };
@@ -41,6 +46,10 @@ async fn wait_for_runtime_completion(server: &ServerSupervisor) -> Result<(), Ru
     server.wait_for_runtime_completion().await
 }
 
+async fn wait_for_runtime_shutdown_request(server: &ServerSupervisor) -> Result<(), RuntimeError> {
+    server.wait_for_shutdown_requested().await
+}
+
 async fn wait_for_exit_signal(shutdown_rx: watch::Receiver<bool>) -> Result<(), RuntimeError> {
     tokio::select! {
         signal = wait_for_ctrl_c() => signal,
@@ -50,7 +59,7 @@ async fn wait_for_exit_signal(shutdown_rx: watch::Receiver<bool>) -> Result<(), 
 
 enum ProcessStartupMode {
     Normal,
-    UpgradeChild(upgrade::PendingUpgradeChild),
+    TransferredChild(PendingExecutableChild),
 }
 
 fn selected_server_config_path(env_override: Option<OsString>) -> PathBuf {
@@ -66,7 +75,7 @@ fn resolve_server_config_source() -> ServerConfigSource {
 
 fn upgrade_control_plane(
     server: &Arc<ServerSupervisor>,
-    coordinator: &Arc<UpgradeCoordinator>,
+    coordinator: &Arc<ExecutableHandoffCoordinator>,
 ) -> AdminControlPlaneHandle {
     let coordinator = Arc::clone(coordinator);
     server.admin_control_plane().with_runtime_upgrader(Arc::new(
@@ -82,22 +91,14 @@ async fn run_server_process(
     control_plane: AdminControlPlaneHandle,
     admin_surface_resume: Option<Vec<PausedAdminSurfaceInstance>>,
     mut startup_mode: ProcessStartupMode,
-    upgrade_coordinator: Arc<UpgradeCoordinator>,
+    handoff_coordinator: Arc<ExecutableHandoffCoordinator>,
 ) -> Result<(), RuntimeError> {
-    for binding in server.listener_bindings() {
-        println!(
-            "server listening on {} via {:?} for {:?}",
-            binding.local_addr, binding.transport, binding.adapter_ids
-        );
-    }
-    println!("{}", format_runtime_status_summary(&server.status().await));
-
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    upgrade_coordinator
+    handoff_coordinator
         .set_process_shutdown_sender(shutdown_tx.clone())
         .await;
     let (surface_control_tx, mut surface_control_rx) = mpsc::channel(4);
-    upgrade_coordinator
+    handoff_coordinator
         .set_surface_control_sender(surface_control_tx.clone())
         .await;
 
@@ -112,23 +113,28 @@ async fn run_server_process(
         admin_surfaces.reconcile().await
     };
     if let Err(error) = startup_result {
-        if let ProcessStartupMode::UpgradeChild(pending_child) = &mut startup_mode {
-            let _ = pending_child.report_error(error.to_string()).await;
+        if let ProcessStartupMode::TransferredChild(pending_child) = &mut startup_mode {
+            pending_child.report_error(&error).await;
         }
         return Err(error);
     }
 
-    if let ProcessStartupMode::UpgradeChild(pending_child) = &mut startup_mode {
-        if let Some(error) = upgrade::child_upgrade_fault_before_ready() {
-            let _ = pending_child.report_error(error.to_string()).await;
-            return Err(error);
-        }
-        upgrade::child_upgrade_ready_delay_if_needed().await;
-        pending_child.report_ready_and_wait_for_commit().await?;
-        server.finish_child_runtime_upgrade_commit().await?;
+    let mut child_status_authority: Option<ChildStatusAuthority> = None;
+    if let ProcessStartupMode::TransferredChild(pending_child) = startup_mode {
         admin_surfaces.activate_after_upgrade_commit()?;
-        eprintln!("runtime upgrade phase: child committed cutover");
+        child_status_authority = Some(pending_child.report_committed().await?);
+        eprintln!("runtime transfer phase: child committed cutover");
     }
+
+    // Status collection may wait behind resumed gameplay mutations. It is presentation work,
+    // not an activation prerequisite, so it must not delay the parent's Committed acknowledgement.
+    for binding in server.listener_bindings() {
+        println!(
+            "server listening on {} via {:?} for {:?}",
+            binding.local_addr, binding.transport, binding.adapter_ids
+        );
+    }
+    println!("{}", format_runtime_status_summary(&server.status().await));
 
     loop {
         tokio::select! {
@@ -157,6 +163,11 @@ async fn run_server_process(
                 let _ = shutdown_tx.send(true);
                 break;
             }
+            result = wait_for_runtime_shutdown_request(&server) => {
+                result?;
+                let _ = shutdown_tx.send(true);
+                break;
+            }
             result = wait_for_exit_signal(shutdown_rx.clone()) => {
                 result?;
                 let _ = shutdown_tx.send(true);
@@ -165,17 +176,20 @@ async fn run_server_process(
         }
     }
 
-    let committed_upgrade = upgrade_coordinator.take_committed_upgrade().await;
-    if let Some(committed_upgrade) = committed_upgrade {
-        drop(committed_upgrade);
+    if handoff_coordinator.take_parent_retirement().await {
+        // The upgrade callback can still be returning the committed report. The paused surfaces
+        // own those in-flight responses; drain them before process exit closes their sockets.
+        admin_surfaces.shutdown_current()?;
+        drop(child_status_authority);
         drop(control_plane);
-        drop(upgrade_coordinator);
+        drop(handoff_coordinator);
         return Ok(());
     }
 
     admin_surfaces.shutdown_current()?;
     drop(control_plane);
-    drop(upgrade_coordinator);
+    drop(child_status_authority);
+    drop(handoff_coordinator);
     let _ = server.request_shutdown();
     server.join_runtime().await
 }
@@ -183,24 +197,26 @@ async fn run_server_process(
 #[tokio::main]
 async fn main() -> Result<(), RuntimeError> {
     let args = std::env::args().collect::<Vec<_>>();
-    if let Some(mut pending_child) = upgrade::try_boot_upgrade_child(&args).await? {
-        let server = pending_child.server();
-        let admin_surface_resume = pending_child.take_admin_surface_resume();
-        let coordinator = Arc::new(UpgradeCoordinator::new(Arc::clone(&server)));
+    let config_source = resolve_server_config_source();
+    if let Some(mut pending_child) =
+        try_prepare_executable_child(&args, config_source.clone()).await?
+    {
+        let admin_surface_resume = pending_child.take_admin_surfaces();
+        let server = pending_child.activate_runtime().await?;
+        let coordinator = Arc::new(ExecutableHandoffCoordinator::new(Arc::clone(&server)));
         let control_plane = upgrade_control_plane(&server, &coordinator);
         return run_server_process(
             server,
             control_plane,
             Some(admin_surface_resume),
-            ProcessStartupMode::UpgradeChild(pending_child),
+            ProcessStartupMode::TransferredChild(pending_child),
             coordinator,
         )
         .await;
     }
 
-    let config_source = resolve_server_config_source();
     let server = Arc::new(ServerSupervisor::boot(config_source).await?);
-    let coordinator = Arc::new(UpgradeCoordinator::new(Arc::clone(&server)));
+    let coordinator = Arc::new(ExecutableHandoffCoordinator::new(Arc::clone(&server)));
     let control_plane = upgrade_control_plane(&server, &coordinator);
     run_server_process(
         server,

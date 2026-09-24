@@ -64,15 +64,15 @@ async fn storage_skip_keeps_dirty_state_after_runtime_save_failure() -> Result<(
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.storage_profile = FAILING_STORAGE_PROFILE_ID.into();
     config.plugins.failure_policy.storage = PluginFailureAction::Skip;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         config,
         packaged_failing_storage_registries(PluginFailureAction::Skip)?,
     )
     .await?;
 
-    server.runtime.kernel.set_dirty(true).await;
+    server.reload_runtime_core().await?;
     server.runtime.maybe_save().await?;
-    assert!(server.runtime.kernel.dirty().await);
+    assert!(server.runtime.authority.active().core.dirty().await);
 
     server.shutdown().await
 }
@@ -124,7 +124,7 @@ async fn reloadable_server_builder_applies_reload_host_failure_policy() -> Resul
     )
     .await?;
 
-    server.runtime.kernel.set_dirty(true).await;
+    server.reload_runtime_core().await?;
     let error = server
         .runtime
         .maybe_save()
@@ -151,13 +151,13 @@ async fn storage_fail_fast_returns_plugin_fatal_on_runtime_save_failure() -> Res
     let mut config = loopback_server_config(temp_dir.path().join("world"));
     config.bootstrap.storage_profile = FAILING_STORAGE_PROFILE_ID.into();
     config.plugins.failure_policy.storage = PluginFailureAction::FailFast;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         config,
         packaged_failing_storage_registries(PluginFailureAction::FailFast)?,
     )
     .await?;
 
-    server.runtime.kernel.set_dirty(true).await;
+    server.reload_runtime_core().await?;
     let error = server
         .runtime
         .maybe_save()
@@ -167,7 +167,10 @@ async fn storage_fail_fast_returns_plugin_fatal_on_runtime_save_failure() -> Res
         error,
         RuntimeError::PluginFatal(message) if message.contains("storage plugin")
     ));
-    server.runtime.kernel.set_dirty(false).await;
-
-    server.shutdown().await
+    let shutdown_error = server
+        .shutdown()
+        .await
+        .expect_err("dirty fail-fast storage should remain observable during shutdown");
+    assert!(matches!(shutdown_error, RuntimeError::PluginFatal(_)));
+    Ok(())
 }

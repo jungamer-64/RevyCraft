@@ -4,8 +4,8 @@ pub use revy_server_types::{
     AdminPluginHostView, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
     AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionTransportCountView,
     AdminSessionView, AdminSessionsView, AdminStatusView, AdminTopologyReloadView,
-    AdminUpgradeRuntimeView, RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole,
-    RuntimeUpgradeStateView,
+    AdminUpgradeRuntimeView, CutoverConnectionMix, CutoverOperation, CutoverOutcome, CutoverReport,
+    RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole, RuntimeUpgradeStateView,
 };
 
 #[cfg(test)]

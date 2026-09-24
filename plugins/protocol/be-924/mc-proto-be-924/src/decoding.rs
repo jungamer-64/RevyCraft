@@ -148,6 +148,19 @@ pub(crate) fn decode_play_packet(
                 window_id,
             })
         })),
+        V924::NetworkStackLatencyPacket(packet) => {
+            if packet.is_from_server {
+                return Err(ProtocolError::InvalidPacket(
+                    "client sent a server-origin keepalive packet",
+                ));
+            }
+            let keep_alive_id = i32::try_from(packet.creation_time)
+                .map_err(|_| ProtocolError::InvalidPacket("keepalive id out of range"))?;
+            Ok(Some(RuntimeCommand::Core(CoreCommand::KeepAliveResponse {
+                player_id,
+                keep_alive_id,
+            })))
+        }
         V924::ClientCacheStatusPacket(_) | V924::ResourcePackClientResponsePacket(_) => Ok(None),
         _ => Ok(None),
     }

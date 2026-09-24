@@ -114,6 +114,7 @@ fn set_held_slot(host: &dyn GameplayHost, player_id: PlayerId, slot: i16) -> Res
 }
 
 const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::gameplay("gameplay-readonly", "Readonly Gameplay Plugin", "readonly");
+    StaticPluginManifest::gameplay("gameplay-readonly", "Readonly Gameplay Plugin", "readonly")
+        .with_max_session_handoff_bytes(256);
 
 export_plugin!(gameplay, ReadonlyGameplayPlugin, MANIFEST);

@@ -5,14 +5,11 @@ use mc_content_canonical::canonical_content;
 use mc_plugin_contract::codec::auth::AuthMode;
 use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
 use mc_plugin_host::registry::LoadedPluginSet;
-use mc_plugin_host::runtime::{
-    AdminSurfaceProfileHandle, AuthProfileHandle, GameplayProfileHandle, StorageProfileHandle,
-};
+use mc_plugin_host::runtime::{AdminSurfaceProfileHandle, AuthProfileHandle, StorageProfileHandle};
 use revy_voxel_core::{AdapterId, GameplayProfileId, ServerCore};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock as AsyncRwLock;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RemoteAdminPrincipal {
@@ -52,72 +49,6 @@ pub(crate) struct BootstrapSelectionResolution {
     pub(crate) storage_profile: Arc<dyn StorageProfileHandle>,
     pub(crate) online_auth_keys: Option<Arc<OnlineAuthKeys>>,
     pub(crate) core: ServerCore,
-}
-
-pub(crate) struct SelectionManager {
-    state: AsyncRwLock<ResolvedRuntimeSelection>,
-    online_auth_keys: Option<Arc<OnlineAuthKeys>>,
-}
-
-impl SelectionManager {
-    pub(crate) fn new(
-        state: ResolvedRuntimeSelection,
-        online_auth_keys: Option<Arc<OnlineAuthKeys>>,
-    ) -> Self {
-        Self {
-            state: AsyncRwLock::new(state),
-            online_auth_keys,
-        }
-    }
-
-    pub(crate) async fn current(&self) -> ResolvedRuntimeSelection {
-        self.state.read().await.clone()
-    }
-
-    pub(crate) async fn current_admin_surfaces(&self) -> Vec<ResolvedAdminSurfaceSelection> {
-        self.current().await.admin_surfaces
-    }
-
-    pub(crate) async fn auth_profile(&self) -> Arc<dyn AuthProfileHandle> {
-        self.state.read().await.auth_profile.clone()
-    }
-
-    pub(crate) async fn bedrock_auth_profile(&self) -> Option<Arc<dyn AuthProfileHandle>> {
-        self.state.read().await.bedrock_auth_profile.clone()
-    }
-
-    pub(crate) fn online_auth_keys(&self) -> Option<Arc<OnlineAuthKeys>> {
-        self.online_auth_keys.clone()
-    }
-
-    async fn gameplay_profile_for_adapter(&self, adapter_id: &str) -> GameplayProfileId {
-        let selection_state = self.state.read().await;
-        selection_state
-            .config
-            .profiles
-            .gameplay_map
-            .get(&AdapterId::new(adapter_id))
-            .cloned()
-            .unwrap_or_else(|| selection_state.config.profiles.default_gameplay.clone())
-    }
-
-    pub(crate) async fn resolve_gameplay_for_adapter(
-        &self,
-        adapter_id: &str,
-    ) -> Result<Arc<dyn GameplayProfileHandle>, RuntimeError> {
-        let profile_id = self.gameplay_profile_for_adapter(adapter_id).await;
-        self.state
-            .read()
-            .await
-            .loaded_plugins
-            .resolve_gameplay_profile(profile_id.as_str())
-            .ok_or_else(|| {
-                RuntimeError::Config(format!(
-                    "gameplay profile `{}` for adapter `{adapter_id}` is not active",
-                    profile_id.as_str()
-                ))
-            })
-    }
 }
 
 pub(crate) struct SelectionResolver;

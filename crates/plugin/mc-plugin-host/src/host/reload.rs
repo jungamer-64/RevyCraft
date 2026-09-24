@@ -159,7 +159,6 @@ impl ProfileArtifactKindOps for GameplayArtifactOps {
     ) -> Result<Arc<Self::Generation>, RuntimeError> {
         Ok(Arc::new(host.loader.load_gameplay_generation(
             package,
-            host.generations.next_generation_id(),
             host.current_runtime_selection().buffer_limits,
         )?))
     }
@@ -243,7 +242,6 @@ impl ProfileArtifactKindOps for StorageArtifactOps {
     ) -> Result<Arc<Self::Generation>, RuntimeError> {
         Ok(Arc::new(host.loader.load_storage_generation(
             package,
-            host.generations.next_generation_id(),
             host.current_runtime_selection().buffer_limits,
         )?))
     }
@@ -334,7 +332,6 @@ impl ProfileArtifactKindOps for AuthArtifactOps {
     ) -> Result<Arc<Self::Generation>, RuntimeError> {
         Ok(Arc::new(host.loader.load_auth_generation(
             package,
-            host.generations.next_generation_id(),
             host.current_runtime_selection().buffer_limits,
         )?))
     }
@@ -417,7 +414,6 @@ impl ProfileArtifactKindOps for AdminSurfaceArtifactOps {
     ) -> Result<Arc<Self::Generation>, RuntimeError> {
         Ok(Arc::new(host.loader.load_admin_surface_generation(
             package,
-            host.generations.next_generation_id(),
             host.current_runtime_selection().buffer_limits,
         )?))
     }
@@ -616,7 +612,16 @@ impl PluginHost {
                 .adapter
                 .current_generation()
                 .map_err(|error| RuntimeError::Config(error.to_string()))?;
-            if !protocol_reload_compatible(plugin_id, &current_generation, &candidate_generation) {
+            let has_live_sessions = protocol_sessions
+                .iter()
+                .any(|session| session.adapter_id == *plugin_id);
+            if has_live_sessions
+                && !protocol_reload_compatible(
+                    plugin_id,
+                    &current_generation,
+                    &candidate_generation,
+                )
+            {
                 return Err(RuntimeError::Config(format!(
                     "protocol session migration failed for `{plugin_id}` because route metadata changed"
                 )));
@@ -822,7 +827,6 @@ impl PluginHost {
             }
             let generation = match self.loader.load_protocol_generation(
                 &managed.package,
-                self.generations.next_generation_id(),
                 self.current_runtime_selection().buffer_limits,
             ) {
                 Ok(generation) => Arc::new(generation),

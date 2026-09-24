@@ -105,34 +105,35 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
         host: SdkAdminSurfaceHost<'_>,
         _surface_config_path: Option<&str>,
     ) -> Result<AdminSurfaceStatusView, String> {
-        let stdin_handle = take_native_resource(&host, "stdio.stdin")?;
-        let stdout_handle = take_native_resource(&host, "stdio.stdout")?;
+        let mut instances = self
+            .instances
+            .lock()
+            .expect("console admin surface mutex should not be poisoned");
+        if instances.contains_key(instance_id) {
+            return Err(format!(
+                "console instance `{instance_id}` is already active"
+            ));
+        }
+        let stdin_handle = OwnedNativeHandle::new(take_native_resource(&host, "stdio.stdin")?);
+        let stdout_handle = OwnedNativeHandle::new(take_native_resource(&host, "stdio.stdout")?);
         let host = host.acquire_lease()?;
         let principal_id = console_principal_id(instance_id);
         let worker = start_worker(
             instance_id.to_string(),
             principal_id.clone(),
-            stdin_handle,
-            stdout_handle,
+            stdin_handle.as_raw(),
+            stdout_handle.as_raw(),
             host,
         )?;
-        let mut instances = self
-            .instances
-            .lock()
-            .expect("console admin surface mutex should not be poisoned");
-        if let Some(previous) = instances.insert(
+        instances.insert(
             instance_id.to_string(),
             ConsoleInstance {
                 principal_id,
-                stdin_handle,
-                stdout_handle,
+                stdin_handle: stdin_handle.into_raw(),
+                stdout_handle: stdout_handle.into_raw(),
                 worker: Some(worker),
             },
-        ) {
-            stop_worker(previous.worker);
-            close_native_handle(previous.stdin_handle);
-            close_native_handle(previous.stdout_handle);
-        }
+        );
         Ok(console_status())
     }
 
@@ -241,14 +242,16 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
     }
 
     fn shutdown(&self, instance_id: &str, _host: SdkAdminSurfaceHost<'_>) -> Result<(), String> {
-        let mut instances = self
+        let instance = self
             .instances
             .lock()
-            .expect("console admin surface mutex should not be poisoned");
-        if let Some(instance) = instances.remove(instance_id) {
-            detach_worker(instance.worker);
+            .expect("console admin surface mutex should not be poisoned")
+            .remove(instance_id);
+        if let Some(instance) = instance {
+            let stopped = stop_worker(instance.worker);
             close_native_handle(instance.stdin_handle);
             close_native_handle(instance.stdout_handle);
+            stopped?;
         }
         Ok(())
     }
@@ -298,20 +301,18 @@ fn start_worker(
     Ok(ConsoleWorker { stop, join })
 }
 
-fn stop_worker(worker: Option<ConsoleWorker>) {
+fn stop_worker(worker: Option<ConsoleWorker>) -> Result<(), String> {
     let Some(worker) = worker else {
-        return;
+        return Ok(());
     };
     worker.stop.store(true, Ordering::SeqCst);
-    let _ = worker.join.join();
-}
-
-fn detach_worker(worker: Option<ConsoleWorker>) {
-    let Some(worker) = worker else {
-        return;
-    };
-    worker.stop.store(true, Ordering::SeqCst);
-    drop(worker);
+    worker.join.thread().unpark();
+    // The instance may lose its generation lease when shutdown returns. The last
+    // host response and all plugin thread cleanup must finish before DLL unload.
+    worker
+        .join
+        .join()
+        .map_err(|_| "console worker panicked while stopping".to_string())
 }
 
 fn run_console_loop(
@@ -331,7 +332,10 @@ fn run_console_loop(
                     break;
                 }
                 pending.extend_from_slice(&chunk[..read]);
-                while let Some(line) = take_line(&mut pending)? {
+                while !stop.load(Ordering::SeqCst) {
+                    let Some(line) = take_line(&mut pending)? else {
+                        break;
+                    };
                     handle_line(host, principal_id, stdout, &line)?;
                 }
             }
@@ -666,6 +670,10 @@ impl OwnedNativeHandle {
         Self(Some(handle))
     }
 
+    fn as_raw(&self) -> NativeHandle {
+        self.0.expect("owned native handle should contain a handle")
+    }
+
     fn into_raw(mut self) -> NativeHandle {
         self.0
             .take()
@@ -804,11 +812,15 @@ fn poll_native_handle(handle: NativeHandle, timeout_ms: i32) -> Result<PollResul
             }
             return Err(error.to_string());
         }
-        return Ok(if available == 0 {
-            PollResult::TimedOut
-        } else {
-            PollResult::Ready
-        });
+        if available == 0 {
+            // A pipe probe does not wait. Park between probes instead of consuming a
+            // CPU while the console is idle; shutdown unparks this worker before joining.
+            thread::park_timeout(std::time::Duration::from_millis(
+                timeout_ms.try_into().unwrap_or(0),
+            ));
+            return Ok(PollResult::TimedOut);
+        }
+        return Ok(PollResult::Ready);
     }
 
     match unsafe { WaitForSingleObject(handle as HANDLE, timeout_ms.try_into().unwrap_or(0)) } {

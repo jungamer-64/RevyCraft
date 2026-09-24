@@ -44,11 +44,27 @@ pub struct GameplayHostApiV9 {
     pub push_effect: Option<GameplayHostPushEffectFn>,
 }
 
-pub type PluginInvokeFn =
-    unsafe extern "C" fn(ByteSlice, *mut OwnedBuffer, *mut OwnedBuffer) -> PluginStatus;
+/// Creates an independent, concurrently invocable plugin object. Success requires a
+/// non-null output. Any non-null output transfers ownership, including on failure:
+/// the host must retire that object with `destroy_instance` before reporting failure.
+/// Returned error buffers use the table's `free_buffer` callback.
+pub type PluginCreateInstanceFn =
+    unsafe extern "C" fn(*mut *mut c_void, *mut OwnedBuffer) -> PluginStatus;
+/// Consumes an object from this table's create callback exactly once. No invocation or
+/// plugin-owned work may remain in flight. Destruction must not unwind or fail.
+pub type PluginDestroyInstanceFn = unsafe extern "C" fn(*mut c_void);
+/// The first argument borrows a live object created by the same function table.
+/// Calls may overlap, but destruction cannot overlap any call or retained resource.
+pub type PluginInvokeFn = unsafe extern "C" fn(
+    *mut c_void,
+    ByteSlice,
+    *mut OwnedBuffer,
+    *mut OwnedBuffer,
+) -> PluginStatus;
 pub type PluginFreeBufferFn = unsafe extern "C" fn(OwnedBuffer);
 pub type HostFreeBufferFn = unsafe extern "C" fn(OwnedBuffer);
 pub type GameplayPluginInvokeV9Fn = unsafe extern "C" fn(
+    *mut c_void,
     ByteSlice,
     *const GameplayHostApiV9,
     *mut OwnedBuffer,
@@ -79,6 +95,7 @@ pub type AdminSurfaceHostPublishResourceFn =
 pub type HostRetainContextFn = unsafe extern "C" fn(*mut c_void) -> bool;
 pub type HostReleaseContextFn = unsafe extern "C" fn(*mut c_void);
 pub type AdminSurfacePluginInvokeV9Fn = unsafe extern "C" fn(
+    *mut c_void,
     ByteSlice,
     *const AdminSurfaceHostApiV9,
     *mut OwnedBuffer,
@@ -90,6 +107,8 @@ pub type AdminSurfacePluginInvokeV9Fn = unsafe extern "C" fn(
 pub struct ProtocolPluginApiV9 {
     pub abi: PluginAbiVersion,
     pub struct_size: usize,
+    pub create_instance: Option<PluginCreateInstanceFn>,
+    pub destroy_instance: Option<PluginDestroyInstanceFn>,
     pub invoke: Option<PluginInvokeFn>,
     pub free_buffer: Option<PluginFreeBufferFn>,
 }
@@ -99,6 +118,8 @@ pub struct ProtocolPluginApiV9 {
 pub struct StoragePluginApiV9 {
     pub abi: PluginAbiVersion,
     pub struct_size: usize,
+    pub create_instance: Option<PluginCreateInstanceFn>,
+    pub destroy_instance: Option<PluginDestroyInstanceFn>,
     pub invoke: Option<PluginInvokeFn>,
     pub free_buffer: Option<PluginFreeBufferFn>,
 }
@@ -108,6 +129,8 @@ pub struct StoragePluginApiV9 {
 pub struct AuthPluginApiV9 {
     pub abi: PluginAbiVersion,
     pub struct_size: usize,
+    pub create_instance: Option<PluginCreateInstanceFn>,
+    pub destroy_instance: Option<PluginDestroyInstanceFn>,
     pub invoke: Option<PluginInvokeFn>,
     pub free_buffer: Option<PluginFreeBufferFn>,
 }
@@ -117,6 +140,8 @@ pub struct AuthPluginApiV9 {
 pub struct GameplayPluginApiV9 {
     pub abi: PluginAbiVersion,
     pub struct_size: usize,
+    pub create_instance: Option<PluginCreateInstanceFn>,
+    pub destroy_instance: Option<PluginDestroyInstanceFn>,
     pub invoke: Option<GameplayPluginInvokeV9Fn>,
     pub free_buffer: Option<PluginFreeBufferFn>,
 }
@@ -143,6 +168,8 @@ pub struct AdminSurfaceHostApiV9 {
 pub struct AdminSurfacePluginApiV9 {
     pub abi: PluginAbiVersion,
     pub struct_size: usize,
+    pub create_instance: Option<PluginCreateInstanceFn>,
+    pub destroy_instance: Option<PluginDestroyInstanceFn>,
     pub invoke: Option<AdminSurfacePluginInvokeV9Fn>,
     pub free_buffer: Option<PluginFreeBufferFn>,
 }

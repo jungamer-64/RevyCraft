@@ -25,9 +25,12 @@
 | `apps/revy-server` | `server-bootstrap` binary。config 読み込み、runtime 起動、stdio / gRPC admin surface を束ねる |
 | `crates/runtime/revy-server-config` | `runtime/server.toml` の schema / document load / normalize / validate / reload plan と neutral selection view |
 | `crates/runtime/revy-server-runtime` | listener、generation、session、status、reload、admin control plane を持つ orchestration 層 |
+| `crates/runtime/revy-runtime-transfer` | executable handoff の protobuf control protocol と bounded shared transfer arena |
+| `crates/network/revy-raknet` | Bedrock UDP transport、reliability、ordering、fragmentation、freeze/transfer state |
 | `crates/core/revy-core` | id、capability、routing、revision を持つ internal kernel primitive |
 | `crates/core/revy-voxel-core` | protocol 非依存の semantic state machine |
-| `crates/plugin/mc-plugin-api` | plugin ABI `8.0`、manifest、host API、typed codec |
+| `crates/plugin/mc-plugin-contract` | plugin と host が共有する safe semantic contract と typed codec |
+| `crates/plugin/mc-plugin-abi` | plugin ABI 9 の raw FFI layout、manifest、function table |
 | `crates/plugin/mc-plugin-host` | packaged plugin discovery、activation、selection、reload、quarantine |
 | `crates/plugin/mc-plugin-sdk-rust` | Rust plugin authoring 向け trait、manifest helper、macro、shared semantic type re-export |
 | `crates/protocol/mc-proto-{common,je-common,be-common}` | shared protocol trait、wire codec、edition-family helper |
@@ -62,10 +65,12 @@
   boot、status、session_status、reload、shutdown、admin control plane の公開入口です。
 - `revy_server_config::*`
   config schema と validation を扱う公開入口です。
-- `mc_plugin_api`
-  host と plugin 間の ABI 契約です。
+- `mc_plugin_contract`
+  host と plugin が共有する safe semantic contract です。
+- `mc_plugin_abi`
+  host と native plugin 間の ABI 9 raw layout です。
 - `mc_plugin_sdk_rust`
-  Rust plugin authoring の正規入口です。plugin-facing shared type はここか `mc_plugin_api` の re-export から取ります。
+  Rust plugin authoring の正規入口です。plugin-facing shared type はここか `mc_plugin_contract` から取ります。
 
 ## 内部専用 `surface`
 
@@ -77,8 +82,6 @@
   `revy-voxel-core` の下で使う internal kernel です。plugin ABI や protocol / storage plugin から直接参照しない前提で扱います。
 - `mc_plugin_sdk_rust::__macro_support`
   macro の内部実装です。
-- `mc_plugin_host::__test_hooks`
-  test support 用の内部 surface です。
 - `mc_proto_je_common::__version_support`
 - `mc_proto_be_common::__version_support`
 
@@ -99,6 +102,10 @@
   `crates/testing/mc-plugin-host-test-support`
 - protocol test support
   `crates/testing/mc-proto-test-support`
+
+`CARGO_TARGET_DIR` を指定した場合、packaged plugin harness の cache・補助 build と、workspace test の一時 world・upgrade log もその配下へ出力します。相対 path は workspace root 基準です。build 用の `TEMP` / `TMP` は実行環境の設定を使います。
+
+packaged plugin harness は Cargo の build profile を nested plugin build に引き継ぎます。`cargo test --release` は release plugin を使い、debug / release の cache は混在させません。
 
 boundary redesign の current debt と新規 drift を固定する check は次です。
 

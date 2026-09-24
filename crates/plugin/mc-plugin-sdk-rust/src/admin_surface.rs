@@ -290,6 +290,16 @@ pub trait RustAdminSurfacePlugin: Send + Sync + 'static {
         host: SdkAdminSurfaceHost<'_>,
     ) -> Result<AdminSurfaceStatusView, String>;
 
+    /// Drains in-flight requests and joins the instance's tasks, threads and executors.
+    ///
+    /// Returning ends this instance's execution authority, including when reporting a failure.
+    /// A task completion notification or host lease release alone is insufficient: no worker
+    /// may subsequently execute plugin code. The static plugin object's destructor is not
+    /// an unload hook, so background execution cannot rely on it for shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Reports failures observed while stopping the instance, after its workers have stopped.
     fn shutdown(&self, instance_id: &str, host: SdkAdminSurfaceHost<'_>) -> Result<(), String>;
 }
 

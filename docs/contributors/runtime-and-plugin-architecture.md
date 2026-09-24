@@ -1,234 +1,129 @@
 # `runtime` と `plugin` の設計
 
-- 対象読者: `runtime` / plugin host / semantic boundary を理解したい contributors
-- この文書で扱う範囲: 現行実装、目標境界、state owner、plugin の責務、目標 crate 構成、依存規則、境界チェック
-- この文書で扱わないこと: operator 向け config key の意味、`reload runtime` の細かな transaction 手順、plugin authoring のコード例
+- 対象読者: runtime、plugin host、transport、process handoff の責務境界を追う contributors
+- この文書で扱う範囲: current architecture、authoritative state、crate dependency、plugin ABI、network ownership
+- この文書で扱わないこと: operator 向け config key、cutover の詳細手順、plugin authoring のコード例
 - 次に読む文書: [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
 
-この文書は contributor 向け設計文書の主正本です。現行実装の説明に加えて、boundary redesign の目標境界、依存規則、境界チェックもここでまとめて扱います。
+RevyCraft の主要価値は、Java/TCP と Bedrock/UDP の live session を維持したまま runtime と executable を低停止時間で切り替えることです。reload を補助機能として扱わず、active state の authority、session ownership、core representation、transport ownershipをこの成立条件から決めます。
 
-## 現行実装と目標境界
-
-RevyCraft の current workspace は実装としては成立していますが、次の境界はまだ複数の crate にまたがって滲みやすい状態です。
-
-- semantic contract と engine internal が `revy-voxel-core` / `mc-plugin-api` に混在している
-- protocol と storage の責務が `mc-proto-*` / storage plugin にまたがっている
-- admin / reload DTO が `revy-server-runtime`、`revy-server-config`、`mc-plugin-api`、`mc-plugin-host` に重複している
-- config parsing / normalize / reload planning の読み順が 1 file に集中しやすい
-
-この文書では、現在の `runtime` / plugin host の読み方を示しつつ、次の目標境界を正本として固定します。
-
-- `revy-voxel-semantic`
-  shared semantic contract を置く。plugin / protocol / storage が共有する world、player、gameplay、content DTO の canonical owner
-- `revy-voxel-core`
-  `ServerCore`、journal validate / apply、canonical event generation、inventory / world / runtime state machine のような engine internal を置く
-- `mc-proto-common`
-  protocol-only crate に寄せる
-- `mc-storage-common`
-  storage-only crate に寄せる
-- `revy-server-types`
-  operator-facing shared DTO の single source of truth に寄せる
-- `revy-server-config`
-  schema / document / normalize / validate / reload plan と neutral selection view を持つ
-
-## レイヤー構成
+## レイヤーと責務
 
 1. `apps/revy-server`
-   `server-bootstrap` binary を持つ `revy-server` package。config 読み込み、runtime boot、process-scope resource broker、admin surface supervisor を持ちます。
+   process boot、admin surface supervision、executable handoff の parent/child orchestration を持ちます。
 2. `crates/runtime/revy-server-runtime`
-   listener、generation、session、status、reload、admin control plane を持つ orchestration 層です。
-3. `crates/core/revy-core`
-   id、capability、event targeting、revision control、session routing primitive を持つ internal kernel です。runtime や plugin ABI から直接見せる層ではありません。
-4. `crates/core/revy-voxel-core`
-   voxel / Minecraft 系の semantic state machine です。`revy-core` を内部 primitive として使います。
-5. `crates/plugin/mc-plugin-host`
-   packaged plugin discovery、activation、selection、reload、quarantine を担います。
-6. `crates/plugin/mc-plugin-api` / `mc-plugin-sdk-rust`
-   ABI 契約と Rust authoring helper です。
-7. `plugins/*`
-   protocol / gameplay / storage / auth / admin-surface の concrete plugin 実装です。
+   `RuntimeEpoch` publication、listener ingress、session actor、versioned core、cutover protocol を持ちます。
+3. `crates/runtime/revy-runtime-transfer`
+   parent/child 間の versioned protobuf envelope、transfer identity、resource descriptor、bounded shared arena を持ちます。
+4. `crates/network/revy-raknet`
+   UDP receive authority、peer reliability state、ACK/NACK、retransmit、ordering、fragmentation、MTU、handshake、freeze snapshot を所有します。
+5. `crates/core/revy-voxel-core`
+   immutable `CoreVersion`、`CoreMutation`、semantic gameplay state と event generation を持ちます。
+6. `crates/plugin/mc-plugin-host`
+   packaged plugin discovery、ABI validation、generation lease、candidate selection、reload preparation を持ちます。
+7. `crates/plugin/mc-plugin-contract` / `mc-plugin-abi`
+   前者は safe semantic contract、後者は ABI 9 の raw FFI layout だけを持ちます。
+8. `crates/plugin/mc-plugin-sdk-rust`
+   Rust plugin authoring trait、manifest helper、export macro を持ちます。
 
-## `runtime` の state owner
+`revy-voxel-semantic` は protocol / gameplay / storage が共有する semantic type の owner、`revy-server-types` は operator-facing DTO の owner です。engine internal を plugin contract の代用にしません。
 
-`RuntimeServer` は facade で、実際の state owner は次の manager に分かれています。
+## active runtime の唯一の authority
 
-- `SelectionManager`
-  active config、`LoadedPluginSet`、auth / admin-surface selection、remote admin principal snapshot を持ちます。
-- `TopologyManager`
-  active / draining generation、listener worker、generation swap を持ちます。
-- `RuntimeKernel`
-  `ServerCore`、`revy-core` の revision primitive で包んだ kernel state、snapshot-isolated gameplay journal commit、tick / save、dirty flag、world_dir、`core` migration の export / materialize / reattach / swap / rollback を持ちます。
-- `SessionRegistry`
-  live session handle、accepted queue、`revy-core` の connection-id source、session task、routing-only の pending login route を持ちます。
-- `ReloadCoordinator`
-  config source、static reload boundary、reload host、consistency gate、shutdown request を持ちます。
+`RuntimeAuthority` が `Arc<RuntimeEpoch>` を一度に publish します。`RuntimeEpoch` は次を同じ revision の state として所有します。
 
-runtime を読むときは `runtime/mod.rs` -> `selection.rs` -> `topology_manager.rs` -> `kernel.rs` -> `session/*` / `admin.rs` の順が追いやすいです。
+- validated config と resolved plugin selection
+- exact plugin artifact / generation lease
+- active topology generation と admission view
+- `CoreStore`
+- online authentication generation
 
-## package / 発見 / 有効化
+selection、topology、core は独立に commit できません。plugin host と topology resources は candidate を構築できますが、active state を変更する authority は `RuntimeAuthority` の epoch publication だけです。session actor は共有 epoch latch を購読し、commit 後の最初の data-plane 処理より前に prepared binding を activate します。
 
-runtime が直接扱うのは packaged plugin です。workspace crate や `target/` の shared library をそのまま読むわけではありません。
+`ReloadCoordinator` が残す責務は config source、reload serialization、shutdown lifecycle です。active selection や commit state の authority ではありません。
 
-### package
+## core の authority
 
-`xtask` は managed plugin を build し、`runtime/plugins/<plugin-id>/` に次を配置します。
+`CoreStore` は `Arc<CoreVersion>` と `CoreRevision` を管理します。read path は `Arc` clone で immutable version を取得し、whole-core clone を行いません。command、tick、plugin effect は `CoreMutation` から `PreparedCoreCommit` を作り、base revision が active revision と一致した場合だけ同じ commit path で publish します。
 
-- `plugin.toml`
-- current host target 向け shared library
+plugin callback の read-set は取得元 revision に結び付きます。競合は stale outcome として返し、callback を暗黙に再実行しません。persistence は `persisted_revision` と最新 dirty revision を区別し、revision R の保存成功によって R より後の mutation を clean にしません。
 
-### discovery
+同一 process reload の handoff は validated `Arc<CoreVersion>` capability です。executable upgrade は immutable pre-copy 後の mutation を bounded journal に保持し、freeze 中は final delta だけを seal します。journal budget を追い越した candidate は freeze 前の restage または machine-readable abort になり、freeze 中の full serialization へ劣化しません。
 
-`plugin_host_from_config(...)` は `static.plugins.plugins_dir` を走査し、`plugin.toml` を持つ directory を package として catalog 化します。この段階で見るのは plugin id、kind、platform に一致する artifact の有無です。
+## session と directory projection
 
-### activation
+session actor が phase と transport state の authority です。phase は次の state machine で表現します。
 
-catalog に載った plugin がそのまま active になるわけではありません。active runtime view は config で決まります。
+- `Handshaking`
+- `Status`
+- `Login::{Negotiating, Authenticating, AcceptedWritePending}`
+- `Play`
+- `Closing`
 
-- protocol
-  active adapter として registry に入る
-- gameplay
-  `default_gameplay` と `gameplay_map` で参照された profile だけ有効化
-- storage
-  `static.bootstrap.storage_profile` の 1 つだけ有効化
-- auth
-  `auth` と、Bedrock 有効時の `bedrock_auth` を有効化
-- admin-surface
-  `live.admin.surfaces.<instance>` で選ばれた 0 個以上の surface instance を有効化
+player / entity / gameplay capability は `Play` だけが所有します。actor lifecycle は `Running`、`CutoverPrepared`、`TransferFrozen`、`Transferred` で、prepared state と active state を同居させる期間を型で限定します。
 
-## `plugin.toml` と embedded manifest
+registry の player-to-connection view と executable session directory は actor transition から更新される projection です。projection は actor state から再構築可能で、独立 authority ではありません。各 actor は bounded handoff slot を事前確保し、plugin blob、read buffer、queued event、transport state を freeze 中にその slot へ seal します。
 
-plugin には 2 種類の manifest があります。
+## listener と RakNet
 
-- package 形式の `plugin.toml`
-  plugin directory の発見と artifact 解決に使います。
-- shared library 内の `PluginManifestV1`
-  ABI、plugin 種別、profile capability、reload capability の検証に使います。
+TCP/UDP listener は topology resource として candidate bind、pause、resume、transfer が区別されます。inactive listener の bind と descriptor duplication は freeze 前に完了します。
 
-Rust plugin 作者が `StaticPluginManifest` で書くのは後者です。host は `plugin.toml` で package を見つけ、library を load したあとに embedded manifest を検証します。
+Bedrock transport は `revy-raknet` が所有します。socket router が唯一の UDP receive authority、peer actor が各接続の reliability authority です。24-bit sequence は専用型で wraparound を扱い、ACK/NACK、retransmit、reliable ordering、sequencing、fragment reassembly、timeout を bounded state として保持します。freeze は router receive を止め、writer queue を seal し、peer snapshot を並列に確定します。外部 RakNet transport crate は production dependency にしません。
 
-## `revy-voxel-core` と plugin の責務境界
+## plugin ABI 9
 
-`revy-core` と `revy-voxel-core` の境界は次のように固定します。
+`mc-plugin-contract` は semantic request / response と safe enum、`mc-plugin-abi` は `repr(C)` table、raw slice、owned buffer、tag だけを所有します。manifest と function table は ABI version と `struct_size` を先頭に持ちます。
 
-- `revy-core`
-  `ConnectionId` / `PlayerId` / capability set、`EventTarget` / routed event、revision control、session routing primitive を持ちます。
-- `revy-voxel-core`
-  world state、inventory / container lifecycle、mining、login / bootstrap、`GameplayEffectBatch` validate/apply、canonical `CoreEvent` generation を持ちます。
+host は invocation 前に tag、function pointer、pointer/count/null、`len <= cap`、`isize::MAX`、configured buffer limit、UTF-8 を検証します。plugin-owned buffer は free callback と generation lease を持つ guard が一度だけ解放します。gameplay host authority は invocation ごとの explicit call context から渡し、ambient TLS scope を使いません。
 
-plugin 種別ごとの責務は次です。
+plugin object は load ごとに host が生成・所有し、同じ artifact の別 load と可変 state を共有しません。code / immutable manifest の共有と object identity は別です。全 invocation と返却 buffer は object lease を保持し、最後の lease の解放で object を destroy してから library lease を解放します。session handoff は artifact hash が等しい場合も必要で、candidate の preparation は active object を書き換えません。
 
-- protocol plugin
-  handshake routing、status / login / play packet の decode / encode、transport / version 固有 session state を持ちます。
-- gameplay plugin
-  semantic な `GameplayCommand` を評価し、invocation-scoped read/effect recorder を通じて snapshot read と `GameplayEffectBatch` を返します。live core への validate / apply は runtime / `revy-voxel-core` 側が担当します。
-- storage plugin
-  world snapshot の load / save / import / export を担います。`core` migration blob は process-local であり、persistent storage schema とは共有しません。
-- auth plugin
-  Java offline / online、Bedrock offline / XBL の認証を担います。
-- admin-surface plugin
-  console / gRPC などの operator surface、identity mapping、surface-owned config、process / handoff resource を担います。
+live reload に参加する protocol / gameplay plugin は `max_session_handoff_bytes` を manifest で宣言します。prepare が slot capacity を検証するため、freeze 中に plugin blob 用の再 allocation は行いません。native plugin boundary は ABI 9 だけを受理します。
 
-plugin / protocol authoring 側の依存もこの境界に合わせます。runtime / content / protocol / storage の実装 crate は `revy-voxel-semantic` を正本として直接参照し、plugin authoring crate は `mc-plugin-sdk-rust` / `mc-plugin-api` / `mc-proto-common` などの公開 surface から型を取ります。`revy-voxel-model` / `revy-voxel-rules` のような wrapper crate は置かない前提で扱います。
+## executable handoff
 
-## 迷ったときの境界判断
+child は freeze 前に起動し、config、transfer protocol、plugin artifact hash、candidate epoch、shared arena、duplicated resource を検証します。parent は versioned session directory を pre-stage し、child が現在 revision を acknowledge してから freeze へ進みます。
 
-### app と runtime
+control plane は length-limited `RuntimeTransferProtocolV1` protobuf envelope と `TransferId` を使います。大きな core / session / RakNet payload は shared arena に置き、control envelope には bounded descriptor だけを載せます。Unix は shared memory と descriptor passing、Windows は file mapping と socket duplication を使います。
 
-`apps/revy-server` に置くのは process-scope の boot、stdio / gRPC admin surface、upgrade 協調です。session や world state の owner は `crates/runtime/revy-server-runtime` に寄せます。
+`Commit` 後に結果が不明な parent は data plane を再開しません。同じ `TransferId` の status で committed / aborted を解決し、解消不能なら fail closed にして親子同時 authority を防ぎます。
 
-### runtime と plugin host
-
-runtime は「どの plugin を今の runtime view で使うか」を決めて使います。packaged plugin の discovery、activation、reload、quarantine は `mc-plugin-host` に寄せます。
-
-### semantic と engine internal
-
-plugin や protocol 共通層が共有してよい型は `revy-voxel-semantic` までです。`revy-voxel-core` と `revy-core` は engine internal として扱います。
-
-### config と runtime translation
-
-`revy-server-config` は schema、document load、normalize、validate、reload plan、neutral selection view に寄せます。runtime は `ServerConfig` から host view を受け取り、`mc-plugin-host` は自分の `config::*` へ変換する owner として扱います。
-
-### build-time と run-time
-
-実行時の正本は `target/` ではなく `runtime/plugins/<plugin-id>/plugin.toml` を起点にした packaged plugin です。runtime は「build 済みかどうか」ではなく「package 済みかどうか」を実行条件にします。
-
-## 目標 crate 構成
+## 依存方向
 
 ```text
 apps/revy-server
   -> revy-server-runtime
-     -> revy-server-config
-     -> revy-server-gameplay-bridge
-     -> revy-server-types
-     -> mc-plugin-host
-     -> revy-voxel-core
-        -> revy-voxel-semantic
-           -> revy-core
+  -> revy-runtime-transfer
+
+revy-server-runtime
+  -> revy-server-config
+  -> revy-server-types
+  -> mc-plugin-host
+  -> revy-raknet
+  -> revy-voxel-core
 
 mc-plugin-host
-  -> revy-server-gameplay-bridge
-
-mc-plugin-api
-  -> revy-voxel-semantic
-  -> revy-server-types
+  -> mc-plugin-contract
+  -> mc-plugin-abi
 
 mc-plugin-sdk-rust
-  -> mc-plugin-api
-  -> revy-voxel-semantic
-  -> revy-server-types
-
-mc-proto-common
-  -> revy-voxel-semantic
-
-mc-storage-common
-  -> revy-voxel-semantic
-
-versioned protocol crates
-  -> mc-proto-common
-  -> edition-family helper
-
-storage crates
-  -> mc-storage-common
+  -> mc-plugin-contract
+  -> mc-plugin-abi
 ```
 
-## 依存規則
-
-次の規則を boundary redesign の境界チェックとして固定します。
-
-- no crate outside runtime / core engine depends on `revy-voxel-core` or `revy-core` as a shared public contract proxy
-- no storage crate depends on versioned protocol crate
-- no config crate depends on `mc-plugin-host`
-- no host crate depends on `revy-voxel-core`; gameplay read access is bridged through `revy-server-gameplay-bridge`
-- no duplicated canonical admin / reload DTO definitions across `revy-server-config` / `revy-server-runtime` / `mc-plugin-api` / `mc-plugin-host`
-
-最初の rule は、`ServerCore` と旧 transaction/journal surface を public contract から消し、plugin-facing contract を `GameplayEffectBatch` と `GameplayReadView` に寄せることが目的です。runtime kernel が `GameplayLoginPreview` / snapshot adapter を所有し、`mc-plugin-host` は bridge trait 越しに読むだけにします。
-
-## 移行順序と境界チェック
-
-boundary redesign の進め方は次を前提にします。
-
-1. docs と boundary check を入れて、current debt を explicit allowlist として固定する
-2. `revy-voxel-semantic` を導入し、shared semantic type を移す
-3. `mc-storage-common` と `mc-storage-je-anvil-1_7_10` を導入し、protocol / storage を切り離す
-4. `revy-server-types` を導入し、admin / reload DTO を寄せる
-5. plugin-host translation を runtime 直書き helper から neutral selection view + host-owned conversion へ移し、`mc-plugin-host` の gameplay read path を `revy-server-gameplay-bridge` 越しにする
-6. `revy-server-config` を schema / document / normalize / validate / reload plan の分割構造に保つ
-
-境界チェックの入口は次です。
+storage は versioned protocol crate に依存せず、plugin host は `revy-voxel-core` を public contract proxy にしません。境界の正規 check は次です。
 
 ```bash
 cargo run -p xtask -- check-boundaries
 ```
 
-この check は `cargo metadata` から direct workspace dependency を読み、forbidden edge を検出し、`tools/xtask/boundary-check.toml` の explicit allowlist と tracked duplicate symbol を照合します。いま全部 clean であることよりも、新しい drift を増やさないことを目的に使います。
+## 読む順番
 
-local baseline と既知の failing test は、鮮度管理を分離するため [`known-issues.md`](known-issues.md) に切り出して追跡します。boundary redesign の code motion は、その文書にある baseline を green に戻すか、明示的に quarantine してから始める前提です。
+1. [`../../crates/runtime/revy-server-runtime/src/runtime/authority.rs`](../../crates/runtime/revy-server-runtime/src/runtime/authority.rs)
+2. [`../../crates/runtime/revy-server-runtime/src/runtime/cutover.rs`](../../crates/runtime/revy-server-runtime/src/runtime/cutover.rs)
+3. [`../../crates/runtime/revy-server-runtime/src/runtime/core_store.rs`](../../crates/runtime/revy-server-runtime/src/runtime/core_store.rs)
+4. [`../../crates/runtime/revy-server-runtime/src/runtime/session/types.rs`](../../crates/runtime/revy-server-runtime/src/runtime/session/types.rs)
+5. [`../../crates/runtime/revy-server-runtime/src/runtime/executable.rs`](../../crates/runtime/revy-server-runtime/src/runtime/executable.rs)
+6. [`../../crates/network/revy-raknet/src/lib.rs`](../../crates/network/revy-raknet/src/lib.rs)
 
-## 関連文書
-
-- current baseline、既知の failing test、quarantine 前提
-  [`known-issues.md`](known-issues.md)
-- reload の意味論、`consistency_gate`、`core` migration
-  [`core-reload-runtime-design.md`](core-reload-runtime-design.md)
-- play / login の command / event flow
-  [`core-command-event-flow.md`](core-command-event-flow.md)
+cutover の測定境界と failure contract は [`core-reload-runtime-design.md`](core-reload-runtime-design.md)、command/event の semantic flow は [`core-command-event-flow.md`](core-command-event-flow.md) を参照してください。

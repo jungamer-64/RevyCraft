@@ -134,6 +134,7 @@ closed_capability_enum!(ProtocolCapability, "protocol", {
 
 closed_capability_enum!(GameplayCapability, "gameplay", {
     RuntimeReload => "runtime.reload.gameplay",
+    SessionTick => "gameplay.session-tick",
 });
 
 closed_capability_enum!(StorageCapability, "storage", {

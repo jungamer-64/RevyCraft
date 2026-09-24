@@ -30,6 +30,12 @@ impl BedrockCompression {
         Self { threshold }
     }
 
+    /// Returns the negotiated threshold needed to reconstruct this transport state.
+    #[must_use]
+    pub const fn threshold(self) -> u16 {
+        self.threshold
+    }
+
     /// Adds the negotiated compression-method discriminator and compresses when required.
     pub fn compress(&self, payload: &[u8]) -> Result<Vec<u8>, BedrockWireError> {
         let mut encoded = Vec::with_capacity(payload.len().saturating_add(1));

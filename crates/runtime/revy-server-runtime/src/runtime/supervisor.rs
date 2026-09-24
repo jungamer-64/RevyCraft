@@ -1,11 +1,15 @@
-use super::bootstrap::boot_server;
+use super::bootstrap::{boot_imported_server, boot_server};
 use super::selection::ResolvedRuntimeSelection;
 use super::status::{RuntimeStatusSnapshot, SessionStatusSnapshot};
-use super::{RuntimeReloadMode, RuntimeServer};
+use super::{
+    ExecutableChildCommit, ExecutableChildRuntimePrepared, ExecutableUpgradeStaged,
+    RuntimeReloadMode, RuntimeServer,
+};
 use crate::RuntimeError;
-use crate::config::{ServerConfig, ServerConfigSource};
+use crate::config::ServerConfigSource;
 use crate::runtime::{AdminControlPlaneHandle, ListenerBinding};
 use mc_plugin_host::runtime::AdminSurfaceProfileHandle;
+use revy_runtime_transfer::SharedTransferArena;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -89,6 +93,33 @@ impl ServerSupervisor {
         let loaded_plugins = plugin_host.load_plugin_set(&runtime_selection)?;
         let running = boot_server(config_source, config, loaded_plugins, Some(plugin_host)).await?;
         Ok(Self { running })
+    }
+
+    /// Builds a committed child runtime with all imported network authorities still paused.
+    /// Calling [`ExecutableChildRuntimePrepared::activate`] is the only transition that opens the
+    /// child data plane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] when the committed core, topology, or imported sessions cannot be
+    /// installed as one runtime epoch.
+    pub async fn boot_executable_child(
+        commit: ExecutableChildCommit,
+    ) -> Result<ExecutableChildRuntimePrepared, RuntimeError> {
+        boot_imported_server(commit).await
+    }
+
+    /// Builds the immutable, full core pre-copy and exact active plugin manifest required before
+    /// spawning an executable-upgrade child.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] if active artifacts or the core pre-copy cannot be materialized.
+    pub async fn prepare_executable_upgrade(
+        &self,
+        arena: Arc<SharedTransferArena>,
+    ) -> Result<ExecutableUpgradeStaged, RuntimeError> {
+        self.running.runtime.prepare_executable_upgrade(arena).await
     }
 
     #[must_use]
@@ -189,6 +220,15 @@ impl ServerSupervisor {
         self.running.wait_for_runtime_completion().await
     }
 
+    /// Waits until runtime shutdown has been accepted, before session draining completes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError`] if the lifecycle watcher closes before shutdown is requested.
+    pub async fn wait_for_shutdown_requested(&self) -> Result<(), RuntimeError> {
+        self.running.wait_for_shutdown_requested().await
+    }
+
     /// # Errors
     ///
     /// Returns [`RuntimeError`] when the runtime task exits with an error or the join fails.
@@ -198,10 +238,6 @@ impl ServerSupervisor {
 
     pub fn request_shutdown(&self) -> bool {
         self.running.request_shutdown()
-    }
-
-    pub fn clear_runtime_upgrade_state(&self) {
-        self.running.clear_runtime_upgrade_state();
     }
 
     /// # Errors
@@ -241,6 +277,18 @@ impl RunningServer {
             ))
         })?;
         Ok(())
+    }
+
+    pub(crate) async fn wait_for_shutdown_requested(&self) -> Result<(), RuntimeError> {
+        let mut shutdown_rx = self.runtime.reload.subscribe_shutdown_requested();
+        if *shutdown_rx.borrow() {
+            return Ok(());
+        }
+        shutdown_rx.changed().await.map_err(|error| {
+            RuntimeError::Config(format!(
+                "runtime shutdown watcher closed before shutdown was requested: {error}"
+            ))
+        })
     }
 
     /// # Errors
@@ -333,10 +381,6 @@ impl RunningServer {
         self.runtime.request_shutdown()
     }
 
-    pub fn clear_runtime_upgrade_state(&self) {
-        self.runtime.clear_runtime_upgrade_state();
-    }
-
     pub async fn join_runtime(&self) -> Result<(), RuntimeError> {
         let join_handle = self.join_handle.lock().await.take();
         match join_handle {
@@ -348,23 +392,20 @@ impl RunningServer {
 
 impl RuntimeServer {
     pub(crate) async fn current_admin_surfaces(&self) -> Vec<AdminSurfaceSelection> {
-        self.selection
-            .current_admin_surfaces()
-            .await
-            .into_iter()
+        let active = self.authority.active();
+        active
+            .selection
+            .admin_surfaces
+            .iter()
             .map(|selection| AdminSurfaceSelection {
-                instance_id: selection.instance_id,
-                surface_config_path: selection.surface_config_path,
-                profile: selection.profile,
+                instance_id: selection.instance_id.clone(),
+                surface_config_path: selection.surface_config_path.clone(),
+                profile: Arc::clone(&selection.profile),
             })
             .collect()
     }
 
     pub(crate) async fn selection_state(&self) -> ResolvedRuntimeSelection {
-        self.selection.current().await
-    }
-
-    pub(crate) async fn replace_active_config(&self, next_active_config: ServerConfig) {
-        self.selection.replace_config(next_active_config).await;
+        self.authority.active().selection.clone()
     }
 }

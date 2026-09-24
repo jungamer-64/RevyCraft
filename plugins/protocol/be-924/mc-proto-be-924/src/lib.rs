@@ -177,6 +177,10 @@ impl BedrockProfile for Bedrock924Profile {
         encoding::encode_login_success_packet(player)
     }
 
+    fn encode_keep_alive_packet(&self, keep_alive_id: i32) -> Result<Vec<u8>, ProtocolError> {
+        encoding::encode_keep_alive_packet(keep_alive_id)
+    }
+
     fn decode_play_packet(
         &self,
         session: &ProtocolSessionSnapshot,

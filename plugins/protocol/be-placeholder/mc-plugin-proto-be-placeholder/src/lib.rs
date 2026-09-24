@@ -12,4 +12,5 @@ declare_protocol_plugin!(
         ProtocolCapability::RuntimeReload,
         ProtocolCapability::Bedrock,
     ],
+    64 * 1024,
 );

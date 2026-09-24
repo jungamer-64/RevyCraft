@@ -401,6 +401,7 @@ const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
     "gameplay-canonical",
     "Canonical Gameplay Plugin",
     "canonical",
-);
+)
+.with_max_session_handoff_bytes(256);
 
 export_plugin!(gameplay, CanonicalGameplayPlugin, MANIFEST);

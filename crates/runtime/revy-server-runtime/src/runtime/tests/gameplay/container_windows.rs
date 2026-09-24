@@ -1,274 +1,75 @@
 use super::*;
 
 #[tokio::test]
-async fn runtime_test_helper_opens_and_closes_crafting_table_window() -> Result<(), RuntimeError> {
-    let _guard = lock_window_transaction_tests().await;
+async fn full_reload_preserves_unacknowledged_inventory_rejection() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         multi_version_creative_server_config(temp_dir.path().join("world")),
         packaged_default_registries(ALL_PROTOCOL_PLUGIN_IDS)?,
     )
     .await?;
-    let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
+    let protocol = TestJavaProtocol::Je340;
+    let (mut stream, mut buffer, _) =
+        login_modern_1_12(listener_addr(&server), "rejection-reload").await?;
+    let status = server.session_status().await;
+    let session = &status[0];
+    let snapshot = mc_proto_common::ProtocolSessionSnapshot {
+        connection_id: session.connection_id,
+        phase: session.phase,
+        player_id: session.player_id,
+        entity_id: session.entity_id,
+    };
+    let active = active_protocol_registry(&server)
+        .resolve_adapter(JE_340_ADAPTER_ID)
+        .expect("active protocol");
+    let initial = active.export_session_state(&snapshot)?;
+    write_packet(
+        &mut stream,
+        &codec,
+        &click_window(protocol, 999, 0, 10, None),
+    )
+    .await?;
+    let reject =
+        read_until_confirm_transaction(&mut stream, &codec, &mut buffer, protocol, 0, 10, 16)
+            .await?;
+    assert_eq!(
+        decode_confirm_transaction(protocol, &reject)?,
+        (0, 10, false)
+    );
+    let pending = active.export_session_state(&snapshot)?;
+    assert_ne!(pending, initial);
 
-    let (mut stream, mut buffer, _) = login_modern_1_12(addr, "alpha").await?;
-    let player_id = server
-        .session_status()
-        .await
-        .into_iter()
-        .find_map(|session| session.player_id)
-        .expect("logged-in player should have a player id");
+    server.reload_runtime_full().await?;
+    let replacement = active_protocol_registry(&server)
+        .resolve_adapter(JE_340_ADAPTER_ID)
+        .expect("replacement protocol");
+    assert!(!Arc::ptr_eq(&active, &replacement));
+    assert_eq!(replacement.export_session_state(&snapshot)?, pending);
+    assert_eq!(active.export_session_state(&snapshot)?, pending);
 
     write_packet(
         &mut stream,
         &codec,
-        &creative_inventory_action(TestJavaProtocol::Je340, 36, 17, 1, 0),
+        &confirm_transaction_ack(protocol, 0, 10, false),
     )
     .await?;
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                0,
-                36,
-                16,
-            )
-            .await?,
-        )?,
-        (0, 36, Some((17, 1, 0)))
-    );
-
-    open_test_crafting_table(&server, player_id, 2, "Crafting").await?;
-
-    let open_window = read_until_java_packet_preserving_nonmatching(
-        &mut stream,
-        &codec,
-        &mut buffer,
-        TestJavaProtocol::Je340,
-        TestJavaPacket::OpenWindow,
-    )
-    .await?;
-    assert_eq!(
-        decode_open_window(TestJavaProtocol::Je340, &open_window)?,
-        (
-            2,
-            "minecraft:crafting_table".to_string(),
-            "{\"text\":\"Crafting\"}".to_string(),
-            0,
-            None,
-        )
-    );
-
-    let open_contents = read_until_java_packet_preserving_nonmatching(
-        &mut stream,
-        &codec,
-        &mut buffer,
-        TestJavaProtocol::Je340,
-        TestJavaPacket::WindowItems,
-    )
-    .await?;
-    assert_eq!(
-        window_items_slot(TestJavaProtocol::Je340, &open_contents, 37)?,
-        Some((17, 1, 0))
-    );
-
     write_packet(
         &mut stream,
         &codec,
-        &click_window_in_window(TestJavaProtocol::Je340, 2, 37, 0, 1, None),
+        &click_window(protocol, 999, 0, 11, None),
     )
     .await?;
-    let _ = read_click_transcript_and_ack_reject_if_needed(
-        TestJavaProtocol::Je340,
-        &mut stream,
-        &mut buffer,
-        &codec,
-        2,
-        1,
-        37,
-        None,
-        Some((17, 1, 0)),
-        None,
-    )
-    .await?;
-
-    write_packet(
-        &mut stream,
-        &codec,
-        &click_window_in_window(TestJavaProtocol::Je340, 2, 1, 0, 2, Some((17, 1, 0))),
-    )
-    .await?;
-    let first_place_ack = read_until_confirm_transaction(
-        &mut stream,
-        &codec,
-        &mut buffer,
-        TestJavaProtocol::Je340,
-        2,
-        2,
-        16,
-    )
-    .await?;
+    let reject =
+        read_until_confirm_transaction(&mut stream, &codec, &mut buffer, protocol, 0, 11, 16)
+            .await?;
     assert_eq!(
-        decode_confirm_transaction(TestJavaProtocol::Je340, &first_place_ack)?,
-        (2, 2, true)
+        decode_confirm_transaction(protocol, &reject)?,
+        (0, 11, false)
     );
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                2,
-                0,
-                16,
-            )
-            .await?,
-        )?,
-        (2, 0, Some((5, 4, 0)))
-    );
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                2,
-                1,
-                16,
-            )
-            .await?,
-        )?,
-        (2, 1, Some((17, 1, 0)))
-    );
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot_item(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                -1,
-                -1,
-                None,
-                16,
-            )
-            .await?,
-        )?,
-        (-1, -1, None)
-    );
-
-    write_packet(
-        &mut stream,
-        &codec,
-        &click_window_in_window(TestJavaProtocol::Je340, 2, 0, 0, 3, None),
-    )
-    .await?;
-    let result_ack = read_until_confirm_transaction(
-        &mut stream,
-        &codec,
-        &mut buffer,
-        TestJavaProtocol::Je340,
-        2,
-        3,
-        16,
-    )
-    .await?;
-    assert_eq!(
-        decode_confirm_transaction(TestJavaProtocol::Je340, &result_ack)?,
-        (2, 3, true)
-    );
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                2,
-                0,
-                16,
-            )
-            .await?,
-        )?,
-        (2, 0, None)
-    );
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                2,
-                1,
-                16,
-            )
-            .await?,
-        )?,
-        (2, 1, None)
-    );
-    assert_eq!(
-        decode_set_slot(
-            TestJavaProtocol::Je340,
-            &read_until_set_slot_item(
-                &mut stream,
-                &codec,
-                &mut buffer,
-                TestJavaProtocol::Je340,
-                -1,
-                -1,
-                Some((5, 4, 0)),
-                16,
-            )
-            .await?,
-        )?,
-        (-1, -1, Some((5, 4, 0)))
-    );
-
-    write_packet(
-        &mut stream,
-        &codec,
-        &close_window(TestJavaProtocol::Je340, 2),
-    )
-    .await?;
-
-    let close_window = read_until_java_packet(
-        &mut stream,
-        &codec,
-        &mut buffer,
-        TestJavaProtocol::Je340,
-        TestJavaPacket::CloseWindow,
-    )
-    .await?;
-    assert_eq!(
-        decode_close_window(TestJavaProtocol::Je340, &close_window)?,
-        2
-    );
-
-    let player_contents = read_until_java_packet_preserving_nonmatching(
-        &mut stream,
-        &codec,
-        &mut buffer,
-        TestJavaProtocol::Je340,
-        TestJavaPacket::WindowItems,
-    )
-    .await?;
-    let mut reader = PacketReader::new(&player_contents);
-    assert_eq!(reader.read_varint().expect("packet id should decode"), 0x14);
-    assert_eq!(reader.read_u8().expect("window id should decode"), 0);
-
+    assert_ne!(replacement.export_session_state(&snapshot)?, pending);
+    // The acknowledgement belongs only to the committed instance, not the retired one.
+    assert_eq!(active.export_session_state(&snapshot)?, pending);
     server.shutdown().await
 }
 

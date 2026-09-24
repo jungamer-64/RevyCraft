@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::Arc;
 
-const CORE_TRANSFER_FORMAT_MAJOR: u16 = 1;
+const CORE_TRANSFER_FORMAT_MAJOR: u16 = 2;
 const MAX_CORE_TRANSFER_BYTES: usize = 512 * 1024 * 1024;
 const CORE_DELTA_MAGIC: [u8; 8] = *b"RVCDCORE";
 const CORE_DELTA_HEADER_BYTES: usize = CORE_DELTA_MAGIC.len()
@@ -301,7 +301,8 @@ pub enum CoreTransferMutation {
         connection_id: crate::ConnectionId,
         username: String,
         player_id: PlayerId,
-        batch: GameplayEffectBatch,
+        now_ms: u64,
+        effects: Vec<crate::GameplayEffect>,
     },
     SetMaxPlayers {
         max_players: u32,
@@ -764,24 +765,23 @@ impl CoreTransferMutation {
             Self::BuiltinTick { now_ms } => {
                 let _events = state.tick(now_ms);
             }
-            Self::GameplayEffects { batch } => {
-                if state.validate_and_apply_gameplay_effects(batch)
-                    == GameplayEffectApplyResult::Conflict
-                {
-                    return Err(CoreTransferError::InvalidState(
-                        "committed gameplay effects conflicted during core delta replay"
-                            .to_string(),
-                    ));
-                }
+            Self::GameplayEffects { now_ms, effects } => {
+                let _events = state.apply_committed_gameplay_effects(now_ms, effects);
             }
             Self::LoginEffects {
                 connection_id,
                 username,
                 player_id,
-                batch,
+                now_ms,
+                effects,
             } => {
-                if state.validate_and_apply_login_effects(connection_id, username, player_id, batch)
-                    == GameplayEffectApplyResult::Conflict
+                if state.apply_committed_login_effects(
+                    connection_id,
+                    username,
+                    player_id,
+                    now_ms,
+                    effects,
+                ) == GameplayEffectApplyResult::Conflict
                 {
                     return Err(CoreTransferError::InvalidState(
                         "committed login effects conflicted during core delta replay".to_string(),
@@ -1047,12 +1047,13 @@ impl CoreMutation {
         batch: GameplayEffectBatch,
     ) -> GameplayEffectApplyResult {
         let has_effects = !batch.effects.is_empty();
-        let result = self
-            .state
-            .validate_and_apply_gameplay_effects(batch.clone());
+        let result = self.state.validate_and_apply_gameplay_effects(&batch);
         if has_effects && result != GameplayEffectApplyResult::Conflict {
             self.transfer_mutations
-                .push(CoreTransferMutation::GameplayEffects { batch });
+                .push(CoreTransferMutation::GameplayEffects {
+                    now_ms: batch.now_ms,
+                    effects: batch.effects,
+                });
         }
         result
     }
@@ -1068,7 +1069,7 @@ impl CoreMutation {
             connection_id,
             username.clone(),
             player_id,
-            batch.clone(),
+            &batch,
         );
         if result != GameplayEffectApplyResult::Conflict {
             self.transfer_mutations
@@ -1076,7 +1077,8 @@ impl CoreMutation {
                     connection_id,
                     username,
                     player_id,
-                    batch,
+                    now_ms: batch.now_ms,
+                    effects: batch.effects,
                 });
         }
         result

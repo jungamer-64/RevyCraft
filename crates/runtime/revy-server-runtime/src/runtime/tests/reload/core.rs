@@ -1,11 +1,78 @@
 use super::*;
+use bedrock_protocol::V924;
 use mc_proto_common::ConnectionPhase;
+use revy_voxel_semantic::BlockPos;
 
 fn core_reload_server_config(world_dir: PathBuf, dist_dir: PathBuf) -> ServerConfig {
     let mut config = loopback_server_config(world_dir);
     config.bootstrap.game_mode = 1;
     config.bootstrap.plugins_dir = dist_dir;
     config
+}
+
+#[tokio::test]
+async fn resync_precopy_retains_events_across_many_core_revisions() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let config = loopback_server_config(temp_dir.path().join("world"));
+    let server = build_reloadable_test_server(config, plugin_test_registries_all()?).await?;
+    let (_stream, _) = connect_and_login_java_client(
+        listener_addr(&server),
+        &MinecraftWireCodec,
+        TestJavaProtocol::Je5,
+        "resync-journal",
+    )
+    .await?;
+    let player_id = server.session_status().await[0].player_id.unwrap();
+    let active = server.runtime.authority.active();
+    let storage = crate::runtime::selection::SelectionResolver::resolve_storage_profile(
+        &active.selection.config,
+        &active.selection.loaded_plugins,
+    )?;
+    let (plan, _) = active.core.plan_candidate(None, storage).await;
+    let mut expected = Vec::new();
+    for index in 0..20_000 {
+        let outcome = active
+            .core
+            .apply_command(
+                revy_voxel_core::CoreCommand::Gameplay(
+                    revy_voxel_core::GameplayCommand::SetHeldSlot {
+                        player_id,
+                        slot: (index % 8) as i16,
+                    },
+                ),
+                crate::runtime::CoreInvocation::Internal,
+                crate::runtime::now_ms(),
+            )
+            .await?;
+        let crate::runtime::CoreCommandOutcome::Events(events) = outcome else {
+            panic!("internal held-slot command cannot be stale");
+        };
+        expected.extend(events.into_iter().filter_map(|event| match *event.event {
+            revy_voxel_core::CoreEvent::SelectedHotbarSlotChanged { slot } => Some(slot),
+            _ => None,
+        }));
+    }
+    let frozen = server.runtime.authority.freeze().await;
+    let sealed = active.core.seal_delta_since(plan.base_revision()).await;
+    let final_revision = active.core.version().revision();
+    frozen.resume();
+    let sealed = sealed?;
+    assert!(final_revision.value() >= plan.base_revision().value() + 20_000);
+    let slots = sealed
+        .events
+        .into_iter()
+        .filter_map(|event| match *event.event {
+            revy_voxel_core::CoreEvent::SelectedHotbarSlotChanged { slot } => Some(slot),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(slots, expected);
+    assert!(!slots.is_empty());
+    assert_eq!(
+        plan.materialize(sealed.precopy).version().revision(),
+        final_revision
+    );
+    server.shutdown().await
 }
 
 #[tokio::test]
@@ -25,17 +92,7 @@ async fn core_reload_preserves_live_java_session() -> Result<(), RuntimeError> {
     let sessions = server.session_status().await;
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].phase, ConnectionPhase::Play);
-    assert_eq!(
-        server
-            .runtime
-            .kernel
-            .export_core_runtime_state()
-            .await
-            .blob
-            .online_players
-            .len(),
-        1
-    );
+    assert_eq!(server.runtime.player_summary().await.online_players, 1);
 
     server.shutdown().await
 }
@@ -59,15 +116,16 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
 
     let (_stream, _buffer) =
         connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "corecfg").await?;
-    let before = server.runtime.kernel.export_core_runtime_state().await;
+    let player_id = server
+        .session_status()
+        .await
+        .into_iter()
+        .find_map(|session| session.player_id)
+        .expect("one online player should exist");
+    let before = server.runtime.authority.active().core.version();
     let before_session = before
-        .blob
-        .online_players
-        .values()
-        .next()
-        .expect("one online player should exist")
-        .session
-        .clone();
+        .player_session_state(player_id)
+        .expect("one online player should have session state");
 
     let mut updated = initial.clone();
     updated.bootstrap.level_name = "renamed-world".to_string();
@@ -83,15 +141,10 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
     let result = server.reload_runtime_core().await?;
     assert_eq!(result, crate::runtime::CoreReloadResult {});
 
-    let after = server.runtime.kernel.export_core_runtime_state().await;
+    let after = server.runtime.authority.active().core.version();
     let after_session = after
-        .blob
-        .online_players
-        .values()
-        .next()
-        .expect("one online player should still exist")
-        .session
-        .clone();
+        .player_session_state(player_id)
+        .expect("one online player should still have session state");
     assert_eq!(
         before_session.pending_keep_alive_id,
         after_session.pending_keep_alive_id
@@ -104,10 +157,11 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
         before_session.next_keep_alive_at,
         after_session.next_keep_alive_at
     );
-    assert_eq!(after.blob.snapshot.meta.level_name, "renamed-world");
-    assert_eq!(after.blob.snapshot.meta.game_mode, 0);
-    assert_eq!(after.blob.snapshot.meta.difficulty, 3);
-    assert_eq!(after.blob.snapshot.meta.max_players, 31);
+    let after_snapshot = after.snapshot();
+    assert_eq!(after_snapshot.meta.level_name, "renamed-world");
+    assert_eq!(after_snapshot.meta.game_mode, 0);
+    assert_eq!(after_snapshot.meta.difficulty, 3);
+    assert_eq!(after_snapshot.meta.max_players, 31);
     let selection = server.runtime.selection_state().await;
     assert_eq!(selection.config.bootstrap.level_name, "renamed-world");
     assert_eq!(selection.config.bootstrap.view_distance, 4);
@@ -128,6 +182,38 @@ async fn core_reload_updates_live_core_config_and_preserves_keepalive_state()
         initial.profiles.default_gameplay
     );
     assert_eq!(selection.config.admin.surfaces, initial.admin.surfaces);
+
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn core_reload_preserves_live_bedrock_reliability_state() -> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let mut config = loopback_server_config(temp_dir.path().join("world"));
+    config.bootstrap.game_mode = 1;
+    config.topology.be_enabled = true;
+    config.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into()]);
+    config.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.into();
+    config.topology.enabled_bedrock_adapters = Some(vec![BE_924_ADAPTER_ID.into()]);
+    config.profiles.bedrock_auth = BEDROCK_OFFLINE_AUTH_PROFILE_ID.into();
+    let server = build_reloadable_test_server(
+        config,
+        plugin_test_registries_with_allowlist(&[JE_5_ADAPTER_ID, BE_924_ADAPTER_ID])?,
+    )
+    .await?;
+    let mut client = BedrockTestClient::connect(udp_listener_addr(&server)).await?;
+    client.login("bedrock-reload").await?;
+    let _ = read_until_bedrock_packet(&mut client, TestBedrockPacket::StartGame, 32).await?;
+    let _ = read_until_bedrock_packet(&mut client, TestBedrockPacket::LevelChunk, 64).await?;
+
+    server.reload_runtime_core().await?;
+    client.place_block(BlockPos::new(2, 3, 0), 1).await?;
+    let update = read_until_bedrock_packet(&mut client, TestBedrockPacket::UpdateBlock, 32).await?;
+    let V924::UpdateBlockPacket(update) = update else {
+        panic!("expected update block after Bedrock reload, got {update:?}");
+    };
+    assert_eq!(update.block_position.x, 2);
+    assert_eq!(server.session_status().await.len(), 1);
 
     server.shutdown().await
 }
@@ -261,17 +347,6 @@ async fn full_reload_updates_live_play_session_generations_without_resending_log
             .iter()
             .any(|plugin_id| plugin_id == "gameplay-canonical")
     );
-    let sessions = server.session_status().await;
-    assert_eq!(sessions.len(), 1);
-    assert_eq!(sessions[0].phase, ConnectionPhase::Play);
-    assert_ne!(
-        sessions[0].protocol_generation,
-        Some(before_protocol_generation)
-    );
-    assert_ne!(
-        sessions[0].gameplay_generation,
-        Some(before_gameplay_generation)
-    );
     assert_eq!(
         protocol_build_tag(&server, JE_5_ADAPTER_ID).as_deref(),
         Some("protocol-reload-v2")
@@ -295,6 +370,17 @@ async fn full_reload_updates_live_play_session_generations_without_resending_log
     assert_eq!(
         held_item_from_packet_for_protocol(TestJavaProtocol::Je5, &held_item)?,
         4
+    );
+    let sessions = server.session_status().await;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].phase, ConnectionPhase::Play);
+    assert_ne!(
+        sessions[0].protocol_generation,
+        Some(before_protocol_generation)
+    );
+    assert_ne!(
+        sessions[0].gameplay_generation,
+        Some(before_gameplay_generation)
     );
 
     server.shutdown().await

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+const PACKAGED_PLUGIN_PROFILE: &str = env!("REVY_PACKAGED_PLUGIN_PROFILE");
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PackagedPluginKind {
     Protocol,
@@ -650,7 +652,7 @@ impl PackagedPluginHarness {
             |cargo_package, target_dir, build_tag| {
                 packaged_plugin_test_run_cargo_build(cargo_package, target_dir, build_tag)?;
                 Ok(target_dir
-                    .join("debug")
+                    .join(PACKAGED_PLUGIN_PROFILE)
                     .join(dynamic_library_filename(cargo_package)))
             },
         )
@@ -1066,7 +1068,7 @@ fn packaged_plugin_test_workspace_root() -> PathBuf {
 
 fn packaged_plugin_test_cache_root() -> PathBuf {
     packaged_plugin_test_workspace_root()
-        .join("target")
+        .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
         .join("revy-server-runtime-plugin-test-cache")
 }
 
@@ -1171,6 +1173,9 @@ fn packaged_plugin_test_run_xtask_package_all_plugins(
         .arg("package-all-plugins")
         .arg("--dist-dir")
         .arg(dist_dir);
+    if PACKAGED_PLUGIN_PROFILE == "release" {
+        command.arg("--release");
+    }
     packaged_plugin_test_run_command(
         command,
         format!("xtask package-all-plugins into {}", dist_dir.display()),
@@ -1197,6 +1202,9 @@ fn packaged_plugin_test_run_cargo_build(
         .arg("build")
         .arg("-p")
         .arg(cargo_package);
+    if PACKAGED_PLUGIN_PROFILE == "release" {
+        command.arg("--release");
+    }
     packaged_plugin_test_run_command(
         command,
         format!("cargo build for packaged plugin `{cargo_package}`"),
@@ -1239,7 +1247,9 @@ fn packaged_plugin_test_harness_stamp() -> Result<String, String> {
             &mut file_count,
         )?;
     }
-    Ok(format!("{newest_ms}-{file_count}"))
+    Ok(format!(
+        "{PACKAGED_PLUGIN_PROFILE}-{newest_ms}-{file_count}"
+    ))
 }
 
 fn accumulate_packaged_plugin_test_stamp(
@@ -1590,7 +1600,7 @@ mod tests {
         target_dir: &Path,
     ) -> Result<PathBuf, PackagedPluginOperationError> {
         let source = target_dir
-            .join("debug")
+            .join(super::PACKAGED_PLUGIN_PROFILE)
             .join(dynamic_library_filename(cargo_package));
         fs::create_dir_all(
             source
@@ -1759,7 +1769,7 @@ mod tests {
 
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
         assert!(artifact.is_file());
-        assert!(target_dir.join("debug").is_dir());
+        assert!(target_dir.join(super::PACKAGED_PLUGIN_PROFILE).is_dir());
     }
 
     #[test]
@@ -1964,7 +1974,7 @@ mod tests {
         assert!(first.is_file());
         assert!(
             target_dir
-                .join("debug")
+                .join(super::PACKAGED_PLUGIN_PROFILE)
                 .join(dynamic_library_filename("mc-plugin-proto-je-5"))
                 .is_file(),
             "direct builds should place intermediates under the requested target dir"
@@ -2025,7 +2035,7 @@ mod tests {
 
     fn tempdir() -> std::io::Result<tempfile::TempDir> {
         let base_dir = super::packaged_plugin_test_workspace_root()
-            .join("target")
+            .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
             .join("test-tmp")
             .join("mc-plugin-test-support");
         fs::create_dir_all(&base_dir)?;

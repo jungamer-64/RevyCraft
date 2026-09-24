@@ -6,12 +6,11 @@ use super::{
     GameplayRequest, Library, ManifestCapabilities, Mutex, PLUGIN_ADMIN_SURFACE_API_SYMBOL_V9,
     PLUGIN_AUTH_API_SYMBOL_V9, PLUGIN_GAMEPLAY_API_SYMBOL_V9, PLUGIN_MANIFEST_SYMBOL_V9,
     PLUGIN_PROTOCOL_API_SYMBOL_V9, PLUGIN_STORAGE_API_SYMBOL_V9, Path, PluginApiHeaderV9,
-    PluginGenerationId, PluginManifestV9, PluginPackage, ProtocolCapability, ProtocolGeneration,
-    ProtocolInvocation, ProtocolPluginApiV9, ProtocolRequest, RuntimeError, StorageCapability,
-    StorageGeneration, StorageInvocation, StoragePluginApiV9, StorageRequest,
-    admin_surface_host_api, decode_manifest, expect_admin_surface_capabilities,
-    expect_admin_surface_descriptor, expect_auth_capabilities, expect_auth_descriptor,
-    expect_gameplay_capabilities, expect_gameplay_descriptor,
+    PluginManifestV9, PluginPackage, ProtocolCapability, ProtocolGeneration, ProtocolInvocation,
+    ProtocolPluginApiV9, ProtocolRequest, RuntimeError, StorageCapability, StorageGeneration,
+    StorageInvocation, StoragePluginApiV9, StorageRequest, admin_surface_host_api, decode_manifest,
+    expect_admin_surface_capabilities, expect_admin_surface_descriptor, expect_auth_capabilities,
+    expect_auth_descriptor, expect_gameplay_capabilities, expect_gameplay_descriptor,
     expect_protocol_bedrock_listener_descriptor, expect_protocol_capabilities,
     expect_protocol_descriptor, expect_storage_capabilities, expect_storage_descriptor,
     gameplay_metadata_host_api,
@@ -72,12 +71,35 @@ unsafe fn read_plugin_api<T: Copy>(api: *const T, api_name: &str) -> Result<T, R
 
 pub(crate) struct PluginLoader {
     abi_range: super::PluginAbiRange,
+    generations: Arc<super::GenerationManager>,
 }
 
 impl PluginLoader {
     #[must_use]
-    pub(crate) const fn new(abi_range: super::PluginAbiRange) -> Self {
-        Self { abi_range }
+    pub(crate) fn new(
+        abi_range: super::PluginAbiRange,
+        generations: Arc<super::GenerationManager>,
+    ) -> Self {
+        Self {
+            abi_range,
+            generations,
+        }
+    }
+
+    fn load_stable_artifact<T>(
+        package: &PluginPackage,
+        load: impl FnOnce() -> Result<T, RuntimeError>,
+    ) -> Result<([u8; 32], T), RuntimeError> {
+        let before = package.artifact_sha256()?;
+        let loaded = load()?;
+        let after = package.artifact_sha256()?;
+        if before != after {
+            return Err(RuntimeError::Config(format!(
+                "plugin `{}` artifact changed while its generation was loading",
+                package.plugin_id
+            )));
+        }
+        Ok((before, loaded))
     }
 }
 
@@ -97,7 +119,18 @@ impl PluginLoader {
                     &package.plugin_id,
                     "free_buffer",
                 )?,
-                _library_lease: guard,
+                instance: super::generation::PluginInstance::create(
+                    &package.plugin_id,
+                    required_api_entry(api.create_instance, &package.plugin_id, "create_instance")?,
+                    required_api_entry(
+                        api.destroy_instance,
+                        &package.plugin_id,
+                        "destroy_instance",
+                    )?,
+                    required_api_entry(api.free_buffer, &package.plugin_id, "free_buffer")?,
+                    guard,
+                    buffer_limits.metadata_bytes,
+                )?,
             },
         ))
     }
@@ -117,7 +150,18 @@ impl PluginLoader {
                     &package.plugin_id,
                     "free_buffer",
                 )?,
-                _library_lease: guard,
+                instance: super::generation::PluginInstance::create(
+                    &package.plugin_id,
+                    required_api_entry(api.create_instance, &package.plugin_id, "create_instance")?,
+                    required_api_entry(
+                        api.destroy_instance,
+                        &package.plugin_id,
+                        "destroy_instance",
+                    )?,
+                    required_api_entry(api.free_buffer, &package.plugin_id, "free_buffer")?,
+                    guard,
+                    buffer_limits.metadata_bytes,
+                )?,
             },
         ))
     }
@@ -137,7 +181,18 @@ impl PluginLoader {
                     &package.plugin_id,
                     "free_buffer",
                 )?,
-                _library_lease: guard,
+                instance: super::generation::PluginInstance::create(
+                    &package.plugin_id,
+                    required_api_entry(api.create_instance, &package.plugin_id, "create_instance")?,
+                    required_api_entry(
+                        api.destroy_instance,
+                        &package.plugin_id,
+                        "destroy_instance",
+                    )?,
+                    required_api_entry(api.free_buffer, &package.plugin_id, "free_buffer")?,
+                    guard,
+                    buffer_limits.metadata_bytes,
+                )?,
             },
         ))
     }
@@ -157,7 +212,18 @@ impl PluginLoader {
                     &package.plugin_id,
                     "free_buffer",
                 )?,
-                _library_lease: guard,
+                instance: super::generation::PluginInstance::create(
+                    &package.plugin_id,
+                    required_api_entry(api.create_instance, &package.plugin_id, "create_instance")?,
+                    required_api_entry(
+                        api.destroy_instance,
+                        &package.plugin_id,
+                        "destroy_instance",
+                    )?,
+                    required_api_entry(api.free_buffer, &package.plugin_id, "free_buffer")?,
+                    guard,
+                    buffer_limits.metadata_bytes,
+                )?,
             },
         ))
     }
@@ -177,7 +243,18 @@ impl PluginLoader {
                     &package.plugin_id,
                     "free_buffer",
                 )?,
-                _library_lease: guard,
+                instance: super::generation::PluginInstance::create(
+                    &package.plugin_id,
+                    required_api_entry(api.create_instance, &package.plugin_id, "create_instance")?,
+                    required_api_entry(
+                        api.destroy_instance,
+                        &package.plugin_id,
+                        "destroy_instance",
+                    )?,
+                    required_api_entry(api.free_buffer, &package.plugin_id, "free_buffer")?,
+                    guard,
+                    buffer_limits.metadata_bytes,
+                )?,
             },
         ))
     }
@@ -185,10 +262,14 @@ impl PluginLoader {
     pub(super) fn load_protocol_generation(
         &self,
         package: &PluginPackage,
-        generation_id: PluginGenerationId,
         buffer_limits: PluginBufferLimits,
     ) -> Result<ProtocolGeneration, RuntimeError> {
-        let (manifest, backend) = Self::load_protocol_backend(package, buffer_limits)?;
+        let (artifact_sha256, (manifest, backend)) = Self::load_stable_artifact(package, || {
+            Self::load_protocol_backend(package, buffer_limits)
+        })?;
+        let generation_id = self
+            .generations
+            .generation_for_binding(artifact_sha256, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
         let descriptor = expect_protocol_descriptor(
             &package.plugin_id,
@@ -236,9 +317,11 @@ impl PluginLoader {
         Ok(ProtocolGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
+            artifact_sha256,
             descriptor,
             bedrock_listener_descriptor,
             capabilities: capabilities.capabilities,
+            max_session_handoff_bytes: manifest.max_session_handoff_bytes,
             buffer_limits,
             build_tag: capabilities.build_tag,
             invocation: backend,
@@ -248,10 +331,14 @@ impl PluginLoader {
     pub(super) fn load_gameplay_generation(
         &self,
         package: &PluginPackage,
-        generation_id: PluginGenerationId,
         buffer_limits: PluginBufferLimits,
     ) -> Result<GameplayGeneration, RuntimeError> {
-        let (manifest, backend) = Self::load_gameplay_backend(package, buffer_limits)?;
+        let (artifact_sha256, (manifest, backend)) = Self::load_stable_artifact(package, || {
+            Self::load_gameplay_backend(package, buffer_limits)
+        })?;
+        let generation_id = self
+            .generations
+            .generation_for_binding(artifact_sha256, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
         let ManifestCapabilities::Gameplay(manifest_capabilities) = &manifest.capabilities else {
             return Err(RuntimeError::Config(format!(
@@ -300,8 +387,10 @@ impl PluginLoader {
         Ok(GameplayGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
+            artifact_sha256,
             profile_id,
             capabilities: capabilities.capabilities,
+            max_session_handoff_bytes: manifest.max_session_handoff_bytes,
             buffer_limits,
             build_tag: capabilities.build_tag,
             invocation: backend,
@@ -311,10 +400,14 @@ impl PluginLoader {
     pub(super) fn load_storage_generation(
         &self,
         package: &PluginPackage,
-        generation_id: PluginGenerationId,
         buffer_limits: PluginBufferLimits,
     ) -> Result<StorageGeneration, RuntimeError> {
-        let (manifest, backend) = Self::load_storage_backend(package, buffer_limits)?;
+        let (artifact_sha256, (manifest, backend)) = Self::load_stable_artifact(package, || {
+            Self::load_storage_backend(package, buffer_limits)
+        })?;
+        let generation_id = self
+            .generations
+            .generation_for_binding(artifact_sha256, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
         let ManifestCapabilities::Storage(manifest_capabilities) = &manifest.capabilities else {
             return Err(RuntimeError::Config(format!(
@@ -355,6 +448,7 @@ impl PluginLoader {
         Ok(StorageGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
+            artifact_sha256,
             profile_id,
             capabilities: capabilities.capabilities,
             buffer_limits,
@@ -366,10 +460,14 @@ impl PluginLoader {
     pub(super) fn load_auth_generation(
         &self,
         package: &PluginPackage,
-        generation_id: PluginGenerationId,
         buffer_limits: PluginBufferLimits,
     ) -> Result<AuthGeneration, RuntimeError> {
-        let (manifest, backend) = Self::load_auth_backend(package, buffer_limits)?;
+        let (artifact_sha256, (manifest, backend)) = Self::load_stable_artifact(package, || {
+            Self::load_auth_backend(package, buffer_limits)
+        })?;
+        let generation_id = self
+            .generations
+            .generation_for_binding(artifact_sha256, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
         let ManifestCapabilities::Auth(manifest_capabilities) = &manifest.capabilities else {
             return Err(RuntimeError::Config(format!(
@@ -410,6 +508,7 @@ impl PluginLoader {
         Ok(AuthGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
+            artifact_sha256,
             profile_id,
             mode: descriptor.mode,
             capabilities: capabilities.capabilities,
@@ -422,10 +521,14 @@ impl PluginLoader {
     pub(super) fn load_admin_surface_generation(
         &self,
         package: &PluginPackage,
-        generation_id: PluginGenerationId,
         buffer_limits: PluginBufferLimits,
     ) -> Result<AdminSurfaceGeneration, RuntimeError> {
-        let (manifest, backend) = Self::load_admin_surface_backend(package, buffer_limits)?;
+        let (artifact_sha256, (manifest, backend)) = Self::load_stable_artifact(package, || {
+            Self::load_admin_surface_backend(package, buffer_limits)
+        })?;
+        let generation_id = self
+            .generations
+            .generation_for_binding(artifact_sha256, buffer_limits)?;
         self.validate_manifest(package, &manifest)?;
         let ManifestCapabilities::AdminSurface(manifest_capabilities) = &manifest.capabilities
         else {
@@ -475,6 +578,7 @@ impl PluginLoader {
         Ok(AdminSurfaceGeneration {
             generation_id,
             plugin_id: package.plugin_id.clone(),
+            artifact_sha256,
             profile_id,
             capabilities: capabilities.capabilities,
             buffer_limits,

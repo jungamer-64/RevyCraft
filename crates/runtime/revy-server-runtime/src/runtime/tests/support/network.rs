@@ -20,6 +20,7 @@ use rak_rs::protocol::packet::online::{
 use rak_rs::protocol::reliability::Reliability as RakReliability;
 use revy_voxel_semantic::BlockPos;
 use rsa::rand_core::{OsRng, RngCore};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 pub(crate) async fn write_packet(
@@ -592,6 +593,8 @@ pub(crate) struct BedrockTestClient {
     recv_queue: RecvQueue,
     compression: Option<BedrockCompression>,
     server_addr: SocketAddr,
+    pending_payloads: VecDeque<Vec<u8>>,
+    pending_packets: VecDeque<V924>,
 }
 
 impl BedrockTestClient {
@@ -637,6 +640,8 @@ impl BedrockTestClient {
             recv_queue: RecvQueue::new(),
             compression: None,
             server_addr: addr,
+            pending_payloads: VecDeque::new(),
+            pending_packets: VecDeque::new(),
         };
 
         client
@@ -838,6 +843,19 @@ impl BedrockTestClient {
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
+    // One transport payload can contain several packets. Preserve its unread suffix
+    // across successive assertions, just as the RakNet queue preserves flushed payloads.
+    async fn recv_bedrock_packet(&mut self) -> Result<V924, RuntimeError> {
+        loop {
+            if let Some(packet) = self.pending_packets.pop_front() {
+                return Ok(packet);
+            }
+            let payload = self.recv_bedrock_payload().await?;
+            self.pending_packets
+                .extend(decode_bedrock_packets(&payload, self.compression.as_ref())?);
+        }
+    }
+
     async fn recv_bedrock_payload(&mut self) -> Result<Vec<u8>, RuntimeError> {
         loop {
             let payload = self.recv_raknet_payload().await?;
@@ -878,6 +896,9 @@ impl BedrockTestClient {
 
     async fn recv_raknet_payload(&mut self) -> Result<Vec<u8>, RuntimeError> {
         loop {
+            if let Some(payload) = self.pending_payloads.pop_front() {
+                return Ok(payload);
+            }
             let payload =
                 tokio::time::timeout(Duration::from_secs(2), Self::recv_udp(&self.socket))
                     .await
@@ -892,9 +913,7 @@ impl BedrockTestClient {
                     if self.recv_queue.insert(frame).is_err() {
                         continue;
                     }
-                    if let Some(raw) = self.recv_queue.flush().into_iter().next() {
-                        return Ok(raw);
-                    }
+                    self.pending_payloads.extend(self.recv_queue.flush());
                 }
                 _ => {}
             }
@@ -937,35 +956,14 @@ pub(crate) async fn read_until_bedrock_packet(
     max_attempts: usize,
 ) -> Result<V924, RuntimeError> {
     let max_attempts = max_attempts.max(64);
-    let mut last_decode_error = None;
     for _ in 0..max_attempts {
-        let payload = client.recv_bedrock_payload().await?;
-        let Ok(packets) = decode_bedrock_packets(&payload, client.compression.as_ref()).map_err(
-            |error| {
-                RuntimeError::Config(format!(
-                    "{error}; wanted={wanted_packet:?}; compression={:?}; payload_len={}; payload_prefix={:02x?}",
-                    client.compression,
-                    payload.len(),
-                    &payload.iter().take(24).copied().collect::<Vec<_>>(),
-                ))
-            },
-        ) else {
-            last_decode_error = Some(format!(
-                "wanted={wanted_packet:?}; compression={:?}; payload_len={}; payload_prefix={:02x?}",
-                client.compression,
-                payload.len(),
-                &payload.iter().take(24).copied().collect::<Vec<_>>(),
-            ));
-            continue;
-        };
-        for packet in packets {
-            if test_bedrock_packet(&packet) == Some(wanted_packet) {
-                return Ok(packet);
-            }
+        let packet = client.recv_bedrock_packet().await?;
+        if test_bedrock_packet(&packet) == Some(wanted_packet) {
+            return Ok(packet);
         }
     }
     Err(RuntimeError::Config(format!(
-        "did not receive bedrock packet {wanted_packet:?}; last_decode_error={last_decode_error:?}"
+        "did not receive bedrock packet {wanted_packet:?}"
     )))
 }
 
@@ -978,25 +976,14 @@ pub(crate) async fn assert_no_bedrock_packet(
         if remaining.is_zero() {
             break;
         }
-        let payload = match tokio::time::timeout(remaining, client.recv_bedrock_payload()).await {
+        let packet = match tokio::time::timeout(remaining, client.recv_bedrock_packet()).await {
             Err(_) => break,
             Ok(result) => result?,
         };
-        let packets =
-            decode_bedrock_packets(&payload, client.compression.as_ref()).map_err(|error| {
-                RuntimeError::Config(format!(
-                    "{error}; wanted_absent={wanted_packet:?}; compression={:?}; payload_len={}; payload_prefix={:02x?}",
-                    client.compression,
-                    payload.len(),
-                    &payload.iter().take(24).copied().collect::<Vec<_>>(),
-                ))
-            })?;
-        for packet in packets {
-            if test_bedrock_packet(&packet) == Some(wanted_packet) {
-                return Err(RuntimeError::Config(format!(
-                    "unexpected bedrock packet {wanted_packet:?}: {packet:?}"
-                )));
-            }
+        if test_bedrock_packet(&packet) == Some(wanted_packet) {
+            return Err(RuntimeError::Config(format!(
+                "unexpected bedrock packet {wanted_packet:?}: {packet:?}"
+            )));
         }
     }
     Ok(())
@@ -1154,6 +1141,42 @@ pub(crate) async fn perform_online_login(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn shutdown_delivers_bedrock_disconnect_before_releasing_udp_router()
+    -> Result<(), RuntimeError> {
+        let temp_dir = tempdir()?;
+        let mut config = loopback_server_config(temp_dir.path().join("world"));
+        config.bootstrap.game_mode = 1;
+        config.topology.be_enabled = true;
+        config.topology.enabled_adapters = Some(vec![JE_5_ADAPTER_ID.into()]);
+        config.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.into();
+        config.topology.enabled_bedrock_adapters = Some(vec![BE_924_ADAPTER_ID.into()]);
+        config.profiles.bedrock_auth = BEDROCK_OFFLINE_AUTH_PROFILE_ID.into();
+        let server = build_test_server(
+            config,
+            plugin_test_registries_with_allowlist(&[JE_5_ADAPTER_ID, BE_924_ADAPTER_ID])?,
+        )
+        .await?;
+        let mut client = BedrockTestClient::connect(udp_listener_addr(&server)).await?;
+        client.login("shutdown-player").await?;
+        read_until_bedrock_packet(&mut client, TestBedrockPacket::StartGame, 32).await?;
+        read_until_bedrock_packet(&mut client, TestBedrockPacket::LevelChunk, 64).await?;
+        let disconnect = async {
+            loop {
+                if let V924::DisconnectPacket(packet) = client.recv_bedrock_packet().await? {
+                    let message = packet.message.ok_or_else(|| {
+                        RuntimeError::Config("shutdown disconnect omitted its reason".to_owned())
+                    })?;
+                    assert_eq!(message.kick_message, "Server shutting down");
+                    return Ok::<_, RuntimeError>(());
+                }
+            }
+        };
+        let (shutdown, disconnected) = tokio::join!(server.shutdown(), disconnect);
+        shutdown?;
+        disconnected
+    }
     use mc_proto_common::PacketWriter;
 
     fn encode_je340_set_slot(window_id: i8, slot: i16, item: Option<(i16, u8, i16)>) -> Vec<u8> {

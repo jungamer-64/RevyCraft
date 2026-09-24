@@ -2,9 +2,9 @@ use crate::PluginHostError as RuntimeError;
 use crate::config::{BootstrapConfig, RuntimeSelectionConfig};
 use crate::registry::ProtocolRegistry;
 use crate::runtime::{
-    AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginHost,
-    RuntimeProtocolTopologyCandidate, RuntimeReloadContext, StagedRuntimeSelection,
-    StorageProfileHandle,
+    AuthGenerationHandle, AuthProfileHandle, GameplayProfileHandle, RuntimePluginArtifact,
+    RuntimePluginHost, RuntimeProtocolTopologyCandidate, RuntimeReloadContext,
+    StagedRuntimeSelection, StorageProfileHandle,
 };
 use bytes::BytesMut;
 use libloading::Library;
@@ -55,7 +55,7 @@ use revy_voxel_semantic::{
     StorageProfileId, WorldSnapshot,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
@@ -162,7 +162,6 @@ pub struct PluginHost {
     dynamic_catalog_source: Option<DynamicCatalogSource>,
     runtime_selection: Mutex<RuntimeSelectionConfig>,
     loader: PluginLoader,
-    generations: Arc<GenerationManager>,
     failures: Arc<PluginFailureDispatch>,
     protocols: Mutex<HashMap<String, ManagedProtocolPlugin>>,
     gameplay: Mutex<HashMap<GameplayProfileId, ManagedGameplayPlugin>>,
@@ -187,14 +186,14 @@ impl PluginHost {
         failure_matrix: PluginFailureMatrix,
         dynamic_catalog_source: Option<PathBuf>,
     ) -> Self {
+        let generations = Arc::new(GenerationManager::default());
         Self {
             bootstrap_config,
             catalog,
             dynamic_catalog_source: dynamic_catalog_source
                 .map(|root| DynamicCatalogSource { root }),
             runtime_selection: Mutex::new(RuntimeSelectionConfig::default()),
-            loader: PluginLoader::new(abi_range),
-            generations: Arc::new(GenerationManager::default()),
+            loader: PluginLoader::new(abi_range, generations),
             failures: Arc::new(PluginFailureDispatch::new(failure_matrix)),
             protocols: Mutex::new(HashMap::new()),
             gameplay: Mutex::new(HashMap::new()),
@@ -239,6 +238,75 @@ impl PluginHost {
 }
 
 impl RuntimePluginHost for PluginHost {
+    fn exact_plugin_artifacts(&self) -> Result<Vec<RuntimePluginArtifact>, RuntimeError> {
+        let mut artifacts = BTreeMap::<String, [u8; 32]>::new();
+        let mut record = |plugin_id: &str, sha256: [u8; 32]| -> Result<(), RuntimeError> {
+            if let Some(active) = artifacts.insert(plugin_id.to_string(), sha256)
+                && active != sha256
+            {
+                return Err(RuntimeError::Config(format!(
+                    "active plugin generations disagree on artifact bytes for `{plugin_id}`"
+                )));
+            }
+            Ok(())
+        };
+
+        for managed in self
+            .protocols
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .values()
+        {
+            let generation = managed
+                .adapter
+                .generation
+                .read()
+                .expect("protocol generation lock should not be poisoned");
+            record(&generation.plugin_id, generation.artifact_sha256)?;
+        }
+        for managed in self
+            .gameplay
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .values()
+        {
+            let generation = managed.profile.current_generation();
+            record(&generation.plugin_id, generation.artifact_sha256)?;
+        }
+        for managed in self
+            .storage
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .values()
+        {
+            let generation = managed.profile.current_generation();
+            record(&generation.plugin_id, generation.artifact_sha256)?;
+        }
+        for managed in self
+            .auth
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .values()
+        {
+            let generation = managed.profile.current_generation();
+            record(&generation.plugin_id, generation.artifact_sha256)?;
+        }
+        for managed in self
+            .admin_surface
+            .lock()
+            .expect("plugin host mutex should not be poisoned")
+            .values()
+        {
+            let generation = managed.profile.current_generation();
+            record(&generation.plugin_id, generation.artifact_sha256)?;
+        }
+
+        Ok(artifacts
+            .into_iter()
+            .map(|(plugin_id, sha256)| RuntimePluginArtifact { plugin_id, sha256 })
+            .collect())
+    }
+
     fn stage_runtime_selection(
         &self,
         config: &RuntimeSelectionConfig,

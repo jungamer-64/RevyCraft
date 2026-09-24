@@ -31,6 +31,7 @@ pub trait BedrockProfile: Default + Send + Sync {
         &self,
         player: &PlayerSnapshot,
     ) -> Result<Vec<u8>, ProtocolError>;
+    fn encode_keep_alive_packet(&self, keep_alive_id: i32) -> Result<Vec<u8>, ProtocolError>;
     fn decode_play_packet(
         &self,
         session: &ProtocolSessionSnapshot,
@@ -315,8 +316,10 @@ impl<P: BedrockProfile> PlaySyncAdapter for BedrockAdapter<P> {
             CoreEvent::EntityDespawned { entity_ids } => {
                 self.profile.encode_entity_despawn_packets(entity_ids)
             }
-            CoreEvent::KeepAliveRequested { .. }
-            | CoreEvent::EntitySpawned { .. }
+            CoreEvent::KeepAliveRequested { keep_alive_id } => {
+                Ok(vec![self.profile.encode_keep_alive_packet(*keep_alive_id)?])
+            }
+            CoreEvent::EntitySpawned { .. }
             | CoreEvent::InventoryTransactionProcessed { .. }
             | CoreEvent::CursorChanged { .. }
             | CoreEvent::LoginAccepted { .. }

@@ -180,15 +180,16 @@ pub(crate) fn packaged_failing_storage_registries(
 ) -> Result<LoadedPluginTestEnvironment, RuntimeError> {
     let harness =
         PackagedPluginHarness::shared().map_err(|error| RuntimeError::Config(error.to_string()))?;
-    let scope = format!(
+    let build_scope = format!(
         "failing-storage-{}",
         uuid::Uuid::new_v3(
             &uuid::Uuid::NAMESPACE_OID,
             format!("{:?}", failure_action).as_bytes()
         )
     );
+    let dist_scope = format!("{build_scope}-{}", uuid::Uuid::new_v4());
     let dist_dir = workspace_test_temp_root()
-        .join(&scope)
+        .join(dist_scope)
         .join("runtime")
         .join("plugins");
     let supporting_plugin_ids = &["auth-offline", "auth-bedrock-offline", "auth-bedrock-xbl"];
@@ -198,7 +199,7 @@ pub(crate) fn packaged_failing_storage_registries(
             FAILING_STORAGE_CARGO_PACKAGE,
             FAILING_STORAGE_PLUGIN_ID,
             &dist_dir,
-            &harness.scoped_target_dir(&scope),
+            &harness.scoped_target_dir(&build_scope),
             PACKAGED_PLUGIN_TEST_HARNESS_TAG,
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;

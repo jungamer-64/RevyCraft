@@ -1,309 +1,177 @@
-# `reload runtime` の設計と `core` 移行
+# `reload runtime` と executable cutover の設計
 
-- 対象読者: `reload runtime <mode>`、`ReloadCoordinator`、`core` 移行の内部設計を追いたい contributors
-- この文書で扱う範囲: 公開 reload surface、mode ごとの意味論、`consistency_gate`、`CoreRuntimeStateBlob`、rollback policy、acceptance
-- この文書で扱わないこと: operator 向けの command 手順、plugin authoring の詳細、target crate split の背景説明
-- 次に読む文書: [`core-command-event-flow.md`](core-command-event-flow.md)
+- 対象読者: reload、core revision、session cutover、executable handoff を変更する contributors
+- この文書で扱う範囲: cutover protocol、freeze 測定契約、rollback、latency acceptance
+- この文書で扱わないこと: operator command の設定手順、plugin authoring のコード例
+- 関連文書: [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)、[`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md)
 
-この文書は、`ServerCore` を reload 境界の内側へ移し、接続を切らずに live session を保持したまま runtime を更新する contributor 向け正本です。operator 向けの command surface と permission は [`../operators/configuration-and-reload.md`](../operators/configuration-and-reload.md) を参照してください。
+この設計の最上位条件は、1000 live session で reload と executable replacement の停止時間を budget 内に保つことです。plugin load や serialization を速くするだけではなく、freeze に入る前に fallible / allocative work を完了できる ownership と protocol を要求します。
 
-## 公開 `reload` surface
+## 公開操作と単一 cutover engine
 
-外向けの入口は `ServerSupervisor::reload_runtime(mode)` です。
+公開 mode は次の 4 つです。
 
 - `reload runtime artifacts`
 - `reload runtime topology`
 - `reload runtime core`
 - `reload runtime full`
 
-`RuntimeReloadMode` は次を持つ前提です。
+mode は変更してよい resource set だけを制限します。すべて `RuntimeChangeSet` と同じ cutover engine を使い、selection / topology / core の mode 別 commit API は持ちません。watch reload は `full` と同じ意味論です。
 
-- `Artifacts`
-  active selection を固定したまま artifact 差分だけを reload する
-- `Topology`
-  最新 config の `network` / `topology` を materialize して listener / routing generation を切り替える
-- `Core`
-  最新 config を読み、core に投影される差分だけを取り込みつつ `ServerCore` を migration する
-- `Full`
-  最新 config から selection / topology / core migration をまとめて評価し、成功時のみ一括 commit する
+## typestate protocol
 
-旧 `reload plugins` / `reload generation` / `reload config` は設計上の surface から外します。
+normal reload は次の一方向 transition です。
 
-## reload の前提
+1. `StagedCutover`
+   config validation、packaged plugin load/finalize、inactive topology、core candidate、session-independent material を構築します。
+2. `PreparingCutover`
+   session actor に candidate binding を bounded fan-out で配布し、handoff slot と resync buffer を確保します。listener candidate を precommit します。
+3. `FrozenCutover`
+   listener ingress と data-plane gate を閉じ、core final delta、session、transport、RakNet の最終 state だけを seal します。
+4. `PreparedCutover`
+   actor は active state と pending state を保持し、外部 packet はまだ送信しません。
+5. commit または abort
+   commit は candidate epoch を一度 publish し、ingress と gate を再開して epoch latch を通知します。abort は old epoch のまま ingress と gate を再開し、pending state を破棄します。
 
-reload は reload-capable supervisor boot が必要です。`server-bootstrap` の通常起動では reload host を伴う boot path を使い、手動 `reload` と watch `reload` を許可します。reload host を持たない custom boot path では手動 `reload` も watch `reload` も使えません。
+1000 actor への commit command は逐次送信しません。各 actor は pending state を持ち、共有 epoch latch の revision が一致した場合だけ次の data-plane 処理前に activate します。古い latch notification は pending revision と一致しないため無視されます。
 
-`plugins.reload_watch` や `topology.reload_watch` は watch trigger であり、実際に実行する処理は `reload runtime full` と同じ意味論を持ちます。
+old generation の drain は registry projection だけで切断を決定しません。期限切れ候補へ通知し、actor が data-plane admission と epoch activation を完了した後に現在の binding の期限を再確認します。猶予0でも新epochへ移った接続を古い通知で切断せず、移行対象でない旧世代の接続には期限を適用します。
 
-reload の並行実行は `ReloadCoordinator` の `reload_serial` で直列化します。手動 `reload` はここで待機し、watch `reload` は他の reload / upgrade が進行中なら skip して次の poll へ回します。
+## freeze に入れてよい処理
 
-## `protocol` / `gameplay` / `core` の境界
+freeze 中に行うのは次だけです。
 
-reload を読むときの責務分割は次です。
+- core journal の final delta seal
+- session actor の final phase / buffer / queued event seal
+- TCP writer と RakNet router / peer の mutation 停止
+- prebuilt resync frame を session queue 先頭へ登録
+- epoch publication または explicit abort
+- listener ingress と data-plane gate の再開
 
-- protocol
-  wire format、routing、transport 固有 session state、session transfer blob を持つ
-- gameplay
-  semantic `GameplayCommand` を評価し、callback 単位の detached `GameplayEffectBatch` を返す
-- core
-  world / entity / inventory / keepalive / dropped item / active mining を含む canonical runtime state を持つ
+freeze 中に plugin discovery、dynamic library load、listener bind、child spawn、core 全体 serialization、socket enumeration、実 network writeを行いません。resync frame の encode は prepare / seal で buffer に完成させ、write は gate 再開後に行います。
 
-`core` を reloadable boundary に出すことで、protocol 固有 session blob と gameplay 固有 session blob に加えて、world-semantic な live state も migration 対象へ入ります。
+## freeze の測定境界
 
-## なぜ現行 `snapshot -> from_snapshot` では足りないか
+`freeze_us` は monotonic clock で次を測ります。
 
-現行 runtime は [`../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs`](../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs) の `RuntimeKernel` が単一の `ServerCore` を保持し、reload context には `WorldSnapshot` を渡します。
+- 開始: data-plane gate の排他取得を開始し、新しい packet、callback、core mutation、accept dispatch の admission を止める時点。進行中の処理の完了待ちも含め、write guard を取得した後へ開始時刻を遅らせません
+- normal commit 終了: candidate epoch を publishし、listener ingress を再開し、全 actor が pending state を activate 可能な状態で data-plane gate を開いた直後
+- executable commit 終了: child が imported listener / session を activateして data plane を開き、parent が authenticated `Committed` acknowledgement を受けた時点
+- abort 終了: old epoch のまま listener ingress と data-plane gate を再開した直後
 
-しかし `WorldSnapshot` は永続化向けの形であり、live session を完全移行するには不足しています。
+stage、plugin load、child boot、pre-copy は freeze に含めません。gate close 後の final snapshot/delta、commit IPC、rollback、ingress resume は含めます。`resume_us` は freeze のうち publication 後の ingress/gate 再開に費やした部分です。
 
-- [`../../crates/core/revy-voxel-core/src/core/mod.rs`](../../crates/core/revy-voxel-core/src/core/mod.rs) の `ServerCore::snapshot()` は online player を persisted player として保存する
-- [`../../crates/core/revy-voxel-core/src/core/inventory/lifecycle.rs`](../../crates/core/revy-voxel-core/src/core/inventory/lifecycle.rs) の `persisted_online_player_snapshot_state(...)` は `cursor` や active container の中身を inventory へ畳み込む
-- [`../../crates/core/revy-voxel-core/src/core/mod.rs`](../../crates/core/revy-voxel-core/src/core/mod.rs) の `ServerCore::from_snapshot(...)` は world / block_entities / saved_players だけを復元し、online player の entity、session、keepalive、window state は復元しない
-- [`../../crates/core/revy-voxel-core/src/world.rs`](../../crates/core/revy-voxel-core/src/world.rs) の `WorldSnapshot` は `meta` / `chunks` / `block_entities` / `players` だけを持ち、dropped item や active mining を表現しない
+gate を閉じてから listener ingress を停止します。listener の bounded accept queue と session admission は区別し、gate 待ちは実際に session を作る runtime 側だけで行います。listener の制御 loop は gate 待ちをせず、pause / resume / shutdown に応答し続けます。
 
-一方で protocol / gameplay reload は [`../../crates/plugin/mc-plugin-host/src/host/support/reload.rs`](../../crates/plugin/mc-plugin-host/src/host/support/reload.rs) の session transfer blob を export / import して live session を継続できます。`core` だけが同等の migration 口を持たないため、`snapshot -> from_snapshot` をそのまま使うと「接続は残るが core 側では player が offline 扱いになる」状態になります。
+## immutable core と conflict
 
-## 内部責務の再編
+gameplay read は `Arc<CoreVersion>` を取得し、read-set に source `CoreRevision` を保持します。mutation は sparse overlay から `PreparedCoreCommit { base_revision, next_version, events }` を作ります。base revision が stale の場合は machine-readable stale outcome を返し、plugin callback を再実行しません。
 
-`RuntimeServer` の state owner は次のように読み替えます。
+chunk payload は集合の index とは別に immutable ownership を持ちます。index の更新で他の chunk payload を複製せず、block mutation は変更する chunk だけを copy-on-write します。既存 chunk の読み取りは mutable access を要求しません。callback 用の core view は callback 終了時に解放し、確定済み read-set / effect batch だけを commit 待ちへ渡します。並行 session の待ち行列が不要な旧 world payload を保持し続けない lifetime とします。
 
-- `SelectionManager`
-  active config と reload candidate selection を保持する
-- `TopologyManager`
-  active / draining generation と listener worker を保持する
-- `RuntimeKernel`
-  `core` migration の export / materialize / reattach / swap / rollback を担う `core runtime owner` として振る舞う
-- `SessionRegistry`
-  live session handle と connection-level metadata を保持する
-- `ReloadCoordinator`
-  config source、consistency gate、shutdown request を保持する
+revision は outgoing event の有無ではなく、適用された mutation log に結び付きます。keepalive ACK のような event を発行しない mutation も revision を進め、process delta に含めます。state が結果的に変わらない mutation attempt でも revision は進み得ます。mutation log が空の場合だけ base revision を保持します。
 
-`RuntimeKernel` は次の内部概念を持つ前提にします。
+plugin の speculative read-set は親の commit 前に競合検証し、その後の転送 journal には確定済み effects と適用時刻だけを保持します。child は厳密に隣接した source revision へその effects を適用し、plugin callback や speculative read-set の再検証を行いません。login の entity allocation と admission の invariant は child の再構築でも検証します。
 
-### `CoreRuntimeStateBlob`
+公開済み core の参照取得は mutation / journal の待ち行列に入りません。publication lock が保護するのは `Arc` の取得と交換だけで、mutation の準備、serialization、古い component の解放をその lock 内で行いません。commit は別の writer lock で直列化し、journal と persistence metadata を確定してから version を publish します。version と metadata を同時に観測する pre-copy / save は writer lock を先に取得し、同じ commit boundary に結び付いた組だけを読みます。
 
-`WorldSnapshot` を含みつつ、それだけでは表現できない live-only state を追加した process-local blob です。persistent storage schema ではなく、reload transaction 中だけ有効なメモリ内表現として扱います。
+同一 process reload は `CoreHandoff` の `Arc<CoreVersion>` capability を candidate `CoreStore` に install します。process transfer は revision R の encoded pre-copy と、その後の bounded mutation journalを分けます。child 起動後も `Preparing` update と `Ready` acknowledgement を繰り返し、child の確認済み revision を進めます。prepare 中に journal が追い越した場合は gate を開いたまま snapshot を作り直します。update 回数と arena 容量は有限で、追いつけなければ freeze 前に失敗します。freeze 中は最後に acknowledge された revision から final revision までの短い delta だけを予約 slot に seal します。`Frozen` update で full snapshot を受理しません。gate 閉鎖直前の race で journal が追い越した場合も、active epoch を変えず abort します。
 
-最低限含めるもの:
+persistence completion は保存した revision までだけを `persisted_revision` に進めます。保存中に新しい commit があれば latest revision は dirty のままです。
 
-- world snapshot
-- dropped item state
-- active mining state
-- online player session state
-- keepalive scheduler state
-- session-scoped inventory window state
-- view / chunk tracking state
-- world-backed chest / furnace viewer state
+journal の保持対象は cutover の用途で分離します。同一 process の candidate は resync event のみを有限の event 数・semantic encoding byte budget で保持し、event を出さない revision は保持枠を消費しません。freeze 時は完成済み event buffer の所有権を移し、process commit の serialization や commit 数 budget を適用しません。executable の journal は encoded semantic commit のみを保持し、entry・全体 byte 数・隣接 commit 数を制限します。entry の encoding limit は出力 buffer の拡張前に適用します。policy exhaustion は pre-copy の作り直し、codec・allocation failure は cutover failure として区別します。journal の失敗で正常な gameplay commit を取り消すことはありません。abort 時の保持 buffer の解放は gate 再開後へ遅延します。
 
-### `SessionReattachRecord`
+## session、writer、resync
 
-live session を candidate core へ再接続禁止で張り替えるための最小単位です。次を束ねます。
+session phase と lifecycle は [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md) の state machine を authority とします。prepare 中も active writer は動き続けるため、keepalive と通常 traffic を数秒止めません。writer pause は data-plane freeze 後に行います。
 
-- `connection_id`
-- `player_id`
-- `entity_id`
-- `phase`
-- protocol generation
-- gameplay generation
-- client view
-- inventory window state
-- `cursor`
-- keepalive state
-- session-linked furnace / chest state
+freeze ack、prepare ack、snapshot は bounded fan-out で集約します。central coordinator は actor slot の大きな payload を再コピーしません。commit 後の write failure はその session だけを切断し、既に publish 済みの global epoch を rollback しません。
 
-`SessionReattachRecord` は `WorldSnapshot` の player entry を置き換えるものではなく、saved-player と online-player を分けて扱うための runtime-only metadata とします。
+fan-out は一件の failure で残りの acknowledgement を cancel しません。全 wave の処理完了を回収してから最初の failure を返し、rollback が未完了の prepare / freeze command と競合しない順序を保ちます。abort / rollback 自体も全 session への処理を完了してから成否を返します。
 
-### `CoreMigrationPlan`
+Bedrock writer は、同じ送信 command または resync queue に既に存在する packet stream を、packet 順序とサイズ境界を保って一つの compressed batch にまとめます。aggregation のために新しい packet の到着は待ちません。compression 設定変更や write completion の境界を跨がず、completion はその command の全 batch を送信した後にだけ通知します。大きい単一 packet を aggregation の都合で分割・拒否せず、既存の transport budget を適用します。
 
-reload の途中成果物です。commit まで mutable global state を書き換えず、失敗時に旧 core をそのまま維持できるようにします。
+## executable upgrade
 
-最低限持つもの:
+parent は freeze 前に child を起動し、次を完了します。
 
-- exported `CoreRuntimeStateBlob`
-- candidate `ServerCore`
-- reattach 対象 `SessionReattachRecord` 群
-- protocol / gameplay へ送る resync event 群
-- rollback に必要な error context
+- config と common transfer protocol の validation
+- exact packaged plugin artifact hash の照合
+- child candidate epoch と shared transfer arena の構築
+- versioned session directory の継続的 pre-stage / acknowledgement
+- TCP stream、TCP/UDP listener、admin resource の duplication
+- core snapshot と bounded final-delta slot の作成
 
-## mode ごとの内部動作
+freeze 中は directory revision を再確認し、session/RakNet/core final delta を sealし、child validation、`Commit`、`Committed` handshakeだけを行います。large payload は arena descriptor で参照し、length-limited protobuf control envelopeへ埋め込みません。
 
-mode ごとの config 射影と restart-required 判定の正本は `revy-server-config` の `ServerConfig::plan_topology_reload` / `plan_core_reload` / `plan_full_reload` です。runtime 側はこの plan を実行する責務に寄せます。
+prepare 中の core delta は bounded temporary buffer で長さを確定してから、実際の長さだけを arena へ保持します。journal が追い越した試行の未使用スロットは保持しません。freeze 用の final delta は別途最大容量を予約し、freeze 中に buffer を確保し直しません。
 
-### `reload runtime artifacts`
+session state の arena descriptor は connection identity を必須とします。child は descriptor と確認済み directory から import job を割り当て、各 worker が decode、actor identity の照合、plugin / transport import を一続きで完了します。payload 内の identity も同じ directory entry と照合してから plugin を呼ぶため、descriptor は未検証 state を正当化する authority にはなりません。
 
-1. `reload_serial` 下で modified plugin を stage する
-2. write consistency lock を取得する
-3. live protocol / gameplay session snapshot と `core` runtime blob を固定する
-4. staged candidate を live runtime snapshot に対して finalize する
-5. selection を差し替える
+RakNet の duplicate window と再送・順序制御 state は child が final `Ready` を返す前に構築を完了します。検証済み checkpoint は resource policy に結び付け、validation で構築した duplicate index も receiving actor へ移譲します。Frozen の間は protocol timer の残り時間を消費せず、commit / abort のどちらでも再開時から計時を継続します。この timer 停止は monotonic wall-clock による `freeze_us` の測定区間を短縮しません。
 
-core swap と topology generation swap は行いません。
+child は `Commit` を受けた後、gameplay admission を閉じたまま共有 latch で全 imported session を activate し、完了を確認してから listener ingress と gate を開きます。最初の tick や queued gameplay が残りの session activation と競合する順序にはしません。
 
-### `reload runtime topology`
+起動時の status 集計と表示は `Committed` 送信後に行います。再開した gameplay と競合する表示用の待ちを activation の成立条件へ含めません。親の freeze 計測は引き続き `Committed` の受信まで継続します。
 
-1. restart-required な static 差分が無いことを確認する
-2. current config を clone する
-3. loaded config から `network` / `topology` だけ差し替える
-4. candidate topology generation を materialize する
-5. active generation を切り替え、旧 generation を draining へ移す
+`Commit` 送信前の failure は parent が rollbackして old epoch を再開できます。sealed transfer の明示的な abort も、gate を開く前に core journal の記録を止めます。放棄した child のための serialization を通常 gameplay へ残さず、保持済み buffer の解放は gate 再開後へ遅延します。送信後に outcome が不明なら parent は再開せず、同じ `TransferId` の status を照会します。解消不能時は fail closed です。`Err` を「child が commit していない」証拠にしません。
 
-selection と core は current state を維持します。
+## `CutoverReport`
 
-### `reload runtime core`
+reload response、upgrade response、runtime status の `last_cutover` は同じ machine-readable report を返します。
 
-1. `reload_serial` 下で candidate config plan を確定する
-2. write consistency lock を取得する
-3. current selection と active topology generation を固定する
-4. live runtime から `CoreRuntimeStateBlob` を export する
-5. candidate core を materialize する
-6. play session を candidate core へ reattach する
-7. protocol / gameplay へ必要な resync event を発行する
-8. 成功時のみ core owner を swap する
+- operation と reload mode
+- Java / Bedrock connection mix と session count
+- `stage_us`、`prepare_us`、`freeze_us`、`resume_us`
+- committed / aborted outcome
+- epoch revision
 
-失敗時は旧 core を維持し、session を切断しません。
+test/debug 専用 clock や pause API は使いません。performance test は production gRPC command とこの report だけを authority にします。
 
-### `reload runtime full`
+## latency budget
 
-1. `reload_serial` 下で config plan、plugin-host candidate、topology candidate を stage する
-2. write consistency lock を取得する
-3. live runtime snapshot に対して staged plugin candidate を finalize する
-4. `CoreRuntimeStateBlob` を export して candidate core を materialize する
-5. plugin generation migration と session reattach を実行する
-6. commit 条件がそろった場合のみ selection / topology / core を一括反映する
+各 budget は Linux / Windows のそれぞれで、1000 Java、1000 Bedrock、Java 500 + Bedrock 500 の各構成へ適用します。
 
-`full` は `config-scoped reload` の別名ではなく、artifact / topology / core をまとめた公開 mode です。
+| operation | Target (p50) | Acceptance (p95) | CI Hard Limit (max) |
+| --- | ---: | ---: | ---: |
+| normal reload | 50 ms | 100 ms | 200 ms |
+| executable upgrade | 100 ms | 250 ms | 500 ms |
 
-## `reload_serial` と `consistency_gate`
+target 超過は warning と artifact に残します。pull request job は 1 warm-up + 5 samples で全 sample に hard limitを適用します。scheduled / published release / manual acceptance job は 3 warm-up + 20 samplesで nearest-rank p50/p95 と max を判定します。hard limit は各 measured sample 直後にも検査し、超過時は partial artifact を残して即時失敗します。
 
-reload orchestration には 2 つの同期原語があります。
+artifacts / topology / core 単独 reload の補助 job は、各 OS の混在 1000 接続で 1 warm-up + 5 samples を実行します。全 sample に normal reload の hard limit を適用し、quantile は artifact に報告します。この 5 回 job を full reload の 20 回 acceptance の代替にはしません。
 
-- `reload_serial`
-  reload / upgrade staging の多重実行を防ぐ mutex
-- `consistency_gate`
-  quiescent な live snapshot と commit point を守る async `RwLock<()>`
+workload は全 session を `Play` まで進め、直前 tick に inbound gameplay と outbound event を処理します。Bedrock は reliable ordered traffic、unacked datagram、fragment reassembly を持つ状態で測定します。executable workload は同じ session population を維持したまま世代を連続 handoff します。最後の measured cutover 後も全 session の gameplay round-trip と Play population を確認してから workload を成功とします。freeze 値を含む artifact だけでは session 継続性の証明になりません。
 
-`consistency_gate` は次の目的に使います。
+性能 job は配布時と同じ release profile の server と packaged plugin を使います。harness の nested build と cache identity も Cargo の build profile に追従させ、debug plugin の混在を防ぎます。debug build の機能検証は別に維持します。gameplay workload は staging / prepare 中も継続し、各 connection に最大一件の outstanding command を持たせます。Bedrock の未 ACK marker は通常の gameplay 送信で解除せず、cutover 完了後に明示的に解放します。
 
-- session spawn、command dispatch、event dispatch、tick 側は read lock を取る
-- reload commit / upgrade freeze 側は write lock を取る
+測定終了後も client population は operator shutdown の完了まで保持し、その後に client task の停止と join を完了します。最後の sample の完了を client の一斉切断へ暗黙に変換せず、runtime shutdown と harness resource cleanup を別の completion boundary として確認します。
 
-結果として次が成り立ちます。
+artifact の正規 checker は次です。
+連続した committed sample は epoch revision が一つずつ進むことも検証し、同じ report の再利用や世代の飛び越しを受理しません。
 
-- in-flight の reader がいるあいだ reload commit は待機する
-- reload が write lock を持っているあいだ、新しい session command の進行は止まる
-- heavy な plugin load / candidate staging は gate の外で進められる
-- `full` は selection / topology / core の commit point を同じ write lock の中で完結する
+```bash
+cargo run -p xtask -- check-cutover-latency --input <artifact.json> --tier pull-request
+cargo run -p xtask -- check-cutover-latency --input <artifact.json> --tier acceptance
+```
 
-## `generation` と移行の境界
+## failure contract
 
-runtime には少なくとも 2 種類の世代があります。
+- stage / prepare failure: active epoch は不変。candidate と pending state を破棄する
+- frozen pre-commit failure: listener と sessionを old epoch で明示的に resumeし、aborted reportを記録する
+- core journal outpace / directory revision change: policy exhaustionとして machine-readable errorを返す
+- commit 後の session write failure: affected sessionだけを閉じる
+- executable commit outcome uncertain: parentは fail closedし、status reconciliationへ進む
 
-- topology generation
-  listener と routing の世代
-- plugin generation
-  protocol / gameplay / storage / auth / admin-surface plugin の世代
+## functional acceptance
 
-`core` migration は topology generation のような別番号を持つ公開概念ではなく、live session を同一 connection / entity identity のまま新しい core owner に張り替える内部 operation として扱います。
-
-## phase ごとの扱い
-
-- `Status`
-  protocol session blob だけで継続する。core reattach は不要。
-- `Login`
-  protocol / auth / gameplay の phase-local state を維持するが、online player reattach は行わない。
-- `Play`
-  `SessionReattachRecord` を使って full reattach する。
-
-`LoginAccepted` は再送しません。play 中 session は同一 connection のまま継続し、reattach 後の差分 resync だけを送ります。
-
-## 移行アルゴリズム
-
-`core` migration の順序は固定します。
-
-1. consistency write lock を取得する
-2. protocol / gameplay / storage selection を固定する
-3. live runtime から `CoreRuntimeStateBlob` を export する
-4. candidate core を materialize する
-5. live session を candidate core へ reattach する
-6. protocol / gameplay 側へ必要な resync event を発行する
-7. 成功時のみ core owner を swap する
-8. 失敗時は旧 core を維持し、candidate を破棄する
-
-設計上の要点:
-
-- `ServerCore::from_snapshot(...)` は saved-player を戻す helper として残すが、online player reattach には使わない
-- online player を saved-player として戻す path を通さない
-- `entity_id` は export 前後で不変とする
-- keepalive scheduler は `pending_keep_alive_id`、`last_keep_alive_sent_at`、`next_keep_alive_at` を含めてそのまま移す
-- world-backed chest / furnace は viewer set と block entity の両方を同期する
-
-## `failure policy` と互換境界
-
-### restart-required のまま残るもの
-
-- `static.bootstrap.online_mode`
-- `static.bootstrap.level_type`
-- `static.bootstrap.world_dir`
-- `static.plugins.*`
-- `storage_profile` の切替
-
-`core` mode と `full` mode はこれらを跨ぎません。
-
-### rollback と fail-fast
-
-基本方針は rollback-first です。
-
-- candidate core materialize failure
-  旧 core を維持する
-- session reattach failure
-  旧 core を維持する
-- protocol / gameplay session blob と `core` blob の version mismatch
-  旧 core を維持する
-
-fail-fast は rollback 不可能な不整合に限ります。通常の candidate failure では session を切断しません。
-
-### blob schema の扱い
-
-`CoreRuntimeStateBlob` は process 内専用です。
-
-- persistent storage schema と共通化しない
-- `storage` plugin の `load_snapshot` / `save_snapshot` に露出しない
-- `storage` reload の `import_runtime_state` とは役割を分ける
-
-## 完全保持の対象
-
-`reload runtime core` と `reload runtime full` は次を保持対象にします。
+reload / upgrade 前後で次を保持します。
 
 - player / entity identity
-- open window と `window_id`
-- `cursor`
-- pending keepalive id と timeout scheduling
-- dropped item と active mining の進行状態
-- client view と loaded chunk state
-- world-backed chest / furnace と viewer state
-- session から参照される protocol / gameplay generation pin
+- inventory、cursor、open window、container state
+- keepalive、mining、dropped item
+- view / chunk state
+- protocol / gameplay generation pin
+- RakNet unacked datagram、ordered holdback、fragment reassembly、remaining timer
 
-完全保持は「できれば維持する」ではなく acceptance の基準です。維持できない candidate は rollback 対象とします。
-
-## テストと受け入れ条件
-
-最低限の acceptance は次です。
-
-- play 中の Java / Bedrock session が `reload runtime core` 後も切断されず継続する
-- selected hotbar、`cursor`、open chest / furnace、`window_id`、container contents が維持される
-- pending keepalive id と timeout scheduling が維持される
-- dropped item と active mining の進行状態が維持される
-- `reload runtime full` で artifact / topology / core がまとめて切り替わる
-- candidate core materialize failure で old core が維持される
-- reattach failure で rollback され、接続が継続する
-- consistency gate 中は session command が停止し、完了後に再開する
-- `Status` / `Login` / `Play` が phase ごとに正しく扱われる
-- old API 前提の operator docs / permission / proto が残っていない
-
-## 読む順番
-
-1. [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)
-2. [`../../crates/runtime/revy-server-runtime/src/runtime/reload_coordinator.rs`](../../crates/runtime/revy-server-runtime/src/runtime/reload_coordinator.rs)
-3. [`../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs`](../../crates/runtime/revy-server-runtime/src/runtime/core_loop/reload.rs)
-4. [`../../crates/runtime/revy-server-runtime/src/runtime/topology_manager.rs`](../../crates/runtime/revy-server-runtime/src/runtime/topology_manager.rs)
-5. [`../../crates/plugin/mc-plugin-host/src/host/support/reload.rs`](../../crates/plugin/mc-plugin-host/src/host/support/reload.rs)
+candidate failure 前後では epoch、core、plugin、topology、session が不変であり、commit 後は単一 epoch だけが authority です。正規 verification は workspace gateに加え、Linux/Windows executable workflow、packaged plugin load、3 connection mix の latency workflowを含みます。

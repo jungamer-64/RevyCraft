@@ -26,6 +26,8 @@ pub(super) fn state_player_pose(
     let Some(entity_id) = state.player_entity_id(player_id) else {
         return None;
     };
+    let previous_player = state.compose_player_snapshot(player_id)?;
+    let previous_view = state.player_session(player_id)?.view;
 
     let current_chunk = {
         let Some(transform) = state.player_transform_mut(entity_id) else {
@@ -44,19 +46,83 @@ pub(super) fn state_player_pose(
         transform.position.chunk_pos()
     };
 
-    let added_chunks = {
+    let (added_chunks, current_view) = {
         let Some(session) = state.player_session_mut(player_id) else {
             return None;
         };
-        session
+        let added_chunks = session
             .view
             .retarget(current_chunk, session.view.view_distance)
-            .added
+            .added;
+        (added_chunks, session.view.clone())
     };
 
     let Some(snapshot) = state.compose_player_snapshot(player_id) else {
         return None;
     };
+
+    let mut moved_for_viewers = Vec::new();
+    let mut spawned_for_viewers = Vec::new();
+    let mut despawned_for_viewers = Vec::new();
+    let mut observed_players_entered = Vec::new();
+    let mut observed_entities_left = Vec::new();
+    for other_id in state
+        .player_ids()
+        .into_iter()
+        .filter(|other_id| *other_id != player_id)
+    {
+        let Some(other_session) = state.player_session(other_id) else {
+            continue;
+        };
+        let Some(other_player) = state.compose_player_snapshot(other_id) else {
+            continue;
+        };
+
+        let viewer_saw_player = other_session
+            .view
+            .loaded_chunks
+            .contains(&previous_player.position.chunk_pos());
+        let viewer_sees_player = other_session
+            .view
+            .loaded_chunks
+            .contains(&snapshot.position.chunk_pos());
+        match (viewer_saw_player, viewer_sees_player) {
+            (true, true) => moved_for_viewers.push(other_id),
+            (false, true) => spawned_for_viewers.push(other_id),
+            (true, false) => despawned_for_viewers.push(other_id),
+            (false, false) => {}
+        }
+
+        let player_saw_other = previous_view
+            .loaded_chunks
+            .contains(&other_player.position.chunk_pos());
+        let player_sees_other = current_view
+            .loaded_chunks
+            .contains(&other_player.position.chunk_pos());
+        match (player_saw_other, player_sees_other) {
+            (false, true) => {
+                observed_players_entered.push((other_session.entity_id, other_player));
+            }
+            (true, false) => observed_entities_left.push(other_session.entity_id),
+            _ => {}
+        }
+    }
+
+    let mut observed_items_entered = Vec::new();
+    for dropped_entity_id in state.dropped_item_ids() {
+        let Some(item) = state.dropped_item_by_entity(dropped_entity_id) else {
+            continue;
+        };
+        let item_chunk = item.snapshot.position.chunk_pos();
+        match (
+            previous_view.loaded_chunks.contains(&item_chunk),
+            current_view.loaded_chunks.contains(&item_chunk),
+        ) {
+            (false, true) => observed_items_entered.push((dropped_entity_id, item.snapshot)),
+            (true, false) => observed_entities_left.push(dropped_entity_id),
+            _ => {}
+        }
+    }
 
     Some(PlayerPoseDelta {
         player_id,
@@ -64,8 +130,14 @@ pub(super) fn state_player_pose(
         player: snapshot,
         chunks: added_chunks
             .into_iter()
-            .map(|chunk_pos| state.ensure_chunk_mut(chunk_pos).clone())
+            .map(|chunk_pos| state.ensure_chunk(chunk_pos).clone())
             .collect::<Vec<ChunkColumn>>(),
+        moved_for_viewers,
+        spawned_for_viewers,
+        despawned_for_viewers,
+        observed_players_entered,
+        observed_items_entered,
+        observed_entities_left,
     })
 }
 

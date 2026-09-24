@@ -140,7 +140,7 @@ pub struct GameplayTransaction<'a> {
 impl<'a> GameplayTransaction<'a> {
     pub fn new(base: &'a mut ServerCore, now_ms: u64) -> Self {
         Self {
-            snapshot: base.clone(),
+            snapshot: base.fork_components(),
             live_base: Some(base),
             overlay: TxOverlay::default(),
             now_ms,
@@ -325,7 +325,10 @@ impl<'a> GameplayTransaction<'a> {
             .read_set
             .online_player_count
             .get_or_insert(online_player_count);
-        if online_player_count >= usize::from(self.snapshot.world.config.max_players) {
+        if online_player_count
+            >= usize::try_from(self.snapshot.world.config.max_players)
+                .expect("u32 player limit fits the supported process address space")
+        {
             return Ok(Some(ServerCore::reject_connection(
                 connection_id,
                 "Server is full",
@@ -782,30 +785,43 @@ impl ServerCore {
         ))
     }
 
-    pub fn validate_and_apply_gameplay_effects(
+    pub(super) fn validate_and_apply_gameplay_effects(
         &mut self,
-        batch: SemanticGameplayEffectBatch,
+        batch: &SemanticGameplayEffectBatch,
     ) -> GameplayEffectApplyResult {
         if !semantic_reads_match(&BaseStateRef::new(self), &batch.reads) {
             return GameplayEffectApplyResult::Conflict;
         }
-        gameplay_effect_apply_result(GameplayJournalApplyResult::Applied(apply_core_ops(
-            self,
-            batch.effects.into_iter().map(core_op_from_effect).collect(),
-            batch.now_ms,
-            ApplyCoreOpsOptions::default(),
-        )))
+        GameplayEffectApplyResult::Applied(
+            self.apply_committed_gameplay_effects(batch.now_ms, batch.effects.clone()),
+        )
     }
 
-    pub fn validate_and_apply_login_effects(
+    /// Applies effects whose speculative reads have already passed the parent's commit boundary.
+    /// Replay is admitted only against the exact adjacent source revision by the transfer decoder;
+    /// it neither invokes plugins nor reinterprets their discarded speculative read sets.
+    pub(super) fn apply_committed_gameplay_effects(
+        &mut self,
+        now_ms: u64,
+        effects: Vec<SemanticGameplayEffect>,
+    ) -> Vec<TargetedEvent> {
+        apply_core_ops(
+            self,
+            effects.into_iter().map(core_op_from_effect).collect(),
+            now_ms,
+            ApplyCoreOpsOptions::default(),
+        )
+    }
+
+    pub(super) fn validate_and_apply_login_effects(
         &mut self,
         connection_id: ConnectionId,
         username: String,
         player_id: PlayerId,
-        batch: SemanticGameplayEffectBatch,
+        batch: &SemanticGameplayEffectBatch,
     ) -> GameplayEffectApplyResult {
         let preview = match GameplayLoginPreview::new(
-            self.clone(),
+            self.fork_components(),
             connection_id,
             username,
             player_id,
@@ -820,8 +836,40 @@ impl ServerCore {
         if !preview.matches_reads(&batch.reads) {
             return GameplayEffectApplyResult::Conflict;
         }
+        self.finish_login_effects(preview, connection_id, player_id, batch.effects.clone())
+    }
+
+    /// Reconstructs login admission on the exact journal base, without speculative callback reads.
+    /// Entity allocation and the resulting login transaction still obey the core's invariants.
+    pub(super) fn apply_committed_login_effects(
+        &mut self,
+        connection_id: ConnectionId,
+        username: String,
+        player_id: PlayerId,
+        now_ms: u64,
+        effects: Vec<SemanticGameplayEffect>,
+    ) -> GameplayEffectApplyResult {
+        let Ok(preview) = GameplayLoginPreview::new(
+            self.fork_components(),
+            connection_id,
+            username,
+            player_id,
+            now_ms,
+        ) else {
+            return GameplayEffectApplyResult::Conflict;
+        };
+        self.finish_login_effects(preview, connection_id, player_id, effects)
+    }
+
+    fn finish_login_effects(
+        &mut self,
+        preview: GameplayLoginPreview,
+        connection_id: ConnectionId,
+        player_id: PlayerId,
+        effects: Vec<SemanticGameplayEffect>,
+    ) -> GameplayEffectApplyResult {
         let mut tx = preview.into_transaction();
-        for effect in batch.effects {
+        for effect in effects {
             apply_effect_to_transaction(&mut tx, effect);
         }
         if tx.finalize_login(connection_id, player_id).is_err() {

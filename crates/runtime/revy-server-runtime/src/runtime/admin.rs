@@ -309,16 +309,17 @@ impl RuntimeServer {
         self.reload.request_shutdown()
     }
 
-    pub(crate) fn clear_runtime_upgrade_state(&self) {
-        self.reload.clear_upgrade_state();
-    }
-
     pub(crate) fn reject_mutating_admin_action_during_upgrade(
         &self,
         action: &str,
     ) -> Result<(), RuntimeError> {
-        self.reload
-            .reject_mutating_admin_action_during_upgrade(action)
+        let Some(state) = self.authority.executable_upgrade_status() else {
+            return Ok(());
+        };
+        Err(RuntimeError::Config(format!(
+            "admin action `{action}` is unavailable during runtime upgrade: role={:?} phase={:?}",
+            state.role, state.phase
+        )))
     }
 
     pub(crate) async fn subject_for_remote_principal(
@@ -465,6 +466,7 @@ impl RuntimeServer {
                 pending_fatal_error: status.pending_fatal_error,
             }),
             upgrade: snapshot.upgrade,
+            last_cutover: snapshot.last_cutover,
         }
     }
 
@@ -561,7 +563,16 @@ impl RuntimeServer {
                 })
             }
         };
-        Ok(AdminRuntimeReloadView { mode, detail })
+        let cutover = self.authority.last_cutover().ok_or_else(|| {
+            RuntimeError::Config(
+                "committed runtime reload did not publish a cutover report".to_string(),
+            )
+        })?;
+        Ok(AdminRuntimeReloadView {
+            mode,
+            detail,
+            cutover,
+        })
     }
 }
 

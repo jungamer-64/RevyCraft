@@ -1,6 +1,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RakNetBudgets {
     pub max_peers: usize,
+    pub peer_ingress_queue: usize,
     pub peer_command_queue: usize,
     pub application_queue: usize,
     pub max_datagram_bytes: usize,
@@ -15,6 +16,7 @@ impl Default for RakNetBudgets {
     fn default() -> Self {
         Self {
             max_peers: 4_096,
+            peer_ingress_queue: 256,
             peer_command_queue: 256,
             application_queue: 256,
             max_datagram_bytes: 2_048,

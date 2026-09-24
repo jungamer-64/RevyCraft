@@ -221,6 +221,8 @@ active selection を固定したまま、managed plugin の artifact 差分だ�
 
 reload 後は新規接続が新 generation に入り、旧 generation の session は `drain_grace_secs` のあいだ継続します。
 
+`server_port = 0` はポート番号の自動割当です。Bedrock の追加や bind address の変更で TCP/UDP の組を新しく確保する場合、両方が使用できる同一ポートを freeze 前に割り当てるため、status に表示される接続先ポートが変わることがあります。確立済みの TCP stream は session が保持します。固定番号を指定した場合は別のポートへ暗黙に切り替えず、bind できなければ commit 前に失敗します。
+
 ### `reload runtime core`
 
 最新 config を読み、`ServerCore` 向けに投影される差分だけを反映しつつ core migration を行います。selection / topology / admin surface は変えません。
@@ -279,6 +281,19 @@ reload 後は新規接続が新 generation に入り、旧 generation の sessio
 - core runtime state migration
 
 `full` は単なる config reload ではなく、artifact / topology / core をひとまとめにした reload mode です。途中で core migration が失敗した場合は、selection / topology も commit しません。
+
+## cutover report と停止時間 budget
+
+reload / executable upgrade の response と `status` の `last_cutover` は、同じ machine-readable `CutoverReport` を返します。operation、reload mode、Java/Bedrock の接続構成、session count、`stage_us`、`prepare_us`、`freeze_us`、`resume_us`、outcome、epoch revision を確認できます。
+
+`freeze_us` は data plane と accept dispatch が止まった区間です。plugin load、candidate build、child boot、pre-copy は含まず、gate close 後の final delta、commit IPC、abort、listener resume は含みます。
+
+| operation | 目標 p50 | 許容 p95 | CI hard limit |
+| --- | ---: | ---: | ---: |
+| 通常 reload | 50 ms | 100 ms | 200 ms |
+| executable upgrade | 100 ms | 250 ms | 500 ms |
+
+この基準は 1000 Java、1000 Bedrock、Java 500 + Bedrock 500 の各構成に適用します。目標超過は warning、p95 超過は scheduled/release acceptance failure、hard limit 超過は performance job failure です。運用時に遅延を調査するときは process 全体の command duration と `freeze_us` を混同せず、`stage_us` / `prepare_us` / `resume_us` を分けて確認してください。
 
 ## watch `reload`
 
@@ -364,7 +379,8 @@ permission は `static.admin.principals."console:<instance>"` で制御します
 - 実行 principal に `upgrade-runtime` permission がある
 - `<path>` が実行可能な `server-bootstrap` binary を指している
 - child process から見ても active config と packaged plugin が解決できる
-- `live.topology.be_enabled = true` ではない
+- parent と child が共通の `RuntimeTransferProtocolV1` を扱える
+- parent と child で active plugin artifact hash が一致する
 
 使いどころ:
 
@@ -374,9 +390,10 @@ permission は `static.admin.principals."console:<instance>"` で制御します
 
 挙動の目安:
 
-- child が ready 前に失敗した場合は rollback され、現在の process が継続します。
-- command が成功すると、以後の listener と admin surface は child 側へ切り替わります。
-- platform が非対応な場合や Bedrock listener/session transfer が有効な場合は error になります。
+- child が commit authority を受け取る前に失敗した場合は rollback され、現在の process が Java/TCP と Bedrock/UDP session を継続します。
+- command が成功すると、TCP/UDP listener、live session、admin surface は child 側へ切り替わります。Linux と Windows の両方で Bedrock session を transfer 対象に含みます。
+- `Commit` 後に結果が不明な場合、parent は勝手に listener/session を再開しません。同じ transfer identity の status を照会し、解消不能なら split-brain を避けるため fail closed になります。
+- `status` の active upgrade phase と、成功後の `last_cutover` を使って stage / prepare / freeze を区別できます。
 
 ## stdin EOF と終了条件
 

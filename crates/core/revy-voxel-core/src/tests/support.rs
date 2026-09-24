@@ -45,13 +45,6 @@ pub(super) fn restore_server_core_from_snapshot(
     ServerCore::from_snapshot(config, snapshot, test_content_behavior())
 }
 
-pub(super) fn restore_server_core_from_runtime_state(
-    config: CoreConfig,
-    blob: CoreRuntimeStateBlob,
-) -> ServerCore {
-    ServerCore::from_runtime_state(config, blob, test_content_behavior())
-}
-
 pub(super) const fn container_slot(index: u8) -> InventorySlot {
     InventorySlot::container(index)
 }
@@ -1047,20 +1040,6 @@ where
 {
     assert!(events.iter().any(|event| {
         matches!(event.target, EventTarget::Player(id) if id == player_id)
-            && predicate(&event.event)
-    }));
-}
-
-#[track_caller]
-pub(super) fn assert_everyone_except_event<F>(
-    events: &[TargetedEvent],
-    player_id: PlayerId,
-    predicate: F,
-) where
-    F: Fn(&CoreEvent) -> bool,
-{
-    assert!(events.iter().any(|event| {
-        matches!(event.target, EventTarget::EveryoneExcept(id) if id == player_id)
             && predicate(&event.event)
     }));
 }

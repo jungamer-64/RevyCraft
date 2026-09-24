@@ -1,8 +1,10 @@
 use crate::PluginHostError as RuntimeError;
 use mc_plugin_contract::plugin::PluginKind;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,6 +28,14 @@ pub(crate) struct DynamicCatalogSource {
 }
 
 impl PluginPackage {
+    pub(crate) fn artifact_sha256(&self) -> Result<[u8; 32], RuntimeError> {
+        let mut digest = Sha256::new();
+        digest.update(b"RevyCraft plugin artifact v1\0");
+        hash_artifact_file(&mut digest, b"manifest\0", &self.manifest_path)?;
+        hash_artifact_file(&mut digest, b"library\0", &self.library_path)?;
+        Ok(digest.finalize().into())
+    }
+
     pub(crate) fn modified_at(&self) -> Result<SystemTime, RuntimeError> {
         Ok(fs::metadata(&self.manifest_path)?
             .modified()?
@@ -82,6 +92,42 @@ impl PluginPackage {
             modified_at,
         }
     }
+}
+
+fn hash_artifact_file(digest: &mut Sha256, role: &[u8], path: &Path) -> Result<(), RuntimeError> {
+    let mut file = File::open(path)?;
+    let expected_len = file.metadata()?.len();
+    digest.update(role);
+    digest.update(expected_len.to_le_bytes());
+    let mut actual_len = 0_u64;
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        actual_len = actual_len
+            .checked_add(u64::try_from(read).map_err(|_| {
+                RuntimeError::Config(format!(
+                    "plugin artifact {} read length did not fit u64",
+                    path.display()
+                ))
+            })?)
+            .ok_or_else(|| {
+                RuntimeError::Config(format!(
+                    "plugin artifact {} exceeded the supported length",
+                    path.display()
+                ))
+            })?;
+        digest.update(&chunk[..read]);
+    }
+    if actual_len != expected_len {
+        return Err(RuntimeError::Config(format!(
+            "plugin artifact {} changed length while it was being hashed",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default)]

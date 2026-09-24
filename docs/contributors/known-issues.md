@@ -15,16 +15,20 @@
 
 ## 現在の local baseline
 
-2026-03-29 に `cargo test -p revy-server-runtime --lib --quiet` を再実行した local baseline では、次の 5 件が failure しました。
+2026-09-08 の Windows local run では、`cargo test --workspace --all-targets --quiet` が成功しました。runtime library test は 168 件、executable upgrade の functional test は 16 件すべて成功しています。
 
-- `runtime::tests::gameplay::container_windows::world_backed_crafting_table_opens_and_crafts_chest_via_protocol`
-- `runtime::tests::gameplay::furnace::world_backed_furnace_opens_smelts_and_closes_via_protocol`
-- `runtime::tests::gameplay::furnace::world_backed_furnace_output_persists_across_restart`
-- `runtime::tests::gameplay::world_chest::world_backed_chest_place_open_and_persist_across_restart`
-- `runtime::tests::gameplay::world_chest::world_backed_chest_syncs_slot_updates_to_other_viewers`
+同日の Ubuntu-26.04 / WSL の `cargo test --locked --release -p revy-server-runtime --lib --quiet` も、169 件すべて成功しました。
+
+これらの functional baseline は、1000接続の latency acceptance を代替しません。freeze の数値だけでなく、規定の負荷条件、全sessionの継続、正常終了、abort / rollback の測定はそれぞれ確認が必要です。
+
+2026-09-07 の Ubuntu-26.04 / WSL の `REVY_CUTOVER_LATENCY_OPERATION=reload-core REVY_CUTOVER_LATENCY_TIER=acceptance cargo test --locked --release -p revy-server --test upgrade_runtime latency_cases::production_cutover_latency_mixed_500_500 -- --exact --ignored --nocapture` で、5回の freeze 測定と全接続の最終 gameplay 確認後、shutdown の親process終了待ちが10秒でtimeoutする試行がありました。再試行は正常終了しましたが、原因は未確定です。timeoutした試行は性能job成功には数えません。
+
+2026-09-09 の Windows local run でも、`REVY_CUTOVER_LATENCY_OPERATION=reload-topology REVY_CUTOVER_LATENCY_TIER=acceptance cargo test --release -p revy-server --test upgrade_runtime latency_cases::production_cutover_latency_mixed_500_500 -- --exact --ignored --nocapture` で同じ終了待ちtimeoutが発生しました。追加の4試行では、保存・session終了・listener停止・admin停止がすべて完了し、原因は再現できていません。Linuxの事象と同一原因とは断定していません。
+
+同日の Windows / Java 1000接続の `REVY_CUTOVER_LATENCY_OPERATION=executable-upgrade REVY_CUTOVER_LATENCY_TIER=acceptance cargo test --release -p revy-server --test upgrade_runtime latency_cases::production_cutover_latency_java_1000 -- --exact --ignored --nocapture` で、freeze 719,057 µsによりHard Limitで失敗した試行があります。起動時status集計を `Committed` 送信後へ移した後の20回測定は基準内ですが、元の超過原因を確定できておらず、再現性の確認を継続します。
 
 ## この baseline の使い方
 
-- boundary redesign の code motion は、この baseline を green に戻すか、明示的に quarantine してから始めます。
+- baseline と変更後の failure を比較し、既存 failure と新しい regression を区別します。
 - runtime / gameplay / storage の責務整理で failure が増えた場合は、「既知だから放置」ではなく、この文書に追記して drift を見える化します。
 - architecture の意図を確認したいときは [`runtime-and-plugin-architecture.md`](runtime-and-plugin-architecture.md)、reload と migration の意味論を追いたいときは [`core-reload-runtime-design.md`](core-reload-runtime-design.md) を参照します。

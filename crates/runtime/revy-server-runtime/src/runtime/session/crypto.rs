@@ -1,7 +1,7 @@
 use crate::RuntimeError;
 use crate::runtime::LOGIN_VERIFY_TOKEN_LEN;
 use num_bigint::BigInt;
-use rsa::pkcs8::EncodePublicKey;
+use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
 use rsa::rand_core::{OsRng, RngCore};
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use sha1::{Digest, Sha1};
@@ -16,6 +16,34 @@ impl OnlineAuthKeys {
         let mut rng = OsRng;
         let private_key = RsaPrivateKey::new(&mut rng, 1024).map_err(|error| {
             RuntimeError::Auth(format!("failed to generate RSA keypair: {error}"))
+        })?;
+        let public_key_der = RsaPublicKey::from(&private_key)
+            .to_public_key_der()
+            .map_err(|error| {
+                RuntimeError::Auth(format!("failed to encode RSA public key: {error}"))
+            })?
+            .as_bytes()
+            .to_vec();
+        Ok(Self {
+            private_key,
+            public_key_der,
+        })
+    }
+
+    pub(in crate::runtime) fn export_process_transfer(&self) -> Result<Vec<u8>, RuntimeError> {
+        self.private_key
+            .to_pkcs8_der()
+            .map(|document| document.as_bytes().to_vec())
+            .map_err(|error| {
+                RuntimeError::Auth(format!("failed to encode RSA private key: {error}"))
+            })
+    }
+
+    pub(in crate::runtime) fn import_process_transfer(bytes: &[u8]) -> Result<Self, RuntimeError> {
+        let private_key = RsaPrivateKey::from_pkcs8_der(bytes).map_err(|error| {
+            RuntimeError::Auth(format!(
+                "failed to decode transferred RSA private key: {error}"
+            ))
         })?;
         let public_key_der = RsaPublicKey::from(&private_key)
             .to_public_key_der()

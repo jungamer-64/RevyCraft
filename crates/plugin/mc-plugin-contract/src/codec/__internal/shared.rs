@@ -485,7 +485,7 @@ pub(crate) fn encode_world_meta(
     encoder.write_string(&meta.level_type)?;
     encoder.write_u8(meta.game_mode);
     encoder.write_u8(meta.difficulty);
-    encoder.write_u8(meta.max_players);
+    encoder.write_u32(meta.max_players);
     Ok(())
 }
 
@@ -502,7 +502,7 @@ pub(crate) fn decode_world_meta(
         level_type: decoder.read_string()?,
         game_mode: decoder.read_u8()?,
         difficulty: decoder.read_u8()?,
-        max_players: decoder.read_u8()?,
+        max_players: decoder.read_u32()?,
     })
 }
 

@@ -70,7 +70,7 @@ async fn manual_protocol_reload_waits_for_consistency_readers() -> Result<(), Ru
     let temp_dir = tempdir()?;
     let (server, dist_dir, target_dir, before_generation) =
         spawn_protocol_reload_server(&temp_dir, "protocol-reload-consistency-manual").await?;
-    let consistency_guard = server.runtime.reload.read_consistency().await;
+    let consistency_guard = server.runtime.authority.enter_data_plane().await;
 
     PackagedPluginHarness::shared()
         .map_err(|error| RuntimeError::Config(error.to_string()))?
@@ -133,7 +133,7 @@ async fn consistency_gate_write_lock_blocks_session_commands() -> Result<(), Run
     )
     .await?;
 
-    let consistency_guard = server.runtime.reload.write_consistency().await;
+    let frozen = server.runtime.authority.freeze().await;
     write_packet(&mut alpha, &codec, &held_item_change(4)).await?;
     assert_no_java_packet(
         &mut alpha,
@@ -143,7 +143,7 @@ async fn consistency_gate_write_lock_blocks_session_commands() -> Result<(), Run
         TestJavaPacket::HeldItemChange,
     )
     .await?;
-    drop(consistency_guard);
+    frozen.resume();
 
     let held_item = read_until_held_item_change(
         &mut alpha,
@@ -257,7 +257,7 @@ async fn protocol_reload_watch_waits_for_consistency_readers() -> Result<(), Run
         .and_then(|adapter| adapter.plugin_generation_id())
         .expect("watch server should report a protocol generation");
 
-    let consistency_guard = server.runtime.reload.read_consistency().await;
+    let consistency_guard = server.runtime.authority.enter_data_plane().await;
     harness
         .install_protocol_plugin_for_reload(
             "mc-plugin-proto-je-5-reload-test",

@@ -64,7 +64,7 @@ pub(crate) struct NetworkDocument {
     pub(crate) server_ip: Option<String>,
     pub(crate) server_port: Option<u16>,
     pub(crate) motd: Option<String>,
-    pub(crate) max_players: Option<u8>,
+    pub(crate) max_players: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]

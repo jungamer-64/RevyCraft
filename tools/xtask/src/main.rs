@@ -73,6 +73,48 @@ struct BoundaryCheckArgs {
     config_path: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LatencyGateTier {
+    PullRequest,
+    Acceptance,
+}
+
+#[derive(Debug, Deserialize)]
+struct CutoverLatencyArtifact {
+    schema_version: u32,
+    operation: String,
+    connection_mix: CutoverLatencyConnectionMix,
+    warm_up_count: usize,
+    samples: Vec<CutoverLatencySample>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CutoverLatencyConnectionMix {
+    java: u64,
+    bedrock: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CutoverLatencySample {
+    operation: String,
+    mode: Option<String>,
+    session_count: u64,
+    connection_mix: CutoverLatencyConnectionMix,
+    stage_us: u64,
+    prepare_us: u64,
+    freeze_us: u64,
+    resume_us: u64,
+    outcome: String,
+    epoch_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CutoverLatencyBudget {
+    target_p50_us: u64,
+    acceptance_p95_us: u64,
+    hard_max_us: u64,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct BoundaryCheckConfig {
@@ -193,6 +235,7 @@ fn main() -> Result<(), String> {
         "package-all-plugins" => package_all_plugins(&args.collect::<Vec<_>>()),
         "build-release-bundles" => build_release_bundles(&args.collect::<Vec<_>>()),
         "check-boundaries" => check_boundaries(&args.collect::<Vec<_>>()),
+        "check-cutover-latency" => check_cutover_latency(&args.collect::<Vec<_>>()),
         _ => Err(help()),
     }
 }
@@ -204,8 +247,205 @@ fn help() -> String {
         "  cargo run -p xtask -- package-all-plugins [--release] [--dist-dir <path>]",
         "  cargo run -p xtask -- build-release-bundles --target <triple>... [--output-dir <path>] [--config <path>]",
         "  cargo run -p xtask -- check-boundaries [--config <path>]",
+        "  cargo run -p xtask -- check-cutover-latency --input <path> --tier <pull-request|acceptance>",
     ]
     .join("\n")
+}
+
+fn check_cutover_latency(args: &[String]) -> Result<(), String> {
+    let (input, tier) = parse_cutover_latency_args(args)?;
+    let bytes =
+        fs::read(&input).map_err(|error| format!("failed to read {}: {error}", input.display()))?;
+    let artifact: CutoverLatencyArtifact = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse {}: {error}", input.display()))?;
+    evaluate_cutover_latency(&artifact, tier)
+}
+
+fn parse_cutover_latency_args(args: &[String]) -> Result<(PathBuf, LatencyGateTier), String> {
+    let mut input = None;
+    let mut tier = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--input requires a path".to_string())?;
+                input = Some(PathBuf::from(value));
+            }
+            "--tier" => {
+                index += 1;
+                tier = Some(match args.get(index).map(String::as_str) {
+                    Some("pull-request") => LatencyGateTier::PullRequest,
+                    Some("acceptance") => LatencyGateTier::Acceptance,
+                    Some(value) => {
+                        return Err(format!(
+                            "unsupported latency tier `{value}`; expected pull-request or acceptance"
+                        ));
+                    }
+                    None => return Err("--tier requires a value".to_string()),
+                });
+            }
+            value => return Err(format!("unknown check-cutover-latency argument `{value}`")),
+        }
+        index += 1;
+    }
+    Ok((
+        input.ok_or_else(|| "check-cutover-latency requires --input".to_string())?,
+        tier.ok_or_else(|| "check-cutover-latency requires --tier".to_string())?,
+    ))
+}
+
+fn evaluate_cutover_latency(
+    artifact: &CutoverLatencyArtifact,
+    tier: LatencyGateTier,
+) -> Result<(), String> {
+    if artifact.schema_version != 1 {
+        return Err(format!(
+            "unsupported cutover latency artifact schema {}",
+            artifact.schema_version
+        ));
+    }
+    let budget = match artifact.operation.as_str() {
+        "reload" => CutoverLatencyBudget {
+            target_p50_us: 50_000,
+            acceptance_p95_us: 100_000,
+            hard_max_us: 200_000,
+        },
+        "executable-upgrade" => CutoverLatencyBudget {
+            target_p50_us: 100_000,
+            acceptance_p95_us: 250_000,
+            hard_max_us: 500_000,
+        },
+        operation => return Err(format!("unsupported cutover operation `{operation}`")),
+    };
+    let mode = artifact
+        .samples
+        .first()
+        .and_then(|sample| sample.mode.as_deref());
+    let scoped_reload =
+        artifact.operation == "reload" && matches!(mode, Some("artifacts" | "topology" | "core"));
+    if artifact.operation == "reload" && !scoped_reload && mode != Some("full") {
+        return Err("reload artifact has no supported reload mode".to_string());
+    }
+    let expected_samples = match (tier, scoped_reload) {
+        (LatencyGateTier::Acceptance, false) => 20,
+        _ => 5,
+    };
+    let expected_warmups = match (tier, scoped_reload) {
+        (LatencyGateTier::Acceptance, false) => 3,
+        _ => 1,
+    };
+    if artifact.samples.len() != expected_samples || artifact.warm_up_count != expected_warmups {
+        return Err(format!(
+            "latency tier {tier:?} requires {expected_warmups} warm-ups and {expected_samples} measured samples; artifact has {} warm-ups and {} samples",
+            artifact.warm_up_count,
+            artifact.samples.len()
+        ));
+    }
+    let expected_sessions = artifact
+        .connection_mix
+        .java
+        .checked_add(artifact.connection_mix.bedrock)
+        .ok_or_else(|| "artifact connection mix overflowed".to_string())?;
+    let valid_mix = matches!(
+        (
+            artifact.connection_mix.java,
+            artifact.connection_mix.bedrock
+        ),
+        (1_000, 0) | (0, 1_000) | (500, 500)
+    );
+    if !valid_mix {
+        return Err(format!(
+            "latency workload must be 1000 Java, 1000 Bedrock, or 500+500; artifact has java={} bedrock={}",
+            artifact.connection_mix.java, artifact.connection_mix.bedrock
+        ));
+    }
+    if scoped_reload && artifact.connection_mix.java != 500 {
+        return Err("scoped reload latency requires the mixed 1000-session population".to_string());
+    }
+    for (index, sample) in artifact.samples.iter().enumerate() {
+        if index > 0
+            && artifact.samples[index - 1].epoch_revision.checked_add(1)
+                != Some(sample.epoch_revision)
+        {
+            return Err(format!(
+                "sample {index} does not advance the preceding committed epoch exactly once"
+            ));
+        }
+        if sample.operation != artifact.operation
+            || sample.outcome != "committed"
+            || sample.session_count != expected_sessions
+            || sample.connection_mix.java != artifact.connection_mix.java
+            || sample.connection_mix.bedrock != artifact.connection_mix.bedrock
+            || sample.epoch_revision == 0
+        {
+            return Err(format!(
+                "sample {index} does not describe the artifact's committed cutover population"
+            ));
+        }
+        if artifact.operation == "reload" && sample.mode.as_deref() != mode {
+            return Err(format!(
+                "reload sample {index} does not match the artifact's reload mode"
+            ));
+        }
+        if artifact.operation == "executable-upgrade" && sample.mode.is_some() {
+            return Err(format!(
+                "executable-upgrade sample {index} unexpectedly has a reload mode"
+            ));
+        }
+        let _non_freeze_durations = sample
+            .stage_us
+            .saturating_add(sample.prepare_us)
+            .saturating_add(sample.resume_us);
+    }
+    let mut durations = artifact
+        .samples
+        .iter()
+        .map(|sample| sample.freeze_us)
+        .collect::<Vec<_>>();
+    durations.sort_unstable();
+    let p50 = nearest_rank(&durations, 50);
+    let p95 = nearest_rank(&durations, 95);
+    let max = *durations
+        .last()
+        .ok_or_else(|| "latency artifact has no samples".to_string())?;
+    println!(
+        "cutover-latency operation={} mode={} java={} bedrock={} samples={} p50={}us p95={}us max={}us",
+        artifact.operation,
+        mode.unwrap_or("-"),
+        artifact.connection_mix.java,
+        artifact.connection_mix.bedrock,
+        durations.len(),
+        p50,
+        p95,
+        max
+    );
+    if p50 > budget.target_p50_us {
+        eprintln!(
+            "warning: cutover p50 {p50}us exceeded target {}us",
+            budget.target_p50_us
+        );
+    }
+    if max > budget.hard_max_us {
+        return Err(format!(
+            "cutover max {max}us exceeded hard limit {}us",
+            budget.hard_max_us
+        ));
+    }
+    if tier == LatencyGateTier::Acceptance && !scoped_reload && p95 > budget.acceptance_p95_us {
+        return Err(format!(
+            "cutover p95 {p95}us exceeded acceptance limit {}us",
+            budget.acceptance_p95_us
+        ));
+    }
+    Ok(())
+}
+
+fn nearest_rank(sorted: &[u64], percentile: usize) -> u64 {
+    let rank = sorted.len().saturating_mul(percentile).div_ceil(100);
+    sorted[rank.saturating_sub(1)]
 }
 
 fn package_plugins(args: &[String]) -> Result<(), String> {
@@ -525,7 +765,7 @@ fn build_release_bundle(
 
     let result = (|| -> Result<(), String> {
         stage_release_bundle(
-            workspace_root,
+            &compiled_artifact_dir(workspace_root, true, Some(target)),
             &stage_dir,
             target,
             plugins,
@@ -547,8 +787,10 @@ fn build_release_bundle(
     result
 }
 
+// Artifact selection belongs to the build orchestration. Staging consumes that selected
+// directory without another environment lookup, so fixture builds remain isolated as well.
 fn stage_release_bundle(
-    workspace_root: &Path,
+    artifact_dir: &Path,
     stage_dir: &Path,
     target: &BuildTarget,
     plugins: &[PluginSpec],
@@ -565,8 +807,7 @@ fn stage_release_bundle(
     })?;
 
     let bundled_server_binary = stage_dir.join(target.binary_filename(SERVER_BINARY_NAME));
-    let server_binary_source =
-        compiled_binary_path(workspace_root, SERVER_BINARY_NAME, true, Some(target));
+    let server_binary_source = artifact_dir.join(target.binary_filename(SERVER_BINARY_NAME));
     copy_required_file(&server_binary_source, &bundled_server_binary)?;
 
     let bundled_config = runtime_dir.join("server.toml");
@@ -576,12 +817,7 @@ fn stage_release_bundle(
     }
 
     for plugin in plugins {
-        let source = compiled_dynamic_library_path(
-            workspace_root,
-            &plugin.cargo_package,
-            true,
-            Some(target),
-        );
+        let source = artifact_dir.join(target.dynamic_library_filename(&plugin.cargo_package));
         package_plugin_from_source(&source, &plugins_dir, plugin, target.artifact_key.as_str())?;
     }
     Ok(())
@@ -1399,7 +1635,7 @@ fn package_plugin_from_source(
 }
 
 fn target_dir(workspace_root: &Path) -> PathBuf {
-    env::var_os("CARGO_TARGET_DIR").map_or_else(|| workspace_root.join("target"), PathBuf::from)
+    workspace_root.join(env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
 }
 
 fn compiled_artifact_dir(
@@ -1428,33 +1664,12 @@ fn compiled_dynamic_library_path(
     compiled_artifact_dir(workspace_root, release, target).join(file_name)
 }
 
-fn compiled_binary_path(
-    workspace_root: &Path,
-    binary_name: &str,
-    release: bool,
-    target: Option<&BuildTarget>,
-) -> PathBuf {
-    let file_name = target.map_or_else(
-        || binary_filename_for_os(env::consts::OS, binary_name),
-        |target| target.binary_filename(binary_name),
-    );
-    compiled_artifact_dir(workspace_root, release, target).join(file_name)
-}
-
 fn dynamic_library_filename_for_os(os: &str, package: &str) -> String {
     let crate_name = package.replace('-', "_");
     match os {
         "windows" => format!("{crate_name}.dll"),
         "macos" => format!("lib{crate_name}.dylib"),
         _ => format!("lib{crate_name}.so"),
-    }
-}
-
-fn binary_filename_for_os(os: &str, name: &str) -> String {
-    if os == "windows" {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
     }
 }
 
@@ -1497,17 +1712,115 @@ fn sanitize_token(value: &str) -> String {
 mod tests {
     use super::{
         BoundaryCheckArgs, BoundaryCheckConfig, BuildTarget, CanonicalSymbolOwner,
-        DependencyBoundaryRule, PackageArgs, PluginSpec, TrackedDuplicateSymbol,
-        filter_plugins_by_ids, find_workspace_root, is_symbol_definition_line,
-        is_versioned_protocol_crate, matching_dependency_rules, package_plugin_from_source,
-        packaged_artifact_name_with_tag, parse_boundary_check_args, parse_package_args,
-        parse_release_bundle_args, plugin_allowlist_from_toml, plugin_spec_from_package_name,
-        reconcile_packaged_plugins, resolve_package_config_path, run_release_bundle_jobs,
-        stage_release_bundle, validate_boundary_check_config,
+        CutoverLatencyArtifact, CutoverLatencyConnectionMix, CutoverLatencySample,
+        DependencyBoundaryRule, LatencyGateTier, PackageArgs, PluginSpec, TrackedDuplicateSymbol,
+        evaluate_cutover_latency, filter_plugins_by_ids, find_workspace_root,
+        is_symbol_definition_line, is_versioned_protocol_crate, matching_dependency_rules,
+        nearest_rank, package_plugin_from_source, packaged_artifact_name_with_tag,
+        parse_boundary_check_args, parse_package_args, parse_release_bundle_args,
+        plugin_allowlist_from_toml, plugin_spec_from_package_name, reconcile_packaged_plugins,
+        resolve_package_config_path, run_release_bundle_jobs, stage_release_bundle,
+        validate_boundary_check_config,
     };
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
+
+    fn reload_latency_artifact(durations: &[u64], warm_up_count: usize) -> CutoverLatencyArtifact {
+        CutoverLatencyArtifact {
+            schema_version: 1,
+            operation: "reload".to_string(),
+            connection_mix: CutoverLatencyConnectionMix {
+                java: 1_000,
+                bedrock: 0,
+            },
+            warm_up_count,
+            samples: durations
+                .iter()
+                .enumerate()
+                .map(|(index, freeze_us)| CutoverLatencySample {
+                    operation: "reload".to_string(),
+                    mode: Some("full".to_string()),
+                    session_count: 1_000,
+                    connection_mix: CutoverLatencyConnectionMix {
+                        java: 1_000,
+                        bedrock: 0,
+                    },
+                    stage_us: 1,
+                    prepare_us: 2,
+                    freeze_us: *freeze_us,
+                    resume_us: 3,
+                    outcome: "committed".to_string(),
+                    epoch_revision: index as u64 + 2,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn latency_gate_requires_distinct_adjacent_committed_epochs() {
+        let mut artifact = reload_latency_artifact(&[10_000; 5], 1);
+        assert!(evaluate_cutover_latency(&artifact, LatencyGateTier::PullRequest).is_ok());
+        for revision in [2, 3, 5, u64::MAX] {
+            artifact.samples[2].epoch_revision = revision;
+            assert!(
+                evaluate_cutover_latency(&artifact, LatencyGateTier::PullRequest)
+                    .expect_err("each sample must describe the next actual cutover")
+                    .contains("epoch")
+            );
+        }
+    }
+
+    #[test]
+    fn pull_request_latency_gate_applies_hard_limit_to_every_sample() {
+        let artifact = reload_latency_artifact(&[10, 20, 30, 40, 200_001], 1);
+        assert!(
+            evaluate_cutover_latency(&artifact, LatencyGateTier::PullRequest)
+                .expect_err("hard-limit violation should fail")
+                .contains("hard limit")
+        );
+    }
+
+    #[test]
+    fn acceptance_latency_gate_uses_nearest_rank_p95() {
+        let mut durations = vec![10_000; 18];
+        durations.extend([100_001, 190_000]);
+        let artifact = reload_latency_artifact(&durations, 3);
+        assert_eq!(nearest_rank(&durations, 95), 100_001);
+        assert!(
+            evaluate_cutover_latency(&artifact, LatencyGateTier::Acceptance)
+                .expect_err("p95 acceptance violation should fail")
+                .contains("p95")
+        );
+    }
+
+    #[test]
+    fn scoped_reload_gate_requires_five_consistent_mixed_samples_and_hard_limit() {
+        for mode in ["artifacts", "topology", "core"] {
+            let mut artifact = reload_latency_artifact(&[150_000; 5], 1);
+            artifact.connection_mix.java = 500;
+            artifact.connection_mix.bedrock = 500;
+            for sample in &mut artifact.samples {
+                sample.mode = Some(mode.to_string());
+                sample.connection_mix.java = 500;
+                sample.connection_mix.bedrock = 500;
+            }
+            // Scoped jobs report quantiles but only apply the per-sample hard limit.
+            assert!(evaluate_cutover_latency(&artifact, LatencyGateTier::Acceptance).is_ok());
+            artifact.samples[4].freeze_us = 200_001;
+            assert!(
+                evaluate_cutover_latency(&artifact, LatencyGateTier::Acceptance)
+                    .expect_err("scoped hard-limit violation must fail")
+                    .contains("hard limit")
+            );
+            artifact.samples[4].freeze_us = 150_000;
+            artifact.samples[4].mode = Some("full".to_string());
+            assert!(evaluate_cutover_latency(&artifact, LatencyGateTier::Acceptance).is_err());
+            artifact.samples[4].mode = Some(mode.to_string());
+            artifact.samples.truncate(4);
+            assert!(evaluate_cutover_latency(&artifact, LatencyGateTier::Acceptance).is_err());
+        }
+    }
 
     #[test]
     fn plugin_spec_maps_protocol_packages_to_adapter_ids() {
@@ -1968,7 +2281,7 @@ mod tests {
 
         let stage_dir = workspace_root.join("dist").join("stage");
         stage_release_bundle(
-            workspace_root,
+            &build_dir,
             &stage_dir,
             &target,
             &[PluginSpec {
@@ -2044,7 +2357,7 @@ mod tests {
 
         let stage_dir = workspace_root.join("dist").join("stage");
         let error = stage_release_bundle(
-            workspace_root,
+            &workspace_root.join("missing-artifacts"),
             &stage_dir,
             &target,
             &[PluginSpec {
@@ -2134,7 +2447,7 @@ mod tests {
         if let Some(root) = find_workspace_root(&manifest_dir)
             .expect("workspace root lookup should succeed for xtask tests")
         {
-            return root.join("target").join("test-tmp");
+            return super::target_dir(&root).join("test-tmp");
         }
         panic!(
             "xtask tests should run under the workspace root: {}",

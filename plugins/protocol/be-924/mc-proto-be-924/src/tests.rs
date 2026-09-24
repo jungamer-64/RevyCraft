@@ -14,8 +14,8 @@ use bedrock_protocol::v662::enums::{
     TextProcessingEventOrigin,
 };
 use bedrock_protocol::v662::packets::{
-    ItemStackRequestPacket, LegacySetItemSlotsEntry, LoginPacket, PlayerActionPacket,
-    RequestNetworkSettingsPacket, RequestsEntry,
+    ItemStackRequestPacket, LegacySetItemSlotsEntry, LoginPacket, NetworkStackLatencyPacket,
+    PlayerActionPacket, RequestNetworkSettingsPacket, RequestsEntry,
 };
 use bedrock_protocol::v662::types::{
     ActorRuntimeID, NetworkBlockPosition, NetworkItemStackDescriptor,
@@ -201,6 +201,72 @@ fn probe_matches_raknet_datagram() {
             .expect("probe should succeed")
             .is_some()
     );
+}
+
+#[test]
+fn keepalive_uses_directional_network_latency_packet() {
+    let adapter = Bedrock924Adapter::new();
+    let context = play_context();
+    let frames = adapter
+        .encode_play_event_for(
+            &CoreEvent::KeepAliveRequested { keep_alive_id: 37 },
+            &context,
+        )
+        .expect("keepalive request should encode");
+    let packets =
+        decode_packet_batch::<V924>(&frames[0], None).expect("keepalive request should decode");
+    assert!(matches!(
+        packets.as_slice(),
+        [V924::NetworkStackLatencyPacket(packet)]
+            if packet.creation_time == 37 && packet.is_from_server
+    ));
+
+    let response = encode_packet_batch(
+        &[V924::NetworkStackLatencyPacket(Box::new(
+            NetworkStackLatencyPacket {
+                creation_time: 37,
+                is_from_server: false,
+            },
+        ))],
+        None,
+    )
+    .expect("keepalive response should encode");
+    let command = adapter
+        .decode_play_for(context.player_id, &response)
+        .expect("keepalive response should decode")
+        .expect("keepalive response should produce a command");
+    assert_eq!(
+        command,
+        RuntimeCommand::Core(CoreCommand::KeepAliveResponse {
+            player_id: context.player_id,
+            keep_alive_id: 37,
+        })
+    );
+}
+
+#[test]
+fn keepalive_rejects_invalid_direction_and_identifier_range() {
+    let adapter = Bedrock924Adapter::new();
+    let player_id = play_context().player_id;
+    for packet in [
+        NetworkStackLatencyPacket {
+            creation_time: 37,
+            is_from_server: true,
+        },
+        NetworkStackLatencyPacket {
+            creation_time: u64::try_from(i32::MAX)
+                .expect("i32::MAX should fit into u64")
+                .saturating_add(1),
+            is_from_server: false,
+        },
+    ] {
+        let frame = encode_packet_batch(&[V924::NetworkStackLatencyPacket(Box::new(packet))], None)
+            .expect("invalid keepalive fixture should encode");
+        assert!(matches!(
+            adapter.decode_play_for(player_id, &frame),
+            Err(ProtocolError::InvalidPacket(_))
+        ));
+    }
 }
 
 #[test]

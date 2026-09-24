@@ -18,6 +18,7 @@ macro_rules! __export_plugin_non_gameplay {
         static MC_PLUGIN_API: std::sync::OnceLock<$api_ty> = std::sync::OnceLock::new();
 
         unsafe extern "C" fn mc_plugin_invoke(
+            instance: *mut std::ffi::c_void,
             request: $crate::__macro_support::ByteSlice,
             output: *mut $crate::__macro_support::OwnedBuffer,
             error_out: *mut $crate::__macro_support::OwnedBuffer,
@@ -45,7 +46,12 @@ macro_rules! __export_plugin_non_gameplay {
             };
 
             let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                $handle(mc_plugin_instance(), request.clone())
+                // SAFETY: the host keeps this table's instance lease alive for the call.
+                unsafe {
+                    $crate::instance::with_instance::<$plugin_ty, _>(instance, |plugin| {
+                        $handle(plugin, request.clone())
+                    })
+                }?
             })) {
                 Ok(Ok(response)) => response,
                 Ok(Err(message)) => {
@@ -109,6 +115,7 @@ macro_rules! __export_plugin_gameplay {
             std::sync::OnceLock::new();
 
         unsafe extern "C" fn mc_gameplay_plugin_invoke_v9(
+            instance: *mut std::ffi::c_void,
             request: $crate::__macro_support::ByteSlice,
             host_api: *const $crate::__macro_support::GameplayHostApiV9,
             output: *mut $crate::__macro_support::OwnedBuffer,
@@ -151,11 +158,16 @@ macro_rules! __export_plugin_gameplay {
             };
 
             let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                $crate::__macro_support::handle_gameplay_request_with_host_api(
-                    mc_gameplay_plugin_instance(),
-                    request.clone(),
-                    Some(host_api),
-                )
+                // SAFETY: the host keeps this table's instance lease alive for the call.
+                unsafe {
+                    $crate::instance::with_instance::<$plugin_ty, _>(instance, |plugin| {
+                        $crate::__macro_support::handle_gameplay_request_with_host_api(
+                            plugin,
+                            request.clone(),
+                            Some(host_api),
+                        )
+                    })
+                }?
             })) {
                 Ok(Ok(response)) => response,
                 Ok(Err(message)) => {
@@ -211,6 +223,8 @@ macro_rules! __export_plugin_gameplay {
                 $crate::__macro_support::GameplayPluginApiV9 {
                     abi: $crate::__macro_support::CURRENT_PLUGIN_ABI,
                     struct_size: std::mem::size_of::<$crate::__macro_support::GameplayPluginApiV9>(),
+                    create_instance: Some($crate::instance::create_instance::<$plugin_ty>),
+                    destroy_instance: Some($crate::instance::destroy_instance::<$plugin_ty>),
                     invoke: Some(mc_gameplay_plugin_invoke_v9),
                     free_buffer: Some(mc_gameplay_plugin_free_buffer),
                 }
@@ -229,6 +243,7 @@ macro_rules! __export_plugin_admin_surface {
             std::sync::OnceLock::new();
 
         unsafe extern "C" fn mc_admin_surface_plugin_invoke_v9(
+            instance: *mut std::ffi::c_void,
             request: $crate::__macro_support::ByteSlice,
             host_api: *const $crate::__macro_support::AdminSurfaceHostApiV9,
             output: *mut $crate::__macro_support::OwnedBuffer,
@@ -273,11 +288,16 @@ macro_rules! __export_plugin_admin_surface {
             };
 
             let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                $crate::__macro_support::handle_admin_surface_request_with_host_api(
-                    mc_admin_surface_plugin_instance(),
-                    request.clone(),
-                    Some(host_api),
-                )
+                // SAFETY: the host keeps this table's instance lease alive for the call.
+                unsafe {
+                    $crate::instance::with_instance::<$plugin_ty, _>(instance, |plugin| {
+                        $crate::__macro_support::handle_admin_surface_request_with_host_api(
+                            plugin,
+                            request.clone(),
+                            Some(host_api),
+                        )
+                    })
+                }?
             })) {
                 Ok(Ok(response)) => response,
                 Ok(Err(message)) => {
@@ -333,6 +353,8 @@ macro_rules! __export_plugin_admin_surface {
                 $crate::__macro_support::AdminSurfacePluginApiV9 {
                     abi: $crate::__macro_support::CURRENT_PLUGIN_ABI,
                     struct_size: std::mem::size_of::<$crate::__macro_support::AdminSurfacePluginApiV9>(),
+                    create_instance: Some($crate::instance::create_instance::<$plugin_ty>),
+                    destroy_instance: Some($crate::instance::destroy_instance::<$plugin_ty>),
                     invoke: Some(mc_admin_surface_plugin_invoke_v9),
                     free_buffer: Some(mc_admin_surface_plugin_free_buffer),
                 }
@@ -351,6 +373,8 @@ macro_rules! export_plugin {
             $crate::__macro_support::ProtocolPluginApiV9 {
                 abi: $crate::__macro_support::CURRENT_PLUGIN_ABI,
                 struct_size: std::mem::size_of::<$crate::__macro_support::ProtocolPluginApiV9>(),
+                create_instance: Some($crate::instance::create_instance::<$plugin_ty>),
+                destroy_instance: Some($crate::instance::destroy_instance::<$plugin_ty>),
                 invoke: Some(mc_plugin_invoke),
                 free_buffer: Some(mc_plugin_free_buffer),
             },
@@ -370,6 +394,8 @@ macro_rules! export_plugin {
             $crate::__macro_support::StoragePluginApiV9 {
                 abi: $crate::__macro_support::CURRENT_PLUGIN_ABI,
                 struct_size: std::mem::size_of::<$crate::__macro_support::StoragePluginApiV9>(),
+                create_instance: Some($crate::instance::create_instance::<$plugin_ty>),
+                destroy_instance: Some($crate::instance::destroy_instance::<$plugin_ty>),
                 invoke: Some(mc_plugin_invoke),
                 free_buffer: Some(mc_plugin_free_buffer),
             },
@@ -389,6 +415,8 @@ macro_rules! export_plugin {
             $crate::__macro_support::AuthPluginApiV9 {
                 abi: $crate::__macro_support::CURRENT_PLUGIN_ABI,
                 struct_size: std::mem::size_of::<$crate::__macro_support::AuthPluginApiV9>(),
+                create_instance: Some($crate::instance::create_instance::<$plugin_ty>),
+                destroy_instance: Some($crate::instance::destroy_instance::<$plugin_ty>),
                 invoke: Some(mc_plugin_invoke),
                 free_buffer: Some(mc_plugin_free_buffer),
             },

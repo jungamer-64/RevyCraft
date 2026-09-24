@@ -36,7 +36,7 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::metadata::MetadataMap;
@@ -100,13 +100,16 @@ impl AcceptLoopMode {
 
 #[derive(Debug)]
 struct AdminGrpcServerHandle {
+    // The instance owns every worker. Shutdown must join tasks and drop this runtime
+    // before returning across the plugin ABI, after which the library may unload.
+    runtime: tokio::runtime::Runtime,
     local_addr: SocketAddr,
     handoff_listener: Option<std::net::TcpListener>,
     serve_mode: Arc<AtomicU8>,
     accept_mode_tx: watch::Sender<AcceptLoopMode>,
     shutdown_tx: watch::Sender<bool>,
-    server_join_handle: JoinHandle<()>,
-    server_done_rx: oneshot::Receiver<Result<(), String>>,
+    accept_join_handle: JoinHandle<()>,
+    server_join_handle: JoinHandle<Result<(), String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,19 +164,18 @@ impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
     ) -> Result<AdminSurfaceStatusView, String> {
         let config = load_surface_config(surface_config_path)?;
         let host = host.acquire_lease()?;
-        let handle = self.block_on_async(spawn_admin_grpc_server(
-            self.runtime_handle()?,
-            &config,
-            host,
-            ListenerSource::Bind(config.bind_addr),
-            AcceptLoopMode::Running,
-        ))?;
-        let status = handle.status_view();
         let mut instances = self
             .instances
             .lock()
             .expect("admin-surface grpc mutex should not be poisoned");
         ensure_instance_absent(&instances, instance_id)?;
+        let handle = spawn_admin_grpc_server(
+            &config,
+            host,
+            ListenerSource::Bind(config.bind_addr),
+            AcceptLoopMode::Running,
+        )?;
+        let status = handle.status_view();
         instances.insert(
             instance_id.to_string(),
             GrpcSurfaceInstanceState::Active { config, handle },
@@ -231,30 +233,20 @@ impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
         _resume_payload: &[u8],
     ) -> Result<AdminSurfaceStatusView, String> {
         let config = load_surface_config(surface_config_path)?;
-        let listener = take_handoff_listener(&host)?;
-        let host = host.acquire_lease()?;
-        let handle = self.block_on_async(spawn_admin_grpc_server(
-            self.runtime_handle()?,
-            &config,
-            host,
-            ListenerSource::Inherited(listener),
-            AcceptLoopMode::Paused,
-        ))?;
-        let status = handle.status_view();
         let mut instances = self
             .instances
             .lock()
             .expect("admin-surface grpc mutex should not be poisoned");
-        if let Some(previous) = instances.remove(instance_id) {
-            match previous {
-                GrpcSurfaceInstanceState::Active { .. } => {
-                    return Err(format!(
-                        "gRPC admin surface `{instance_id}` is already active"
-                    ));
-                }
-                GrpcSurfaceInstanceState::Paused { .. } => {}
-            }
-        }
+        ensure_instance_absent(&instances, instance_id)?;
+        let listener = take_handoff_listener(&host)?;
+        let host = host.acquire_lease()?;
+        let handle = spawn_admin_grpc_server(
+            &config,
+            host,
+            ListenerSource::Inherited(listener),
+            AcceptLoopMode::Paused,
+        )?;
+        let status = handle.status_view();
         instances.insert(
             instance_id.to_string(),
             GrpcSurfaceInstanceState::Active { config, handle },
@@ -317,12 +309,10 @@ impl RustAdminSurfacePlugin for GrpcAdminSurfacePlugin {
             .remove(instance_id);
         match state {
             None => Ok(()),
-            Some(GrpcSurfaceInstanceState::Paused { handle, .. }) => {
-                self.block_on_async(handle.join())
-            }
-            Some(GrpcSurfaceInstanceState::Active { handle, .. }) => {
-                self.block_on_async(handle.join())
-            }
+            Some(
+                GrpcSurfaceInstanceState::Paused { handle, .. }
+                | GrpcSurfaceInstanceState::Active { handle, .. },
+            ) => handle.join(),
         }
     }
 }
@@ -584,13 +574,19 @@ impl AdminControlPlane for AdminGrpcService {
     }
 }
 
-async fn spawn_admin_grpc_server(
-    runtime_handle: tokio::runtime::Handle,
+fn spawn_admin_grpc_server(
     config: &LoadedGrpcSurfaceConfig,
     host: AdminSurfaceHostLease,
     listener_source: ListenerSource,
     initial_accept_mode: AcceptLoopMode,
 ) -> Result<AdminGrpcServerHandle, String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name("admin-surface-grpc")
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to build admin gRPC runtime: {error}"))?;
+    let runtime_scope = runtime.enter();
     let handoff_listener = match listener_source {
         ListenerSource::Bind(bind_addr) => {
             std::net::TcpListener::bind(bind_addr).map_err(|error| {
@@ -618,27 +614,27 @@ async fn spawn_admin_grpc_server(
         auth: Arc::clone(&config.token_principals),
         serve_mode: Arc::clone(&serve_mode),
     };
-    runtime_handle.spawn(run_accept_loop(listener, incoming_tx, accept_mode_rx));
-    let (server_done_tx, server_done_rx) = oneshot::channel();
-    let server_join_handle = runtime_handle.spawn(async move {
-        let result = tonic::transport::Server::builder()
+    let accept_join_handle = runtime.spawn(run_accept_loop(listener, incoming_tx, accept_mode_rx));
+    let server_join_handle = runtime.spawn(async move {
+        tonic::transport::Server::builder()
             .add_service(AdminControlPlaneServer::new(service))
             .serve_with_incoming_shutdown(
                 ReceiverStream::new(incoming_rx),
                 wait_for_shutdown_signal(shutdown_rx),
             )
             .await
-            .map_err(|error| format!("admin gRPC server failed: {error}"));
-        let _ = server_done_tx.send(result);
+            .map_err(|error| format!("admin gRPC server failed: {error}"))
     });
+    drop(runtime_scope);
     Ok(AdminGrpcServerHandle {
+        runtime,
         local_addr,
         handoff_listener: Some(handoff_listener),
         serve_mode,
         accept_mode_tx,
         shutdown_tx,
         server_join_handle,
-        server_done_rx,
+        accept_join_handle,
     })
 }
 
@@ -692,14 +688,6 @@ impl AdminGrpcServerHandle {
         }
     }
 
-    async fn wait_for_server_exit(mut self) -> Result<(), String> {
-        let result = (&mut self.server_done_rx)
-            .await
-            .map_err(|_| "admin gRPC server task ended unexpectedly".to_string())?;
-        self.server_join_handle.abort();
-        result
-    }
-
     fn export_handoff_listener(&mut self) -> Result<std::net::TcpListener, String> {
         let listener = self.handoff_listener.take().ok_or_else(|| {
             "admin gRPC server did not retain a listener for upgrade handoff".to_string()
@@ -718,12 +706,28 @@ impl AdminGrpcServerHandle {
             .map_err(|_| "admin gRPC accept loop was not available".to_string())
     }
 
-    async fn join(self) -> Result<(), String> {
+    fn join(self) -> Result<(), String> {
         self.serve_mode
             .store(AcceptLoopMode::Shutdown.as_u8(), Ordering::SeqCst);
-        let _ = self.accept_mode_tx.send(AcceptLoopMode::Shutdown);
-        let _ = self.shutdown_tx.send(true);
-        self.wait_for_server_exit().await
+        // A closed receiver means its task has already stopped; joins below own
+        // observation of its outcome, including panic and server I/O failure.
+        self.accept_mode_tx.send_replace(AcceptLoopMode::Shutdown);
+        self.shutdown_tx.send_replace(true);
+        let (server, accept) = self
+            .runtime
+            .block_on(async { tokio::join!(self.server_join_handle, self.accept_join_handle) });
+        // Joining the server future alone is insufficient: executor workers and
+        // transport-owned tasks must also stop before the generation is released.
+        drop(self.runtime);
+        let server = server
+            .map_err(|error| format!("admin gRPC server task failed: {error}"))
+            .and_then(|result| result);
+        let accept = accept.map_err(|error| format!("admin gRPC accept task failed: {error}"));
+        match (server, accept) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(server), Err(accept)) => Err(format!("{server}; {accept}")),
+        }
     }
 }
 

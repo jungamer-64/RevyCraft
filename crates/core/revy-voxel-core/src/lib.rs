@@ -10,8 +10,11 @@ mod tests;
 pub(crate) mod world;
 
 pub use self::core::{
-    ActiveMiningState, ClientView, CoreConfig, DroppedItemState, GameplayEffectApplyResult,
-    GameplayLoginPreview, GameplayLoginPreviewError, OpenInventoryWindow, PlayerSessionState,
+    ActiveMiningState, ClientView, CoreConfig, CoreHandoff, CoreMutation, CoreRevision,
+    CoreTransferCommit, CoreTransferDelta, CoreTransferDeltaDescriptor, CoreTransferError,
+    CoreTransferMutation, CoreTransferSnapshot, CoreVersion, DroppedItemState,
+    EncodedCoreTransferCommit, GameplayEffectApplyResult, GameplayLoginPreview,
+    GameplayLoginPreviewError, OpenInventoryWindow, PlayerSessionState, PreparedCoreCommit,
     ServerCore, WorldContainerViewers,
 };
 pub use self::events::{

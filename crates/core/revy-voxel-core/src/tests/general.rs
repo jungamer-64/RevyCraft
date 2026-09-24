@@ -1,4 +1,5 @@
 use super::support::*;
+use std::sync::Arc;
 
 fn air() -> BlockState {
     BlockState::new("minecraft:air")
@@ -104,89 +105,321 @@ fn dropped_item_entity_id(events: &[TargetedEvent], player_id: PlayerId) -> Enti
 }
 
 #[test]
-fn runtime_state_round_trips_live_session_state() {
-    let mut core = new_server_core(CoreConfig {
-        view_distance: 2,
+fn committed_core_handoff_retains_the_exact_version_capability() {
+    let version = CoreVersion::initial(new_server_core(CoreConfig::default()));
+    let handoff = CoreHandoff::from_committed(Arc::clone(&version));
+    assert!(Arc::ptr_eq(&version, &handoff.version()));
+
+    let mut mutation = CoreMutation::from_version(&version);
+    mutation.reconfigure(CoreConfig {
+        max_players: 40,
         ..CoreConfig::default()
     });
-    let (player_id, _) = login_player(&mut core, 1, "coreblob");
-    let _ = spawn_dropped_item_via_tx(
-        &mut core,
-        Vec3::new(1.5, 4.5, 1.5),
-        item("minecraft:diamond", 2),
-        0,
-    );
-    let dropped_item_id = *core
-        .entities
-        .dropped_items
-        .keys()
-        .next()
-        .expect("dropped item should exist");
-    let spawned_item = dropped_item_snapshot(&core, dropped_item_id);
+    let prepared = mutation.prepare(Vec::new(), false);
 
+    assert_eq!(prepared.base_revision(), CoreRevision::initial());
+    assert_eq!(version.world_meta().max_players, 20);
+    assert_eq!(prepared.next_version().revision().value(), 1);
+    assert_eq!(prepared.next_version().world_meta().max_players, 40);
+}
+
+#[test]
+fn login_reuses_existing_immutable_chunk_payloads() {
+    let mut core = new_server_core(CoreConfig {
+        view_distance: 1,
+        ..CoreConfig::default()
+    });
+    let _ = login_player(&mut core, 1, "first");
+    let retained = core.fork_components();
+    let _ = login_player(&mut core, 2, "second");
+
+    assert!(!retained.world.chunks.is_empty());
+    for (position, original) in retained.world.chunks.iter() {
+        let current = core.world.chunks.get(position).unwrap();
+        assert!(std::ptr::eq(&**original, &**current));
+    }
+    assert_eq!(core.world.chunks.len(), retained.world.chunks.len());
+}
+
+#[test]
+fn block_mutation_copies_only_the_changed_chunk_and_keeps_old_revision_readable() {
+    let mut core = new_server_core(CoreConfig::default());
+    let edited = BlockPos::new(1, 4, 1);
+    let untouched = BlockPos::new(33, 4, 1);
+    let _ = set_block_via_tx(&mut core, edited, glass(), 0);
+    let _ = set_block_via_tx(&mut core, untouched, stone(), 0);
+    let mut next = core.fork_components();
+    let _ = set_block_via_tx(&mut next, edited, sand(), 1);
+
+    for (position, original) in core.world.chunks.iter() {
+        let current = next.world.chunks.get(position).unwrap();
+        assert_eq!(
+            std::ptr::eq(&**original, &**current),
+            *position != edited.chunk_pos(),
+        );
+    }
+    assert_eq!(snapshot_block(&core, edited), glass());
+    assert_eq!(snapshot_block(&next, edited), sand());
+    assert_eq!(snapshot_block(&core, untouched), stone());
+    assert_eq!(snapshot_block(&next, untouched), stone());
+}
+
+#[test]
+fn process_transfer_snapshot_round_trips_all_live_core_components() {
+    let mut core = new_server_core(CoreConfig {
+        view_distance: 1,
+        ..CoreConfig::default()
+    });
+    let (player_id, _) = login_player(&mut core, 41, "transfer-player");
+    let entity_id = core
+        .player_entity_id(player_id)
+        .expect("transferred player entity should exist");
     let _ = open_virtual_container_for_test(
         &mut core,
         player_id,
         7,
         InventoryContainer::CraftingTable,
-        0,
+        10,
     );
-    {
-        let session = core
-            .player_session_mut(player_id)
-            .expect("player session should exist");
-        session.cursor = Some(item("minecraft:stone", 3));
-        session.pending_keep_alive_id = Some(91);
-        session.last_keep_alive_sent_at = Some(77);
-        session.next_keep_alive_at = 1234;
-        session.next_non_player_window_id = 9;
-    }
-    let entity_id = core
-        .player_entity_id(player_id)
-        .expect("player entity should exist");
+    core.player_session_mut(player_id)
+        .expect("transferred player session should exist")
+        .cursor = Some(item("minecraft:stone", 3));
     core.entities.player_active_mining.insert(
         entity_id,
-        crate::core::ActiveMiningState {
+        ActiveMiningState {
             position: BlockPos::new(1, 4, 1),
-            started_at_ms: 10,
+            started_at_ms: 12,
             duration_ms: 250,
-            last_stage: Some(3),
+            last_stage: Some(2),
             tool_context: None,
         },
     );
-
-    let blob = core.export_runtime_state();
-    let restored = restore_server_core_from_runtime_state(
-        CoreConfig {
-            max_players: 40,
-            ..CoreConfig::default()
-        },
-        blob,
+    let _ = spawn_dropped_item_via_tx(
+        &mut core,
+        Vec3::new(1.5, 4.5, 1.5),
+        item("minecraft:diamond", 1),
+        20,
     );
-    let restored_player = online_player(&restored, player_id);
-    let restored_session = restored
-        .player_session(player_id)
-        .expect("player session should restore");
 
-    assert_eq!(restored.world_meta().max_players, 40);
-    assert_eq!(restored_player.snapshot.username, "coreblob");
-    assert_eq!(restored_player.cursor, Some(item("minecraft:stone", 3)));
-    assert!(matches!(
-        restored_player.active_container,
-        Some(crate::core::OpenInventoryWindow {
-            window_id: 7,
-            container,
-            ..
-        }) if container.kind == container_kind(InventoryContainer::CraftingTable)
-    ));
-    assert!(restored_player.active_mining.is_some());
-    assert_eq!(restored_session.pending_keep_alive_id, Some(91));
-    assert_eq!(restored_session.last_keep_alive_sent_at, Some(77));
-    assert_eq!(restored_session.next_keep_alive_at, 1234);
-    assert_eq!(restored_session.next_non_player_window_id, 9);
+    let version = CoreVersion::initial(core);
+    let prepared = version
+        .prepare_process_transfer()
+        .expect("complete core transfer snapshot should encode");
+    let restored = CoreVersion::import_process_transfer(prepared.bytes(), test_content_behavior())
+        .expect("complete core transfer snapshot should restore");
+
+    assert_eq!(restored.revision(), prepared.revision());
+    assert_eq!(restored.snapshot(), version.snapshot());
     assert_eq!(
-        dropped_item_snapshot(&restored, dropped_item_id),
-        spawned_item
+        restored.player_session_state(player_id),
+        version.player_session_state(player_id)
+    );
+    assert_eq!(
+        restored.session_resync_events(player_id),
+        version.session_resync_events(player_id)
+    );
+    assert_eq!(
+        restored
+            .prepare_process_transfer()
+            .expect("restored transfer snapshot should encode")
+            .bytes(),
+        prepared.bytes()
+    );
+}
+
+#[test]
+fn process_transfer_snapshot_rejects_malformed_payload() {
+    let error = CoreVersion::import_process_transfer(b"not-json", test_content_behavior())
+        .expect_err("malformed core transfer payload should be rejected");
+    assert!(matches!(error, CoreTransferError::Codec(_)));
+}
+
+#[test]
+fn process_commit_encoding_enforces_the_reserved_byte_budget() {
+    let base = CoreVersion::initial(new_server_core(CoreConfig::default()));
+    let mut mutation = CoreMutation::from_version(&base);
+    mutation.set_max_players(32);
+    let commit = mutation.prepare(Vec::new(), true).into_parts().3;
+    let encoded = commit.clone().encode(1024).expect("small semantic commit");
+    let exact = encoded.encoded_len();
+    assert_eq!(commit.clone().encode(exact).unwrap().encoded_len(), exact);
+    for limit in [0, exact - 1] {
+        assert!(matches!(
+            commit.clone().encode(limit),
+            Err(CoreTransferError::BudgetExceeded { actual, limit: reported })
+                if actual > limit && reported == limit
+        ));
+    }
+}
+
+#[test]
+fn committed_effect_journal_size_is_independent_of_speculative_reads() {
+    let (core, player_id) = logged_in_creative_core("effect-journal");
+    let base = CoreVersion::initial(core);
+    let mut batch = crate::GameplayEffectBatch::empty(100);
+    batch
+        .effects
+        .push(crate::GameplayEffect::SetSelectedHotbarSlot { player_id, slot: 3 });
+    let mut with_reads = batch.clone();
+    with_reads.reads.world_meta = Some(base.world_meta().clone());
+    with_reads
+        .reads
+        .player_snapshots
+        .insert(player_id, base.player_snapshot(player_id));
+    for x in 0..128 {
+        let position = BlockPos::new(x, 0, 0);
+        with_reads
+            .reads
+            .block_states
+            .insert(position, base.block_state(position));
+    }
+    let mut plain = CoreMutation::from_version(&base);
+    let mut observed = CoreMutation::from_version(&base);
+    let GameplayEffectApplyResult::Applied(events) =
+        plain.validate_and_apply_gameplay_effects(batch)
+    else {
+        panic!("empty read set should apply");
+    };
+    let (expected, _, _, plain_commit) = plain.prepare(events, true).into_parts();
+    let GameplayEffectApplyResult::Applied(events) =
+        observed.validate_and_apply_gameplay_effects(with_reads.clone())
+    else {
+        panic!("matching speculative reads should apply");
+    };
+    let observed_commit = observed.prepare(events, true).into_parts().3;
+    let plain_delta = CoreTransferDelta::prepare(base.revision(), vec![plain_commit]).unwrap();
+    let observed_delta =
+        CoreTransferDelta::prepare(base.revision(), vec![observed_commit]).unwrap();
+    assert_eq!(plain_delta.bytes(), observed_delta.bytes());
+    let replayed = base
+        .apply_process_transfer_delta(observed_delta.bytes())
+        .unwrap();
+    assert_eq!(replayed.revision(), expected.revision());
+    assert_eq!(replayed.snapshot(), expected.snapshot());
+    assert!(
+        expected
+            .apply_process_transfer_delta(observed_delta.bytes())
+            .is_err()
+    );
+
+    let mut stale = CoreMutation::from_version(&expected);
+    assert_eq!(
+        stale.validate_and_apply_gameplay_effects(with_reads),
+        GameplayEffectApplyResult::Conflict
+    );
+    let unchanged = stale.prepare(Vec::new(), false).into_parts().0;
+    assert_eq!(unchanged.revision(), expected.revision());
+    assert_eq!(unchanged.snapshot(), expected.snapshot());
+}
+
+#[test]
+fn committed_login_effects_replay_identity_and_reject_stale_preview() {
+    let base = CoreVersion::initial(new_server_core(CoreConfig::default()));
+    let player_id = PlayerId(uuid::Uuid::from_u128(91));
+    let connection_id = ConnectionId(91);
+    let username = "committed-login".to_string();
+    let mut preview = base
+        .login_preview(connection_id, username.clone(), player_id, 100)
+        .unwrap();
+    let mut batch = crate::GameplayEffectBatch::empty(100);
+    batch
+        .reads
+        .player_snapshots
+        .insert(player_id, preview.player_snapshot(player_id));
+    batch
+        .effects
+        .push(crate::GameplayEffect::SetSelectedHotbarSlot { player_id, slot: 4 });
+    let mut mutation = CoreMutation::from_version(&base);
+    let GameplayEffectApplyResult::Applied(events) = mutation.validate_and_apply_login_effects(
+        connection_id,
+        username.clone(),
+        player_id,
+        batch.clone(),
+    ) else {
+        panic!("matching login preview should apply");
+    };
+    let (expected, _, _, commit) = mutation.prepare(events, true).into_parts();
+    let delta = CoreTransferDelta::prepare(base.revision(), vec![commit]).unwrap();
+    let replayed = base.apply_process_transfer_delta(delta.bytes()).unwrap();
+    assert_eq!(replayed.snapshot(), expected.snapshot());
+    assert_eq!(
+        replayed.player_session_state(player_id),
+        expected.player_session_state(player_id)
+    );
+    assert_eq!(
+        replayed
+            .player_snapshot(player_id)
+            .unwrap()
+            .selected_hotbar_slot,
+        4
+    );
+
+    batch.reads.player_snapshots.insert(player_id, None);
+    let mut stale = CoreMutation::from_version(&base);
+    assert_eq!(
+        stale.validate_and_apply_login_effects(connection_id, username, player_id, batch),
+        GameplayEffectApplyResult::Conflict
+    );
+    assert_eq!(
+        stale.prepare(Vec::new(), false).next_version().revision(),
+        base.revision()
+    );
+}
+
+#[test]
+fn process_transfer_delta_replays_committed_semantics_without_plugin_callbacks() {
+    let (core, player_id) = logged_in_creative_core("delta-player");
+    let base = CoreVersion::initial(core);
+    let base_snapshot = base
+        .prepare_process_transfer()
+        .expect("base process snapshot should encode");
+    let mut mutation = CoreMutation::from_version(&base);
+    let events = mutation
+        .apply_builtin_gameplay_command(GameplayCommand::SetHeldSlot { player_id, slot: 3 }, 100);
+    mutation.set_max_players(64);
+    let prepared = mutation.prepare(events, true);
+    let (expected, _, _, commit) = prepared.into_parts();
+    assert!(commit.requires_persistence());
+    let encoded_commit = commit
+        .clone()
+        .encode(2 * 1024 * 1024)
+        .expect("committed semantic mutation should pre-encode");
+    let delta = CoreTransferDelta::prepare(base.revision(), vec![commit])
+        .expect("adjacent semantic core delta should encode");
+    let mut direct = Vec::with_capacity(delta.bytes().len());
+    let descriptor = CoreTransferDelta::seal_preencoded_into(
+        base.revision(),
+        std::iter::once(&encoded_commit),
+        &mut direct,
+    )
+    .expect("pre-encoded delta should seal into caller storage");
+    assert_eq!(descriptor.base_revision(), delta.base_revision());
+    assert_eq!(descriptor.final_revision(), delta.final_revision());
+    assert_eq!(descriptor.encoded_len(), delta.bytes().len());
+    assert_eq!(direct, delta.bytes());
+    let imported =
+        CoreVersion::import_process_transfer(base_snapshot.bytes(), test_content_behavior())
+            .expect("base process snapshot should restore");
+    let replayed = imported
+        .apply_process_transfer_delta(delta.bytes())
+        .expect("committed semantic delta should replay");
+
+    assert_eq!(replayed.revision(), expected.revision());
+    assert_eq!(replayed.snapshot(), expected.snapshot());
+    assert_eq!(
+        replayed.player_session_state(player_id),
+        expected.player_session_state(player_id)
+    );
+    assert_eq!(replayed.world_meta().max_players, 64);
+    assert_eq!(
+        replayed
+            .prepare_process_transfer()
+            .expect("replayed process snapshot should encode")
+            .bytes(),
+        expected
+            .prepare_process_transfer()
+            .expect("expected process snapshot should encode")
+            .bytes()
     );
 }
 
@@ -305,7 +538,7 @@ fn login_emits_initial_chunks_and_existing_entities() {
         ..CoreConfig::default()
     });
 
-    let (_first, first_events) = login_player(&mut core, 1, "first");
+    let (first, first_events) = login_player(&mut core, 1, "first");
     assert!(first_events.iter().any(|event| matches!(
         event.event,
         CoreEvent::PlayBootstrap {
@@ -319,13 +552,66 @@ fn login_emits_initial_chunks_and_existing_entities() {
     assert_connection_inventory_contents(&first_events, ConnectionId(1));
     assert_connection_selected_hotbar_slot(&first_events, ConnectionId(1), 0);
 
-    let (second, second_events) = login_player(&mut core, 2, "second");
+    let (_second, second_events) = login_player(&mut core, 2, "second");
     assert_connection_event(&second_events, ConnectionId(2), |event| {
         matches!(event, CoreEvent::EntitySpawned { .. })
     });
-    assert_everyone_except_event(&second_events, second, |event| {
+    assert_player_event(&second_events, first, |event| {
         matches!(event, CoreEvent::EntitySpawned { .. })
     });
+}
+
+#[test]
+fn entity_visibility_is_limited_to_each_players_loaded_view() {
+    let mut core = new_server_core(CoreConfig {
+        view_distance: 1,
+        ..CoreConfig::default()
+    });
+
+    let (first, _) = login_player(&mut core, 1, "first");
+    let first_entity = core
+        .player_entity_id(first)
+        .expect("first player should have an entity");
+    let _ = core.apply_command(
+        gameplay(GameplayCommand::MoveIntent {
+            player_id: first,
+            position: Some(Vec3::new(128.5, 4.0, 0.5)),
+            yaw: None,
+            pitch: None,
+            on_ground: true,
+        }),
+        25,
+    );
+
+    let (second, login_events) = login_player(&mut core, 2, "second");
+    let second_entity = core
+        .player_entity_id(second)
+        .expect("second player should have an entity");
+    assert!(!login_events.iter().any(|event| {
+        matches!(event.event, CoreEvent::EntitySpawned { entity_id, .. }
+            if entity_id == first_entity || entity_id == second_entity)
+    }));
+
+    let entered_events = core.apply_command(
+        gameplay(GameplayCommand::MoveIntent {
+            player_id: second,
+            position: Some(Vec3::new(128.5, 4.0, 0.5)),
+            yaw: None,
+            pitch: None,
+            on_ground: true,
+        }),
+        50,
+    );
+    assert_player_event(
+        &entered_events,
+        first,
+        |event| matches!(event, CoreEvent::EntitySpawned { entity_id, .. } if *entity_id == second_entity),
+    );
+    assert_player_event(
+        &entered_events,
+        second,
+        |event| matches!(event, CoreEvent::EntitySpawned { entity_id, .. } if *entity_id == first_entity),
+    );
 }
 
 #[test]
@@ -335,8 +621,28 @@ fn moving_player_updates_other_clients_and_view() {
         ..CoreConfig::default()
     });
 
-    let (_first, _) = login_player(&mut core, 1, "first");
+    let (first, _) = login_player(&mut core, 1, "first");
     let (second, _) = login_player(&mut core, 2, "second");
+    let second_entity = core
+        .player_entity_id(second)
+        .expect("second player should have an entity");
+    let visible_move = core.apply_command(
+        gameplay(GameplayCommand::MoveIntent {
+            player_id: second,
+            position: Some(Vec3::new(16.5, 4.0, 0.5)),
+            yaw: Some(45.0),
+            pitch: Some(0.0),
+            on_ground: true,
+        }),
+        25,
+    );
+
+    assert_player_event(
+        &visible_move,
+        first,
+        |event| matches!(event, CoreEvent::EntityMoved { entity_id, .. } if *entity_id == second_entity),
+    );
+
     let events = core.apply_command(
         gameplay(GameplayCommand::MoveIntent {
             player_id: second,
@@ -348,9 +654,15 @@ fn moving_player_updates_other_clients_and_view() {
         50,
     );
 
-    assert_everyone_except_event(&events, second, |event| {
-        matches!(event, CoreEvent::EntityMoved { .. })
-    });
+    assert_player_event(
+        &events,
+        first,
+        |event| matches!(event, CoreEvent::EntityDespawned { entity_ids } if entity_ids == &vec![second_entity]),
+    );
+    assert!(!events.iter().any(|event| {
+        matches!(event.target, EventTarget::Player(id) if id == first)
+            && matches!(event.event, CoreEvent::EntityMoved { entity_id, .. } if entity_id == second_entity)
+    }));
     assert!(
         count_player_events(&events, second, |event| {
             matches!(event, CoreEvent::ChunkBatch { .. })
@@ -452,6 +764,54 @@ fn keepalive_response_clears_pending_state_without_emitting_events() {
 }
 
 #[test]
+fn eventless_keepalive_ack_advances_revision_and_survives_process_delta() {
+    let (mut core, player_id) = logged_in_core(CoreConfig::default(), 1, "ack-delta");
+    let _ = core.tick(DEFAULT_KEEPALIVE_INTERVAL_MS + 1);
+    let keep_alive_id = core
+        .player_session(player_id)
+        .unwrap()
+        .pending_keep_alive_id
+        .unwrap();
+    let base = CoreVersion::initial(core);
+    let snapshot = base.prepare_process_transfer().unwrap();
+    let mut mutation = CoreMutation::from_version(&base);
+    let events = mutation.apply_command(
+        CoreCommand::KeepAliveResponse {
+            player_id,
+            keep_alive_id,
+        },
+        DEFAULT_KEEPALIVE_INTERVAL_MS + 2,
+    );
+    assert!(events.is_empty());
+    let prepared = mutation.prepare(events, false);
+    let (expected, _, _, commit) = prepared.into_parts();
+    assert!(expected.revision() > base.revision());
+    assert_eq!(
+        base.player_session_state(player_id)
+            .unwrap()
+            .pending_keep_alive_id,
+        Some(keep_alive_id)
+    );
+    let delta = CoreTransferDelta::prepare(base.revision(), vec![commit]).unwrap();
+    let imported =
+        CoreVersion::import_process_transfer(snapshot.bytes(), test_content_behavior()).unwrap();
+    let replayed = imported
+        .apply_process_transfer_delta(delta.bytes())
+        .unwrap();
+    assert_eq!(
+        replayed.player_session_state(player_id),
+        expected.player_session_state(player_id)
+    );
+    assert_eq!(
+        replayed
+            .player_session_state(player_id)
+            .unwrap()
+            .pending_keep_alive_id,
+        None
+    );
+}
+
+#[test]
 fn keepalive_response_ignores_mismatched_pending_id() {
     let (mut core, first) = logged_in_core(CoreConfig::default(), 1, "ka-ack-mismatch");
     let _ = core.tick(DEFAULT_KEEPALIVE_INTERVAL_MS + 1);
@@ -498,7 +858,7 @@ fn keepalive_response_matches_manual_transaction_acknowledge() {
         .expect("player session should exist after keepalive tick")
         .pending_keep_alive_id
         .expect("keepalive should be pending");
-    let mut via_tx = direct.clone();
+    let mut via_tx = direct.fork_components();
 
     let direct_events = direct.apply_command(
         CoreCommand::KeepAliveResponse {
@@ -535,7 +895,7 @@ fn keepalive_response_matches_manual_transaction_acknowledge() {
 #[test]
 fn keepalive_tick_matches_manual_transaction_request_keep_alive() {
     let (mut direct, player_id) = logged_in_core(CoreConfig::default(), 1, "ka-parity");
-    let mut via_tx = direct.clone();
+    let mut via_tx = direct.fork_components();
     direct
         .player_session_mut(player_id)
         .expect("player session should exist")
@@ -628,7 +988,7 @@ fn gameplay_move_direct_path_matches_manual_transaction_commit() {
     });
     let (_first, _) = login_player(&mut direct, 1, "direct-first");
     let (mover, _) = login_player(&mut direct, 2, "direct-mover");
-    let mut via_tx = direct.clone();
+    let mut via_tx = direct.fork_components();
 
     let direct_events = direct.apply_command(
         gameplay(GameplayCommand::MoveIntent {
@@ -657,7 +1017,7 @@ fn gameplay_move_direct_path_matches_manual_transaction_commit() {
 #[test]
 fn gameplay_inventory_direct_path_matches_manual_transaction_commit() {
     let (mut direct, player_id) = logged_in_creative_core("inventory-parity");
-    let mut via_tx = direct.clone();
+    let mut via_tx = direct.fork_components();
 
     let direct_events = creative_inventory_set(
         &mut direct,
@@ -680,7 +1040,7 @@ fn gameplay_inventory_direct_path_matches_manual_transaction_commit() {
 #[test]
 fn gameplay_set_held_slot_direct_path_matches_manual_transaction_commit() {
     let (mut direct, player_id) = logged_in_creative_core("held-slot-parity");
-    let mut via_tx = direct.clone();
+    let mut via_tx = direct.fork_components();
 
     let direct_events = set_held_slot(&mut direct, player_id, 4);
     let tx_events = apply_test_transaction(&mut via_tx, 0, |tx| {
@@ -694,7 +1054,7 @@ fn gameplay_set_held_slot_direct_path_matches_manual_transaction_commit() {
 #[test]
 fn gameplay_begin_mining_direct_path_matches_manual_transaction_commit() {
     let (mut direct, player_id) = logged_in_core(CoreConfig::default(), 1, "mining-parity");
-    let mut via_tx = direct.clone();
+    let mut via_tx = direct.fork_components();
     let position = BlockPos::new(2, 1, 0);
 
     let direct_events = direct.apply_command(
@@ -739,8 +1099,8 @@ fn gameplay_clear_mining_direct_path_matches_manual_transaction_commit() {
         }),
         0,
     );
-    let mut direct = base.clone();
-    let mut via_tx = base.clone();
+    let mut direct = base.fork_components();
+    let mut via_tx = base.fork_components();
 
     let direct_events = direct.apply_command(
         gameplay(GameplayCommand::DigBlock {
@@ -2609,7 +2969,7 @@ fn gameplay_transaction_commit_preserves_emit_event_order() {
 #[test]
 fn gameplay_journal_apply_matches_direct_transaction_commit() {
     let mut direct_core = new_server_core(CoreConfig::default());
-    let mut journal_core = direct_core.clone();
+    let mut journal_core = direct_core.fork_components();
     let position = BlockPos::new(2, 4, 0);
 
     let direct_events = {
@@ -2620,7 +2980,7 @@ fn gameplay_journal_apply_matches_direct_transaction_commit() {
     };
 
     let journal = {
-        let mut tx = GameplayTransaction::detached(journal_core.clone(), 0);
+        let mut tx = GameplayTransaction::detached(journal_core.fork_components(), 0);
         assert_eq!(tx.block_state(position), None);
         tx.set_block(position, Some(glass()));
         tx.into_journal()
@@ -2642,7 +3002,7 @@ fn gameplay_journal_apply_survives_unrelated_live_change() {
     let position = BlockPos::new(1, 4, 0);
     let unrelated_position = BlockPos::new(5, 4, 0);
     let journal = {
-        let mut tx = GameplayTransaction::detached(core.clone(), 0);
+        let mut tx = GameplayTransaction::detached(core.fork_components(), 0);
         assert_eq!(tx.block_state(position), None);
         tx.set_block(position, Some(glass()));
         tx.into_journal()
@@ -2671,7 +3031,7 @@ fn gameplay_journal_conflict_drops_partial_mutation_when_player_snapshot_changes
         .get_slot(InventorySlot::Hotbar(0))
         .cloned();
     let journal = {
-        let mut tx = GameplayTransaction::detached(core.clone(), 0);
+        let mut tx = GameplayTransaction::detached(core.fork_components(), 0);
         let _ = tx.player_snapshot(player_id);
         tx.set_selected_hotbar_slot(player_id, 6);
         tx.set_inventory_slot(
@@ -2706,7 +3066,7 @@ fn gameplay_journal_login_conflict_leaves_single_authoritative_player() {
     let mut core = new_server_core(CoreConfig::default());
     let joining = player_id("journal-login");
     let journal = {
-        let mut tx = GameplayTransaction::detached(core.clone(), 0);
+        let mut tx = GameplayTransaction::detached(core.fork_components(), 0);
         let prepared = tx
             .begin_login(ConnectionId(7), "journal-login".to_string(), joining)
             .expect("detached login prepare should succeed");

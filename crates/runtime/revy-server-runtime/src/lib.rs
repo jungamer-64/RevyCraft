@@ -12,8 +12,8 @@ pub use self::api::{
     AdminPluginHostView, AdminRequest, AdminResponse, AdminRuntimeReloadDetail,
     AdminRuntimeReloadView, AdminSessionSummaryView, AdminSessionTransportCountView,
     AdminSessionView, AdminSessionsView, AdminStatusView, AdminTopologyReloadView,
-    AdminUpgradeRuntimeView, ListenerBinding, PluginFailureAction, PluginFailureMatrix,
-    PluginHostStatusSnapshot, RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole,
-    RuntimeUpgradeStateView,
+    AdminUpgradeRuntimeView, CutoverConnectionMix, CutoverOperation, CutoverOutcome, CutoverReport,
+    ListenerBinding, PluginFailureAction, PluginFailureMatrix, PluginHostStatusSnapshot,
+    RuntimeReloadMode, RuntimeUpgradePhase, RuntimeUpgradeRole, RuntimeUpgradeStateView,
 };
 pub use self::error::RuntimeError;

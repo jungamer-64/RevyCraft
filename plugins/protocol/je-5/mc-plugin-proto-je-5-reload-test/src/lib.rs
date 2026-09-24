@@ -161,6 +161,7 @@ impl ProtocolAdapter for Je5ReloadTestProtocolPlugin {
 }
 
 const MANIFEST: StaticPluginManifest =
-    StaticPluginManifest::protocol(JE_5_ADAPTER_ID, "JE 1.7.10 (Protocol 5) Reload Test Plugin");
+    StaticPluginManifest::protocol(JE_5_ADAPTER_ID, "JE 1.7.10 (Protocol 5) Reload Test Plugin")
+        .with_max_session_handoff_bytes(std::mem::size_of::<u64>());
 
 export_plugin!(protocol, Je5ReloadTestProtocolPlugin, MANIFEST);

@@ -3,6 +3,7 @@
 use aes::Aes128;
 use aes::cipher::{BlockCipherEncrypt, KeyInit};
 use bytes::BytesMut;
+use mc_plugin_contract::plugin::CURRENT_PLUGIN_ABI;
 use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_common::{MinecraftWireCodec, PacketReader, PacketWriter, WireCodec};
 use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol};
@@ -14,8 +15,6 @@ use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener as StdTcpListener, TcpStream};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -65,9 +64,12 @@ pub struct ServerTomlOptions<'a> {
     pub server_port: u16,
     pub remote_admin_port: u16,
     pub motd: &'a str,
+    pub max_players: usize,
+    pub view_distance: u8,
     pub online_mode: bool,
     pub bedrock_enabled: bool,
     pub auth_profile: &'a str,
+    pub storage_profile: &'a str,
     pub extra_plugin_allowlist: &'a [&'a str],
     pub plugins_dir_override: Option<PathBuf>,
     pub console_permissions: &'a [&'a str],
@@ -87,9 +89,12 @@ impl<'a> ServerTomlOptions<'a> {
             server_port,
             remote_admin_port,
             motd,
+            max_players: 20,
+            view_distance: 2,
             online_mode: false,
             bedrock_enabled: false,
             auth_profile: "offline-v1",
+            storage_profile: "je-anvil-1_7_10",
             extra_plugin_allowlist: &[],
             plugins_dir_override: None,
             console_permissions: DEFAULT_CONSOLE_PERMISSIONS,
@@ -175,7 +180,7 @@ pub fn repo_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 pub fn tempdir() -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
     let base_dir = repo_root()?
-        .join("target")
+        .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
         .join("test-tmp")
         .join("revy-server");
     fs::create_dir_all(&base_dir)?;
@@ -305,6 +310,7 @@ pub fn write_server_toml_at(
     } else {
         ""
     };
+    let plugin_abi = CURRENT_PLUGIN_ABI;
 
     fs::write(
         config_path,
@@ -316,14 +322,14 @@ level_name = \"world\"
 level_type = \"flat\"
 game_mode = 0
 difficulty = 1
-view_distance = 2
+view_distance = {}
 world_dir = {}
-storage_profile = \"je-anvil-1_7_10\"
+storage_profile = {}
 
 [static.plugins]
 plugins_dir = {}
-plugin_abi_min = \"8.0\"
-plugin_abi_max = \"8.0\"
+plugin_abi_min = \"{plugin_abi}\"
+plugin_abi_max = \"{plugin_abi}\"
 
 {}\
 [static.admin.principals.\"console:console\"]
@@ -333,7 +339,7 @@ permissions = {}
 server_ip = \"127.0.0.1\"
 server_port = {}
 motd = {}
-max_players = 20
+max_players = {}
 
 [live.topology]
 be_enabled = {}
@@ -363,12 +369,15 @@ default_gameplay = \"canonical\"
 profile = \"console-v1\"
 ",
             options.online_mode,
+            options.view_distance,
             toml_string(&world_dir.display().to_string()),
+            toml_string(options.storage_profile),
             toml_string(&plugins_dir.display().to_string()),
             remote_admin_block,
             console_permissions,
             options.server_port,
             toml_string(options.motd),
+            options.max_players,
             options.bedrock_enabled,
             bedrock_adapter_block,
             plugin_allowlist,
@@ -419,7 +428,7 @@ fn sanitize_log_name(name: &str) -> String {
 pub fn create_persisted_server_log_capture(name: &str) -> TestResult<PersistedServerLogCapture> {
     let capture_id = LOG_CAPTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let capture_dir = repo_root()?
-        .join("target")
+        .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
         .join("upgrade-runtime-logs")
         .join(format!(
             "{}-{}-{}",
@@ -929,12 +938,4 @@ pub fn read_until_java_packet_encrypted(
         }
     }
     Err(format!("did not receive encrypted packet id 0x{wanted_packet_id:02x}").into())
-}
-
-#[cfg(unix)]
-pub fn set_world_read_only(path: &Path, read_only: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_mode(if read_only { 0o555 } else { 0o755 });
-    fs::set_permissions(path, permissions)?;
-    Ok(())
 }

@@ -17,15 +17,15 @@ client packet
      -> CoreCommand::LoginStart
         -> GameplayLoginPreview::new(...)
         -> gameplay plugin HandlePlayerJoin
-        -> validate_and_apply_login_effects(...)
+        -> CoreMutation / PreparedCoreCommit
         -> Vec<TargetedEvent>
      -> direct-core command
-        -> ServerCore::apply_command(...)
+        -> CoreMutation / PreparedCoreCommit
         -> Vec<TargetedEvent>
      -> CoreCommand::Gameplay(GameplayCommand)
         -> snapshot-backed GameplayReadView + detached GameplayEffectBatch
         -> gameplay plugin callback
-        -> validate_and_apply_gameplay_effects(...)
+        -> revision validation / PreparedCoreCommit
         -> Vec<TargetedEvent>
   -> TargetedEvent dispatch
   -> protocol plugin encode
@@ -38,11 +38,11 @@ client packet
 LoginStart accepted
   -> connection-targeted LoginAccepted を queue
   -> session task が login success packet を write
-  -> player_id / entity_id / phase / session_capabilities を commit
-  -> pending login route を閉じて Play session へ進める
+  -> Login::AcceptedWritePending から Play へ transition
+  -> player_id / entity_id / session_capabilities を Play state と registry projection に publish
 ```
 
-login は gameplay transaction の special-case ですが、`LoginAccepted` を emit した瞬間に shared session state が `Play` へ進むわけではありません。session task が login success packet を write した時点で commit されるため、この短い window だけ `SessionRegistry` の pending login route が `EventTarget::Player` 配送を bridge します。
+login は gameplay transaction の special-case ですが、`LoginAccepted` を emit した瞬間に session state が `Play` へ進むわけではありません。actor は `Login::AcceptedWritePending` として login success write の authority を保持し、write 成功時だけ `Play` へ transition します。registry は actor transition から更新される projection です。
 
 ## 型の役割
 
@@ -51,7 +51,7 @@ login は gameplay transaction の special-case ですが、`LoginAccepted` を 
 - `GameplayCommand`
   gameplay plugin に見せる gameplay-owned command だけを表す canonical enum です。runtime / protocol 境界では `CoreCommand::Gameplay(GameplayCommand)` の payload として運ばれます。定義は [`../../crates/core/revy-voxel-semantic/src/events.rs`](../../crates/core/revy-voxel-semantic/src/events.rs) にあります。
 - `GameplayEffectBatch`
-  gameplay callback 単位で host が返す invocation-scoped result です。plugin は read callback と effect recorder を通じて snapshot を読み、`read-set + effect list` を batch に積みます。runtime は live core を直接触らせず、この batch を `ServerCore::validate_and_apply_*` へ渡して validate/apply します。定義は [`../../crates/core/revy-voxel-semantic/src/gameplay.rs`](../../crates/core/revy-voxel-semantic/src/gameplay.rs)、apply 側は [`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) にあります。
+  gameplay callback 単位で host が返す invocation-scoped result です。plugin は read callback と effect recorder を通じて immutable `CoreVersion` を読み、`source revision + read-set + effect list` を batch に積みます。runtime は live core を直接触らせず、`CoreMutation` から `PreparedCoreCommit` を作って base revision 一致時だけ publish します。定義は [`../../crates/core/revy-voxel-semantic/src/gameplay.rs`](../../crates/core/revy-voxel-semantic/src/gameplay.rs)、version / mutation は [`../../crates/core/revy-voxel-core/src/core/version.rs`](../../crates/core/revy-voxel-core/src/core/version.rs) と [`../../crates/core/revy-voxel-core/src/core/mutation.rs`](../../crates/core/revy-voxel-core/src/core/mutation.rs) にあります。
 - `CoreEvent`
   core から外へ出る出力です。最終的に protocol plugin が encode します。定義は [`../../crates/core/revy-voxel-semantic/src/events.rs`](../../crates/core/revy-voxel-semantic/src/events.rs) にあります。
 - `TargetedEvent`
@@ -59,11 +59,11 @@ login は gameplay transaction の special-case ですが、`LoginAccepted` を 
 
 ## command の分岐点
 
-runtime 側の本体は [`../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs`](../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs) にあります。現在の分岐は大きく 3 種類です。
+runtime 側の authority は [`../../crates/runtime/revy-server-runtime/src/runtime/core_store.rs`](../../crates/runtime/revy-server-runtime/src/runtime/core_store.rs) にあります。現在の分岐は大きく 3 種類です。
 
 ### login special-case
 
-`CoreCommand::LoginStart` は gameplay profile があれば、runtime kernel が先に `GameplayLoginPreview::new(...)` で login prelude を作り、reject をここで short-circuit します。success のときだけ preview-backed `GameplayReadView` を `prepare_player_join(...)` へ渡し、戻ってきた `GameplayEffectBatch` を `validate_and_apply_login_effects(...)` で live core へ commit します。host は detached read/effect batch を返すだけで、`begin_login(...)` / `finalize_login(...)` の owner ではありません。実装は [`../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs`](../../crates/runtime/revy-server-runtime/src/runtime/kernel.rs)、[`../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs`](../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs)、[`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) にあります。
+`CoreCommand::LoginStart` は gameplay profile があれば、`CoreStore` が current version から `GameplayLoginPreview::new(...)` を作り、reject をここで short-circuit します。success のときだけ preview-backed `GameplayReadView` を `prepare_player_join(...)` へ渡し、戻ってきた `GameplayEffectBatch` を同じ revisioned commit path へ入れます。host は detached read/effect batch を返すだけで、login state transition の owner ではありません。実装は [`../../crates/runtime/revy-server-runtime/src/runtime/core_store.rs`](../../crates/runtime/revy-server-runtime/src/runtime/core_store.rs)、[`../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs`](../../crates/plugin/mc-plugin-host/src/host/profiles/gameplay.rs)、[`../../crates/core/revy-voxel-core/src/core/mutation.rs`](../../crates/core/revy-voxel-core/src/core/mutation.rs) にあります。
 
 ### direct-core command
 
@@ -92,7 +92,7 @@ protocol plugin の decode 結果も `RuntimeCommand::Core(CoreCommand::Gameplay
 
 ## login 時に何が足されるか
 
-`validate_and_apply_login_effects(...)` は gameplay callback が成功したあと、runtime bootstrap に必要な event をまとめて積みます。
+login mutation は gameplay callback が成功したあと、runtime bootstrap に必要な event をまとめて積みます。
 
 - `LoginAccepted`
 - `PlayBootstrap`
@@ -101,9 +101,9 @@ protocol plugin の decode 結果も `RuntimeCommand::Core(CoreCommand::Gameplay
 - `SelectedHotbarSlotChanged`
 - 既存 player の spawn event
 
-この順番を追いたいときは [`../../crates/core/revy-voxel-core/src/core/transaction.rs`](../../crates/core/revy-voxel-core/src/core/transaction.rs) を読むのが最短です。
+この順番を追いたいときは [`../../crates/core/revy-voxel-core/src/core/mutation.rs`](../../crates/core/revy-voxel-core/src/core/mutation.rs) を読むのが最短です。
 
-ただし `LoginAccepted` は core の accept point であって、その場で shared session state を `Play` へ進めるわけではありません。runtime は `LoginAccepted` をまず connection-targeted event として queue に積み、session task が login success packet を write できた時点で `player_id / entity_id / phase / session_capabilities` を commit します。commit 前の短い window は `SessionRegistry` の pending login route が `EventTarget::Player` 配送だけを bridge します。
+ただし `LoginAccepted` は core の accept point であって、その場で session actor を `Play` へ進めるわけではありません。runtime は connection-targeted login event を queue に積み、session task が login success packet を write できた時点で `Login::AcceptedWritePending` から `Play` へ transition します。この transition が registry projection の更新元です。
 
 ## runtime 側の受け渡し
 

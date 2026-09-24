@@ -6,7 +6,7 @@ const HALF_RANGE: u32 = MODULUS / 2;
 
 macro_rules! sequence_type {
     ($name:ident) => {
-        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize)]
         pub struct $name(u32);
 
         impl $name {
@@ -53,6 +53,21 @@ macro_rules! sequence_type {
                 }
             }
         }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = <u32 as serde::Deserialize>::deserialize(deserializer)?;
+                if value > MASK {
+                    return Err(serde::de::Error::custom(
+                        "24-bit sequence exceeds its wire domain",
+                    ));
+                }
+                Ok(Self(value))
+            }
+        }
     };
 }
 
@@ -63,6 +78,7 @@ sequence_type!(OrderSequence);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     #[test]
     fn sequence_wraparound_preserves_newer_relation() {
@@ -77,5 +93,11 @@ mod tests {
     fn sequence_masks_values_to_twenty_four_bits() {
         assert_eq!(ReliableSequence::new(0xab12_3456).value(), 0x12_3456);
         assert_eq!(OrderSequence::new(MODULUS).value(), 0);
+    }
+
+    #[test]
+    fn deserialization_rejects_values_outside_the_wire_domain() {
+        let encoded = serde::de::value::U32Deserializer::<serde::de::value::Error>::new(1 << 24);
+        assert!(DatagramSequence::deserialize(encoded).is_err());
     }
 }

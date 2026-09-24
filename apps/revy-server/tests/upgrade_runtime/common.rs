@@ -111,6 +111,15 @@ pub(crate) fn runtime_tcp_listener_addr(status: &proto::AdminStatusView) -> Test
     Ok(binding.local_addr.parse()?)
 }
 
+pub(crate) fn runtime_udp_listener_addr(status: &proto::AdminStatusView) -> TestResult<SocketAddr> {
+    let binding = status
+        .listener_bindings
+        .iter()
+        .find(|binding| binding.transport == proto::TransportKind::Udp as i32)
+        .ok_or("status did not include a UDP game listener binding")?;
+    Ok(binding.local_addr.parse()?)
+}
+
 pub(crate) async fn fetch_runtime_tcp_listener_addr(
     client: &mut AdminClient,
 ) -> TestResult<SocketAddr> {
@@ -172,18 +181,65 @@ pub(crate) async fn upgrade_runtime_executable(
 pub(crate) async fn upgrade_to_current_bootstrap(client: &mut AdminClient) -> TestResult<()> {
     let upgrade = upgrade_runtime_executable(client, SERVER_BOOTSTRAP_BIN).await?;
     assert_eq!(upgrade.executable_path, SERVER_BOOTSTRAP_BIN);
+    assert_cutover_report(
+        upgrade.cutover.as_ref(),
+        proto::CutoverOperation::ExecutableUpgrade,
+        None,
+    )?;
     Ok(())
 }
 
-pub(crate) async fn reload_runtime_full(client: &mut AdminClient) -> TestResult<()> {
+pub(crate) async fn reload_runtime(
+    client: &mut AdminClient,
+    mode: proto::RuntimeReloadMode,
+) -> TestResult<proto::CutoverReport> {
     let response = client
         .reload_runtime(authorized_request(proto::ReloadRuntimeRequest {
-            mode: proto::RuntimeReloadMode::Full as i32,
+            mode: mode as i32,
         }))
         .await?
         .into_inner();
-    if response.result.is_none() {
-        return Err("reload runtime response was missing result".into());
+    let result = response
+        .result
+        .ok_or("reload runtime response was missing result")?;
+    let cutover = result
+        .cutover
+        .ok_or("reload runtime response was missing cutover report")?;
+    assert_cutover_report(Some(&cutover), proto::CutoverOperation::Reload, Some(mode))?;
+    Ok(cutover)
+}
+
+pub(crate) fn assert_cutover_report(
+    report: Option<&proto::CutoverReport>,
+    expected_operation: proto::CutoverOperation,
+    expected_mode: Option<proto::RuntimeReloadMode>,
+) -> TestResult<()> {
+    let report = report.ok_or("operator response was missing cutover report")?;
+    let operation = proto::CutoverOperation::try_from(report.operation)
+        .map_err(|_| "cutover report operation was invalid")?;
+    let outcome = proto::CutoverOutcome::try_from(report.outcome)
+        .map_err(|_| "cutover report outcome was invalid")?;
+    assert_eq!(operation, expected_operation);
+    assert_eq!(outcome, proto::CutoverOutcome::Committed);
+    assert_eq!(
+        report
+            .mode
+            .map(proto::RuntimeReloadMode::try_from)
+            .transpose()?,
+        expected_mode
+    );
+    let mix = report
+        .connection_mix
+        .as_ref()
+        .ok_or("cutover report was missing connection mix")?;
+    assert_eq!(
+        mix.java
+            .checked_add(mix.bedrock)
+            .ok_or("cutover connection count overflowed")?,
+        report.session_count
+    );
+    if report.epoch_revision == 0 {
+        return Err("cutover report epoch revision was zero".into());
     }
     Ok(())
 }
@@ -204,7 +260,11 @@ pub(crate) fn wait_for_clean_parent_exit(
     let exit_status = wait_for_exit(parent, timeout)?;
     let diagnostics = persisted_log_diagnostics(logs);
     let Some(exit_status) = exit_status else {
-        return Err(format!("{expectation}; {diagnostics}").into());
+        return Err(format!(
+            "{expectation}; process {} did not exit within {timeout:?}; {diagnostics}",
+            parent.id(),
+        )
+        .into());
     };
     if !exit_status.success() {
         return Err(format!("{expectation}; status={exit_status}; {diagnostics}").into());
@@ -274,14 +334,6 @@ pub(crate) fn write_stdin_lines(child: &mut Child, lines: &[&str]) -> TestResult
     Ok(())
 }
 
-#[cfg(unix)]
-pub(crate) fn assert_process_alive(child: &mut Child, context: &str) -> TestResult<()> {
-    if let Some(status) = child.try_wait()? {
-        return Err(format!("{context}; status={status}").into());
-    }
-    Ok(())
-}
-
 pub(crate) fn spawn_upgrade_task(mut client: AdminClient) -> UpgradeTask {
     tokio::spawn(async move {
         client
@@ -298,17 +350,11 @@ pub(crate) async fn assert_upgrade_task_succeeded(task: UpgradeTask) -> TestResu
         .result
         .ok_or("upgrade response was missing result")?;
     assert_eq!(result.executable_path, SERVER_BOOTSTRAP_BIN);
-    Ok(())
-}
-
-#[cfg(unix)]
-pub(crate) async fn assert_upgrade_task_failed(
-    task: UpgradeTask,
-    expected_code: Code,
-    context: &str,
-) -> TestResult<()> {
-    let error = task.await?.expect_err(context);
-    assert_eq!(error.code(), expected_code);
+    assert_cutover_report(
+        result.cutover.as_ref(),
+        proto::CutoverOperation::ExecutableUpgrade,
+        None,
+    )?;
     Ok(())
 }
 
@@ -353,47 +399,13 @@ impl PreparedServer {
         &self,
         capture_name: &str,
     ) -> TestResult<(Child, PersistedServerLogCapture)> {
+        let config_path = self.temp_path().join("runtime").join("server.toml");
         spawn_server_with_log_capture_and_envs(
             self.temp_path(),
             Stdio::null(),
-            None,
+            Some(&config_path),
             &[],
             capture_name,
-        )
-    }
-
-    pub(crate) fn spawn_logged_with_envs(
-        &self,
-        capture_name: &str,
-        extra_envs: &[(&str, &str)],
-    ) -> TestResult<(Child, PersistedServerLogCapture)> {
-        spawn_server_with_log_capture_and_envs(
-            self.temp_path(),
-            Stdio::null(),
-            None,
-            extra_envs,
-            capture_name,
-        )
-    }
-
-    pub(crate) fn spawn_piped(&self) -> TestResult<Child> {
-        spawn_server(
-            self.temp_path(),
-            Stdio::piped(),
-            Stdio::piped(),
-            Stdio::piped(),
-        )
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn spawn_piped_with_envs(&self, extra_envs: &[(&str, &str)]) -> TestResult<Child> {
-        spawn_server_with_config_path_and_envs(
-            self.temp_path(),
-            Stdio::piped(),
-            Stdio::piped(),
-            Stdio::piped(),
-            None,
-            extra_envs,
         )
     }
 

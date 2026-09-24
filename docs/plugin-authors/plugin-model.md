@@ -109,10 +109,11 @@ profile id を新しく増やす plugin は、manifest / descriptor / config の
 
 | crate | 役割 | 使いどころ |
 | --- | --- | --- |
-| `mc-plugin-api` | ABI `8.0`、manifest struct、host API、typed codec | host / runtime 実装、ABI 契約確認 |
+| `mc-plugin-contract` | safe semantic request / response、descriptor、typed codec | plugin / host が共有する意味契約 |
+| `mc-plugin-abi` | ABI 9 の raw FFI layout、manifest、function table、owned buffer | host / SDK の ABI 境界実装 |
 | `mc-plugin-sdk-rust` | Rust 向け trait、manifest helper、capability helper、export macro、semantic type re-export | 通常の Rust plugin authoring の正規入口 |
 
-通常の plugin 作者は `mc-plugin-sdk-rust` だけを正規入口として使い、ABI の細部が必要なときだけ `mc-plugin-api` を読みます。capability、id、`GameplayCommand`、`WorldSnapshot` のような semantic type も `mc_plugin_sdk_rust` crate root から import し、`mc-plugin-api` や `revy_voxel_core` を plugin authoring surface として直接使いません。
+通常の plugin 作者は `mc-plugin-sdk-rust` を正規入口として使います。semantic codec を直接扱う場合だけ `mc-plugin-contract`、raw ABI table を実装する場合だけ `mc-plugin-abi` を参照します。capability、id、`GameplayCommand`、`WorldSnapshot` のような semantic type は `mc_plugin_sdk_rust` crate root から import し、`revy_voxel_core` を plugin authoring surface として直接使いません。
 
 ### kind ごとの正規入口
 
@@ -147,7 +148,15 @@ profile id を新しく増やす plugin は、manifest / descriptor / config の
 - `StaticPluginManifest::admin_surface(..., profile_id)`
   `admin-surface.profile:<profile_id>` と `runtime.reload.admin-surface`
 
-ABI はすべて `CURRENT_PLUGIN_ABI`、すなわち `8.0` に揃います。通常の Rust plugin ではこれを手で上書きする必要はありません。
+ABI はすべて `CURRENT_PLUGIN_ABI` に揃います。通常の Rust plugin ではこれを手で上書きする必要はありません。live session handoff state を持つ plugin は `.with_max_session_handoff_bytes(...)` で上限を宣言し、prepare 時に runtime slot capacity 内であることを検証できるようにします。
+
+### ABI 9 の所有権と validation
+
+manifest と function table は ABI major/minor と `struct_size` を先頭に持ちます。enum は raw `u32` tag のまま受けず、host validation 後に safe enum へ変換します。host は function pointer、pointer/count/null、`len <= cap`、`isize::MAX`、configured buffer limit、UTF-8 を invocation 前に検証します。
+
+plugin-owned buffer は free callback を必須とし、host の `ForeignOwnedBuffer` guard が generation lease と一緒に保持します。success、decode failure、callback failure のいずれでも一度だけ解放されます。gameplay callback は invocation ごとの `GameplayHost<'call>` を受け取り、thread-local な ambient authority を取得しません。
+
+ABI 9.1 の function table は `create_instance` / `destroy_instance` を必須とし、`invoke` の先頭引数へ生成済み object を渡します。9.0 の呼出規約は受理しません。同じ dylib と artifact hash でも、独立に load された世代の可変 state は共有しません。SDK は object を世代ごとに生成し、manifest / function table の immutable storage だけを共有します。object は concurrent invocation に対応し、host は最後の invocation / buffer lease が失われた後、library を unload する前に一度だけ destroy します。
 
 ### runtime capability set は別物
 
@@ -179,15 +188,16 @@ declare_protocol_plugin!(
         ProtocolCapability::Je,
         ProtocolCapability::Je47,
     ],
+    64 * 1024,
 );
 ```
 
-この macro は adapter への委譲実装、embedded manifest の export、protocol API v3 の export をまとめて行います。
+最後の引数は 1 session あたりの handoff blob 上限です。この macro は adapter への委譲実装、ABI 9 embedded manifest と function table の export をまとめて行います。
 
 ### gameplay plugin
 
 ```rust
-use mc_plugin_api::codec::gameplay::GameplayDescriptor;
+use mc_plugin_contract::codec::gameplay::GameplayDescriptor;
 use mc_plugin_sdk_rust::{GameplayCapability, GameplayCapabilitySet};
 use mc_plugin_sdk_rust::capabilities::gameplay_capabilities;
 use mc_plugin_sdk_rust::export_plugin;
@@ -211,7 +221,8 @@ const MANIFEST: StaticPluginManifest = StaticPluginManifest::gameplay(
     "gameplay-canonical",
     "Canonical Gameplay Plugin",
     "canonical",
-);
+)
+.with_max_session_handoff_bytes(256);
 
 export_plugin!(gameplay, CanonicalGameplayPlugin, MANIFEST);
 ```
@@ -229,6 +240,12 @@ gameplay plugin は callback ごとに host から `GameplayHost` を受け取�
 
 権限判定そのものは host 側の `static.admin.principals` が持ちます。
 
+surface が開始した task、thread、executor は instance の寿命に属します。`shutdown` は
+in-flight request を完了させ、全 worker の終了を確認してから返します。host lease の解放や
+server の終了通知だけでは、executor が plugin code を実行しなくなった証拠にはなりません。
+object の destroy は memory の解放境界であり、fallible な worker shutdown の代わりではありません。
+background execution は明示的な shutdown で完了を回収し、その後に object の destructor を実行します。
+
 ## 避けるべき内部 path
 
 authoring code が semantic capability / id を参照するときは `mc_plugin_sdk_rust` crate root を使います。`revy_voxel_core` 直参照は engine internal 依存なので避けます。
@@ -238,7 +255,6 @@ authoring code が semantic capability / id を参照するときは `mc_plugin_
 | 避ける path | 理由 | 代わりに使うもの |
 | --- | --- | --- |
 | `mc_plugin_sdk_rust::__macro_support` | macro 展開用の内部 module で、authoring surface ではない | `mc_plugin_sdk_rust::manifest`、`mc_plugin_sdk_rust::capabilities`、`mc_plugin_sdk_rust::{protocol, gameplay, storage, auth, admin_surface}` |
-| `mc_plugin_host::__test_hooks` | host 内部の test support で、production authoring からは見せない前提 | 通常の authoring は `mc_plugin_api` / `mc_plugin_sdk_rust` の公開 API を使い、workspace 内 test では `crates/testing/mc-plugin-test-support` と `crates/testing/mc-plugin-host-test-support` を使う |
 | `mc_proto_je_common::__version_support` | Java 版ごとの codec helper をまとめた内部 module | versioned Java protocol crate の公開 adapter / codec API を使う。例: `mc_proto_je_47::Je47Adapter` |
 | `mc_proto_be_common::__version_support` | Bedrock 版ごとの codec helper をまとめた内部 module | versioned Bedrock protocol crate の公開 adapter / codec API を使う。例: `mc_proto_be_924` の公開 surface |
 

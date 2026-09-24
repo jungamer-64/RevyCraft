@@ -20,7 +20,7 @@ use bedrock_protocol::v662::enums::{
 };
 use bedrock_protocol::v662::packets::{
     AddItemActorPacket, LevelEventPacket, MovePlayerPacket, NetworkSettingsPacket,
-    PlayStatusPacket, RemoveActorPacket, UpdateBlockPacket,
+    NetworkStackLatencyPacket, PlayStatusPacket, RemoveActorPacket, UpdateBlockPacket,
 };
 use bedrock_protocol::v662::types::{
     ActorRuntimeID, ActorUniqueID, BaseGameVersion, EduSharedUriResource, Experiments,
@@ -100,6 +100,17 @@ pub(crate) fn encode_login_success_packet(
             include_editor_packs: false,
         })),
     ])
+}
+
+pub(crate) fn encode_keep_alive_packet(keep_alive_id: i32) -> Result<Vec<u8>, ProtocolError> {
+    let creation_time = u64::try_from(keep_alive_id)
+        .map_err(|_| ProtocolError::InvalidPacket("keepalive id out of range"))?;
+    encode_v924(&[V924::NetworkStackLatencyPacket(Box::new(
+        NetworkStackLatencyPacket {
+            creation_time,
+            is_from_server: true,
+        },
+    ))])
 }
 
 pub(crate) fn encode_play_bootstrap_packets(

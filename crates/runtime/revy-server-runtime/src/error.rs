@@ -13,14 +13,82 @@ pub enum RuntimeError {
     Protocol(#[from] ProtocolError),
     #[error("storage error: {0}")]
     Storage(#[from] mc_storage_common::StorageError),
+    #[error("core transfer error: {0}")]
+    CoreTransfer(#[from] revy_voxel_core::CoreTransferError),
+    #[error("cutover event encoding failed: {0}")]
+    CutoverEventEncoding(#[source] serde_json::Error),
+    #[error("{resource} allocation of {requested} bytes failed")]
+    Allocation {
+        resource: &'static str,
+        requested: usize,
+    },
     #[error("auth error: {0}")]
     Auth(String),
+    #[error("raknet error: {0}")]
+    RakNet(String),
+    #[error("socket transfer error: {0}")]
+    SocketTransfer(#[from] revy_runtime_transfer::SocketTransferError),
     #[error("unsupported configuration: {0}")]
     Unsupported(String),
     #[error("configuration error: {0}")]
     Config(String),
+    #[error(
+        "cutover {resource} pre-copy at revision {staged_revision} was outpaced; earliest available revision is {earliest_revision}"
+    )]
+    CutoverOutpaced {
+        resource: &'static str,
+        staged_revision: u64,
+        earliest_revision: u64,
+    },
+    #[error(
+        "cutover session directory changed from prepared revision {prepared_revision} to sealed revision {sealed_revision}"
+    )]
+    CutoverDirectoryChanged {
+        prepared_revision: u64,
+        sealed_revision: u64,
+    },
+    #[error(
+        "cutover abort after {cause}; session recovery: {sessions:?}; ingress recovery: {ingress:?}"
+    )]
+    CutoverAbortFailed {
+        cause: Box<RuntimeError>,
+        sessions: Option<Box<RuntimeError>>,
+        ingress: Option<Box<RuntimeError>>,
+    },
+    #[error("{resource} budget exceeded: requested {requested}, limit {limit}")]
+    BudgetExceeded {
+        resource: &'static str,
+        requested: usize,
+        limit: usize,
+    },
     #[error("task join error: {0}")]
     Join(#[from] tokio::task::JoinError),
+}
+
+impl From<revy_raknet::RakNetError> for RuntimeError {
+    fn from(value: revy_raknet::RakNetError) -> Self {
+        match value {
+            revy_raknet::RakNetError::Budget(error) => Self::BudgetExceeded {
+                resource: error.resource,
+                requested: error.requested,
+                limit: error.limit,
+            },
+            revy_raknet::RakNetError::Io(error) => Self::Io(error),
+            revy_raknet::RakNetError::Wire(message) => Self::RakNet(message),
+            revy_raknet::RakNetError::Closed => Self::RakNet("raknet peer is closed".to_string()),
+            revy_raknet::RakNetError::PeerTimeout => {
+                Self::RakNet("raknet peer activity timed out".to_string())
+            }
+            revy_raknet::RakNetError::RetransmitExhausted { sequence, attempts } => {
+                Self::RakNet(format!(
+                    "raknet datagram sequence {sequence} exhausted its retransmit budget after {attempts} attempts"
+                ))
+            }
+            revy_raknet::RakNetError::QueueFull => {
+                Self::RakNet("raknet peer command queue is full".to_string())
+            }
+        }
+    }
 }
 
 impl From<mc_plugin_host::PluginHostError> for RuntimeError {

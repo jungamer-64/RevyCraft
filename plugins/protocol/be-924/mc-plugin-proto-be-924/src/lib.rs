@@ -13,4 +13,5 @@ declare_protocol_plugin!(
         ProtocolCapability::Bedrock,
         ProtocolCapability::Bedrock924,
     ],
+    64 * 1024,
 );

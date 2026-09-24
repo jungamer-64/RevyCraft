@@ -1,11 +1,15 @@
 mod support;
 
+#[path = "upgrade_runtime/bedrock_oracle.rs"]
+mod bedrock_oracle;
 #[path = "upgrade_runtime/common.rs"]
 mod common;
 #[path = "upgrade_runtime/console_cases.rs"]
 mod console_cases;
 #[path = "upgrade_runtime/failure_cases.rs"]
 mod failure_cases;
+#[path = "upgrade_runtime/latency_cases.rs"]
+mod latency_cases;
 #[path = "upgrade_runtime/lock.rs"]
 mod lock;
 #[path = "upgrade_runtime/options.rs"]

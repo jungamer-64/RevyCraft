@@ -10,6 +10,7 @@ categories.workspace = true
 description = "RevyCraft-owned bounded RakNet transport state machine."
 
 [dependencies]
+serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 

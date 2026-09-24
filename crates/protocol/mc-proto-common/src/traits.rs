@@ -149,6 +149,11 @@ pub trait ProtocolAdapter: SessionAdapter + PlaySyncAdapter + Send + Sync {
         None
     }
 
+    #[must_use]
+    fn max_session_handoff_bytes(&self) -> usize {
+        0
+    }
+
     /// # Errors
     ///
     /// Returns [`ProtocolError`] when the adapter cannot export session-owned

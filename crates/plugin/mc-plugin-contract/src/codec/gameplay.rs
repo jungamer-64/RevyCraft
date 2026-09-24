@@ -722,6 +722,7 @@ mod tests {
     fn gameplay_ops_round_trip_with_binary_codec() {
         let mut capabilities = GameplayCapabilitySet::new();
         let _ = capabilities.insert(GameplayCapability::RuntimeReload);
+        let _ = capabilities.insert(GameplayCapability::SessionTick);
         let requests_and_responses = vec![
             (
                 GameplayRequest::Describe,

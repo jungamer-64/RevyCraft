@@ -141,7 +141,7 @@ pub struct WorldMeta {
     pub level_type: String,
     pub game_mode: u8,
     pub difficulty: u8,
-    pub max_players: u8,
+    pub max_players: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -43,6 +43,8 @@ pub trait GameplayProfileHandle: Send + Sync {
 
     fn plugin_generation_id(&self) -> Option<PluginGenerationId>;
 
+    fn max_session_handoff_bytes(&self) -> usize;
+
     fn prepare_player_join(
         &self,
         read_view: Box<dyn GameplayReadView>,
@@ -384,6 +386,14 @@ impl PreparedRuntimeSelection {
 }
 
 pub trait RuntimePluginHost: Send + Sync {
+    /// Returns the exact package digests captured while each active plugin generation loaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginHostError`] if two active generations claim the same plugin id with
+    /// different artifact bytes.
+    fn exact_plugin_artifacts(&self) -> Result<Vec<RuntimePluginArtifact>, PluginHostError>;
+
     /// # Errors
     ///
     /// Returns [`PluginHostError`] when the host cannot stage its
@@ -450,4 +460,10 @@ pub trait RuntimePluginHost: Send + Sync {
     fn managed_protocol_ids(&self) -> Vec<String>;
 
     fn status(&self) -> PluginHostInventoryStatusSnapshot;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimePluginArtifact {
+    pub plugin_id: String,
+    pub sha256: [u8; 32],
 }

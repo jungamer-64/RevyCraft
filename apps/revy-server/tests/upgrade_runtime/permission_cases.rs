@@ -1,9 +1,8 @@
 use crate::common::{
     PreparedServer, SERVER_BOOTSTRAP_BIN, expect_upgrade_error, kill_server, upgrade_test_lock,
-    write_stdin_lines,
+    wait_for_output_contains, write_stdin_lines,
 };
-use crate::support::{ServerTomlOptions, TestResult, read_child_output};
-use std::thread;
+use crate::support::{ServerTomlOptions, TestResult, wait_for_tcp_ready};
 use std::time::Duration;
 use tonic::Code;
 
@@ -19,15 +18,17 @@ fn local_console_without_upgrade_permission_denies_upgrade_command() -> TestResu
         ))
     })?;
 
-    let mut child = server.spawn_piped()?;
+    let stdout_path = server.temp_path().join("server.stdout.log");
+    let stderr_path = server.temp_path().join("server.stderr.log");
+    let mut child = server.spawn_with_log_files(&stdout_path, &stderr_path)?;
     let command = format!("upgrade runtime executable {SERVER_BOOTSTRAP_BIN}");
+    wait_for_tcp_ready(server.grpc_addr, Duration::from_secs(5))?;
     write_stdin_lines(&mut child, &[command.as_str()])?;
-    drop(child.stdin.take());
-    thread::sleep(Duration::from_millis(500));
+    let output =
+        wait_for_output_contains(&stdout_path, "permission denied", Duration::from_secs(5));
     kill_server(&mut child)?;
 
-    let (stdout, _stderr) = read_child_output(&mut child)?;
-    assert!(stdout.contains("permission denied"));
+    let stdout = output?;
     assert!(stdout.contains("upgrade-runtime"));
     Ok(())
 }

@@ -254,7 +254,7 @@ pub type TargetedEvent = revy_core::event::RoutedEvent<CoreEvent>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlayerSummary {
     pub online_players: usize,
-    pub max_players: u8,
+    pub max_players: u32,
 }
 
 #[cfg(test)]

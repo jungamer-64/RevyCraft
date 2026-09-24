@@ -428,7 +428,7 @@ async fn config_reload_updates_storage_generation_for_buffer_limit_changes()
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
-    let before_protocol_generation = server.runtime.active_generation().generation_id;
+    let before_protocol_generation = server.runtime.active_generation_id();
     let storage_before = loaded_plugins_snapshot(&server)
         .await
         .resolve_storage_profile(JE_1_7_10_STORAGE_PROFILE_ID)

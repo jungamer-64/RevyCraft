@@ -85,6 +85,13 @@ token_file = "admin/ops.token"
 
 reload mode の正確な反映境界は [`configuration-and-reload.md`](configuration-and-reload.md) を参照してください。
 
+reload / executable upgrade の直後は response または `status.last_cutover` を確認します。
+
+- outcome が `committed` で、epoch revision が進んでいる
+- connection mix と session count が実際の population に一致する
+- `freeze_us` と `resume_us` を command 全体の所要時間から分けて確認する
+- 通常 reload の 200 ms、executable upgrade の 500 ms という単一試行 hard limit を超えていない
+
 ## よくある失敗と確認箇所
 
 ### `runtime/server.toml` が見つからない
@@ -125,6 +132,7 @@ reload mode の正確な反映境界は [`configuration-and-reload.md`](configur
 - `--target <triple>` ごとに必要な Rust target component と linker を用意する
 - bundle に world data や admin token などの secret が自動では入らない前提を理解しておく
 - allowlist を更新したあとに package と bundle 生成の順番が崩れていないか確認する
+- published release の cutover latency acceptance job が、1000 Java、1000 Bedrock、500 + 500 の reload / executable 全構成で通っている
 - 生成後は `dist/releases/<target>/` か `--output-dir` の中身を見て、`server-bootstrap`、`runtime/server.toml`、必要な plugin package が揃っていることを確認する
 
 bundle の内容と config source の仕様は [`getting-started.md`](getting-started.md) を参照してください。

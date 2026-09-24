@@ -5,6 +5,10 @@ fn online_auth_server_config(world_dir: PathBuf, enabled_adapters: &[&str]) -> S
     let mut config = loopback_server_config(world_dir);
     config.bootstrap.online_mode = true;
     config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.into();
+    config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
+        enabled_adapters,
+        &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
+    ));
     config.topology.enabled_adapters =
         Some(enabled_adapters.iter().map(|id| (*id).into()).collect());
     config
@@ -45,6 +49,10 @@ async fn offline_mode_rejects_online_auth_profile() -> Result<(), RuntimeError> 
     let temp_dir = tempdir()?;
     let mut config = ServerConfig::default();
     config.profiles.auth = ONLINE_STUB_AUTH_PROFILE_ID.into();
+    config.plugins.allowlist = Some(plugin_allowlist_with_supporting_plugins(
+        &[JE_5_ADAPTER_ID],
+        &["storage-je-anvil-1_7_10", ONLINE_STUB_AUTH_PLUGIN_ID],
+    ));
     config.bootstrap.world_dir = temp_dir.path().join("world");
     assert_spawn_fails_with_message(
         config,

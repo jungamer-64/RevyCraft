@@ -112,8 +112,7 @@ async fn modern_1_12_window_zero_crafting_round_trips_authoritative_slot_updates
 }
 
 #[tokio::test]
-async fn legacy_rejected_window_zero_click_recovers_after_apology()
--> Result<(), RuntimeError> {
+async fn legacy_rejected_window_zero_click_recovers_after_apology() -> Result<(), RuntimeError> {
     let _guard = lock_window_transaction_tests().await;
     let temp_dir = tempdir()?;
     let server = build_test_server(

@@ -1,6 +1,5 @@
 use super::*;
 use crate::runtime::RunningServer;
-use revy_voxel_core::PlayerId;
 
 #[derive(Clone)]
 pub(crate) struct LoadedPluginTestEnvironment {
@@ -68,17 +67,11 @@ pub(crate) async fn build_reloadable_test_server_from_source(
 }
 
 pub(crate) fn active_protocol_registry(server: &RunningServer) -> ProtocolRegistry {
-    server.runtime.active_generation().protocol_registry.clone()
-}
-
-pub(crate) async fn open_test_crafting_table(
-    server: &RunningServer,
-    player_id: PlayerId,
-    window_id: u8,
-    title: &str,
-) -> Result<(), RuntimeError> {
     server
         .runtime
-        .open_test_crafting_table(player_id, window_id, title)
-        .await
+        .authority
+        .active()
+        .topology
+        .protocol_registry
+        .clone()
 }

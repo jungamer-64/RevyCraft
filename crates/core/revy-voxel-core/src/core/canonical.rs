@@ -147,6 +147,12 @@ pub(super) struct PlayerPoseDelta {
     pub(super) entity_id: EntityId,
     pub(super) player: PlayerSnapshot,
     pub(super) chunks: Vec<ChunkColumn>,
+    pub(super) moved_for_viewers: Vec<PlayerId>,
+    pub(super) spawned_for_viewers: Vec<PlayerId>,
+    pub(super) despawned_for_viewers: Vec<PlayerId>,
+    pub(super) observed_players_entered: Vec<(EntityId, PlayerSnapshot)>,
+    pub(super) observed_items_entered: Vec<(EntityId, DroppedItemSnapshot)>,
+    pub(super) observed_entities_left: Vec<EntityId>,
 }
 
 #[derive(Clone, Debug)]
@@ -263,6 +269,7 @@ pub(super) struct LoginFinalizeDelta {
     pub(super) visible_chunks: Vec<ChunkColumn>,
     pub(super) existing_players: Vec<(EntityId, PlayerSnapshot)>,
     pub(super) dropped_items: Vec<(EntityId, DroppedItemSnapshot)>,
+    pub(super) new_player_viewers: Vec<PlayerId>,
 }
 
 #[derive(Clone, Debug)]
@@ -652,13 +659,18 @@ impl CoreEventBuilder {
                     event: CoreEvent::DroppedItemSpawned { entity_id, item },
                 }),
         );
-        events.push(TargetedEvent {
-            target: EventTarget::EveryoneExcept(delta.player_id),
-            event: CoreEvent::EntitySpawned {
-                entity_id: delta.entity_id,
-                player: delta.player,
-            },
-        });
+        events.extend(
+            delta
+                .new_player_viewers
+                .into_iter()
+                .map(|viewer| TargetedEvent {
+                    target: EventTarget::Player(viewer),
+                    event: CoreEvent::EntitySpawned {
+                        entity_id: delta.entity_id,
+                        player: delta.player.clone(),
+                    },
+                }),
+        );
         events
     }
 
@@ -673,13 +685,67 @@ impl CoreEventBuilder {
                 },
             })
             .collect::<Vec<_>>();
-        events.push(TargetedEvent {
-            target: EventTarget::EveryoneExcept(delta.player_id),
-            event: CoreEvent::EntityMoved {
-                entity_id: delta.entity_id,
-                player: delta.player,
-            },
-        });
+        events.extend(
+            delta
+                .moved_for_viewers
+                .into_iter()
+                .map(|viewer| TargetedEvent {
+                    target: EventTarget::Player(viewer),
+                    event: CoreEvent::EntityMoved {
+                        entity_id: delta.entity_id,
+                        player: delta.player.clone(),
+                    },
+                }),
+        );
+        events.extend(
+            delta
+                .spawned_for_viewers
+                .into_iter()
+                .map(|viewer| TargetedEvent {
+                    target: EventTarget::Player(viewer),
+                    event: CoreEvent::EntitySpawned {
+                        entity_id: delta.entity_id,
+                        player: delta.player.clone(),
+                    },
+                }),
+        );
+        events.extend(
+            delta
+                .despawned_for_viewers
+                .into_iter()
+                .map(|viewer| TargetedEvent {
+                    target: EventTarget::Player(viewer),
+                    event: CoreEvent::EntityDespawned {
+                        entity_ids: vec![delta.entity_id],
+                    },
+                }),
+        );
+        events.extend(
+            delta
+                .observed_players_entered
+                .into_iter()
+                .map(|(entity_id, player)| TargetedEvent {
+                    target: EventTarget::Player(delta.player_id),
+                    event: CoreEvent::EntitySpawned { entity_id, player },
+                }),
+        );
+        events.extend(
+            delta
+                .observed_items_entered
+                .into_iter()
+                .map(|(entity_id, item)| TargetedEvent {
+                    target: EventTarget::Player(delta.player_id),
+                    event: CoreEvent::DroppedItemSpawned { entity_id, item },
+                }),
+        );
+        if !delta.observed_entities_left.is_empty() {
+            events.push(TargetedEvent {
+                target: EventTarget::Player(delta.player_id),
+                event: CoreEvent::EntityDespawned {
+                    entity_ids: delta.observed_entities_left,
+                },
+            });
+        }
         events
     }
 

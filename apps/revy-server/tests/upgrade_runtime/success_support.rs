@@ -1,8 +1,8 @@
 use crate::common::{
-    JavaPlaySession, PreparedServer, StatusSession, assert_upgrade_task_succeeded,
-    fetch_runtime_tcp_listener_addr, reload_runtime_full, remote_admin_upgrade_options,
-    shutdown_runtime_via_grpc, spawn_upgrade_task, upgrade_to_current_bootstrap,
-    wait_for_clean_parent_exit, wait_for_upgrade_phase,
+    JavaPlaySession, PreparedServer, StatusSession, assert_cutover_report,
+    assert_upgrade_task_succeeded, fetch_runtime_tcp_listener_addr, fetch_status, reload_runtime,
+    remote_admin_upgrade_options, shutdown_runtime_via_grpc, spawn_upgrade_task,
+    upgrade_to_current_bootstrap, wait_for_clean_parent_exit, wait_for_upgrade_phase,
 };
 use crate::support::{
     PersistedServerLogCapture, ProcessTestClientEncryptionState, TestResult, begin_online_login,
@@ -101,6 +101,12 @@ async fn wait_for_child_client(
         fetch_runtime_tcp_listener_addr(&mut child_client).await?,
         runtime.game_addr
     );
+    let status = fetch_status(&mut child_client).await?;
+    assert_cutover_report(
+        status.last_cutover.as_ref(),
+        proto::CutoverOperation::ExecutableUpgrade,
+        None,
+    )?;
     Ok(child_client)
 }
 
@@ -132,7 +138,11 @@ async fn start_reloaded_runtime() -> TestResult<LoggedRuntime> {
         Duration::from_secs(5),
     )
     .await?;
-    reload_runtime_full(runtime_client(&mut runtime)?).await?;
+    reload_runtime(
+        runtime_client(&mut runtime)?,
+        proto::RuntimeReloadMode::Full,
+    )
+    .await?;
     runtime.game_addr = fetch_runtime_tcp_listener_addr(runtime_client(&mut runtime)?).await?;
     Ok(runtime)
 }
@@ -176,7 +186,7 @@ pub(crate) fn assert_new_player_can_join(
     JavaPlaySession::connect_additional_player(game_addr, username, context)
 }
 
-pub(crate) async fn start_freeze_harness() -> TestResult<FreezeHarness> {
+pub(crate) async fn start_upgrade_harness() -> TestResult<FreezeHarness> {
     let (
         runtime,
         upgrade_client,
@@ -198,7 +208,7 @@ pub(crate) async fn start_freeze_harness() -> TestResult<FreezeHarness> {
     })
 }
 
-pub(crate) fn spawn_freeze_upgrade(harness: &mut FreezeHarness) -> TestResult<UpgradeTask> {
+pub(crate) fn spawn_upgrade_from_harness(harness: &mut FreezeHarness) -> TestResult<UpgradeTask> {
     let client = harness
         .upgrade_client
         .take()
@@ -206,19 +216,19 @@ pub(crate) fn spawn_freeze_upgrade(harness: &mut FreezeHarness) -> TestResult<Up
     Ok(spawn_upgrade_task(client))
 }
 
-pub(crate) async fn wait_for_parent_freeze(harness: &mut FreezeHarness) -> TestResult<()> {
-    let freeze_status = wait_for_upgrade_phase(
+pub(crate) async fn wait_for_parent_preparing(harness: &mut FreezeHarness) -> TestResult<()> {
+    let preparing_status = wait_for_upgrade_phase(
         &mut harness.status_client,
         proto::RuntimeUpgradeRole::Parent,
-        proto::RuntimeUpgradePhase::ParentFreezing,
+        proto::RuntimeUpgradePhase::ParentPreparing,
         Duration::from_secs(5),
     )
     .await?;
-    assert!(freeze_status.upgrade.is_some());
+    assert!(preparing_status.upgrade.is_some());
     Ok(())
 }
 
-pub(crate) async fn assert_freeze_mutations_rejected(
+pub(crate) async fn assert_upgrade_mutations_rejected(
     harness: &mut FreezeHarness,
 ) -> TestResult<()> {
     let reload_error = harness
@@ -252,18 +262,13 @@ pub(crate) async fn assert_freeze_mutations_rejected(
     Ok(())
 }
 
-pub(crate) fn assert_freeze_buffers_play_packet(harness: &mut FreezeHarness) -> TestResult<()> {
+pub(crate) fn send_play_packet_during_upgrade(harness: &mut FreezeHarness) -> TestResult<()> {
     harness
         .session
-        .set_held_item(8, "freeze held-item write failed")?;
-    harness.session.assert_no_packet(
-        TestJavaPacket::HeldItemChange,
-        Duration::from_millis(200),
-        "held-item change should stay buffered during freeze",
-    )
+        .set_held_item(8, "concurrent held-item write failed")
 }
 
-pub(crate) async fn finish_freeze_scenario(
+pub(crate) async fn finish_concurrent_play_scenario(
     harness: &mut FreezeHarness,
     upgrade_task: UpgradeTask,
 ) -> TestResult<()> {
@@ -272,7 +277,7 @@ pub(crate) async fn finish_freeze_scenario(
     assert_eq!(
         harness
             .session
-            .read_held_item("buffered held-item change was not delivered after cutover")?,
+            .read_held_item("concurrent held-item change was not preserved across cutover")?,
         8
     );
     shutdown_logged_runtime(&mut harness.runtime, &mut child_client).await

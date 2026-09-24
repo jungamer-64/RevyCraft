@@ -19,6 +19,7 @@ pub mod auth;
 pub mod buffers;
 pub mod capabilities;
 pub mod gameplay;
+pub mod instance;
 mod macros;
 pub mod manifest;
 pub mod protocol;

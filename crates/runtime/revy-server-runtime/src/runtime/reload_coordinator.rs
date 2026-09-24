@@ -1,20 +1,15 @@
-use crate::RuntimeError;
 use crate::config::{ServerConfigSource, StaticConfig};
-use crate::{RuntimeUpgradePhase, RuntimeUpgradeRole, RuntimeUpgradeStateView};
 use mc_plugin_host::runtime::RuntimePluginHost;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, oneshot};
+use tokio::sync::{Mutex as AsyncMutex, oneshot, watch};
 
 pub(crate) struct ReloadCoordinator {
     static_config: StaticConfig,
     config_source: ServerConfigSource,
     reload_host: Option<Arc<dyn RuntimePluginHost>>,
     reload_serial: Arc<AsyncMutex<()>>,
-    shutting_down: AtomicBool,
+    shutdown_requested_tx: watch::Sender<bool>,
     shutdown_tx: std::sync::Mutex<Option<oneshot::Sender<()>>>,
-    upgrade_state: std::sync::Mutex<Option<RuntimeUpgradeStateView>>,
-    child_upgrade_serial_hold: std::sync::Mutex<Option<OwnedMutexGuard<()>>>,
 }
 
 impl ReloadCoordinator {
@@ -28,10 +23,8 @@ impl ReloadCoordinator {
             config_source,
             reload_host,
             reload_serial: Arc::new(AsyncMutex::new(())),
-            shutting_down: AtomicBool::new(false),
+            shutdown_requested_tx: watch::channel(false).0,
             shutdown_tx: std::sync::Mutex::new(None),
-            upgrade_state: std::sync::Mutex::new(None),
-            child_upgrade_serial_hold: std::sync::Mutex::new(None),
         }
     }
 
@@ -51,12 +44,12 @@ impl ReloadCoordinator {
         self.reload_serial.lock().await
     }
 
-    pub(crate) fn try_lock_reload_serial(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
-        self.reload_serial.try_lock().ok()
+    pub(crate) async fn lock_reload_serial_owned(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        Arc::clone(&self.reload_serial).lock_owned().await
     }
 
-    pub(crate) async fn lock_reload_serial_owned(&self) -> OwnedMutexGuard<()> {
-        Arc::clone(&self.reload_serial).lock_owned().await
+    pub(crate) fn try_lock_reload_serial(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        self.reload_serial.try_lock().ok()
     }
 
     pub(crate) fn install_shutdown_tx(&self, shutdown_tx: oneshot::Sender<()>) {
@@ -67,11 +60,15 @@ impl ReloadCoordinator {
     }
 
     pub(crate) fn is_shutting_down(&self) -> bool {
-        self.shutting_down.load(Ordering::SeqCst)
+        *self.shutdown_requested_tx.borrow()
     }
 
     pub(crate) fn mark_shutting_down(&self) {
-        self.shutting_down.store(true, Ordering::SeqCst);
+        self.shutdown_requested_tx.send_replace(true);
+    }
+
+    pub(crate) fn subscribe_shutdown_requested(&self) -> watch::Receiver<bool> {
+        self.shutdown_requested_tx.subscribe()
     }
 
     pub(crate) fn request_shutdown(&self) -> bool {
@@ -81,55 +78,5 @@ impl ReloadCoordinator {
             .expect("shutdown mutex should not be poisoned")
             .take()
             .is_some_and(|shutdown_tx| shutdown_tx.send(()).is_ok())
-    }
-
-    pub(crate) fn current_upgrade_state(&self) -> Option<RuntimeUpgradeStateView> {
-        *self
-            .upgrade_state
-            .lock()
-            .expect("upgrade state mutex should not be poisoned")
-    }
-
-    pub(crate) fn set_upgrade_state(&self, role: RuntimeUpgradeRole, phase: RuntimeUpgradePhase) {
-        *self
-            .upgrade_state
-            .lock()
-            .expect("upgrade state mutex should not be poisoned") =
-            Some(RuntimeUpgradeStateView { role, phase });
-    }
-
-    pub(crate) fn clear_upgrade_state(&self) {
-        *self
-            .upgrade_state
-            .lock()
-            .expect("upgrade state mutex should not be poisoned") = None;
-    }
-
-    pub(crate) fn install_child_upgrade_serial_hold(&self, hold: OwnedMutexGuard<()>) {
-        *self
-            .child_upgrade_serial_hold
-            .lock()
-            .expect("child upgrade serial mutex should not be poisoned") = Some(hold);
-    }
-
-    pub(crate) fn release_child_upgrade_serial_hold(&self) {
-        let _ = self
-            .child_upgrade_serial_hold
-            .lock()
-            .expect("child upgrade serial mutex should not be poisoned")
-            .take();
-    }
-
-    pub(crate) fn reject_mutating_admin_action_during_upgrade(
-        &self,
-        action: &str,
-    ) -> Result<(), RuntimeError> {
-        let Some(state) = self.current_upgrade_state() else {
-            return Ok(());
-        };
-        Err(RuntimeError::Config(format!(
-            "admin action `{action}` is unavailable during runtime upgrade: role={:?} phase={:?}",
-            state.role, state.phase
-        )))
     }
 }

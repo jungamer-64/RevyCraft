@@ -40,10 +40,45 @@ enum RuntimeUpgradeRole {
 
 enum RuntimeUpgradePhase {
   RUNTIME_UPGRADE_PHASE_UNSPECIFIED = 0;
-  RUNTIME_UPGRADE_PHASE_PARENT_FREEZING = 1;
-  RUNTIME_UPGRADE_PHASE_PARENT_WAITING_CHILD_READY = 2;
-  RUNTIME_UPGRADE_PHASE_PARENT_ROLLING_BACK = 3;
-  RUNTIME_UPGRADE_PHASE_CHILD_WAITING_COMMIT = 4;
+  RUNTIME_UPGRADE_PHASE_PARENT_STAGING = 1;
+  RUNTIME_UPGRADE_PHASE_PARENT_PREPARING = 2;
+  RUNTIME_UPGRADE_PHASE_PARENT_FROZEN = 3;
+  RUNTIME_UPGRADE_PHASE_PARENT_OUTCOME_UNCERTAIN = 4;
+  RUNTIME_UPGRADE_PHASE_CHILD_BOOTING = 5;
+  RUNTIME_UPGRADE_PHASE_CHILD_PRESTAGING = 6;
+  RUNTIME_UPGRADE_PHASE_CHILD_READY = 7;
+  RUNTIME_UPGRADE_PHASE_CHILD_COMMITTING = 8;
+  RUNTIME_UPGRADE_PHASE_PARENT_COMMITTED = 9;
+}
+
+enum CutoverOperation {
+  CUTOVER_OPERATION_UNSPECIFIED = 0;
+  CUTOVER_OPERATION_RELOAD = 1;
+  CUTOVER_OPERATION_EXECUTABLE_UPGRADE = 2;
+}
+
+enum CutoverOutcome {
+  CUTOVER_OUTCOME_UNSPECIFIED = 0;
+  CUTOVER_OUTCOME_COMMITTED = 1;
+  CUTOVER_OUTCOME_ABORTED = 2;
+}
+
+message CutoverConnectionMix {
+  uint64 java = 1;
+  uint64 bedrock = 2;
+}
+
+message CutoverReport {
+  CutoverOperation operation = 1;
+  optional RuntimeReloadMode mode = 2;
+  CutoverConnectionMix connection_mix = 3;
+  uint64 session_count = 4;
+  uint64 stage_us = 5;
+  uint64 prepare_us = 6;
+  uint64 freeze_us = 7;
+  uint64 resume_us = 8;
+  CutoverOutcome outcome = 9;
+  uint64 epoch_revision = 10;
 }
 
 message RuntimeUpgradeStateView {
@@ -53,6 +88,7 @@ message RuntimeUpgradeStateView {
 
 message AdminUpgradeRuntimeView {
   string executable_path = 1;
+  CutoverReport cutover = 2;
 }
 
 message AdminListenerBindingView {
@@ -115,6 +151,7 @@ message AdminStatusView {
   bool dirty = 11;
   optional AdminPluginHostView plugin_host = 12;
   optional RuntimeUpgradeStateView upgrade = 13;
+  optional CutoverReport last_cutover = 14;
 }
 
 message AdminSessionView {
@@ -161,6 +198,7 @@ message AdminRuntimeReloadView {
     AdminCoreReloadView core = 4;
     AdminFullReloadView full = 5;
   }
+  CutoverReport cutover = 6;
 }
 
 message GetStatusRequest {}

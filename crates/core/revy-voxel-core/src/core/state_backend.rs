@@ -1,6 +1,7 @@
 use super::{
     ActiveMiningState, ClientView, CoreConfig, DroppedItemState, EntityKind, PlayerIdentity,
-    PlayerSessionState, PlayerTransform, PlayerVitals, ServerCore, WorldContainerViewers,
+    PlayerSessionState, PlayerTransform, PlayerVitals, ServerCore, VersionComponent,
+    WorldContainerViewers,
 };
 use crate::inventory::PlayerInventory;
 use crate::player::PlayerSnapshot;
@@ -14,7 +15,7 @@ use std::sync::Arc;
 
 #[derive(Default)]
 pub(super) struct TxOverlay {
-    pub(super) chunks: BTreeMap<ChunkPos, ChunkColumn>,
+    pub(super) chunks: BTreeMap<ChunkPos, VersionComponent<ChunkColumn>>,
     pub(super) block_entities: BTreeMap<BlockPos, Option<BlockEntityState>>,
     pub(super) container_viewers: BTreeMap<BlockPos, Option<WorldContainerViewers>>,
     pub(super) saved_players: BTreeMap<PlayerId, Option<PlayerSnapshot>>,
@@ -125,7 +126,8 @@ pub(super) trait CoreStateRead {
 }
 
 pub(super) trait CoreStateMut: CoreStateRead {
-    fn ensure_chunk_mut(&mut self, chunk_pos: ChunkPos) -> &mut ChunkColumn;
+    /// Materializes an absent chunk without acquiring mutation authority over an existing one.
+    fn ensure_chunk(&mut self, chunk_pos: ChunkPos) -> &ChunkColumn;
     fn set_block_state(&mut self, position: BlockPos, block: Option<BlockState>);
     fn set_block_entity(&mut self, position: BlockPos, block_entity: Option<BlockEntityState>);
     fn player_session_mut(&mut self, player_id: PlayerId) -> Option<&mut PlayerSessionState>;
@@ -507,12 +509,22 @@ impl CoreStateRead for BaseStateRef<'_> {
 }
 
 impl CoreStateMut for BaseState<'_> {
-    fn ensure_chunk_mut(&mut self, chunk_pos: ChunkPos) -> &mut ChunkColumn {
-        self.core.world.chunks.entry(chunk_pos).or_insert_with(|| {
-            self.core
+    fn ensure_chunk(&mut self, chunk_pos: ChunkPos) -> &ChunkColumn {
+        if !self.core.world.chunks.contains_key(&chunk_pos) {
+            let generated = self
+                .core
                 .content_behavior
-                .generate_chunk(&self.core.world.world_meta, chunk_pos)
-        })
+                .generate_chunk(&self.core.world.world_meta, chunk_pos);
+            self.core
+                .world
+                .chunks
+                .insert(chunk_pos, VersionComponent::new(generated));
+        }
+        self.core
+            .world
+            .chunks
+            .get(&chunk_pos)
+            .expect("chunk insertion should make the requested chunk available")
     }
 
     fn set_block_state(&mut self, position: BlockPos, block: Option<BlockState>) {
@@ -710,6 +722,7 @@ impl CoreStateMut for BaseState<'_> {
             .player_selected_hotbar
             .insert(entity_id, player.selected_hotbar_slot);
         self.core.entities.player_active_mining.remove(&entity_id);
+        let keepalive_interval_ms = self.core.sessions.keepalive_interval_ms;
         self.core.sessions.player_sessions.insert(
             player_id,
             PlayerSessionState {
@@ -720,7 +733,7 @@ impl CoreStateMut for BaseState<'_> {
                 view,
                 pending_keep_alive_id: None,
                 last_keep_alive_sent_at: None,
-                next_keep_alive_at: now_ms.saturating_add(self.core.sessions.keepalive_interval_ms),
+                next_keep_alive_at: now_ms.saturating_add(keepalive_interval_ms),
             },
         );
         entity_id
@@ -1006,7 +1019,7 @@ impl CoreStateRead for OverlayStateRef<'_> {
 }
 
 impl CoreStateMut for OverlayState<'_> {
-    fn ensure_chunk_mut(&mut self, chunk_pos: ChunkPos) -> &mut ChunkColumn {
+    fn ensure_chunk(&mut self, chunk_pos: ChunkPos) -> &ChunkColumn {
         self.overlay.chunks.entry(chunk_pos).or_insert_with(|| {
             self.base
                 .world
@@ -1014,20 +1027,28 @@ impl CoreStateMut for OverlayState<'_> {
                 .get(&chunk_pos)
                 .cloned()
                 .unwrap_or_else(|| {
-                    self.base
-                        .content_behavior
-                        .generate_chunk(&self.base.world.world_meta, chunk_pos)
+                    VersionComponent::new(
+                        self.base
+                            .content_behavior
+                            .generate_chunk(&self.base.world.world_meta, chunk_pos),
+                    )
                 })
         })
     }
 
     fn set_block_state(&mut self, position: BlockPos, block: Option<BlockState>) {
-        self.ensure_chunk_mut(position.chunk_pos()).set_block(
-            local_block_x(position),
-            position.y,
-            local_block_z(position),
-            block,
-        );
+        let chunk_pos = position.chunk_pos();
+        self.ensure_chunk(chunk_pos);
+        self.overlay
+            .chunks
+            .get_mut(&chunk_pos)
+            .expect("ensured overlay chunk exists")
+            .set_block(
+                local_block_x(position),
+                position.y,
+                local_block_z(position),
+                block,
+            );
     }
 
     fn set_block_entity(&mut self, position: BlockPos, block_entity: Option<BlockEntityState>) {
@@ -1288,7 +1309,7 @@ pub(super) fn initial_visible_chunks(
 ) -> Vec<ChunkColumn> {
     required_chunks(center, view_distance)
         .into_iter()
-        .map(|chunk_pos| state.ensure_chunk_mut(chunk_pos).clone())
+        .map(|chunk_pos| state.ensure_chunk(chunk_pos).clone())
         .collect()
 }
 

@@ -1,105 +1,96 @@
 use crate::RuntimeError;
 use crate::runtime::{
-    KernelCommandOutcome, RuntimeServer, SessionControl, SessionMessage, SessionRuntimeContext,
-    SharedSessionState, now_ms,
+    CoreCommandOutcome, CoreInvocation, CoreStore, PreparedGameplayTick, RuntimeServer,
+    SessionCommandContext, SessionControl, SessionMessage, SessionPhase, now_ms,
 };
+use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
 use revy_voxel_core::{
     CoreCommand, CoreEvent, EventTarget, PlayerSummary, RuntimeCommand, SessionCommand,
     TargetedEvent,
 };
+use std::collections::HashMap;
+use std::sync::Arc;
+
+const GAMEPLAY_TICK_PREPARE_FAN_OUT: usize = 16;
 
 impl RuntimeServer {
     pub(in crate::runtime) async fn apply_runtime_command(
         &self,
         command: RuntimeCommand,
-        session: Option<SessionRuntimeContext>,
-    ) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.reload.read_consistency().await;
-        self.apply_runtime_command_guarded(command, session).await
-    }
-
-    async fn apply_runtime_command_guarded(
-        &self,
-        command: RuntimeCommand,
-        session: Option<SessionRuntimeContext>,
+        session: Option<SessionCommandContext>,
     ) -> Result<(), RuntimeError> {
         match command {
-            RuntimeCommand::Core(command) => self.apply_command_guarded(command, session).await,
-            RuntimeCommand::Session(command) => {
-                self.apply_session_command_guarded(command, session).await
-            }
+            RuntimeCommand::Core(command) => self.apply_command(command, session).await,
+            RuntimeCommand::Session(command) => self.apply_session_command(command, session),
         }
     }
 
     pub(in crate::runtime) async fn apply_command(
         &self,
         command: CoreCommand,
-        session: Option<SessionRuntimeContext>,
+        session: Option<SessionCommandContext>,
     ) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.reload.read_consistency().await;
-        self.apply_command_guarded(command, session).await
-    }
-
-    async fn apply_command_guarded(
-        &self,
-        command: CoreCommand,
-        session: Option<SessionRuntimeContext>,
-    ) -> Result<(), RuntimeError> {
-        let session_capabilities = session
-            .as_ref()
-            .and_then(|session| session.session_capabilities.clone());
-        let gameplay = session
-            .as_ref()
-            .and_then(|session| session.gameplay.clone());
-        if session.is_some() {
-            debug_assert!(
-                session_capabilities.is_some() == gameplay.is_some()
-                    || matches!(
-                        &command,
-                        CoreCommand::LoginStart { .. } | CoreCommand::Disconnect { .. }
-                    ),
-                "session-backed command reached core loop without matching session context"
-            );
-        }
-        let events = self
-            .kernel
-            .apply_command(command, session_capabilities, gameplay, now_ms())
-            .await?;
-        match events {
-            KernelCommandOutcome::Events(events) => self.dispatch_events(events).await,
-            KernelCommandOutcome::StaleGameplayCommand { player_id } => {
-                let events = self.kernel.session_resync_events(player_id).await;
-                self.dispatch_events(events).await;
+        let invocation = match session {
+            None => CoreInvocation::Internal,
+            Some(SessionCommandContext::Login {
+                gameplay,
+                capabilities,
+            }) => CoreInvocation::Login {
+                gameplay,
+                capabilities,
+            },
+            Some(SessionCommandContext::Play {
+                player_id,
+                gameplay,
+                capabilities,
+            }) => CoreInvocation::Play {
+                player_id,
+                gameplay,
+                capabilities,
+            },
+        };
+        let core = self.authority.active().core.clone();
+        match core.apply_command(command, invocation, now_ms()).await? {
+            CoreCommandOutcome::Events(events) => self.dispatch_events(events).await,
+            CoreCommandOutcome::StaleGameplayCommand { player_id } => {
+                self.dispatch_events(
+                    core.session_resync_events(player_id)
+                        .await
+                        .into_iter()
+                        .map(crate::runtime::SharedCoreEvent::from)
+                        .collect(),
+                )
+                .await;
             }
-            KernelCommandOutcome::StaleLogin { connection_id } => {
-                self.dispatch_events(vec![TargetedEvent {
+            CoreCommandOutcome::StaleLogin { connection_id } => {
+                self.dispatch_events(vec![crate::runtime::SharedCoreEvent::from(TargetedEvent {
                     target: EventTarget::Connection(connection_id),
                     event: CoreEvent::Disconnect {
                         reason:
                             "login state changed while processing your request; please try again"
                                 .to_string(),
                     },
-                }])
+                })])
                 .await;
             }
         }
         Ok(())
     }
 
-    async fn apply_session_command_guarded(
+    fn apply_session_command(
         &self,
         command: SessionCommand,
-        session: Option<SessionRuntimeContext>,
+        session: Option<SessionCommandContext>,
     ) -> Result<(), RuntimeError> {
-        debug_assert!(
-            session.is_some(),
-            "session-only command reached runtime core loop without session context"
-        );
-        if let Some(session) = session {
-            debug_assert!(
-                session.player_id.is_none() || session.player_id == Some(command.player_id()),
-                "session-only command player id did not match session player id"
-            );
+        let Some(SessionCommandContext::Play { player_id, .. }) = session else {
+            return Err(RuntimeError::Config(
+                "session-only command requires a play-session capability".to_string(),
+            ));
+        };
+        if player_id != command.player_id() {
+            return Err(RuntimeError::Config(
+                "session-only command player did not match its play-session capability".to_string(),
+            ));
         }
         match command {
             SessionCommand::ClientStatus { .. }
@@ -107,74 +98,49 @@ impl RuntimeServer {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) async fn open_test_crafting_table(
-        &self,
-        player_id: revy_voxel_core::PlayerId,
-        window_id: u8,
-        title: &str,
-    ) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.reload.read_consistency().await;
-        let events = self
-            .kernel
-            .open_crafting_table(player_id, window_id, title)
+    pub(in crate::runtime) async fn tick(&self) -> Result<(), RuntimeError> {
+        let _data_plane = self.authority.enter_data_plane().await;
+        let gameplay_sessions = self.sessions.gameplay_tick_subscribers().await;
+        let now_ms = now_ms();
+        let core = self.authority.active().core.clone();
+        self.dispatch_events(core.apply_builtin_tick(now_ms).await?)
             .await;
-        self.dispatch_events(events).await;
+        let snapshot = core.version();
+        let prepared = prepare_gameplay_ticks(snapshot, gameplay_sessions, now_ms).await?;
+        let outcome = core.commit_gameplay_ticks(prepared).await?;
+        for stale in outcome.stale {
+            eprintln!(
+                "gameplay tick for player {:?} was stale: source core revision {}, active revision {}",
+                stale.player_id,
+                stale.source_revision.value(),
+                stale.active_revision.value()
+            );
+        }
+        self.dispatch_events(outcome.events).await;
         Ok(())
     }
 
-    pub(in crate::runtime) async fn tick(&self) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.reload.read_consistency().await;
-        self.tick_guarded().await
-    }
-
-    async fn tick_guarded(&self) -> Result<(), RuntimeError> {
-        let gameplay_sessions = self.sessions.gameplay_sessions_for_tick().await;
-        let now_ms = now_ms();
-        let events = self.kernel.apply_builtin_tick(now_ms).await?;
-        self.dispatch_events(events).await;
-        for (player_id, session_capabilities, gameplay) in gameplay_sessions {
-            if let Some(events) = self
-                .kernel
-                .apply_gameplay_tick(player_id, session_capabilities, gameplay, now_ms)
-                .await?
-            {
-                self.dispatch_events(events).await;
+    pub(in crate::runtime) async fn dispatch_events(
+        &self,
+        events: Vec<crate::runtime::SharedCoreEvent>,
+    ) {
+        let mut batches = HashMap::new();
+        for event in events {
+            let recipients = self.sessions.recipients_for_target(event.target).await;
+            let payload = event.event;
+            for recipient in recipients {
+                let (_, batch): &mut (_, Vec<_>) = batches
+                    .entry(recipient.connection_id)
+                    .or_insert_with(|| (recipient, Vec::new()));
+                batch.push(std::sync::Arc::clone(&payload));
             }
         }
-        Ok(())
-    }
-
-    pub(in crate::runtime) async fn dispatch_events(&self, events: Vec<TargetedEvent>) {
-        for event in events {
-            let TargetedEvent {
-                target,
-                event: payload,
-            } = event;
-            if let (
-                EventTarget::Connection(connection_id),
-                CoreEvent::LoginAccepted { player_id, .. },
-            ) = (&target, &payload)
+        for (_, (recipient, batch)) in batches {
+            if recipient
+                .tx
+                .try_send(SessionMessage::Events(batch))
+                .is_err()
             {
-                self.sessions
-                    .record_pending_login_route(*connection_id, *player_id)
-                    .await;
-            }
-            let payload = std::sync::Arc::new(payload);
-
-            let recipients = self.sessions.recipients_for_target(target).await;
-
-            let mut backpressured_sessions = Vec::new();
-            for recipient in recipients {
-                if recipient
-                    .tx
-                    .try_send(SessionMessage::Event(std::sync::Arc::clone(&payload)))
-                    .is_err()
-                {
-                    backpressured_sessions.push(recipient);
-                }
-            }
-            for recipient in backpressured_sessions {
                 let _ = recipient
                     .control_tx
                     .send(SessionControl::Terminate {
@@ -189,50 +155,104 @@ impl RuntimeServer {
     pub(in crate::runtime) async fn unregister_session(
         &self,
         connection_id: revy_voxel_core::ConnectionId,
-        shared_state: &SharedSessionState,
+        session: &SessionPhase,
     ) -> Result<(), RuntimeError> {
-        let _consistency_guard = self.reload.read_consistency().await;
-        self.unregister_session_guarded(connection_id, shared_state)
-            .await
-    }
-
-    async fn unregister_session_guarded(
-        &self,
-        connection_id: revy_voxel_core::ConnectionId,
-        shared_state: &SharedSessionState,
-    ) -> Result<(), RuntimeError> {
-        let (view, context, adapter) = {
-            let session = shared_state.read().await;
-            (
-                Self::session_view(&session),
-                Self::session_runtime_context(&session),
-                session.adapter.clone(),
-            )
-        };
-        if let Some(adapter) = adapter.as_ref() {
-            adapter
-                .session_closed(&Self::protocol_session_snapshot(connection_id, &view))
+        let _data_plane = self.authority.enter_data_plane().await;
+        if let Some(binding) = session.binding() {
+            binding
+                .adapter
+                .session_closed(&session.protocol_snapshot(connection_id))
                 .map_err(|error| RuntimeError::Config(error.to_string()))?;
         }
-        if let (Some(gameplay), Some(snapshot)) = (
-            context.gameplay.as_ref(),
-            Self::gameplay_session_snapshot(&view, &context),
-        ) {
-            gameplay.session_closed(&snapshot)?;
+        if let SessionPhase::Play(play) = session {
+            play.binding
+                .gameplay
+                .session_closed(&GameplaySessionSnapshot {
+                    phase: mc_proto_common::ConnectionPhase::Play,
+                    player_id: Some(play.player_id),
+                    entity_id: Some(play.entity_id),
+                    protocol: play.binding.capabilities.protocol.clone(),
+                    gameplay_profile: play.binding.capabilities.gameplay_profile.clone(),
+                    protocol_generation: play.binding.capabilities.protocol_generation,
+                    gameplay_generation: play.binding.capabilities.gameplay_generation,
+                })?;
         }
         self.sessions.remove(connection_id).await;
-        if let Some(player_id) = view.player_id {
-            self.apply_command_guarded(CoreCommand::Disconnect { player_id }, None)
-                .await?;
+        if let SessionPhase::Play(play) = session {
+            self.apply_command(
+                CoreCommand::Disconnect {
+                    player_id: play.player_id,
+                },
+                None,
+            )
+            .await?;
         }
         let _ = self
-            .topology
+            .topology_resources
             .retire_drained_generations(&self.sessions)
             .await;
         Ok(())
     }
 
     pub(in crate::runtime) async fn player_summary(&self) -> PlayerSummary {
-        self.kernel.player_summary().await
+        self.authority.active().core.player_summary().await
     }
+}
+
+async fn prepare_gameplay_ticks(
+    snapshot: Arc<revy_voxel_core::CoreVersion>,
+    sessions: Vec<(
+        revy_voxel_core::PlayerId,
+        revy_voxel_core::SessionCapabilitySet,
+        Arc<dyn mc_plugin_host::runtime::GameplayProfileHandle>,
+    )>,
+    now_ms: u64,
+) -> Result<Vec<PreparedGameplayTick>, RuntimeError> {
+    if sessions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let chunk_size = sessions.len().div_ceil(GAMEPLAY_TICK_PREPARE_FAN_OUT);
+    let mut sessions = sessions.into_iter();
+    let mut tasks = Vec::new();
+    loop {
+        let chunk = sessions.by_ref().take(chunk_size).collect::<Vec<_>>();
+        if chunk.is_empty() {
+            break;
+        }
+        let snapshot = Arc::clone(&snapshot);
+        tasks.push(tokio::task::spawn_blocking(move || {
+            chunk
+                .into_iter()
+                .map(|(player_id, capabilities, gameplay)| {
+                    CoreStore::prepare_gameplay_tick(
+                        Arc::clone(&snapshot),
+                        player_id,
+                        capabilities,
+                        gameplay,
+                        now_ms,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+        }));
+    }
+
+    let mut prepared = Vec::new();
+    let mut failure = None;
+    for task in tasks {
+        match task.await {
+            Ok(Ok(mut chunk)) => prepared.append(&mut chunk),
+            Ok(Err(error)) => {
+                failure.get_or_insert(error);
+            }
+            Err(error) => {
+                failure.get_or_insert_with(|| {
+                    RuntimeError::Config(format!("gameplay tick preparation task failed: {error}"))
+                });
+            }
+        }
+    }
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    Ok(prepared)
 }

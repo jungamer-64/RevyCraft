@@ -26,6 +26,7 @@ bedrock-jwt = "0.1"
 bedrock_protocol = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", rev = "2d9e4087a207bdcbad6e4cdc83de46e94712b2f4", features = ["v924"] }
 bedrock_protocol_core = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", rev = "2d9e4087a207bdcbad6e4cdc83de46e94712b2f4" }
 bytes = "1.10"
+ciborium = { version = "=0.2.2", default-features = false, features = ["std"] }
 flate2 = "1.1"
 md5 = { package = "md-5", version = "0.11" }
 nbtx = "3.0"

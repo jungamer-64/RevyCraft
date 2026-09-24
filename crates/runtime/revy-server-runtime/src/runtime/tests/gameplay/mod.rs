@@ -228,7 +228,10 @@ async fn read_click_transcript_and_ack_reject_if_needed(
             expected_slot_item,
             16,
         )
-        .await?;
+        .await
+        .map_err(|error| RuntimeError::Config(format!(
+            "rejected click window {window_id} action {action_number}, resync slot {synced_slot} expected {expected_slot_item:?}: {error}"
+        )))?;
         assert_eq!(
             window_items_slot(
                 protocol,

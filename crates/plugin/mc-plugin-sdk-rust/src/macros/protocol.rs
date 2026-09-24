@@ -5,24 +5,8 @@ macro_rules! declare_protocol_plugin {
         $adapter_ty:ty,
         $plugin_id:expr,
         $display_name:expr,
-        $capabilities:expr $(,)?
-    ) => {
-        $crate::declare_protocol_plugin!(
-            $plugin_ty,
-            $adapter_ty,
-            $plugin_id,
-            $display_name,
-            $capabilities,
-            &[]
-        );
-    };
-    (
-        $plugin_ty:ident,
-        $adapter_ty:ty,
-        $plugin_id:expr,
-        $display_name:expr,
         $capabilities:expr,
-        $manifest_capabilities:expr $(,)?
+        $max_session_handoff_bytes:expr $(,)?
     ) => {
         #[derive(Default)]
         pub struct $plugin_ty {
@@ -37,6 +21,7 @@ macro_rules! declare_protocol_plugin {
             protocol,
             $plugin_ty,
             $crate::manifest::StaticPluginManifest::protocol($plugin_id, $display_name)
+                .with_max_session_handoff_bytes($max_session_handoff_bytes)
         );
     };
 }

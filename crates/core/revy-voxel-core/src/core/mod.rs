@@ -84,6 +84,16 @@ pub struct WorldStore {
     pub(super) saved_players: VersionComponent<BTreeMap<PlayerId, PlayerSnapshot>>,
 }
 
+impl WorldStore {
+    /// Materializes the owned persistence/transfer representation outside the gameplay path.
+    fn snapshot_chunks(&self) -> BTreeMap<ChunkPos, ChunkColumn> {
+        self.chunks
+            .iter()
+            .map(|(position, chunk)| (*position, (**chunk).clone()))
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorldContainerViewers {
     pub kind: ContainerKindId,
@@ -292,7 +302,13 @@ impl ServerCore {
         let mut core = Self::new(config, content_behavior);
         let world = core.world_mut();
         world.world_meta = snapshot.meta;
-        world.chunks = VersionComponent::new(snapshot.chunks);
+        world.chunks = VersionComponent::new(
+            snapshot
+                .chunks
+                .into_iter()
+                .map(|(position, chunk)| (position, VersionComponent::new(chunk)))
+                .collect(),
+        );
         world.block_entities = VersionComponent::new(snapshot.block_entities);
         world.saved_players = VersionComponent::new(snapshot.players);
         core
@@ -311,7 +327,7 @@ impl ServerCore {
         }
         crate::WorldSnapshot {
             meta: self.world.world_meta.clone(),
-            chunks: (*self.world.chunks).clone(),
+            chunks: self.world.snapshot_chunks(),
             block_entities: (*self.world.block_entities).clone(),
             players,
         }
@@ -352,7 +368,8 @@ impl ServerCore {
             .view
             .loaded_chunks
             .iter()
-            .filter_map(|chunk_pos| self.world.chunks.get(chunk_pos).cloned())
+            .filter_map(|chunk_pos| self.world.chunks.get(chunk_pos))
+            .map(|chunk| (**chunk).clone())
             .collect::<Vec<_>>();
         events.push(TargetedEvent {
             target: EventTarget::Player(player_id),

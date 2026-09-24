@@ -1,7 +1,7 @@
 use crate::RuntimeError;
-use crate::runtime::{RuntimeServer, SharedSessionState};
-use crate::transport::{TransportSessionIo, write_payload};
-use mc_proto_common::{ConnectionPhase, HandshakeNextState, ServerListStatus, StatusRequest};
+use crate::runtime::{BoundSession, LoginSession, RuntimeServer, SessionPhase};
+use crate::transport::{TransportSessionIo, write_payload_confirmed};
+use mc_proto_common::{HandshakeNextState, ServerListStatus, StatusRequest, TransportKind};
 use revy_voxel_core::ConnectionId;
 use std::sync::Arc;
 
@@ -10,124 +10,124 @@ impl RuntimeServer {
         &self,
         connection_id: ConnectionId,
         transport_io: &mut TransportSessionIo,
-        shared_state: &SharedSessionState,
+        session: &mut SessionPhase,
         frame: Vec<u8>,
     ) -> Result<bool, RuntimeError> {
-        let phase = shared_state.read().await.phase;
-        match phase {
-            ConnectionPhase::Handshaking => {
-                self.handle_handshake_frame(transport_io, shared_state, &frame)
+        match session {
+            SessionPhase::Handshaking { .. } => {
+                self.handle_handshake_frame(transport_io, session, &frame)
                     .await
             }
-            ConnectionPhase::Status => {
-                self.handle_status_frame(transport_io, shared_state, &frame)
+            SessionPhase::Status(_) => {
+                self.handle_status_frame(transport_io, session, &frame)
                     .await
             }
-            ConnectionPhase::Login => {
-                self.handle_login_frame(connection_id, transport_io, shared_state, &frame)
+            SessionPhase::Login(_) => {
+                self.handle_login_frame(connection_id, transport_io, session, &frame)
                     .await
             }
-            ConnectionPhase::Play => {
-                self.handle_play_frame(connection_id, shared_state, &frame)
-                    .await
-            }
+            SessionPhase::Play(_) => self.handle_play_frame(connection_id, session, &frame).await,
+            SessionPhase::Closing { .. } => Ok(true),
         }
     }
 
     async fn handle_handshake_frame(
         &self,
         transport_io: &mut TransportSessionIo,
-        shared_state: &SharedSessionState,
+        session: &mut SessionPhase,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let (topology, transport) = {
-            let session = shared_state.read().await;
-            (Arc::clone(&session.generation), session.transport)
+        let SessionPhase::Handshaking { generation } = session else {
+            return Err(RuntimeError::Config(
+                "handshake frame reached a non-handshaking session".to_string(),
+            ));
         };
-        let Some(intent) = topology
+        let generation = Arc::clone(generation);
+        let Some(intent) = generation
             .protocol_registry
-            .route_handshake(transport, frame)?
+            .route_handshake(TransportKind::Tcp, frame)?
         else {
             return Ok(true);
         };
-        let next_phase = match intent.next_state {
-            HandshakeNextState::Status => ConnectionPhase::Status,
-            HandshakeNextState::Login => ConnectionPhase::Login,
-        };
-        if let Some(next_adapter) = topology.protocol_registry.resolve_route(
-            transport,
+        let next_adapter = generation.protocol_registry.resolve_route(
+            TransportKind::Tcp,
             intent.edition,
             intent.protocol_number,
-        ) {
+        );
+        if let Some(adapter) = next_adapter {
             let gameplay = self
-                .resolve_gameplay_for_adapter(&next_adapter.descriptor().adapter_id)
+                .resolve_gameplay_for_adapter(&adapter.descriptor().adapter_id)
                 .await?;
-            let mut session = shared_state.write().await;
-            session.adapter = Some(next_adapter);
-            session.gameplay = Some(gameplay);
-            session.phase = next_phase;
-            Self::refresh_session_capabilities(&mut session);
+            let binding =
+                BoundSession::new(generation, TransportKind::Tcp, adapter, gameplay, None);
+            *session = match intent.next_state {
+                HandshakeNextState::Status => SessionPhase::Status(binding),
+                HandshakeNextState::Login => {
+                    SessionPhase::Login(LoginSession::Negotiating(binding))
+                }
+            };
             return Ok(false);
         }
 
-        let fallback = Arc::clone(&topology.default_adapter);
+        let fallback = Arc::clone(&generation.default_adapter);
         let descriptor = fallback.descriptor();
-        match next_phase {
-            ConnectionPhase::Status => {
+        match intent.next_state {
+            HandshakeNextState::Status => {
                 let gameplay = self
                     .resolve_gameplay_for_adapter(&fallback.descriptor().adapter_id)
                     .await?;
-                let mut session = shared_state.write().await;
-                session.adapter = Some(fallback);
-                session.gameplay = Some(gameplay);
-                session.phase = ConnectionPhase::Status;
-                Self::refresh_session_capabilities(&mut session);
+                *session = SessionPhase::Status(BoundSession::new(
+                    generation,
+                    TransportKind::Tcp,
+                    fallback,
+                    gameplay,
+                    None,
+                ));
                 Ok(false)
             }
-            ConnectionPhase::Login => {
+            HandshakeNextState::Login => {
                 let disconnect = fallback.encode_disconnect(
-                    ConnectionPhase::Login,
+                    mc_proto_common::ConnectionPhase::Login,
                     &format!(
                         "Unsupported protocol {}. This server supports {} (protocol {}).",
                         intent.protocol_number, descriptor.version_name, descriptor.protocol_number
                     ),
                 )?;
-                write_payload(transport_io, fallback.wire_codec(), &disconnect).await?;
+                write_payload_confirmed(transport_io, fallback.wire_codec(), &disconnect).await?;
                 Ok(true)
             }
-            _ => Ok(true),
         }
     }
 
     async fn handle_status_frame(
         &self,
         transport_io: &mut TransportSessionIo,
-        shared_state: &SharedSessionState,
+        session: &SessionPhase,
         frame: &[u8],
     ) -> Result<bool, RuntimeError> {
-        let (topology, current) = {
-            let session = shared_state.read().await;
-            let current = session
-                .adapter
-                .clone()
-                .ok_or_else(|| RuntimeError::Config("missing protocol adapter".to_string()))?;
-            (Arc::clone(&session.generation), current)
+        let SessionPhase::Status(binding) = session else {
+            return Err(RuntimeError::Config(
+                "status frame reached a non-status session".to_string(),
+            ));
         };
-        match current.decode_status(frame)? {
+        match binding.adapter.decode_status(frame)? {
             StatusRequest::Query => {
                 let summary = self.player_summary().await;
-                let response = current.encode_status_response(&ServerListStatus {
-                    version: current.descriptor(),
+                let response = binding.adapter.encode_status_response(&ServerListStatus {
+                    version: binding.adapter.descriptor(),
                     players_online: summary.online_players,
-                    max_players: usize::from(topology.config.network.max_players),
-                    description: topology.config.network.motd.clone(),
+                    max_players: usize::try_from(binding.generation.config.network.max_players)
+                        .expect("u32 player limit fits the supported process address space"),
+                    description: binding.generation.config.network.motd.clone(),
                 })?;
-                write_payload(transport_io, current.wire_codec(), &response).await?;
+                write_payload_confirmed(transport_io, binding.adapter.wire_codec(), &response)
+                    .await?;
                 Ok(false)
             }
             StatusRequest::Ping { payload } => {
-                let response = current.encode_status_pong(payload)?;
-                write_payload(transport_io, current.wire_codec(), &response).await?;
+                let response = binding.adapter.encode_status_pong(payload)?;
+                write_payload_confirmed(transport_io, binding.adapter.wire_codec(), &response)
+                    .await?;
                 Ok(true)
             }
         }

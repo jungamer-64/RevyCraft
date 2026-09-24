@@ -6,6 +6,47 @@ fn ipv6_loopback_available() -> bool {
     std::net::TcpListener::bind(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0)).is_ok()
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn incomplete_java_frame_allows_cutover_and_resumes_after_remaining_bytes()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_reloadable_test_server(
+        loopback_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+    let codec = MinecraftWireCodec;
+    let (mut stream, mut buffer) = connect_and_login_java_client(
+        listener_addr(&server),
+        &codec,
+        TestJavaProtocol::Je5,
+        "split-frame",
+    )
+    .await?;
+    let frame = codec.encode_frame(&held_item_change(6))?;
+    stream.write_all(&frame[..1]).await?;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), server.reload_runtime_core())
+        .await
+        .map_err(|error| RuntimeError::Config(error.to_string()))??;
+    stream.write_all(&frame[1..]).await?;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(2),
+        read_until_held_item_change(
+            &mut stream,
+            &codec,
+            &mut buffer,
+            TestJavaProtocol::Je5,
+            6,
+            32,
+        ),
+    )
+    .await
+    .map_err(|error| RuntimeError::Config(error.to_string()))??;
+    drop(stream);
+    server.shutdown().await
+}
+
 async fn assert_spawn_fails_with_message(
     config: ServerConfig,
     expected_fragment: &str,
@@ -243,7 +284,59 @@ async fn shutdown_waits_for_active_handshaking_sessions() -> Result<(), RuntimeE
 }
 
 #[tokio::test]
-async fn runtime_upgrade_hold_blocks_tick_and_save() -> Result<(), RuntimeError> {
+async fn freeze_includes_admission_drain_and_listener_control_remains_responsive()
+-> Result<(), RuntimeError> {
+    let temp_dir = tempdir()?;
+    let server = build_test_server(
+        loopback_server_config(temp_dir.path().join("world")),
+        plugin_test_registries_tcp_only()?,
+    )
+    .await?;
+    {
+        let authority = &server.runtime.authority;
+        let reader = authority.enter_data_plane().await;
+        let freeze = authority.freeze();
+        tokio::pin!(freeze);
+        let drain_interval = Duration::from_millis(40);
+        assert!(
+            tokio::time::timeout(drain_interval, &mut freeze)
+                .await
+                .is_err()
+        );
+        let admission = authority.enter_data_plane();
+        tokio::pin!(admission);
+        assert!(
+            tokio::time::timeout(drain_interval, &mut admission)
+                .await
+                .is_err()
+        );
+        drop(reader);
+        let frozen = freeze.await;
+        assert!(
+            frozen.elapsed() >= drain_interval * 2,
+            "freeze must include the interval during which the queued writer blocked new admissions"
+        );
+
+        let _connection = connect_tcp(listener_addr(&server)).await?;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let ingress = tokio::time::timeout(
+            Duration::from_secs(1),
+            server.runtime.topology_resources.freeze_ingress(),
+        )
+        .await
+        .map_err(|_| {
+            RuntimeError::Config("listener pause blocked on session admission".into())
+        })??;
+        assert!(server.session_status().await.is_empty());
+        ingress.resume().await?;
+        frozen.resume();
+        drop(admission.await);
+    }
+    server.shutdown().await
+}
+
+#[tokio::test]
+async fn data_plane_freeze_blocks_core_mutation() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let server = crate::runtime::ServerSupervisor {
         running: build_test_server(
@@ -252,40 +345,18 @@ async fn runtime_upgrade_hold_blocks_tick_and_save() -> Result<(), RuntimeError>
         )
         .await?,
     };
-    server.running.runtime.kernel.set_dirty(true).await;
-
-    let guard = server.begin_runtime_upgrade().await?;
+    let frozen = server.running.runtime.authority.freeze().await;
     let tick = tokio::spawn({
         let runtime = std::sync::Arc::clone(&server.running.runtime);
         async move { runtime.tick().await }
     });
-    let save = tokio::spawn({
-        let runtime = std::sync::Arc::clone(&server.running.runtime);
-        async move { runtime.maybe_save().await }
-    });
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert!(
         !tick.is_finished(),
-        "tick should block while upgrade hold is active"
+        "tick should block while the data plane is frozen"
     );
-    assert!(
-        !save.is_finished(),
-        "maybe_save should block while upgrade hold is active"
-    );
-
-    let status = server.status().await;
-    let upgrade = status
-        .upgrade
-        .ok_or_else(|| RuntimeError::Config("upgrade status should be visible".to_string()))?;
-    assert_eq!(upgrade.role, crate::RuntimeUpgradeRole::Parent);
-    assert_eq!(
-        upgrade.phase,
-        crate::RuntimeUpgradePhase::ParentWaitingChildReady
-    );
-
-    guard.rollback().await?;
+    frozen.resume();
     tick.await.map_err(RuntimeError::from)??;
-    save.await.map_err(RuntimeError::from)??;
 
     server.shutdown().await
 }
@@ -314,11 +385,7 @@ async fn frozen_sessions_do_not_consume_tcp_bytes_until_resumed() -> Result<(), 
     )
     .await?;
 
-    let frozen = server
-        .running
-        .runtime
-        .freeze_live_sessions_for_upgrade()
-        .await?;
+    let frozen = server.running.runtime.authority.freeze().await;
     write_packet(&mut alpha, &codec, &held_item_change(7)).await?;
     assert_no_java_packet(
         &mut alpha,
@@ -329,11 +396,7 @@ async fn frozen_sessions_do_not_consume_tcp_bytes_until_resumed() -> Result<(), 
     )
     .await?;
 
-    server
-        .running
-        .runtime
-        .resume_frozen_live_sessions_after_upgrade_rollback(frozen)
-        .await?;
+    frozen.resume();
     let held_item =
         read_until_held_item_change(&mut alpha, &codec, &mut alpha_buffer, protocol, 7, 16).await?;
     assert_eq!(held_item_from_packet_for_protocol(protocol, &held_item)?, 7);
@@ -352,7 +415,7 @@ async fn runtime_loop_storage_error_shuts_down_listeners_and_sessions() -> Resul
         loaded_plugins,
         plugin_host,
     } = packaged_failing_storage_registries(PluginFailureAction::Quarantine)?;
-    let server = build_test_server(
+    let server = build_reloadable_test_server(
         config,
         LoadedPluginTestEnvironment {
             loaded_plugins,
@@ -375,7 +438,7 @@ async fn runtime_loop_storage_error_shuts_down_listeners_and_sessions() -> Resul
         RuntimeError::Config("session did not become visible before save failure".into())
     })?;
 
-    server.runtime.kernel.set_dirty(true).await;
+    server.reload_runtime_core().await?;
 
     tokio::time::timeout(Duration::from_secs(3), server.wait_for_runtime_completion())
         .await
@@ -398,7 +461,10 @@ async fn runtime_loop_storage_error_shuts_down_listeners_and_sessions() -> Resul
 
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if connect_tcp(addr).await.is_err() {
+            if !matches!(
+                tokio::time::timeout(Duration::from_millis(100), connect_tcp(addr)).await,
+                Ok(Ok(_))
+            ) {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;

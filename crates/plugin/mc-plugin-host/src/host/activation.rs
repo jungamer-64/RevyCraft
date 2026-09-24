@@ -131,11 +131,10 @@ impl PluginHost {
         {
             return Ok(());
         }
-        let generation = match self.loader.load_gameplay_generation(
-            package,
-            self.generations.next_generation_id(),
-            config.buffer_limits,
-        ) {
+        let generation = match self
+            .loader
+            .load_gameplay_generation(package, config.buffer_limits)
+        {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -203,11 +202,7 @@ impl PluginHost {
         {
             return Ok(());
         }
-        let generation = match self.loader.load_storage_generation(
-            package,
-            self.generations.next_generation_id(),
-            buffer_limits,
-        ) {
+        let generation = match self.loader.load_storage_generation(package, buffer_limits) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -270,11 +265,7 @@ impl PluginHost {
         {
             return Ok(());
         }
-        let generation = match self.loader.load_auth_generation(
-            package,
-            self.generations.next_generation_id(),
-            buffer_limits,
-        ) {
+        let generation = match self.loader.load_auth_generation(package, buffer_limits) {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();
@@ -343,11 +334,10 @@ impl PluginHost {
         {
             return Ok(());
         }
-        let generation = match self.loader.load_admin_surface_generation(
-            package,
-            self.generations.next_generation_id(),
-            config.buffer_limits,
-        ) {
+        let generation = match self
+            .loader
+            .load_admin_surface_generation(package, config.buffer_limits)
+        {
             Ok(generation) => Arc::new(generation),
             Err(error) => {
                 let reason = error.to_string();

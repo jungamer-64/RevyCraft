@@ -1,9 +1,10 @@
-use crate::RuntimeError;
 use crate::config::ServerConfig;
 use crate::runtime::ListenerBinding;
 use crate::transport::AcceptedTransportSession;
 use mc_plugin_host::registry::ProtocolRegistry;
 use mc_proto_common::{ProtocolAdapter, TransportKind};
+use revy_raknet::PeerSnapshot;
+use revy_runtime_transfer::{ExportedSocket, SocketTransferTarget};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -40,19 +41,55 @@ pub(crate) enum GenerationAdmission {
 pub(crate) struct TopologyListenerWorker {
     pub(crate) transport: TransportKind,
     pub(crate) generation_tx: watch::Sender<GenerationId>,
-    pub(crate) control_tx: mpsc::Sender<ListenerWorkerControl>,
+    pub(crate) serving_tx: watch::Sender<bool>,
+    pub(crate) ingress_tx: mpsc::Sender<ListenerIngressCommand>,
     pub(crate) shutdown_tx: Option<oneshot::Sender<()>>,
     pub(crate) join_handle: Option<JoinHandle<()>>,
 }
 
-pub(crate) enum ListenerWorkerControl {
-    Export {
-        ack_tx: oneshot::Sender<Result<std::net::TcpListener, RuntimeError>>,
+pub(crate) enum ListenerIngressCommand {
+    Pause {
+        ack_tx: oneshot::Sender<Result<(), crate::RuntimeError>>,
+    },
+    Resume {
+        ack_tx: oneshot::Sender<Result<(), crate::RuntimeError>>,
+    },
+    DuplicateForProcessTransfer {
+        target: SocketTransferTarget,
+        ack_tx: oneshot::Sender<Result<ExecutableListenerResource, crate::RuntimeError>>,
+    },
+    SealProcessTransfer {
+        ack_tx: oneshot::Sender<Result<Vec<PeerSnapshot>, crate::RuntimeError>>,
     },
 }
 
-pub(crate) struct RuntimeGenerationState {
-    pub(crate) active: Arc<ActiveGeneration>,
+pub struct ExecutableListenerResource {
+    binding: ListenerBinding,
+    socket: ExportedSocket,
+}
+
+impl ExecutableListenerResource {
+    pub(crate) fn new(binding: ListenerBinding, socket: ExportedSocket) -> Self {
+        Self { binding, socket }
+    }
+
+    #[must_use]
+    pub const fn binding(&self) -> &ListenerBinding {
+        &self.binding
+    }
+
+    #[must_use]
+    pub const fn socket(&self) -> &ExportedSocket {
+        &self.socket
+    }
+
+    #[must_use]
+    pub fn into_socket(self) -> ExportedSocket {
+        self.socket
+    }
+}
+
+pub(crate) struct TopologyResourceState {
     pub(crate) draining: Vec<DrainingGeneration>,
     pub(crate) listener_workers: HashMap<TransportKind, TopologyListenerWorker>,
     pub(crate) next_generation_id: u64,
@@ -127,15 +164,6 @@ impl QueuedAcceptTracker {
             .keys()
             .copied()
             .collect()
-    }
-
-    pub(crate) fn total_count(&self) -> usize {
-        self.counts
-            .lock()
-            .expect("queued accept tracker should not be poisoned")
-            .values()
-            .copied()
-            .sum()
     }
 }
 

@@ -13,4 +13,5 @@ declare_protocol_plugin!(
         ProtocolCapability::Je,
         ProtocolCapability::Je340,
     ],
+    64 * 1024,
 );

@@ -82,6 +82,10 @@ pub trait RustGameplayPlugin: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Handles a server tick for one active play session.
+    ///
+    /// The runtime invokes this callback only when the plugin advertises
+    /// [`GameplayCapability::SessionTick`].
     fn handle_tick(
         &self,
         _host: &dyn GameplayHost,

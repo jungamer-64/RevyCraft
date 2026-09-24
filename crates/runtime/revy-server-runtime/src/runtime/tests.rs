@@ -41,6 +41,7 @@ pub(crate) use self::support::*;
 mod auth;
 mod config_props;
 mod connectivity;
+mod executable;
 mod gameplay;
 mod guardrails;
 mod multiversion;
@@ -81,7 +82,9 @@ fn workspace_test_temp_root() -> PathBuf {
             continue;
         };
         if contents.contains("[workspace]") {
-            return ancestor.join("target").join("test-tmp");
+            return ancestor
+                .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
+                .join("test-tmp");
         }
     }
     panic!(

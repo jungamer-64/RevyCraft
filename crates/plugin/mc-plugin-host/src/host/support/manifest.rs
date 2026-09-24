@@ -34,6 +34,7 @@ pub(crate) struct DecodedManifest {
     pub(crate) min_host_abi: PluginAbiVersion,
     pub(crate) max_host_abi: PluginAbiVersion,
     pub(crate) capabilities: ManifestCapabilities,
+    pub(crate) max_session_handoff_bytes: usize,
 }
 
 pub(crate) fn decode_manifest(
@@ -96,6 +97,7 @@ pub(crate) fn decode_manifest(
         min_host_abi: manifest.min_host_abi,
         max_host_abi: manifest.max_host_abi,
         capabilities,
+        max_session_handoff_bytes: manifest.max_session_handoff_bytes,
     })
 }
 

@@ -1,5 +1,5 @@
 use super::{GenerationId, RunningServer, RuntimeServer, now_ms};
-use crate::{ListenerBinding, PluginHostStatusSnapshot, RuntimeUpgradeStateView};
+use crate::{CutoverReport, ListenerBinding, PluginHostStatusSnapshot, RuntimeUpgradeStateView};
 use mc_proto_common::{ConnectionPhase, TransportKind};
 use revy_voxel_core::{ConnectionId, EntityId, PlayerId, PluginGenerationId};
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ pub struct GenerationStatusSnapshot {
     pub enabled_adapter_ids: Vec<String>,
     pub enabled_bedrock_adapter_ids: Vec<String>,
     pub motd: String,
-    pub max_players: u8,
+    pub max_players: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +83,7 @@ pub struct RuntimeStatusSnapshot {
     pub dirty: bool,
     pub plugin_host: Option<PluginHostStatusSnapshot>,
     pub upgrade: Option<RuntimeUpgradeStateView>,
+    pub last_cutover: Option<CutoverReport>,
 }
 
 impl RunningServer {
@@ -99,7 +100,8 @@ impl RunningServer {
 
 impl RuntimeServer {
     pub(crate) async fn status_snapshot(&self) -> RuntimeStatusSnapshot {
-        let (active_generation_state, draining_states) = self.topology.snapshot_generations();
+        let active_generation_state = self.authority.active().topology.clone();
+        let draining_states = self.topology_resources.draining_generations();
         let active_generation = generation_status_snapshot(
             &active_generation_state,
             GenerationStatusState::Active,
@@ -119,7 +121,7 @@ impl RuntimeServer {
         let listener_bindings = active_generation_state.listener_bindings.clone();
         let session_status = self.session_status_snapshot().await;
         let session_summary = summarize_sessions(&session_status);
-        let dirty = self.kernel.dirty().await;
+        let dirty = self.authority.active().core.dirty().await;
 
         RuntimeStatusSnapshot {
             active_generation,
@@ -131,7 +133,8 @@ impl RuntimeServer {
                 .reload
                 .reload_host()
                 .map(|reload_host| summarize_plugin_host_status(reload_host.status())),
-            upgrade: self.reload.current_upgrade_state(),
+            upgrade: self.authority.executable_upgrade_status(),
+            last_cutover: self.authority.last_cutover(),
         }
     }
 
@@ -215,6 +218,23 @@ pub fn format_runtime_status_summary(snapshot: &RuntimeStatusSnapshot) -> String
         lines.push(format!(
             "upgrade role={:?} phase={:?}",
             upgrade.role, upgrade.phase
+        ));
+    }
+
+    if let Some(cutover) = &snapshot.last_cutover {
+        lines.push(format!(
+            "cutover operation={:?} mode={:?} outcome={:?} sessions={} java={} bedrock={} stage-us={} prepare-us={} freeze-us={} resume-us={} epoch={}",
+            cutover.operation,
+            cutover.mode,
+            cutover.outcome,
+            cutover.session_count,
+            cutover.connection_mix.java,
+            cutover.connection_mix.bedrock,
+            cutover.stage_us,
+            cutover.prepare_us,
+            cutover.freeze_us,
+            cutover.resume_us,
+            cutover.epoch_revision,
         ));
     }
 

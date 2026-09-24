@@ -348,4 +348,60 @@ impl ProtocolAdapter for HotSwappableProtocolAdapter {
         self.with_generation(|generation| Ok(generation.generation_id))
             .ok()
     }
+
+    fn max_session_handoff_bytes(&self) -> usize {
+        self.with_generation(|generation| Ok(generation.max_session_handoff_bytes))
+            .unwrap_or_default()
+    }
+
+    fn export_session_state(
+        &self,
+        session: &mc_proto_common::ProtocolSessionSnapshot,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        self.with_generation(|generation| {
+            let blob = match generation.invoke(&ProtocolRequest::ExportSessionState {
+                session: session.clone(),
+            })? {
+                ProtocolResponse::SessionTransferBlob(blob) => blob,
+                other => {
+                    return Err(ProtocolError::Plugin(format!(
+                        "unexpected protocol export_session_state payload: {other:?}"
+                    )));
+                }
+            };
+            if blob.len() > generation.max_session_handoff_bytes {
+                return Err(ProtocolError::Plugin(format!(
+                    "protocol session handoff produced {} bytes but declared a {} byte maximum",
+                    blob.len(),
+                    generation.max_session_handoff_bytes
+                )));
+            }
+            Ok(blob)
+        })
+    }
+
+    fn import_session_state(
+        &self,
+        session: &mc_proto_common::ProtocolSessionSnapshot,
+        blob: &[u8],
+    ) -> Result<(), ProtocolError> {
+        self.with_generation(|generation| {
+            if blob.len() > generation.max_session_handoff_bytes {
+                return Err(ProtocolError::Plugin(format!(
+                    "protocol session handoff received {} bytes but declared a {} byte maximum",
+                    blob.len(),
+                    generation.max_session_handoff_bytes
+                )));
+            }
+            match generation.invoke(&ProtocolRequest::ImportSessionState {
+                session: session.clone(),
+                blob: blob.to_vec(),
+            })? {
+                ProtocolResponse::Empty => Ok(()),
+                other => Err(ProtocolError::Plugin(format!(
+                    "unexpected protocol import_session_state payload: {other:?}"
+                ))),
+            }
+        })
+    }
 }

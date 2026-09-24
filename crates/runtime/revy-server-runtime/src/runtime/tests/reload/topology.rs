@@ -37,7 +37,7 @@ async fn reload_server_with_queued_old_accept(
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID])?,
     )
     .await?;
-    let old_generation = server.runtime.active_generation().generation_id;
+    let old_generation = server.runtime.active_generation_id();
     let queued_accept = server
         .runtime
         .sessions
@@ -69,10 +69,7 @@ async fn synthetic_tcp_transport_session() -> Result<
         client,
         crate::transport::AcceptedTransportSession {
             transport: TransportKind::Tcp,
-            io: crate::transport::TransportSessionIo::Tcp {
-                stream,
-                encryption: Box::default(),
-            },
+            io: crate::transport::TransportSessionIo::tcp(stream),
         },
     ))
 }
@@ -99,7 +96,7 @@ async fn topology_reload_manual_inline_updates_protocol_topology() -> Result<(),
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
-    let before_generation = server.runtime.active_generation();
+    let before_generation = server.runtime.authority.active().topology.clone();
     let before_adapter = active_protocol_registry(&server)
         .resolve_adapter(JE_5_ADAPTER_ID)
         .expect("runtime should resolve the initial adapter");
@@ -162,7 +159,7 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
         )?,
     )
     .await?;
-    let before_generation = server.runtime.active_generation().generation_id;
+    let before_generation = server.runtime.active_generation_id();
     assert_eq!(server.listener_bindings().len(), 1);
 
     let mut updated = initial.clone();
@@ -178,6 +175,16 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
     assert!(result.applied_config_change);
     let bindings = server.listener_bindings();
     assert_eq!(bindings.len(), 2);
+    let tcp = bindings
+        .iter()
+        .find(|binding| binding.transport == TransportKind::Tcp)
+        .expect("updated topology has a TCP listener");
+    let udp = bindings
+        .iter()
+        .find(|binding| binding.transport == TransportKind::Udp)
+        .expect("updated topology has a UDP listener");
+    assert_eq!(tcp.local_addr, udp.local_addr);
+    assert_ne!(tcp.local_addr.port(), 0);
     assert!(
         bindings
             .iter()
@@ -186,7 +193,9 @@ async fn topology_reload_toml_source_reads_updated_server_toml() -> Result<(), R
     assert_eq!(
         server
             .runtime
-            .active_generation()
+            .authority
+            .active()
+            .topology
             .default_adapter
             .descriptor()
             .adapter_id,
@@ -225,7 +234,7 @@ async fn config_reload_rotates_generation_for_protocol_buffer_limit_changes()
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
-    let before_generation = server.runtime.active_generation().generation_id;
+    let before_generation = server.runtime.active_generation_id();
     let before_bindings = server.listener_bindings();
 
     let mut updated = initial.clone();
@@ -240,7 +249,9 @@ async fn config_reload_rotates_generation_for_protocol_buffer_limit_changes()
     assert_eq!(
         server
             .runtime
-            .active_generation()
+            .authority
+            .active()
+            .topology
             .config
             .plugins
             .buffer_limits
@@ -280,7 +291,7 @@ async fn generation_reload_ignores_pending_protocol_buffer_limit_changes()
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
-    let before_generation = server.runtime.active_generation().generation_id;
+    let before_generation = server.runtime.active_generation_id();
     let before_bindings = server.listener_bindings();
 
     let mut updated = initial.clone();
@@ -294,7 +305,9 @@ async fn generation_reload_ignores_pending_protocol_buffer_limit_changes()
     assert_eq!(
         server
             .runtime
-            .active_generation()
+            .authority
+            .active()
+            .topology
             .config
             .plugins
             .buffer_limits
@@ -315,14 +328,23 @@ async fn generation_reload_ignores_pending_protocol_buffer_limit_changes()
     assert_eq!(
         server
             .runtime
-            .active_generation()
+            .authority
+            .active()
+            .topology
             .config
             .profiles
             .default_gameplay,
         initial.profiles.default_gameplay
     );
     assert_eq!(
-        server.runtime.active_generation().config.admin.surfaces,
+        server
+            .runtime
+            .authority
+            .active()
+            .topology
+            .config
+            .admin
+            .surfaces,
         initial.admin.surfaces
     );
     assert_eq!(
@@ -358,7 +380,7 @@ async fn plugin_reload_ignores_pending_generation_config_changes() -> Result<(),
         plugin_test_registries_from_dist(dist_dir, &[JE_5_ADAPTER_ID])?,
     )
     .await?;
-    let before_generation = server.runtime.active_generation().generation_id;
+    let before_generation = server.runtime.active_generation_id();
     let before_bindings = server.listener_bindings();
     let before_status = server.status().await;
     let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -372,10 +394,7 @@ async fn plugin_reload_ignores_pending_generation_config_changes() -> Result<(),
     assert!(reloaded.is_empty());
 
     let after_status = server.status().await;
-    assert_eq!(
-        server.runtime.active_generation().generation_id,
-        before_generation
-    );
+    assert_eq!(server.runtime.active_generation_id(), before_generation);
     assert_eq!(server.listener_bindings(), before_bindings);
     assert_eq!(
         after_status.active_generation.generation_id,
@@ -406,7 +425,7 @@ async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result
         plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID])?,
     )
     .await?;
-    let before_generation = server.runtime.active_generation().generation_id;
+    let before_generation = server.runtime.active_generation_id();
 
     let mut invalid = initial.clone();
     invalid.topology.default_adapter = "missing-adapter".into();
@@ -421,10 +440,7 @@ async fn topology_reload_invalid_candidate_keeps_existing_generation() -> Result
         error,
         RuntimeError::Config(ref message) if message.contains("unknown default-adapter")
     ));
-    assert_eq!(
-        server.runtime.active_generation().generation_id,
-        before_generation
-    );
+    assert_eq!(server.runtime.active_generation_id(), before_generation);
 
     server.shutdown().await
 }
@@ -454,7 +470,7 @@ async fn topology_reload_status_reports_draining_generation() -> Result<(), Runt
     let (_stream, _buffer) =
         connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "topology-status")
             .await?;
-    let before_generation = server.runtime.active_generation().generation_id;
+    let before_generation = server.runtime.active_generation_id();
 
     let mut updated = initial.clone();
     updated.topology.default_adapter = JE_47_ADAPTER_ID.into();
@@ -497,13 +513,13 @@ async fn topology_reload_status_reports_draining_generation() -> Result<(), Runt
 }
 
 #[tokio::test]
-async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<(), RuntimeError> {
+async fn topology_reload_zero_grace_rebinds_eligible_play_sessions() -> Result<(), RuntimeError> {
     let temp_dir = tempdir()?;
     let dist_dir = temp_dir.path().join("runtime").join("plugins");
     let config_path = temp_dir.path().join("server.toml");
     seed_runtime_plugins(
         &dist_dir,
-        &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID],
+        &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID, BE_924_ADAPTER_ID],
         STORAGE_AND_AUTH_PLUGIN_IDS,
     )?;
     let mut initial =
@@ -514,30 +530,78 @@ async fn topology_reload_zero_grace_disconnects_old_play_sessions() -> Result<()
     write_server_toml(&config_path, &initial)?;
     let server = build_reloadable_test_server_from_source(
         ServerConfigSource::Toml(config_path.clone()),
-        plugin_test_registries_from_dist(dist_dir.clone(), &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID])?,
+        plugin_test_registries_from_dist(
+            dist_dir.clone(),
+            &[JE_5_ADAPTER_ID, JE_47_ADAPTER_ID, BE_924_ADAPTER_ID],
+        )?,
     )
     .await?;
     let addr = listener_addr(&server);
     let codec = MinecraftWireCodec;
-    let (_stream, _buffer) =
+    let (mut stream, mut buffer) =
         connect_and_login_java_client(addr, &codec, TestJavaProtocol::Je5, "topodrain").await?;
-    assert_eq!(server.runtime.sessions.len().await, 1);
+    assert_eq!(server.runtime.sessions.session_count().await, 1);
+    let player_connection = server.session_status().await[0].connection_id;
+    let before_generation = server.runtime.active_generation_id();
 
     let mut updated = initial.clone();
     updated.topology.default_adapter = JE_47_ADAPTER_ID.into();
+    updated.topology.be_enabled = true;
+    updated.topology.default_bedrock_adapter = BE_924_ADAPTER_ID.into();
+    updated.topology.enabled_bedrock_adapters = Some(vec![BE_924_ADAPTER_ID.into()]);
     write_server_toml_for_reload(&config_path, &updated)?;
-    let _ = server.reload_runtime_topology().await?;
+    let reloaded = server.reload_runtime_topology().await?;
+    let after_generation = reloaded.activated_generation_id;
+    assert_ne!(after_generation, before_generation);
+
+    // Exercise late delivery even if the periodic drain scan missed the transient old
+    // projection. This production notification must recheck the actor's current binding.
+    for handle in server.runtime.sessions.all_handles().await {
+        handle
+            .control_tx
+            .send(crate::runtime::SessionControl::EnforceGenerationDrain)
+            .await
+            .map_err(|_| RuntimeError::Config("drain notification receiver closed".into()))?;
+    }
 
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if server.runtime.sessions.is_empty().await {
+            let sessions = server.session_status().await;
+            assert!(
+                sessions
+                    .iter()
+                    .any(|session| session.connection_id == player_connection),
+                "eligible play session was disconnected"
+            );
+            let old_generation_drained = server
+                .status()
+                .await
+                .draining_generations
+                .iter()
+                .all(|generation| generation.generation_id != before_generation);
+            if sessions.len() == 1
+                && sessions[0].generation_id == after_generation
+                && old_generation_drained
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await
-    .expect("old play session should be drained once grace expires");
+    .expect("eligible play session should activate the committed runtime generation");
+
+    assert_ne!(listener_addr(&server), addr);
+    write_packet(&mut stream, &codec, &held_item_change(4)).await?;
+    read_until_held_item_change(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je5,
+        4,
+        16,
+    )
+    .await?;
 
     server.shutdown().await
 }
@@ -558,7 +622,11 @@ async fn topology_reload_retains_draining_generation_while_old_accepts_remain_qu
     );
 
     drop(queued_accept);
-    let retired = server.runtime.retire_drained_generations().await;
+    let retired = server
+        .runtime
+        .topology_resources
+        .retire_drained_generations(&server.runtime.sessions)
+        .await;
     assert_eq!(retired, vec![old_generation]);
 
     server.shutdown().await
@@ -607,6 +675,32 @@ async fn topology_reload_admits_old_generation_accept_during_drain_grace()
 }
 
 #[tokio::test]
+async fn topology_drain_expires_session_admitted_from_old_accept() -> Result<(), RuntimeError> {
+    // Establish the transport before commit starts the drain deadline. Socket setup is not
+    // part of the admission-to-expiration contract exercised below.
+    let (mut client, accepted_session) = synthetic_tcp_transport_session().await?;
+    let (_temp_dir, server, old_generation, queued_accept) =
+        reload_server_with_queued_old_accept(1).await?;
+    server
+        .runtime
+        .spawn_accepted_transport_session(AcceptedGenerationSession::new(
+            old_generation,
+            accepted_session,
+            queued_accept,
+        ))
+        .await;
+    assert_eq!(server.session_status().await.len(), 1);
+    let mut byte = [0];
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(3), client.read(&mut byte))
+            .await
+            .expect("old-generation session should close when its drain grace expires")?,
+        0
+    );
+    server.shutdown().await
+}
+
+#[tokio::test]
 async fn topology_reload_drops_old_generation_accept_after_drain_deadline()
 -> Result<(), RuntimeError> {
     let (_temp_dir, server, old_generation, queued_accept) =
@@ -631,7 +725,13 @@ async fn topology_reload_drops_old_generation_accept_after_drain_deadline()
     );
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if server.runtime.generation(old_generation).is_none() {
+            if server
+                .runtime
+                .topology_resources
+                .draining_generations()
+                .iter()
+                .all(|generation| generation.generation.generation_id != old_generation)
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

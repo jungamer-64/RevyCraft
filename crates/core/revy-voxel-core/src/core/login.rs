@@ -44,7 +44,7 @@ pub(super) fn state_update_client_settings(
         chunks: delta
             .added
             .into_iter()
-            .map(|chunk_pos| state.ensure_chunk_mut(chunk_pos).clone())
+            .map(|chunk_pos| state.ensure_chunk(chunk_pos).clone())
             .collect(),
     })
 }
@@ -55,27 +55,52 @@ pub(super) fn finalize_login_delta(
     player_id: PlayerId,
 ) -> Option<LoginFinalizeDelta> {
     let player = state.compose_player_snapshot(player_id)?;
-    let (entity_id, session_view_distance) = state
+    let (entity_id, session_view) = state
         .player_session(player_id)
-        .map(|session| (session.entity_id, session.view.view_distance))?;
-    let visible_chunks =
-        initial_visible_chunks(state, player.position.chunk_pos(), session_view_distance);
-    let existing_players = state
+        .map(|session| (session.entity_id, session.view))?;
+    let visible_chunks = initial_visible_chunks(
+        state,
+        player.position.chunk_pos(),
+        session_view.view_distance,
+    );
+    let mut existing_players = Vec::new();
+    let mut new_player_viewers = Vec::new();
+    for other_id in state
         .player_ids()
         .into_iter()
         .filter(|other_id| *other_id != player_id)
-        .filter_map(|other_id| {
-            let session = state.player_session(other_id)?;
-            let snapshot = state.compose_player_snapshot(other_id)?;
-            Some((session.entity_id, snapshot))
-        })
-        .collect::<Vec<_>>();
+    {
+        let Some(session) = state.player_session(other_id) else {
+            continue;
+        };
+        let Some(snapshot) = state.compose_player_snapshot(other_id) else {
+            continue;
+        };
+        if session_view
+            .loaded_chunks
+            .contains(&snapshot.position.chunk_pos())
+        {
+            existing_players.push((session.entity_id, snapshot));
+        }
+        if session
+            .view
+            .loaded_chunks
+            .contains(&player.position.chunk_pos())
+        {
+            new_player_viewers.push(other_id);
+        }
+    }
     let dropped_items = state
         .dropped_item_ids()
         .into_iter()
         .filter_map(|entity_id| {
             state
                 .dropped_item_by_entity(entity_id)
+                .filter(|item| {
+                    session_view
+                        .loaded_chunks
+                        .contains(&item.snapshot.position.chunk_pos())
+                })
                 .map(|item| (entity_id, item.snapshot))
         })
         .collect::<Vec<_>>();
@@ -87,6 +112,7 @@ pub(super) fn finalize_login_delta(
         visible_chunks,
         existing_players,
         dropped_items,
+        new_player_viewers,
     })
 }
 

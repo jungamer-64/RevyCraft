@@ -1,24 +1,25 @@
-use super::listeners::{bind_runtime_listeners, spawn_listener_workers};
+use super::listeners::{
+    bind_runtime_listeners, spawn_listener_workers, spawn_paused_listener_workers,
+};
 use super::r#loop::spawn_runtime_loop;
 use super::protocols::{ActiveProtocols, activate_protocols};
 use crate::RuntimeError;
 use crate::config::{ServerConfig, ServerConfigSource, ValidatedServerConfig};
-use crate::runtime::kernel::RuntimeKernel;
+use crate::runtime::authority::{RuntimeAuthority, RuntimeEpoch};
+use crate::runtime::core_store::CoreStore;
 use crate::runtime::reload_coordinator::ReloadCoordinator;
-use crate::runtime::selection::{
-    BootstrapSelectionResolution, SelectionManager, SelectionResolver,
-};
+use crate::runtime::selection::{BootstrapSelectionResolution, SelectionResolver};
 use crate::runtime::session_registry::SessionRegistry;
-use crate::runtime::topology_manager::TopologyManager;
+use crate::runtime::topology_resources::TopologyResources;
 use crate::runtime::{
-    ACCEPT_QUEUE_CAPACITY, ActiveGeneration, GenerationId, RunningServer, RuntimeServer,
-    RuntimeUpgradeImport, RuntimeUpgradePhase, RuntimeUpgradeRole,
+    ACCEPT_QUEUE_CAPACITY, ActiveGeneration, ExecutableChildCommit, ExecutableChildRuntimePrepared,
+    GenerationId, RunningServer, RuntimeServer,
 };
-use mc_plugin_contract::codec::gameplay::GameplaySessionSnapshot;
+use crate::transport::{BedrockListenerSocket, BoundTransportListener};
 use mc_plugin_host::registry::LoadedPluginSet;
 use mc_plugin_host::runtime::RuntimePluginHost;
 use mc_proto_common::TransportKind;
-use revy_voxel_core::ServerCore;
+use revy_voxel_core::CoreHandoff;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 pub(crate) async fn boot_server(
@@ -53,6 +54,18 @@ pub(crate) async fn boot_server(
         default_bedrock_adapter,
         listener_bindings: listener_bindings.clone(),
     });
+    let core = Arc::new(CoreStore::new(
+        core,
+        storage_profile,
+        config.bootstrap.world_dir.clone(),
+    ));
+    let epoch = RuntimeEpoch::initial(
+        selection,
+        Arc::clone(&active_generation),
+        core,
+        online_auth_keys,
+    );
+    let authority = RuntimeAuthority::new(epoch);
     let (accepted_tx, accepted_rx) = mpsc::channel(ACCEPT_QUEUE_CAPACITY);
     let sessions = SessionRegistry::new(accepted_tx);
     let listener_workers = spawn_listener_workers(
@@ -61,12 +74,10 @@ pub(crate) async fn boot_server(
         sessions.accepted_sender(),
         sessions.queued_accepts(),
     )?;
-
     let server = Arc::new(RuntimeServer {
         reload: ReloadCoordinator::new(config.static_config(), config_source, reload_host),
-        selection: SelectionManager::new(selection, online_auth_keys),
-        topology: TopologyManager::new(active_generation, listener_workers, 2),
-        kernel: RuntimeKernel::new(core, storage_profile, config.bootstrap.world_dir.clone()),
+        topology_resources: TopologyResources::new(listener_workers, 2),
+        authority,
         sessions,
     });
 
@@ -84,132 +95,131 @@ pub(crate) async fn boot_server(
     })
 }
 
-pub(crate) async fn boot_server_from_upgrade(
-    config_source: ServerConfigSource,
-    import: RuntimeUpgradeImport,
-    config: ValidatedServerConfig,
-    loaded_plugins: LoadedPluginSet,
-    reload_host: Option<Arc<dyn RuntimePluginHost>>,
-) -> Result<RunningServer, RuntimeError> {
-    if config.topology.be_enabled {
-        return Err(RuntimeError::Unsupported(
-            "runtime upgrade does not support bedrock listener/session transfer".to_string(),
-        ));
-    }
-    validate_reload_capable_boot(&config, reload_host.as_ref())?;
-
+pub(crate) async fn boot_imported_server(
+    commit: ExecutableChildCommit,
+) -> Result<ExecutableChildRuntimePrepared, RuntimeError> {
+    let parts = commit.into_boot_parts();
+    let storage_profile = SelectionResolver::resolve_storage_profile(
+        parts.config.as_inner(),
+        &parts.selection.loaded_plugins,
+    )?;
+    let child_epoch_revision = parts
+        .parent_epoch_revision
+        .checked_add(1)
+        .ok_or_else(|| RuntimeError::Config("runtime epoch revision overflow".to_string()))?;
+    let next_generation_id = parts
+        .active_generation_id
+        .0
+        .checked_add(1)
+        .ok_or_else(|| RuntimeError::Config("runtime generation id overflow".to_string()))?;
     let ActiveProtocols {
         protocols,
         default_adapter,
         default_bedrock_adapter,
-    } = activate_protocols(&config, loaded_plugins.protocols())?;
-    let gameplay_sessions = import
-        .payload
-        .sessions
-        .iter()
-        .filter_map(|session| {
-            Some(GameplaySessionSnapshot {
-                phase: session.phase,
-                player_id: Some(session.player_id?),
-                entity_id: session.entity_id,
-                protocol: loaded_plugins
-                    .protocols()
-                    .resolve_adapter(session.adapter_id.as_deref()?)?
-                    .capability_set(),
-                gameplay_profile: session.gameplay_profile.clone()?,
-                protocol_generation: session.protocol_generation,
-                gameplay_generation: session.gameplay_generation,
-            })
-        })
-        .collect::<Vec<_>>();
-    let selection = SelectionResolver::resolve(
-        config.as_inner().clone(),
-        loaded_plugins.clone(),
-        &gameplay_sessions,
-    )?;
-    let storage_profile = SelectionResolver::resolve_storage_profile(&config, &loaded_plugins)?;
-    let online_auth_keys = import
-        .payload
-        .online_auth_keys
-        .clone()
-        .map(super::super::OnlineAuthKeys::from_snapshot)
-        .transpose()?
-        .map(Arc::new);
-    let core = ServerCore::from_runtime_state(
-        SelectionResolver::core_config(&config),
-        import.payload.core.clone(),
-        SelectionResolver::content_behavior(),
-    );
-    let adapter_ids = protocols.adapter_ids_for_transport(TransportKind::Tcp);
-    let bound_listeners = vec![
-        crate::transport::BoundTransportListener::import_tcp_listener(
-            import.game_listener,
-            adapter_ids,
-        )?,
-    ];
-    let listener_bindings = bound_listeners
-        .iter()
-        .map(crate::transport::BoundTransportListener::listener_binding)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let initial_generation_id = import.payload.active_generation_id;
+    } = parts.active_protocols;
+    let tcp_binding = crate::ListenerBinding {
+        transport: TransportKind::Tcp,
+        local_addr: parts.tcp_listener.local_addr()?,
+        adapter_ids: protocols.adapter_ids_for_transport(TransportKind::Tcp),
+    };
+    let mut listener_bindings = vec![tcp_binding.clone()];
+    let mut bound_listeners = vec![BoundTransportListener::Tcp {
+        listener: parts.tcp_listener,
+        adapter_ids: tcp_binding.adapter_ids,
+    }];
+    if let Some(listener) = parts.bedrock_listener {
+        let binding = crate::ListenerBinding {
+            transport: TransportKind::Udp,
+            local_addr: listener.local_addr()?,
+            adapter_ids: protocols.adapter_ids_for_transport(TransportKind::Udp),
+        };
+        listener_bindings.push(binding.clone());
+        bound_listeners.push(BoundTransportListener::Bedrock {
+            listener: BedrockListenerSocket::ReceivePaused(Box::new(listener)),
+            adapter_ids: binding.adapter_ids,
+            bind_addr: binding.local_addr,
+        });
+    }
     let active_generation = Arc::new(ActiveGeneration {
-        generation_id: initial_generation_id,
-        config: config.as_inner().clone(),
+        generation_id: parts.active_generation_id,
+        config: parts.config.as_inner().clone(),
         protocol_registry: protocols,
         default_adapter,
         default_bedrock_adapter,
-        listener_bindings: listener_bindings.clone(),
+        listener_bindings,
     });
+    let core = Arc::new(CoreStore::from_handoff(
+        CoreHandoff::from_committed(parts.core),
+        storage_profile,
+        parts.config.bootstrap.world_dir.clone(),
+        parts.persisted_revision,
+        parts.latest_dirty_revision,
+    ));
+    let epoch = RuntimeEpoch::transferred(
+        child_epoch_revision,
+        parts.selection,
+        Arc::clone(&active_generation),
+        core,
+        parts.online_auth_keys,
+    )?;
+    let authority = RuntimeAuthority::new(epoch);
+    let data_plane = authority.freeze().await;
     let (accepted_tx, accepted_rx) = mpsc::channel(ACCEPT_QUEUE_CAPACITY);
     let sessions = SessionRegistry::new(accepted_tx);
-    let listener_workers = spawn_listener_workers(
+    let listener_workers = spawn_paused_listener_workers(
         bound_listeners,
-        initial_generation_id,
+        parts.active_generation_id,
         sessions.accepted_sender(),
         sessions.queued_accepts(),
     )?;
-
     let server = Arc::new(RuntimeServer {
-        reload: ReloadCoordinator::new(config.static_config(), config_source, reload_host),
-        selection: SelectionManager::new(selection, online_auth_keys),
-        topology: TopologyManager::new(
-            active_generation,
-            listener_workers,
-            initial_generation_id.0.saturating_add(1),
+        reload: ReloadCoordinator::new(
+            parts.config.static_config(),
+            parts.config_source,
+            Some(parts.plugin_host),
         ),
-        kernel: RuntimeKernel::new(core, storage_profile, config.bootstrap.world_dir.clone()),
+        topology_resources: TopologyResources::new(listener_workers, next_generation_id),
+        authority,
         sessions,
     });
-    server.reload.set_upgrade_state(
-        RuntimeUpgradeRole::Child,
-        RuntimeUpgradePhase::ChildWaitingCommit,
-    );
-    let child_serial_hold = server.reload.lock_reload_serial_owned().await;
-    let child_commit_hold = server.reload.write_consistency_owned().await;
-    server
-        .reload
-        .install_child_upgrade_serial_hold(child_serial_hold);
-    server
-        .reload
-        .install_child_upgrade_commit_hold(child_commit_hold);
-    server.kernel.set_dirty(import.payload.dirty).await;
-    server
-        .import_live_sessions_after_upgrade(import.sessions)
-        .await?;
+
+    let activation_receivers = match server
+        .spawn_imported_sessions(parts.sessions, child_epoch_revision)
+        .await
+    {
+        Ok(activation) => activation,
+        Err(error) => {
+            server.shutdown_listener_workers().await;
+            server
+                .terminate_all_sessions("Executable child import failed")
+                .await;
+            server.join_all_session_tasks().await;
+            data_plane.resume();
+            return Err(error);
+        }
+    };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let (runtime_completion_tx, runtime_completion_rx) = tokio::sync::watch::channel(false);
     server.reload.install_shutdown_tx(shutdown_tx);
-    let run_server = Arc::clone(&server);
-    let join_handle =
-        spawn_runtime_loop(run_server, shutdown_rx, accepted_rx, runtime_completion_tx);
-
-    Ok(RunningServer {
-        runtime: server,
-        join_handle: tokio::sync::Mutex::new(Some(join_handle)),
-        runtime_completion_rx,
-    })
+    let join_handle = spawn_runtime_loop(
+        Arc::clone(&server),
+        shutdown_rx,
+        accepted_rx,
+        runtime_completion_tx,
+    );
+    Ok(ExecutableChildRuntimePrepared::new(
+        RunningServer {
+            runtime: server,
+            join_handle: tokio::sync::Mutex::new(Some(join_handle)),
+            runtime_completion_rx,
+        },
+        data_plane,
+        activation_receivers,
+        parts.queued_bedrock_peers,
+        parts.active_generation_id,
+        parts.cutover_context,
+    ))
 }
 
 fn validate_reload_capable_boot(

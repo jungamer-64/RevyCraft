@@ -143,6 +143,10 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
         Some(self.generation.generation_id())
     }
 
+    fn max_session_handoff_bytes(&self) -> usize {
+        self.current_generation().max_session_handoff_bytes
+    }
+
     fn prepare_player_join(
         &self,
         read_view: Box<dyn GameplayReadView>,
@@ -218,7 +222,15 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
                 })
                 .map_err(PluginHostError::Config)?
             {
-                GameplayResponse::SessionTransferBlob(blob) => Ok(blob),
+                GameplayResponse::SessionTransferBlob(blob) => {
+                    if blob.len() > generation.max_session_handoff_bytes {
+                        return Err(PluginHostError::Config(format!(
+                            "gameplay session handoff produced {} bytes but declared a {} byte maximum",
+                            blob.len(), generation.max_session_handoff_bytes
+                        )));
+                    }
+                    Ok(blob)
+                }
                 other => Err(PluginHostError::Config(format!(
                     "unexpected gameplay export_session_state payload: {other:?}"
                 ))),
@@ -232,6 +244,13 @@ impl GameplayProfileHandle for HotSwappableGameplayProfile {
         blob: &[u8],
     ) -> Result<(), PluginHostError> {
         self.generation.with_reload_read(|generation| {
+            if blob.len() > generation.max_session_handoff_bytes {
+                return Err(PluginHostError::Config(format!(
+                    "gameplay session handoff received {} bytes but declared a {} byte maximum",
+                    blob.len(),
+                    generation.max_session_handoff_bytes
+                )));
+            }
             match generation
                 .invoke(&GameplayRequest::ImportSessionState {
                     session: session.clone(),

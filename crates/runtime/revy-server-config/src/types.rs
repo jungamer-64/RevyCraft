@@ -69,7 +69,7 @@ pub struct NetworkConfig {
     pub server_ip: Option<IpAddr>,
     pub server_port: u16,
     pub motd: String,
-    pub max_players: u8,
+    pub max_players: u32,
 }
 
 impl Default for NetworkConfig {

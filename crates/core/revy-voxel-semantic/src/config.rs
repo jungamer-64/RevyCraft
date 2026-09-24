@@ -1,10 +1,11 @@
 use crate::BlockPos;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreConfig {
     pub level_name: String,
     pub seed: u64,
-    pub max_players: u8,
+    pub max_players: u32,
     pub view_distance: u8,
     pub game_mode: u8,
     pub difficulty: u8,

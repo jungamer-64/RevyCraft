@@ -14,7 +14,7 @@ use revy_voxel_core::{
 };
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 
 pub(crate) const CORE_PROCESS_DELTA_SLOT_BYTES: usize = journal::PROCESS_BYTE_LIMIT
@@ -210,6 +210,13 @@ pub(crate) enum CoreInvocation {
 pub(crate) struct CoreStore {
     storage_profile: Arc<dyn StorageProfileHandle>,
     world_dir: PathBuf,
+    /// The sole published version. This lock only clones or exchanges an Arc; mutation,
+    /// serialization and retirement never run while it is held. Snapshot readers therefore
+    /// do not queue behind gameplay commits or transfer-journal preparation.
+    active: RwLock<Arc<CoreVersion>>,
+    /// Serializes writers and keeps publication coherent with journal/persistence metadata.
+    /// Readers needing both version and metadata acquire this lock before reading `active`.
+    /// The reverse lock order is never used.
     state: Mutex<CoreStoreState>,
 }
 
@@ -226,9 +233,9 @@ impl CoreStore {
             state: Mutex::new(CoreStoreState {
                 persisted_revision: active.revision(),
                 journal: CoreJournal::Inactive,
-                active,
                 latest_dirty_revision: None,
             }),
+            active: RwLock::new(active),
         }
     }
 
@@ -242,8 +249,8 @@ impl CoreStore {
         Self {
             storage_profile,
             world_dir,
+            active: RwLock::new(handoff.version()),
             state: Mutex::new(CoreStoreState {
-                active: handoff.version(),
                 persisted_revision,
                 latest_dirty_revision,
                 journal: CoreJournal::Inactive,
@@ -251,11 +258,21 @@ impl CoreStore {
         }
     }
 
+    pub(crate) fn version(&self) -> Arc<CoreVersion> {
+        Arc::clone(
+            &self
+                .active
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
     pub(crate) async fn process_precopy(&self) -> CoreProcessPrecopy {
         let mut state = self.state.lock().await;
-        state.journal = CoreJournal::process(state.active.revision());
+        let version = self.version();
+        state.journal = CoreJournal::process(version.revision());
         CoreProcessPrecopy {
-            version: Arc::clone(&state.active),
+            version,
             persisted_revision: state.persisted_revision,
             latest_dirty_revision: state.latest_dirty_revision,
         }
@@ -267,9 +284,10 @@ impl CoreStore {
         storage_profile: Arc<dyn StorageProfileHandle>,
     ) -> (CoreCandidatePlan, Arc<Self>) {
         let mut state = self.state.lock().await;
-        state.journal = CoreJournal::resync(state.active.revision());
+        let version = self.version();
+        state.journal = CoreJournal::resync(version.revision());
         let precopy = CorePrecopy {
-            version: Arc::clone(&state.active),
+            version,
             persisted_revision: state.persisted_revision,
             latest_dirty_revision: state.latest_dirty_revision,
         };
@@ -291,7 +309,7 @@ impl CoreStore {
         let events = state.journal.seal_resync(revision)?;
         Ok(CoreDeltaSeal {
             precopy: CorePrecopy {
-                version: Arc::clone(&state.active),
+                version: self.version(),
                 persisted_revision: state.persisted_revision,
                 latest_dirty_revision: state.latest_dirty_revision,
             },
@@ -307,11 +325,12 @@ impl CoreStore {
         // Pre-copy can advance while mutations continue. Sealing a delta does not revoke the
         // journal; the cutover owner ends retention after commit or abort.
         let state = self.state.lock().await;
-        if revision > state.active.revision() {
+        let active_revision = self.version().revision();
+        if revision > active_revision {
             return Err(CoreTransferError::InvalidState(format!(
                 "core delta base revision {} exceeds active revision {}",
                 revision.value(),
-                state.active.revision().value(),
+                active_revision.value(),
             )));
         }
         let descriptor = match state.journal.write_process_delta(revision, writer)? {
@@ -330,7 +349,7 @@ impl CoreStore {
         })
     }
 
-    /// Stops retaining semantic commits after a pre-copy that will not reach its seal boundary.
+    /// Revokes journal recording when its cutover owner abandons pre-copy or the sealed transfer.
     ///
     /// Retained entries are deliberately not released here: this operation can run while
     /// recovering a freeze, and dropping the bounded journal must not extend the data-plane
@@ -365,8 +384,7 @@ impl CoreStore {
                     gameplay,
                 },
             ) => {
-                let snapshot = self.version().await;
-                let preview = match snapshot.login_preview(
+                let preview = match self.version().login_preview(
                     connection_id,
                     username.clone(),
                     player_id,
@@ -391,7 +409,7 @@ impl CoreStore {
                     )
                     .map_err(|error| RuntimeError::Config(error.to_string()))?;
                 let mut state = self.state.lock().await;
-                let mut mutation = CoreMutation::from_version(&state.active);
+                let mut mutation = CoreMutation::from_version(&self.version());
                 match mutation.validate_and_apply_login_effects(
                     connection_id,
                     username,
@@ -400,9 +418,9 @@ impl CoreStore {
                 ) {
                     GameplayEffectApplyResult::Applied(events) => {
                         let prepared = mutation.prepare(events, requires_persistence);
-                        Ok(CoreCommandOutcome::Events(Self::commit_locked(
-                            &mut state, prepared,
-                        )?))
+                        Ok(CoreCommandOutcome::Events(
+                            self.commit_locked(&mut state, prepared)?,
+                        ))
                     }
                     GameplayEffectApplyResult::Conflict => {
                         Ok(CoreCommandOutcome::StaleLogin { connection_id })
@@ -420,23 +438,22 @@ impl CoreStore {
                 if gameplay_command.player_id() != player_id {
                     return Ok(CoreCommandOutcome::StaleGameplayCommand { player_id });
                 }
-                let snapshot = self.version().await;
                 let batch = gameplay
                     .prepare_command(
-                        VersionReadView::boxed(Arc::clone(&snapshot)),
+                        VersionReadView::boxed(self.version()),
                         &capabilities,
                         &gameplay_command,
                         now_ms,
                     )
                     .map_err(|error| RuntimeError::Config(error.to_string()))?;
                 let mut state = self.state.lock().await;
-                let mut mutation = CoreMutation::from_version(&state.active);
+                let mut mutation = CoreMutation::from_version(&self.version());
                 match mutation.validate_and_apply_gameplay_effects(batch) {
                     GameplayEffectApplyResult::Applied(events) => {
                         let prepared = mutation.prepare(events, requires_persistence);
-                        Ok(CoreCommandOutcome::Events(Self::commit_locked(
-                            &mut state, prepared,
-                        )?))
+                        Ok(CoreCommandOutcome::Events(
+                            self.commit_locked(&mut state, prepared)?,
+                        ))
                     }
                     GameplayEffectApplyResult::Conflict => {
                         Ok(CoreCommandOutcome::StaleGameplayCommand { player_id })
@@ -447,12 +464,12 @@ impl CoreStore {
             | (command, CoreInvocation::Login { .. })
             | (command, CoreInvocation::Play { .. }) => {
                 let mut state = self.state.lock().await;
-                let mut mutation = CoreMutation::from_version(&state.active);
+                let mut mutation = CoreMutation::from_version(&self.version());
                 let events = mutation.apply_command(command, now_ms);
                 let prepared = mutation.prepare(events, requires_persistence);
-                Ok(CoreCommandOutcome::Events(Self::commit_locked(
-                    &mut state, prepared,
-                )?))
+                Ok(CoreCommandOutcome::Events(
+                    self.commit_locked(&mut state, prepared)?,
+                ))
             }
         }
     }
@@ -462,10 +479,10 @@ impl CoreStore {
         now_ms: u64,
     ) -> Result<Vec<SharedCoreEvent>, RuntimeError> {
         let mut state = self.state.lock().await;
-        let mut mutation = CoreMutation::from_version(&state.active);
+        let mut mutation = CoreMutation::from_version(&self.version());
         let events = mutation.tick(now_ms);
         let prepared = mutation.prepare(events, false);
-        Self::commit_locked(&mut state, prepared)
+        self.commit_locked(&mut state, prepared)
     }
 
     pub(crate) fn prepare_gameplay_tick(
@@ -501,8 +518,9 @@ impl CoreStore {
             });
         }
         let mut state = self.state.lock().await;
-        let active_revision = state.active.revision();
-        let mut mutation = CoreMutation::from_version(&state.active);
+        let active = self.version();
+        let active_revision = active.revision();
+        let mut mutation = CoreMutation::from_version(&active);
         let mut events = Vec::new();
         let mut stale = Vec::new();
         for prepared in prepared_ticks {
@@ -523,19 +541,21 @@ impl CoreStore {
             }
         }
         let prepared = mutation.prepare(events, false);
-        let events = Self::commit_locked(&mut state, prepared)?;
+        let events = self.commit_locked(&mut state, prepared)?;
         Ok(GameplayTickCommitOutcome { events, stale })
     }
 
     fn commit_locked(
+        &self,
         state: &mut CoreStoreState,
         prepared: PreparedCoreCommit,
     ) -> Result<Vec<SharedCoreEvent>, RuntimeError> {
-        if state.active.revision() != prepared.base_revision() {
+        let active_revision = self.version().revision();
+        if active_revision != prepared.base_revision() {
             return Err(RuntimeError::Config(format!(
                 "stale core commit: expected revision {}, active revision {}",
                 prepared.base_revision().value(),
-                state.active.revision().value()
+                active_revision.value()
             )));
         }
         let (next_version, events, requires_persistence, transfer) = prepared.into_parts();
@@ -546,21 +566,30 @@ impl CoreStore {
         if requires_persistence {
             state.latest_dirty_revision = Some(next_version.revision());
         }
-        if next_version.revision() > state.active.revision() {
+        if next_version.revision() > active_revision {
             state
                 .journal
                 .record(next_version.revision(), &events, transfer);
         }
-        state.active = next_version;
+        let retired = {
+            let mut active = self
+                .active
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::replace(&mut *active, next_version)
+        };
+        // The last reference can release an entire changed component. Keep this outside the
+        // publication lock so immutable readers only contend with the pointer exchange.
+        drop(retired);
         Ok(events)
     }
 
     pub(crate) async fn player_summary(&self) -> PlayerSummary {
-        self.version().await.player_summary()
+        self.version().player_summary()
     }
 
     pub(crate) async fn session_resync_events(&self, player_id: PlayerId) -> Vec<TargetedEvent> {
-        self.version().await.session_resync_events(player_id)
+        self.version().session_resync_events(player_id)
     }
 
     pub(crate) async fn dirty(&self) -> bool {
@@ -586,7 +615,7 @@ impl CoreStore {
             if !dirty {
                 return Ok(());
             }
-            Arc::clone(&state.active)
+            self.version()
         };
         let saved_revision = version.revision();
         let storage_profile = Arc::clone(&self.storage_profile);
@@ -659,5 +688,68 @@ impl CoreCandidatePlan {
             precopy.persisted_revision,
             latest_dirty_revision,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::selection::SelectionResolver;
+    use crate::runtime::tests::{loopback_server_config, plugin_test_registries_all};
+
+    #[tokio::test]
+    async fn published_core_reads_remain_available_during_commit_preparation()
+    -> Result<(), RuntimeError> {
+        let directory = tempfile::tempdir()?;
+        let config = loopback_server_config(directory.path().join("world"));
+        let plugins = plugin_test_registries_all()?;
+        let storage = SelectionResolver::resolve_storage_profile(&config, &plugins.loaded_plugins)?;
+        let core = CoreStore::new(
+            ServerCore::new(
+                SelectionResolver::core_config(&config),
+                SelectionResolver::content_behavior(),
+            ),
+            storage,
+            config.bootstrap.world_dir,
+        );
+        let mut writer = core.state.lock().await;
+        // Holding mutation authority must not prevent another callback from retaining the
+        // last complete revision. Preparing a commit cannot publish any of its fields.
+        let before = core.version();
+        writer.journal = CoreJournal::process(before.revision());
+        let mut mutation = CoreMutation::from_version(&before);
+        let next_max_players = before.world_meta().max_players + 1;
+        mutation.set_max_players(next_max_players);
+        let prepared = mutation.prepare(Vec::new(), true);
+        assert!(Arc::ptr_eq(&before, &core.version()));
+
+        assert!(core.commit_locked(&mut writer, prepared)?.is_empty());
+        let after = core.version();
+        assert_eq!(after.revision().value(), before.revision().value() + 1);
+        assert_eq!(after.world_meta().max_players, next_max_players);
+        assert_eq!(before.world_meta().max_players + 1, next_max_players);
+        assert_eq!(writer.latest_dirty_revision, Some(after.revision()));
+        assert_eq!(writer.persisted_revision, before.revision());
+
+        let mut delta = Vec::new();
+        let ProcessDeltaSeal::Ready(descriptor) = writer
+            .journal
+            .write_process_delta(before.revision(), &mut delta)?
+        else {
+            panic!("an adjacent retained commit must remain transferable");
+        };
+        assert_eq!(descriptor.final_revision(), after.revision());
+        let replayed = before.apply_process_transfer_delta(&delta)?;
+        assert_eq!(replayed.world_meta(), after.world_meta());
+
+        let mut stale = CoreMutation::from_version(&before);
+        stale.set_max_players(next_max_players + 1);
+        assert!(
+            core.commit_locked(&mut writer, stale.prepare(Vec::new(), true))
+                .is_err()
+        );
+        assert!(Arc::ptr_eq(&after, &core.version()));
+        assert_eq!(writer.latest_dirty_revision, Some(after.revision()));
+        Ok(())
     }
 }

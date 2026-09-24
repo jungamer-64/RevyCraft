@@ -35,7 +35,9 @@ pub fn encode_join_game(
     writer.write_u8(world_meta.game_mode);
     writer.write_i32(dimension_to_i32(player.dimension));
     writer.write_u8(world_meta.difficulty);
-    writer.write_u8(world_meta.max_players);
+    writer.write_u8(mc_proto_je_common::join_game_player_limit(
+        world_meta.max_players,
+    ));
     writer.write_string(&world_meta.level_type.to_ascii_lowercase())?;
     writer.write_bool(false);
     Ok(writer.into_inner())
