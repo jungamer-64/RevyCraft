@@ -74,7 +74,7 @@ struct ConsoleInstance {
 }
 
 struct ConsoleWorker {
-    stop: Arc<AtomicBool>,
+    control: Arc<Mutex<ConsoleWorkerMode>>,
     join: thread::JoinHandle<()>,
 }
 
