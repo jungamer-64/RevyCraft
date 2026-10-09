@@ -1029,11 +1029,19 @@ impl PeerActor {
                 continue;
             }
             let timer_deadline = self.next_timer_deadline();
-            // A datagram already admitted by the router is authoritative activity. Process the
-            // ordered mailbox before evaluating timeout state so scheduler starvation cannot
-            // turn queued traffic into a false idle disconnect.
+            // Control must remain responsive under continuous ingress, including freeze.
+            // Router admission already records activity; process ingress before timers so
+            // queued traffic cannot turn scheduler starvation into an idle disconnect.
             tokio::select! {
                 biased;
+                command = command_rx.recv() => {
+                    let Some(command) = command else {
+                        break;
+                    };
+                    if self.apply_command(command, &mut execution).await {
+                        break;
+                    }
+                }
                 datagram = ingress_rx.recv() => {
                     let Some(bytes) = datagram else {
                         break;
@@ -1043,14 +1051,6 @@ impl PeerActor {
                             "RakNet peer {} stopped while receiving a datagram: {error}",
                             self.remote_addr
                         );
-                        break;
-                    }
-                }
-                command = command_rx.recv() => {
-                    let Some(command) = command else {
-                        break;
-                    };
-                    if self.apply_command(command, &mut execution).await {
                         break;
                     }
                 }
@@ -1871,6 +1871,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn freeze_preempts_queued_ingress_and_resume_preserves_delivery() {
+        let budgets = RakNetBudgets::default();
+        let mut actor = actor_with_budgets(budgets).await;
+        actor.accepted = true;
+        let inbox = Arc::clone(&actor.inbox);
+        let (ingress_tx, ingress_rx) = mpsc::channel(budgets.peer_ingress_queue);
+        let (command_tx, command_rx) = mpsc::channel(budgets.peer_command_queue);
+        ingress_tx
+            .send(encode_datagram(
+                DatagramSequence::new(0),
+                &reliable_ordered_frame(0, 0, &[0xfe, 7]),
+            ))
+            .await
+            .unwrap();
+        actor.activity.observe(Instant::now());
+        let (freeze_tx, freeze_rx) = oneshot::channel();
+        command_tx
+            .send(PeerCommand::Freeze {
+                reply_tx: freeze_tx,
+            })
+            .await
+            .unwrap();
+        let task = tokio::spawn(actor.run(ingress_rx, command_rx));
+        tokio::time::timeout(Duration::from_secs(1), freeze_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let (seal_tx, seal_rx) = oneshot::channel();
+        command_tx
+            .send(PeerCommand::SealTransfer { reply_tx: seal_tx })
+            .await
+            .unwrap();
+        let snapshot = seal_rx.await.unwrap();
+        assert!(snapshot.last_datagram.is_none());
+        assert!(snapshot.queued_payloads.is_empty());
+        command_tx.send(PeerCommand::Resume).await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), inbox.receive())
+                .await
+                .unwrap()
+                .unwrap(),
+            vec![0xfe, 7]
+        );
+        let (transfer_tx, transfer_rx) = oneshot::channel();
+        command_tx
+            .send(PeerCommand::Transfer {
+                reply_tx: transfer_tx,
+            })
+            .await
+            .unwrap();
+        transfer_rx.await.unwrap();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn queued_datagram_refreshes_activity_before_overdue_timer() {
         let budgets = RakNetBudgets::default();
         let mut actor = actor_with_budgets(budgets).await;
@@ -1885,6 +1940,7 @@ mod tests {
             .send(encode_ack(DatagramSequence::new(0)))
             .await
             .unwrap();
+        actor.activity.observe(Instant::now());
         let (freeze_tx, freeze_rx) = oneshot::channel();
         command_tx
             .send(PeerCommand::Freeze {
