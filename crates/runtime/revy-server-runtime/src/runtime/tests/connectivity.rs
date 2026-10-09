@@ -26,23 +26,25 @@ async fn incomplete_java_frame_allows_cutover_and_resumes_after_remaining_bytes(
     let frame = codec.encode_frame(&held_item_change(6))?;
     stream.write_all(&frame[..1]).await?;
     tokio::time::sleep(Duration::from_millis(30)).await;
-    let _ = tokio::time::timeout(Duration::from_secs(2), server.reload_runtime_core())
+    // An incomplete frame must not hold data-plane admission while waiting for more bytes.
+    // Observe that barrier directly; reload staging and preparation do not belong to it.
+    let frozen = tokio::time::timeout(Duration::from_secs(2), server.runtime.authority.freeze())
         .await
-        .map_err(|error| RuntimeError::Config(error.to_string()))??;
+        .map_err(|_| {
+            RuntimeError::Config("data-plane freeze waited for an incomplete Java frame".into())
+        })?;
+    frozen.resume();
+    let _ = server.reload_runtime_core().await?;
     stream.write_all(&frame[1..]).await?;
-    let _ = tokio::time::timeout(
-        Duration::from_secs(2),
-        read_until_held_item_change(
-            &mut stream,
-            &codec,
-            &mut buffer,
-            TestJavaProtocol::Je5,
-            6,
-            32,
-        ),
+    let _ = read_until_held_item_change(
+        &mut stream,
+        &codec,
+        &mut buffer,
+        TestJavaProtocol::Je5,
+        6,
+        32,
     )
-    .await
-    .map_err(|error| RuntimeError::Config(error.to_string()))??;
+    .await?;
     drop(stream);
     server.shutdown().await
 }
