@@ -10,7 +10,9 @@ use std::io::Write;
 const RESYNC_EVENT_LIMIT: usize = 65_536;
 const RESYNC_BYTE_LIMIT: usize = 32 * 1024 * 1024;
 const PROCESS_ENTRY_BYTE_LIMIT: usize = 2 * 1024 * 1024;
-pub(super) const PROCESS_BYTE_LIMIT: usize = 8 * 1024 * 1024;
+// Keep an overlap window for 1000 live sessions while the child imports its snapshot.
+// Freeze admission separately bounds the remaining revision lag before gate closure.
+pub(super) const PROCESS_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 
 /// Retention belongs to the exclusive cutover owner. Same-process reload retains only events
 /// since its candidate snapshot; process pre-copy retains only encoded, adjacent commits.
@@ -257,6 +259,46 @@ mod tests {
     use super::*;
     use revy_voxel_core::{ConnectionId, CoreEvent, EventTarget};
     use std::sync::Arc;
+
+    #[test]
+    fn process_overlap_retains_its_commit_limit_then_advances_the_floor() {
+        let base = CoreRevision::initial();
+        let mut version = revy_voxel_core::CoreVersion::initial(revy_voxel_core::ServerCore::new(
+            revy_voxel_core::CoreConfig::default(),
+            crate::runtime::selection::SelectionResolver::content_behavior(),
+        ));
+        let mut journal = CoreJournal::process(base);
+        for _ in 0..CoreTransferDelta::MAX_COMMITS {
+            let mut mutation = revy_voxel_core::CoreMutation::from_version(&version);
+            mutation.set_max_players(1000);
+            let (next, _, _, transfer) = mutation.prepare(Vec::new(), false).into_parts();
+            journal.record(next.revision(), &[], transfer);
+            version = next;
+        }
+        let mut bytes = Vec::new();
+        let ProcessDeltaSeal::Ready(descriptor) =
+            journal.write_process_delta(base, &mut bytes).unwrap()
+        else {
+            panic!("the complete overlap window must remain available");
+        };
+        assert_eq!(descriptor.final_revision(), version.revision());
+        let mut mutation = revy_voxel_core::CoreMutation::from_version(&version);
+        mutation.set_max_players(1000);
+        let (next, _, _, transfer) = mutation.prepare(Vec::new(), false).into_parts();
+        journal.record(next.revision(), &[], transfer);
+        assert!(matches!(
+            journal.write_process_delta(base, &mut Vec::new()).unwrap(),
+            ProcessDeltaSeal::Outpaced { earliest_revision } if earliest_revision == CoreRevision::from_value(1)
+        ));
+        let mut bytes = Vec::new();
+        let ProcessDeltaSeal::Ready(descriptor) = journal
+            .write_process_delta(CoreRevision::from_value(1), &mut bytes)
+            .unwrap()
+        else {
+            panic!("the shifted overlap window must remain available");
+        };
+        assert_eq!(descriptor.final_revision(), next.revision());
+    }
 
     #[test]
     fn resync_event_count_budget_accepts_its_boundary_then_reports_outpace() {

@@ -425,7 +425,7 @@ impl CoreTransferDelta {
     /// Maximum adjacent commits in one pre-copy update. The runtime retains at most this many
     /// entries, independently of its byte budget. This overlap window covers ongoing gameplay
     /// while a child imports a snapshot; it does not define the smaller freeze admission budget.
-    pub const MAX_COMMITS: usize = 16_384;
+    pub const MAX_COMMITS: usize = 131_072;
 
     /// Encodes a bounded sequence of adjacent committed mutations.
     ///
