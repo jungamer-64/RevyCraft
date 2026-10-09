@@ -7,9 +7,9 @@ use crate::support::TestResult;
 use std::fs;
 use std::time::Duration;
 
-#[test]
-fn console_upgrade_reaches_child_and_child_console_keeps_working() -> TestResult<()> {
-    let _guard = upgrade_test_lock().blocking_lock();
+#[tokio::test]
+async fn console_upgrade_reaches_child_and_child_console_keeps_working() -> TestResult<()> {
+    let _guard = upgrade_test_lock().lock().await;
     let server = PreparedServer::new(|_, grpc_port| {
         Ok(remote_admin_upgrade_options(grpc_port, "console-upgrade"))
     })?;
@@ -28,15 +28,12 @@ fn console_upgrade_reaches_child_and_child_console_keeps_working() -> TestResult
     )?;
 
     crate::support::wait_for_tcp_ready(server.grpc_addr, Duration::from_secs(5))?;
-    let runtime = tokio::runtime::Runtime::new()?;
-    let mut client = runtime.block_on(async { grpc_client(server.grpc_addr).await })?;
-    let status = runtime.block_on(async {
-        client
-            .get_status(crate::common::authorized_request(
-                mc_plugin_admin_grpc::admin::GetStatusRequest {},
-            ))
-            .await
-    })?;
+    let mut client = grpc_client(server.grpc_addr).await?;
+    let status = client
+        .get_status(crate::common::authorized_request(
+            mc_plugin_admin_grpc::admin::GetStatusRequest {},
+        ))
+        .await?;
     assert!(status.into_inner().status.is_some());
 
     write_stdin_lines(&mut child, &["status", "shutdown"])?;
@@ -50,7 +47,8 @@ fn console_upgrade_reaches_child_and_child_console_keeps_working() -> TestResult
         &logs,
         Duration::from_secs(5),
         "original parent process should exit after successful cutover",
-    )?;
+    )
+    .await?;
 
     let stdout =
         wait_for_output_contains(&stdout_path, "shutdown: scheduled", Duration::from_secs(5))?;
@@ -66,14 +64,14 @@ fn console_upgrade_reaches_child_and_child_console_keeps_working() -> TestResult
     Ok(())
 }
 
-#[test]
-fn console_upgrade_child_rejection_resumes_parent_input() -> TestResult<()> {
-    let _guard = upgrade_test_lock().blocking_lock();
+#[tokio::test]
+async fn console_upgrade_child_rejection_resumes_parent_input() -> TestResult<()> {
+    let _guard = upgrade_test_lock().lock().await;
     let server = PreparedServer::remote_admin("console-upgrade-rollback")?;
     let stdout_path = server.temp_path().join("server.stdout.log");
     let stderr_path = server.temp_path().join("server.stderr.log");
     let mut child = server.spawn_with_log_files(&stdout_path, &stderr_path)?;
-    let result = (|| {
+    let result = async {
         crate::support::wait_for_tcp_ready(server.grpc_addr, Duration::from_secs(5))?;
 
         // The parent uses its active validated configuration; the candidate must materialize
@@ -99,7 +97,9 @@ fn console_upgrade_child_rejection_resumes_parent_input() -> TestResult<()> {
             Duration::from_secs(5),
             "parent should shut down cleanly after the rejected upgrade",
         )
-    })();
+        .await
+    }
+    .await;
     if result.is_err() && child.try_wait()?.is_none() {
         kill_server(&mut child)?;
     }

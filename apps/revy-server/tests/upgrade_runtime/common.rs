@@ -251,13 +251,24 @@ pub(crate) fn persisted_log_diagnostics(logs: &PersistedServerLogCapture) -> Str
     }
 }
 
-pub(crate) fn wait_for_clean_parent_exit(
+pub(crate) async fn wait_for_clean_parent_exit(
     parent: &mut Child,
     logs: &PersistedServerLogCapture,
     timeout: Duration,
     expectation: &str,
 ) -> TestResult<()> {
-    let exit_status = wait_for_exit(parent, timeout)?;
+    let deadline = Instant::now() + timeout;
+    let exit_status = loop {
+        if let Some(status) = parent.try_wait()? {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        // Keep the gRPC client's reactor running so it can acknowledge the parent's
+        // HTTP/2 graceful shutdown while transferred Minecraft sessions stay open.
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
     let diagnostics = persisted_log_diagnostics(logs);
     let Some(exit_status) = exit_status else {
         return Err(format!(
@@ -300,7 +311,8 @@ pub(crate) async fn shutdown_runtime_via_grpc(
         logs,
         Duration::from_secs(10),
         "original parent process should exit cleanly after successful cutover",
-    )?;
+    )
+    .await?;
     Ok(())
 }
 

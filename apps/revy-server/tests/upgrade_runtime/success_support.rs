@@ -76,6 +76,13 @@ pub(crate) async fn cutover_logged_runtime(
     timeout: Duration,
 ) -> TestResult<AdminClient> {
     upgrade_to_current_bootstrap(runtime_client(runtime)?).await?;
+    wait_for_clean_parent_exit(
+        &mut runtime.child,
+        &runtime.logs,
+        timeout,
+        "original parent process should exit after successful cutover while transferred sessions stay open",
+    )
+    .await?;
     wait_for_child_client(runtime, timeout).await
 }
 
@@ -295,16 +302,7 @@ pub(crate) async fn start_status_runtime() -> TestResult<(LoggedRuntime, StatusS
     Ok((runtime, status_session))
 }
 
-pub(crate) fn assert_status_session_survives(
-    runtime: &mut LoggedRuntime,
-    status_session: &mut StatusSession,
-) -> TestResult<()> {
-    wait_for_clean_parent_exit(
-        &mut runtime.child,
-        &runtime.logs,
-        Duration::from_secs(5),
-        "original parent process should exit after successful cutover even while the pre-cutover status session stays open",
-    )?;
+pub(crate) fn assert_status_session_survives(status_session: &mut StatusSession) -> TestResult<()> {
     assert_eq!(status_session.ping(12_345)?, 12_345);
     Ok(())
 }
