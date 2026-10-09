@@ -18,10 +18,7 @@ use mc_plugin_sdk_rust::manifest::StaticPluginManifest;
 use mc_plugin_sdk_rust::{AdminSurfaceCapability, AdminSurfaceCapabilitySet};
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 #[cfg(unix)]
@@ -76,6 +73,23 @@ struct ConsoleInstance {
 struct ConsoleWorker {
     control: Arc<Mutex<ConsoleWorkerMode>>,
     join: thread::JoinHandle<()>,
+}
+
+enum ConsoleWorkerMode {
+    Running,
+    Paused,
+    Stopping,
+}
+
+impl ConsoleWorker {
+    fn set_mode(&self, mode: ConsoleWorkerMode) -> Result<(), String> {
+        *self
+            .control
+            .lock()
+            .map_err(|_| "console worker control mutex was poisoned".to_string())? = mode;
+        self.join.thread().unpark();
+        Ok(())
+    }
 }
 
 impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
@@ -146,8 +160,13 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
             .instances
             .lock()
             .expect("console admin surface mutex should not be poisoned");
-        if !instances.contains_key(instance_id) {
-            return Err(format!("console instance `{instance_id}` is not active"));
+        let instance = instances
+            .get(instance_id)
+            .ok_or_else(|| format!("console instance `{instance_id}` is not active"))?;
+        if let Some(worker) = &instance.worker {
+            // Revoke stdin reads while allowing the command that requested the upgrade to
+            // finish its host callback and write the response. Joining here would deadlock it.
+            worker.set_mode(ConsoleWorkerMode::Paused)?;
         }
         Ok(AdminSurfacePauseView {
             resume_payload: Vec::new(),
@@ -166,7 +185,9 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
             .lock()
             .expect("console admin surface mutex should not be poisoned");
         if let Some(instance) = instances.get_mut(instance_id) {
-            if instance.worker.is_none() {
+            if let Some(worker) = &instance.worker {
+                worker.set_mode(ConsoleWorkerMode::Running)?;
+            } else {
                 instance.worker = Some(start_worker(
                     instance_id.to_string(),
                     instance.principal_id.clone(),
@@ -205,7 +226,9 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
         let instance = instances
             .get_mut(instance_id)
             .ok_or_else(|| format!("console instance `{instance_id}` is not active"))?;
-        if instance.worker.is_none() {
+        if let Some(worker) = &instance.worker {
+            worker.set_mode(ConsoleWorkerMode::Running)?;
+        } else {
             instance.worker = Some(start_worker(
                 instance_id.to_string(),
                 instance.principal_id.clone(),
@@ -229,7 +252,9 @@ impl RustAdminSurfacePlugin for ConsoleAdminSurfacePlugin {
         let Some(instance) = instances.get_mut(instance_id) else {
             return Ok(console_status());
         };
-        if instance.worker.is_none() {
+        if let Some(worker) = &instance.worker {
+            worker.set_mode(ConsoleWorkerMode::Running)?;
+        } else {
             instance.worker = Some(start_worker(
                 instance_id.to_string(),
                 instance.principal_id.clone(),
@@ -277,8 +302,8 @@ fn start_worker(
     stdout_handle: NativeHandle,
     host: AdminSurfaceHostLease,
 ) -> Result<ConsoleWorker, String> {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stop_for_thread = Arc::clone(&stop);
+    let control = Arc::new(Mutex::new(ConsoleWorkerMode::Running));
+    let control_for_thread = Arc::clone(&control);
     let stdin_dup = OwnedNativeHandle::new(dup_native_handle(stdin_handle)?);
     let stdout_dup = OwnedNativeHandle::new(dup_native_handle(stdout_handle)?);
     let join = thread::Builder::new()
@@ -291,22 +316,21 @@ fn start_worker(
                 &principal_id,
                 native_handle_from_file(&stdin),
                 &mut stdout,
-                stop_for_thread,
+                control_for_thread,
             ) {
                 let _ = writeln!(stdout, "error: {error}");
                 let _ = stdout.flush();
             }
         })
         .map_err(|error| format!("failed to spawn console thread: {error}"))?;
-    Ok(ConsoleWorker { stop, join })
+    Ok(ConsoleWorker { control, join })
 }
 
 fn stop_worker(worker: Option<ConsoleWorker>) -> Result<(), String> {
     let Some(worker) = worker else {
         return Ok(());
     };
-    worker.stop.store(true, Ordering::SeqCst);
-    worker.join.thread().unpark();
+    worker.set_mode(ConsoleWorkerMode::Stopping)?;
     // The instance may lose its generation lease when shutdown returns. The last
     // host response and all plugin thread cleanup must finish before DLL unload.
     worker
@@ -320,24 +344,44 @@ fn run_console_loop(
     principal_id: &str,
     stdin_handle: NativeHandle,
     stdout: &mut std::fs::File,
-    stop: Arc<AtomicBool>,
+    control: Arc<Mutex<ConsoleWorkerMode>>,
 ) -> Result<(), String> {
     let mut pending = Vec::new();
     let mut chunk = [0_u8; 4096];
-    while !stop.load(Ordering::SeqCst) {
+    loop {
+        // The guard serializes input consumption with pause. It is never held across polling
+        // or a reentrant host command, so either can be paused without waiting for new input.
+        let mode = control
+            .lock()
+            .map_err(|_| "console worker control mutex was poisoned".to_string())?;
+        match *mode {
+            ConsoleWorkerMode::Running => {}
+            ConsoleWorkerMode::Paused => {
+                drop(mode);
+                thread::park();
+                continue;
+            }
+            ConsoleWorkerMode::Stopping => break,
+        }
+        if let Some(line) = take_line(&mut pending)? {
+            drop(mode);
+            handle_line(host, principal_id, stdout, &line)?;
+            continue;
+        }
+        drop(mode);
         match poll_native_handle(stdin_handle, 200)? {
             PollResult::Ready => {
+                let mode = control
+                    .lock()
+                    .map_err(|_| "console worker control mutex was poisoned".to_string())?;
+                if !matches!(*mode, ConsoleWorkerMode::Running) {
+                    continue;
+                }
                 let read = read_native_handle(stdin_handle, &mut chunk)?;
                 if read == 0 {
                     break;
                 }
                 pending.extend_from_slice(&chunk[..read]);
-                while !stop.load(Ordering::SeqCst) {
-                    let Some(line) = take_line(&mut pending)? else {
-                        break;
-                    };
-                    handle_line(host, principal_id, stdout, &line)?;
-                }
             }
             PollResult::TimedOut => {}
         }

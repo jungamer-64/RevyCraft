@@ -246,6 +246,10 @@ server の終了通知だけでは、executor が plugin code を実行しなく
 object の destroy は memory の解放境界であり、fallible な worker shutdown の代わりではありません。
 background execution は明示的な shutdown で完了を回収し、その後に object の destructor を実行します。
 
+console の `pause_for_upgrade` の完了後、親は新しい入力を消費しません。upgrade を要求した
+in-flight command の応答は完了でき、rollback は親の入力を再開します。console の pause は
+その command 自身の終了を待たず、worker の join は shutdown が所有します。
+
 ## 避けるべき内部 path
 
 authoring code が semantic capability / id を参照するときは `mc_plugin_sdk_rust` crate root を使います。`revy_voxel_core` 直参照は engine internal 依存なので避けます。

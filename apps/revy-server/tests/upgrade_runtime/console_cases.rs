@@ -65,3 +65,43 @@ fn console_upgrade_reaches_child_and_child_console_keeps_working() -> TestResult
     let _ = kill_server(&mut child);
     Ok(())
 }
+
+#[test]
+fn console_upgrade_child_rejection_resumes_parent_input() -> TestResult<()> {
+    let _guard = upgrade_test_lock().blocking_lock();
+    let server = PreparedServer::remote_admin("console-upgrade-rollback")?;
+    let stdout_path = server.temp_path().join("server.stdout.log");
+    let stderr_path = server.temp_path().join("server.stderr.log");
+    let mut child = server.spawn_with_log_files(&stdout_path, &stderr_path)?;
+    let result = (|| {
+        crate::support::wait_for_tcp_ready(server.grpc_addr, Duration::from_secs(5))?;
+
+        // The parent uses its active validated configuration; the candidate must materialize
+        // this source after process surfaces have paused and reject it before committing.
+        fs::write(
+            server.temp_path().join("runtime/server.toml"),
+            "invalid candidate configuration",
+        )?;
+        let upgrade_command = format!("upgrade runtime executable {SERVER_BOOTSTRAP_BIN}");
+        write_stdin_lines(&mut child, &[&upgrade_command])?;
+        wait_for_output_contains(&stdout_path, "error:", Duration::from_secs(5))?;
+
+        write_stdin_lines(&mut child, &["status", "shutdown"])?;
+        wait_for_output_contains(&stdout_path, "shutdown: scheduled", Duration::from_secs(5))?;
+        wait_for_tcp_closed(server.grpc_addr, Duration::from_secs(5))?;
+        let logs = crate::support::PersistedServerLogCapture {
+            stdout_path,
+            stderr_path,
+        };
+        wait_for_clean_parent_exit(
+            &mut child,
+            &logs,
+            Duration::from_secs(5),
+            "parent should shut down cleanly after the rejected upgrade",
+        )
+    })();
+    if result.is_err() && child.try_wait()?.is_none() {
+        kill_server(&mut child)?;
+    }
+    result
+}
