@@ -17,12 +17,20 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 
-pub(crate) const CORE_PROCESS_DELTA_SLOT_BYTES: usize = journal::PROCESS_BYTE_LIMIT
-    + revy_voxel_core::CoreTransferDelta::MAX_COMMITS * std::mem::size_of::<u32>()
+const CORE_PROCESS_DELTA_FRAMING_BYTES: usize = revy_voxel_core::CoreTransferDelta::MAX_COMMITS
+    * std::mem::size_of::<u32>()
     + 8
     + std::mem::size_of::<u16>()
     + std::mem::size_of::<u64>() * 2
     + std::mem::size_of::<u32>();
+
+pub(crate) const CORE_PROCESS_PRESTAGE_BYTES: usize =
+    journal::PROCESS_BYTE_LIMIT + CORE_PROCESS_DELTA_FRAMING_BYTES;
+
+// The acknowledged revision must catch up before freeze. Its final delta has a smaller
+// independent byte budget than the journal overlap retained while a child imports a snapshot.
+pub(crate) const CORE_PROCESS_DELTA_SLOT_BYTES: usize =
+    8 * 1024 * 1024 + CORE_PROCESS_DELTA_FRAMING_BYTES;
 
 struct CoreStoreState {
     persisted_revision: CoreRevision,

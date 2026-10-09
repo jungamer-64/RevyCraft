@@ -1,5 +1,5 @@
 use super::authority::FrozenDataPlane;
-use super::core_store::CORE_PROCESS_DELTA_SLOT_BYTES;
+use super::core_store::{CORE_PROCESS_DELTA_SLOT_BYTES, CORE_PROCESS_PRESTAGE_BYTES};
 use super::session_registry::{FrozenProcessSessionStates, PreparedProcessSessionSockets};
 use super::topology_resources::FrozenTopologyIngress;
 use super::{
@@ -2203,10 +2203,10 @@ impl ExecutableUpgradePreparing {
         // reservation (including an unused reservation when a fresh snapshot is required).
         let mut encoded_delta = Vec::new();
         encoded_delta
-            .try_reserve_exact(CORE_PROCESS_DELTA_SLOT_BYTES)
+            .try_reserve_exact(CORE_PROCESS_PRESTAGE_BYTES)
             .map_err(|_error| RuntimeError::Allocation {
                 resource: "core pre-stage delta",
-                requested: CORE_PROCESS_DELTA_SLOT_BYTES,
+                requested: CORE_PROCESS_PRESTAGE_BYTES,
             })?;
         let delta = core
             .write_process_delta_since(CoreRevision::from_value(base_revision), &mut encoded_delta)
