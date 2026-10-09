@@ -75,6 +75,7 @@ jobs:
   cutover-latency:
     if: >-
       github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
       github.event_name == 'release' ||
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch'
@@ -118,7 +119,7 @@ jobs:
             mix: { name: mixed-500-500, test: production_cutover_latency_mixed_500_500 }
     env:
       REVY_CUTOVER_LATENCY_OPERATION: ${{ matrix.operation }}
-      REVY_CUTOVER_LATENCY_TIER: ${{ github.event_name == 'pull_request' && 'pull-request' || 'acceptance' }}
+      REVY_CUTOVER_LATENCY_TIER: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && 'pull-request' || 'acceptance' }}
       REVY_CUTOVER_LATENCY_ARTIFACT: ${{ github.workspace }}/target/cutover-latency-${{ matrix.mix.name }}-${{ matrix.operation }}.json
     steps:
       - uses: actions/checkout@v4
