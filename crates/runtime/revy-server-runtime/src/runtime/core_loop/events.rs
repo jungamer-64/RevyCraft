@@ -99,22 +99,15 @@ impl RuntimeServer {
     }
 
     pub(in crate::runtime) async fn tick(&self) -> Result<(), RuntimeError> {
-        let data_plane = self.authority.enter_data_plane().await;
-        // Temporary outer-boundary timing; remove after diagnosing reload drain latency.
-        let tick_started = std::time::Instant::now();
+        let _data_plane = self.authority.enter_data_plane().await;
         let gameplay_sessions = self.sessions.gameplay_tick_subscribers().await;
         let now_ms = now_ms();
         let core = self.authority.active().core.clone();
         self.dispatch_events(core.apply_builtin_tick(now_ms).await?)
             .await;
         let snapshot = core.version();
-        let builtin_elapsed = tick_started.elapsed();
-        let prepare_started = std::time::Instant::now();
         let prepared = prepare_gameplay_ticks(snapshot, gameplay_sessions, now_ms).await?;
-        let prepare_elapsed = prepare_started.elapsed();
-        let commit_started = std::time::Instant::now();
         let outcome = core.commit_gameplay_ticks(prepared).await?;
-        let commit_elapsed = commit_started.elapsed();
         for stale in outcome.stale {
             eprintln!(
                 "gameplay tick for player {:?} was stale: source core revision {}, active revision {}",
@@ -124,20 +117,6 @@ impl RuntimeServer {
             );
         }
         self.dispatch_events(outcome.events).await;
-        let tick_elapsed = tick_started.elapsed();
-        drop(data_plane);
-        if tick_elapsed > std::time::Duration::from_millis(50) {
-            eprintln!(
-                "tick phases builtin={}us prepare={}us commit={}us dispatch={}us total={}us",
-                builtin_elapsed.as_micros(),
-                prepare_elapsed.as_micros(),
-                commit_elapsed.as_micros(),
-                tick_elapsed
-                    .saturating_sub(builtin_elapsed + prepare_elapsed + commit_elapsed)
-                    .as_micros(),
-                tick_elapsed.as_micros(),
-            );
-        }
         Ok(())
     }
 

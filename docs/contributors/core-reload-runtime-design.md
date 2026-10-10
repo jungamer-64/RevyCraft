@@ -52,9 +52,11 @@ freeze 中に plugin discovery、dynamic library load、listener bind、child sp
 
 ## freeze の測定境界
 
+data-plane の実行許可は有限の同時処理枠で管理します。freeze は新規 admission を閉じ、枠を待つ要求を再開まで保留して、許可済みの処理だけを drain します。待機中の入力は session が保持し、再開後の epoch へ進みます。quiescence が成立する前の取消は admission を戻し、成立後の authority 破棄では明示 resume なしに再開しません。
+
 `freeze_us` は monotonic clock で次を測ります。
 
-- 開始: data-plane gate の排他取得を開始し、新しい packet、callback、core mutation、accept dispatch の admission を止める時点。進行中の処理の完了待ちも含め、write guard を取得した後へ開始時刻を遅らせません
+- 開始: packet、callback、core mutation、accept dispatch の admission を閉じるための quiescence 取得を開始する時点。許可済みの処理の完了待ちを測定に含めます
 - normal commit 終了: candidate epoch を publishし、listener ingress を再開し、全 actor が pending state を activate 可能な状態で data-plane gate を開いた直後
 - executable commit 終了: child が imported listener / session を activateして data plane を開き、parent が authenticated `Committed` acknowledgement を受けた時点
 - abort 終了: old epoch のまま listener ingress と data-plane gate を再開した直後

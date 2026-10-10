@@ -316,7 +316,7 @@ async fn freeze_includes_admission_drain_and_listener_control_remains_responsive
         let frozen = freeze.await;
         assert!(
             frozen.elapsed() >= drain_interval * 2,
-            "freeze must include the interval during which the queued writer blocked new admissions"
+            "freeze must include the interval during which admission was closed"
         );
 
         let _connection = connect_tcp(listener_addr(&server)).await?;
