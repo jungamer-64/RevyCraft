@@ -54,12 +54,24 @@ struct FrozenCutover {
     prepared: PreparingCutover,
     ingress: FrozenTopologyIngress,
     data_plane: FrozenDataPlane,
+    phase_times: CutoverPhaseTimes,
+}
+
+// Temporary outer-boundary timing; remove after diagnosing the reload acceptance spikes.
+#[derive(Default)]
+struct CutoverPhaseTimes {
+    drain: Duration,
+    ingress: Duration,
+    delta: Duration,
+    sessions: Duration,
+    materialize: Duration,
 }
 
 struct PreparedCutover {
     prepared: PreparingCutover,
     ingress: FrozenTopologyIngress,
     data_plane: FrozenDataPlane,
+    phase_times: CutoverPhaseTimes,
     // Keep the sealed event payloads alive until the data-plane opens. Actor queues retain
     // their own encoded frames; releasing this backing batch is old-epoch drain work.
     sealed_events: Vec<super::SharedCoreEvent>,
@@ -382,6 +394,8 @@ impl StagedCutover {
 impl PreparingCutover {
     async fn freeze(self, server: &RuntimeServer) -> Result<FrozenCutover, RuntimeError> {
         let data_plane = server.authority.freeze().await;
+        let drain = data_plane.elapsed();
+        let ingress_started = Instant::now();
         let ingress = match server.topology_resources.freeze_ingress().await {
             Ok(ingress) => ingress,
             Err(error) => {
@@ -414,12 +428,18 @@ impl PreparingCutover {
             prepared: self,
             ingress,
             data_plane,
+            phase_times: CutoverPhaseTimes {
+                drain,
+                ingress: ingress_started.elapsed(),
+                ..CutoverPhaseTimes::default()
+            },
         })
     }
 }
 
 impl FrozenCutover {
     async fn finalize(mut self, server: &RuntimeServer) -> Result<PreparedCutover, RuntimeError> {
+        let delta_started = Instant::now();
         let delta = self
             .prepared
             .active
@@ -430,6 +450,8 @@ impl FrozenCutover {
             Ok(delta) => delta,
             Err(error) => return Err(self.abort(server, error).await),
         };
+        self.phase_times.delta = delta_started.elapsed();
+        let sessions_started = Instant::now();
         if let Err(error) = server
             .sessions
             .seal_cutover(
@@ -441,6 +463,8 @@ impl FrozenCutover {
         {
             return Err(self.abort(server, error).await);
         }
+        self.phase_times.sessions = sessions_started.elapsed();
+        let materialize_started = Instant::now();
         let final_core = self.prepared.candidate_core_plan.materialize(precopy);
         self.prepared.candidate = RuntimeEpoch::candidate(
             &self.prepared.active,
@@ -448,10 +472,12 @@ impl FrozenCutover {
             Arc::clone(&self.prepared.candidate.topology),
             final_core,
         );
+        self.phase_times.materialize = materialize_started.elapsed();
         Ok(PreparedCutover {
             prepared: self.prepared,
             ingress: self.ingress,
             data_plane: self.data_plane,
+            phase_times: self.phase_times,
             sealed_events: events,
         })
     }
@@ -499,6 +525,7 @@ impl PreparedCutover {
         server: &RuntimeServer,
         reload_host: &dyn RuntimePluginHost,
     ) -> Result<RuntimeReloadResult, RuntimeError> {
+        let publication_started = Instant::now();
         let committed_topology = server.topology_resources.commit_generation_resources(
             Arc::clone(&self.prepared.active.topology),
             self.prepared.prepared_topology,
@@ -509,6 +536,7 @@ impl PreparedCutover {
         self.data_plane
             .publish(&server.authority, Arc::clone(&self.prepared.candidate));
         let freeze_before_resume = self.data_plane.elapsed();
+        let publication_duration = publication_started.elapsed();
         let ingress_result = self.ingress.resume().await;
         let resumed = self.data_plane.resume();
         server
@@ -516,6 +544,18 @@ impl PreparedCutover {
             .activate_epoch(self.prepared.candidate.revision());
         let freeze_duration = resumed.elapsed();
         let resume_duration = freeze_duration.saturating_sub(freeze_before_resume);
+        eprintln!(
+            "reload phases events={} drain={}us ingress={}us delta={}us sessions={}us materialize={}us publication={}us resume={}us total={}us",
+            self.sealed_events.len(),
+            duration_us(self.phase_times.drain),
+            duration_us(self.phase_times.ingress),
+            duration_us(self.phase_times.delta),
+            duration_us(self.phase_times.sessions),
+            duration_us(self.phase_times.materialize),
+            duration_us(publication_duration),
+            duration_us(resume_duration),
+            duration_us(freeze_duration),
+        );
         drop(self.sealed_events);
         let topology_result = server
             .topology_resources
