@@ -1,6 +1,6 @@
 use crate::RakNetError;
 use crate::budget::{RakNetBudgets, ensure_budget};
-use crate::sequence::{DatagramSequence, OrderSequence, ReliableSequence};
+use crate::sequence::{DatagramSequence, OrderSequence, ReliableSequence, SequenceHistory};
 use crate::wire::{
     Acknowledgement, Frame, Reliability, SplitHeader, decode_acknowledgement,
     decode_connected_ping, decode_connection_request, decode_datagram, encode_ack,
@@ -176,8 +176,8 @@ pub struct PeerSnapshot {
     pub next_ordered: OrderSequence,
     pub next_split_id: u16,
     pub last_datagram: Option<DatagramSequence>,
-    pub seen_datagram_order: Vec<DatagramSequence>,
-    pub seen_reliable_order: Vec<ReliableSequence>,
+    pub seen_datagram_order: SequenceHistory<DatagramSequence>,
+    pub seen_reliable_order: SequenceHistory<ReliableSequence>,
     pub ordered_expected: Vec<(u8, OrderSequence)>,
     pub sequenced_latest: Vec<(u8, OrderSequence)>,
     pub queued_payloads: Vec<Vec<u8>>,
