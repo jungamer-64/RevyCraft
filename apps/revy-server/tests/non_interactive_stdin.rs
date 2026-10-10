@@ -1,7 +1,7 @@
 mod support;
 
 use mc_plugin_test_support::PackagedPluginHarness;
-use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol};
+use mc_proto_test_support::TestJavaProtocol;
 use std::fs;
 use std::io::Write;
 use std::process::Stdio;
@@ -175,32 +175,26 @@ fn runtime_failure_exits_even_when_grpc_admin_surface_is_available()
     )?;
 
     let server_addr = std::net::SocketAddr::from(([127, 0, 0, 1], server_port));
-    wait_for_tcp_ready(server_addr, Duration::from_secs(3))?;
-
+    let grpc_addr = std::net::SocketAddr::from(([127, 0, 0, 1], remote_admin_port));
+    wait_for_tcp_ready(grpc_addr, Duration::from_secs(3))?;
+    // Keep the game readiness connection: closing a probe can dirty the core and trigger the
+    // failing storage plugin before the login that is meant to cause persistence.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut stream = loop {
+        match connect_tcp(server_addr) {
+            Ok(stream) => break stream,
+            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+            Err(error) => return Err(error),
+        }
+    };
     let codec = mc_proto_common::MinecraftWireCodec;
     let protocol = TestJavaProtocol::Je5;
-    let (mut stream, mut buffer) =
-        connect_and_login_java_client(server_addr, &codec, protocol, "runtime-failure")?;
-    let _ = read_until_java_packet(
+    write_packet(
         &mut stream,
         &codec,
-        &mut buffer,
-        protocol,
-        TestJavaPacket::HeldItemChange,
-        Duration::from_secs(5),
-        24,
+        &encode_handshake(protocol.protocol_version(), 2)?,
     )?;
-    write_packet(&mut stream, &codec, &held_item_change(4))?;
-    let held_item = read_until_java_packet(
-        &mut stream,
-        &codec,
-        &mut buffer,
-        protocol,
-        TestJavaPacket::HeldItemChange,
-        Duration::from_secs(5),
-        24,
-    )?;
-    assert_eq!(held_item_from_packet(protocol, &held_item)?, 4);
+    write_packet(&mut stream, &codec, &login_start("runtime-failure")?)?;
 
     let Some(status) = wait_for_exit(&mut child, Duration::from_secs(8))? else {
         child.kill()?;
