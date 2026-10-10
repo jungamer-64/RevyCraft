@@ -317,32 +317,28 @@ impl PeerSnapshot {
                 budgets.max_payload_bytes,
             )?;
         }
+        let datagram_count = self.seen_datagram_order.sequence_count()?;
+        let reliable_count = self.seen_reliable_order.sequence_count()?;
         ensure_budget(
             "datagram duplicate window",
-            self.seen_datagram_order.len(),
+            datagram_count,
             duplicate_window_limit(budgets),
         )?;
-        let seen_datagrams = self
-            .seen_datagram_order
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>();
-        if seen_datagrams.len() != self.seen_datagram_order.len() {
+        ensure_budget(
+            "reliable duplicate window",
+            reliable_count,
+            duplicate_window_limit(budgets),
+        )?;
+        let mut seen_datagrams = HashSet::with_capacity(datagram_count);
+        seen_datagrams.extend(self.seen_datagram_order.sequences());
+        if seen_datagrams.len() != datagram_count {
             return Err(RakNetError::Wire(
                 "transferred peer repeats a datagram duplicate-window sequence".to_string(),
             ));
         }
-        ensure_budget(
-            "reliable duplicate window",
-            self.seen_reliable_order.len(),
-            duplicate_window_limit(budgets),
-        )?;
-        let seen = self
-            .seen_reliable_order
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>();
-        if seen.len() != self.seen_reliable_order.len() {
+        let mut seen = HashSet::with_capacity(reliable_count);
+        seen.extend(self.seen_reliable_order.sequences());
+        if seen.len() != reliable_count {
             return Err(RakNetError::Wire(
                 "transferred peer repeats a reliable duplicate-window sequence".to_string(),
             ));
@@ -892,6 +888,10 @@ impl PeerActor {
         activity: Arc<PeerActivity>,
         router_owned: Arc<AtomicBool>,
     ) -> Self {
+        let mut seen_datagram_order = VecDeque::with_capacity(duplicate_indexes.datagrams.len());
+        seen_datagram_order.extend(snapshot.seen_datagram_order.sequences());
+        let mut seen_reliable_order = VecDeque::with_capacity(duplicate_indexes.reliable.len());
+        seen_reliable_order.extend(snapshot.seen_reliable_order.sequences());
         let mut actor = Self {
             socket,
             remote_addr: snapshot.remote_addr,
@@ -909,9 +909,9 @@ impl PeerActor {
             next_split_id: snapshot.next_split_id,
             last_datagram: snapshot.last_datagram,
             seen_datagrams: duplicate_indexes.datagrams,
-            seen_datagram_order: snapshot.seen_datagram_order.into(),
+            seen_datagram_order,
             seen_reliable: duplicate_indexes.reliable,
-            seen_reliable_order: snapshot.seen_reliable_order.into(),
+            seen_reliable_order,
             ordered_expected: HashMap::new(),
             sequenced_latest: HashMap::new(),
             ordered_holdback: HashMap::new(),
@@ -1547,8 +1547,12 @@ impl PeerActor {
             next_ordered: self.next_ordered,
             next_split_id: self.next_split_id,
             last_datagram: self.last_datagram,
-            seen_datagram_order: self.seen_datagram_order.iter().copied().collect(),
-            seen_reliable_order: self.seen_reliable_order.iter().copied().collect(),
+            seen_datagram_order: SequenceHistory::from_sequences(
+                self.seen_datagram_order.iter().copied(),
+            ),
+            seen_reliable_order: SequenceHistory::from_sequences(
+                self.seen_reliable_order.iter().copied(),
+            ),
             ordered_expected,
             sequenced_latest,
             queued_payloads: self.inbox.snapshot(),
@@ -1779,6 +1783,34 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_admission_checks_expanded_history_and_duplicate_sequences() {
+        let budgets = RakNetBudgets {
+            max_unacked_datagrams: 2,
+            ..RakNetBudgets::default()
+        };
+        let actor = actor_with_budgets(budgets).await;
+        let mut snapshot = actor.snapshot(Instant::now());
+        snapshot.seen_datagram_order =
+            SequenceHistory::from_sequences((0..5).map(DatagramSequence::new));
+        assert!(matches!(
+            snapshot.into_validated(budgets),
+            Err(RakNetError::Budget(crate::BudgetExceeded {
+                resource: "datagram duplicate window",
+                requested: 5,
+                limit: 4,
+            }))
+        ));
+
+        let mut snapshot = actor.snapshot(Instant::now());
+        snapshot.seen_reliable_order =
+            SequenceHistory::from_sequences([0, 1, 0].map(ReliableSequence::new));
+        assert!(matches!(
+            snapshot.into_validated(budgets),
+            Err(RakNetError::Wire(_))
+        ));
     }
 
     #[tokio::test]

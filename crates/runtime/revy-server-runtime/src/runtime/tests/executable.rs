@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn dense_sequence_history_has_bounded_transfer_encoding() -> Result<(), Box<dyn std::error::Error>>
+{
+    use revy_raknet::sequence::{DatagramSequence, SequenceHistory};
+
+    let history = SequenceHistory::from_sequences((0..4_096).map(DatagramSequence::new));
+    let mut encoded = Vec::new();
+    ciborium::into_writer(&history, &mut encoded)?;
+    assert!(
+        encoded.len() <= 64,
+        "a contiguous history must fit one compact transfer record"
+    );
+    let restored: SequenceHistory<DatagramSequence> = ciborium::from_reader(encoded.as_slice())?;
+    assert_eq!(restored.sequence_count()?, 4_096);
+    assert!(
+        restored
+            .sequences()
+            .map(DatagramSequence::value)
+            .eq(0..4_096)
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn executable_precopy_refreshes_an_outpaced_journal_before_freeze() -> Result<(), RuntimeError>
 {
