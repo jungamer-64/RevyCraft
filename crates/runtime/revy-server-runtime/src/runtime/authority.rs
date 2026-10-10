@@ -6,7 +6,7 @@ use crate::{
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock as AsyncRwLock, watch};
+use tokio::sync::watch;
 
 pub(crate) struct RuntimeEpoch {
     revision: u64,
@@ -75,7 +75,7 @@ impl RuntimeEpoch {
 
 pub(crate) struct RuntimeAuthority {
     active: RwLock<Arc<RuntimeEpoch>>,
-    data_plane: Arc<AsyncRwLock<()>>,
+    data_plane: DataPlaneGate,
     epoch_latch: watch::Sender<u64>,
     last_cutover: RwLock<Option<CutoverReport>>,
     next_upgrade_status_id: AtomicU64,
@@ -87,7 +87,7 @@ impl RuntimeAuthority {
         let initial_revision = initial.revision();
         Self {
             active: RwLock::new(initial),
-            data_plane: Arc::new(AsyncRwLock::new(())),
+            data_plane: DataPlaneGate::new(),
             epoch_latch: watch::channel(initial_revision).0,
             last_cutover: RwLock::new(None),
             next_upgrade_status_id: AtomicU64::new(1),
@@ -104,8 +104,8 @@ impl RuntimeAuthority {
         )
     }
 
-    pub(crate) async fn enter_data_plane(&self) -> OwnedRwLockReadGuard<()> {
-        Arc::clone(&self.data_plane).read_owned().await
+    pub(crate) async fn enter_data_plane(&self) -> DataPlaneOperation {
+        self.data_plane.enter().await
     }
 
     pub(crate) fn subscribe_epoch(&self) -> watch::Receiver<u64> {
@@ -117,15 +117,7 @@ impl RuntimeAuthority {
     }
 
     pub(crate) async fn freeze(&self) -> FrozenDataPlane {
-        // A queued writer prevents subsequent admissions while existing readers drain. That
-        // interval is already a gameplay stall, not prepare time. Start before polling the write
-        // acquisition so scheduling and drain latency cannot disappear from the report.
-        let started_at = Instant::now();
-        let guard = Arc::clone(&self.data_plane).write_owned().await;
-        FrozenDataPlane {
-            guard: Some(guard),
-            started_at,
-        }
+        self.data_plane.freeze().await
     }
 
     pub(crate) fn last_cutover(&self) -> Option<CutoverReport> {
@@ -208,7 +200,7 @@ impl RuntimeAuthority {
 }
 
 pub(crate) struct FrozenDataPlane {
-    guard: Option<OwnedRwLockWriteGuard<()>>,
+    guard: Option<QuiescedDataPlane>,
     started_at: Instant,
 }
 
