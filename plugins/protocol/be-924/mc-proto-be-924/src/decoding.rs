@@ -5,9 +5,11 @@ use crate::inventory::{
 };
 use bedrock_network_protocol::V924;
 use bedrock_network_protocol::v662::enums::{
-    ItemUseInventoryTransactionType, PlayerActionType,
+    ContainerID, ItemUseInventoryTransactionType, PlayerActionType,
 };
+use bedrock_network_protocol::v662::types::InventoryTransactionData;
 use bedrock_network_protocol::v712::enums::ItemStackRequestActionType;
+use bedrock_network_protocol::v712::types::ItemUseTransactionData;
 use mc_proto_be_common::__version_support::{
     login::parse_bedrock_login_payload,
     world::{block_face_from_i32, block_pos_from_network, protocol_error},
@@ -111,14 +113,19 @@ pub(crate) fn decode_play_packet(
             decode_item_stack_request_packet(session, sessions, player_id, &packet.requests)
                 .map(|command| command.map(RuntimeCommand::Core))
         }
+        V924::InventoryTransactionPacket(packet) => match packet.data {
+            InventoryTransactionData::ItemUse(transaction) => {
+                Ok(Some(item_use_command(player_id, &transaction)))
+            }
+            _ => Ok(None),
+        },
         V924::PlayerAuthInputPacket(packet) => {
             if let Some(request) = packet.item_stack_request {
                 return decode_auth_input_stack_request(session, sessions, player_id, &request)
                     .map(|command| command.map(RuntimeCommand::Core));
             }
             if let Some(transaction) = packet.item_use_transaction {
-                return decode_item_use_transaction(player_id, &transaction)
-                    .map(|command| command.map(RuntimeCommand::Core));
+                return Ok(Some(item_use_command(player_id, &transaction.item_use)));
             }
             let (x, y, z) = packet.player_position;
             let (yaw, pitch) = packet.player_rotation;
@@ -130,18 +137,15 @@ pub(crate) fn decode_play_packet(
                 on_ground: true,
             })))
         }
-        V924::ContainerClosePacket(packet) => Ok(matches!(
-            packet.container_id,
-            bedrock_network_protocol::v662::enums::ContainerID::First
-        )
-        .then(|| sessions.active_window_id(session))
-        .flatten()
-        .map(|window_id| {
-            RuntimeCommand::Core(CoreCommand::CloseContainer {
-                player_id,
-                window_id,
-            })
-        })),
+        V924::ContainerClosePacket(packet) => Ok(matches!(packet.container_id, ContainerID::FIRST)
+            .then(|| sessions.active_window_id(session))
+            .flatten()
+            .map(|window_id| {
+                RuntimeCommand::Core(CoreCommand::CloseContainer {
+                    player_id,
+                    window_id,
+                })
+            })),
         V924::NetworkStackLatencyPacket(packet) => {
             if packet.is_from_server {
                 return Err(ProtocolError::InvalidPacket(
@@ -168,34 +172,32 @@ fn runtime_gameplay(command: GameplayCommand) -> RuntimeCommand {
     RuntimeCommand::Core(gameplay(command))
 }
 
-fn decode_item_use_transaction(
+fn item_use_command(
     player_id: PlayerId,
-    transaction: &bedrock_network_protocol::v712::types::PackedItemUseLegacyInventoryTransaction<
-        V924,
-    >,
-) -> Result<Option<CoreCommand>, ProtocolError> {
-    Ok(Some(gameplay(match transaction.action_type {
+    transaction: &ItemUseTransactionData<V924>,
+) -> RuntimeCommand {
+    runtime_gameplay(match transaction.action_type {
         ItemUseInventoryTransactionType::Place => GameplayCommand::PlaceBlock {
             player_id,
             hand: InteractionHand::Main,
-            position: block_pos_from_network(&transaction.position),
-            face: block_face_from_i32(transaction.face),
+            position: block_pos_from_network(&transaction.block_position),
+            face: block_face_from_i32(transaction.block_face),
             held_item: None,
         },
         ItemUseInventoryTransactionType::Use => GameplayCommand::UseBlock {
             player_id,
             hand: InteractionHand::Main,
-            position: block_pos_from_network(&transaction.position),
-            face: block_face_from_i32(transaction.face),
+            position: block_pos_from_network(&transaction.block_position),
+            face: block_face_from_i32(transaction.block_face),
             held_item: None,
         },
         ItemUseInventoryTransactionType::Destroy => GameplayCommand::DigBlock {
             player_id,
-            position: block_pos_from_network(&transaction.position),
+            position: block_pos_from_network(&transaction.block_position),
             status: 2,
-            face: block_face_from_i32(transaction.face),
+            face: block_face_from_i32(transaction.block_face),
         },
-    })))
+    })
 }
 
 fn decode_item_stack_request_packet(

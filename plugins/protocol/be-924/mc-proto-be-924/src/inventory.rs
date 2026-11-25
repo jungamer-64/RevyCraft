@@ -151,7 +151,7 @@ pub(crate) fn encode_selected_hotbar_slot_changed_packets(
     Ok(vec![encode_v924(&[V924::PlayerHotbarPacket(Box::new(
         bedrock_network_protocol::v662::packets::PlayerHotbarPacket {
             selected_slot: u32::from(slot),
-            container_id: ContainerID::Inventory,
+            container_id: ContainerID::INVENTORY,
             should_select_slot: true,
         },
     ))])?])
@@ -166,7 +166,7 @@ pub(crate) fn encode_container_opened_packets(
     }
     Ok(vec![encode_v924(&[V924::ContainerOpenPacket(Box::new(
         bedrock_network_protocol::v662::packets::ContainerOpenPacket {
-            container_id: ContainerID::First,
+            container_id: ContainerID::FIRST,
             container_type: container_type(container),
             position: bedrock_network_protocol::v662::types::NetworkBlockPosition {
                 x: 0,
@@ -186,7 +186,7 @@ pub(crate) fn encode_container_closed_packets(
     }
     Ok(vec![encode_v924(&[V924::ContainerClosePacket(Box::new(
         ContainerClosePacket {
-            container_id: ContainerID::First,
+            container_id: ContainerID::FIRST,
             container_type: ContainerType::None,
             server_initiated_close: true,
         },
@@ -207,7 +207,7 @@ pub(crate) fn encode_container_property_changed_packets(
     Ok(vec![encode_v924(&[V924::ContainerSetDataPacket(
         Box::new(
             bedrock_network_protocol::v662::packets::ContainerSetDataPacket {
-                container_id: ContainerID::First,
+                container_id: ContainerID::FIRST,
                 id: i32::from(property_id),
                 value: i32::from(value),
             },

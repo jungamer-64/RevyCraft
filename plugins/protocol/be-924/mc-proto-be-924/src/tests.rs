@@ -10,20 +10,19 @@ use base64::Engine;
 use bedrock_network_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
 use bedrock_network_protocol::V924;
 use bedrock_network_protocol::v662::enums::{
-    ComplexInventoryTransactionType, ContainerEnumName, InputMode, ItemUseInventoryTransactionType,
-    LevelEvent as BedrockLevelEvent, NewInteractionModel, PlayerActionType,
-    TextProcessingEventOrigin,
+    ContainerEnumName, InputMode, ItemUseInventoryTransactionType, LevelEvent as BedrockLevelEvent,
+    NewInteractionModel, PlayerActionType, TextProcessingEventOrigin,
 };
 use bedrock_network_protocol::v662::packets::{
-    ItemStackRequestPacket, LegacySetItemSlotsEntry, LoginPacket, NetworkStackLatencyPacket,
-    PlayerActionPacket, RequestNetworkSettingsPacket, RequestsEntry,
+    ItemStackRequestPacket, LoginPacket, NetworkStackLatencyPacket, PlayerActionPacket,
+    RequestNetworkSettingsPacket, RequestsEntry,
 };
 use bedrock_network_protocol::v662::types::{
     ActorRuntimeID, NetworkBlockPosition, NetworkItemStackDescriptor,
 };
 use bedrock_network_protocol::v712::enums::ItemStackRequestActionType;
 use bedrock_network_protocol::v712::types::{
-    ItemStackRequestSlotInfo, PackedItemUseLegacyInventoryTransaction, PredictedResult, TriggerType,
+    ItemStackRequestSlotInfo, ItemUseTransactionData, PackedItemUseLegacyInventoryTransaction,
 };
 use bedrock_network_protocol::v729::types::FullContainerName;
 use bedrock_network_protocol::v766::packets::ClientPlayMode;
@@ -455,7 +454,7 @@ fn encodes_inventory_and_container_packets() {
     assert!(matches!(
         packets.as_slice(),
         [V924::ContainerOpenPacket(packet)]
-            if matches!(packet.container_id, bedrock_network_protocol::v662::enums::ContainerID::First)
+            if matches!(packet.container_id, bedrock_network_protocol::v662::enums::ContainerID::FIRST)
                 && matches!(packet.container_type, bedrock_network_protocol::v662::enums::ContainerType::Workbench)
     ));
 
@@ -561,11 +560,14 @@ fn decodes_legacy_inventory_transaction_item_use() {
         &Uuid::NAMESPACE_OID,
         b"bedrock-legacy-item-use",
     ));
-    let frame = encode_legacy_item_use_transaction(sample_item_use_transaction(
-        ItemUseInventoryTransactionType::Place,
-        BlockPos::new(2, 3, 4),
-        1,
-    ));
+    let frame = [
+        38, 30, 0, 2, 0, // Length, packet ID, legacy request ID, item-use tag, action count.
+        0, 1, 4, 3, 8, // Place, player input, and block position.
+        2, 0, 0, // Top face, hotbar slot, and empty held item.
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // Player position.
+        0, 0, 0, 63, 0, 0, 0, 63, 0, 0, 0, 63, // Relative click position (0.5, 0.5, 0.5).
+        0, 1, // Block runtime ID and successful client prediction.
+    ];
 
     let command = adapter
         .decode_play_for(player_id, &frame)
@@ -580,6 +582,7 @@ fn decodes_legacy_inventory_transaction_item_use() {
             ..
         })) if decoded_player == player_id && position == BlockPos::new(2, 3, 4)
     ));
+    assert!(adapter.decode_play_for(player_id, &frame[..38]).is_err());
 }
 
 #[test]
@@ -894,55 +897,26 @@ fn sample_item_use_transaction(
     face: i32,
 ) -> PackedItemUseLegacyInventoryTransaction<V924> {
     PackedItemUseLegacyInventoryTransaction {
-        id: 0,
-        container_slots: None,
-        action: bedrock_network_protocol::v662::types::InventoryTransaction { action: Vec::new() },
-        action_type,
-        trigger_type: TriggerType::PlayerInput,
-        position: NetworkBlockPosition {
-            x: position.x,
-            y: u32::try_from(position.y).expect("test block y should fit into u32"),
-            z: position.z,
+        legacy_request_id: 0,
+        legacy_set_item_slots: None,
+        actions: bedrock_network_protocol::v662::types::InventoryTransaction { action: Vec::new() },
+        item_use: ItemUseTransactionData {
+            action_type,
+            trigger_type: 1,
+            block_position: NetworkBlockPosition {
+                x: position.x,
+                y: u32::try_from(position.y).expect("test block y should fit into u32"),
+                z: position.z,
+            },
+            block_face: face,
+            hotbar_slot: 0,
+            held_item: empty_item_stack_descriptor(),
+            player_position: (0.0, 0.0, 0.0),
+            click_position: (0.5, 0.5, 0.5),
+            block_runtime_id: 0,
+            client_prediction: 1,
         },
-        face,
-        slot: 0,
-        item: empty_item_stack_descriptor(),
-        from_position: (0.0, 0.0, 0.0),
-        click_position: (0.5, 0.5, 0.5),
-        target_block_id: 0,
-        predicted_result: PredictedResult::Success,
     }
-}
-
-fn encode_legacy_item_use_transaction(
-    transaction: PackedItemUseLegacyInventoryTransaction<V924>,
-) -> Vec<u8> {
-    let mut packet = Vec::new();
-    PacketHeader {
-        packet_id: 30,
-        sender_sub_client_id: 0,
-        target_sub_client_id: 0,
-    }
-    .serialize(&mut packet)
-    .expect("packet header should serialize");
-    <i32 as ProtoCodecVAR>::serialize(&0, &mut packet).expect("legacy request id should serialize");
-    <Vec<LegacySetItemSlotsEntry> as ProtoCodec>::serialize(&Vec::new(), &mut packet)
-        .expect("legacy slots should serialize");
-    ComplexInventoryTransactionType::ItemUseTransaction
-        .serialize(&mut packet)
-        .expect("transaction type should serialize");
-    transaction
-        .serialize(&mut packet)
-        .expect("item use transaction should serialize");
-
-    let mut frame = Vec::new();
-    <u32 as ProtoCodecVAR>::serialize(
-        &u32::try_from(packet.len()).expect("packet length should fit into u32"),
-        &mut frame,
-    )
-    .expect("frame length should serialize");
-    frame.extend_from_slice(&packet);
-    frame
 }
 
 fn encode_player_auth_input(packet: PlayerAuthInputPacket<V924>) -> Vec<u8> {

@@ -12,7 +12,7 @@ use bedrock_network_protocol::v662::types::{
     ActorRuntimeID, NetworkBlockPosition, NetworkItemStackDescriptor,
 };
 use bedrock_network_protocol::v712::types::{
-    PackedItemUseLegacyInventoryTransaction, PredictedResult, TriggerType,
+    ItemUseTransactionData, PackedItemUseLegacyInventoryTransaction,
 };
 use bedrock_network_protocol::v766::packets::ClientPlayMode;
 use bedrock_network_protocol::v766::packets::PlayerAuthInputPacket;
@@ -560,26 +560,28 @@ fn bedrock_block_interaction_payload(
         client_tick: 0,
         velocity: (0.0, 0.0, 0.0),
         item_use_transaction: Some(PackedItemUseLegacyInventoryTransaction {
-            id: 0,
-            container_slots: None,
-            action: bedrock_network_protocol::v662::types::InventoryTransaction {
+            legacy_request_id: 0,
+            legacy_set_item_slots: None,
+            actions: bedrock_network_protocol::v662::types::InventoryTransaction {
                 action: Vec::new(),
             },
-            action_type,
-            trigger_type: TriggerType::PlayerInput,
-            position: NetworkBlockPosition {
-                x: position.x,
-                y: u32::try_from(position.y)
-                    .expect("test bedrock block interaction y should fit into u32"),
-                z: position.z,
+            item_use: ItemUseTransactionData {
+                action_type,
+                trigger_type: 1,
+                block_position: NetworkBlockPosition {
+                    x: position.x,
+                    y: u32::try_from(position.y)
+                        .expect("test bedrock block interaction y should fit into u32"),
+                    z: position.z,
+                },
+                block_face: face,
+                hotbar_slot: 0,
+                held_item: empty_bedrock_item_stack_descriptor()?,
+                player_position: (0.0, 0.0, 0.0),
+                click_position: (0.5, 0.5, 0.5),
+                block_runtime_id: 0,
+                client_prediction: 1,
             },
-            face,
-            slot: 0,
-            item: empty_bedrock_item_stack_descriptor()?,
-            from_position: (0.0, 0.0, 0.0),
-            click_position: (0.5, 0.5, 0.5),
-            target_block_id: 0,
-            predicted_result: PredictedResult::Success,
         }),
         item_stack_request: None,
         player_block_actions: None,

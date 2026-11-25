@@ -844,7 +844,7 @@ pub fn complete_online_login(
     public_key: &PublicKey,
     verify_token: &[u8],
 ) -> TestResult<ProcessTestClientEncryptionState> {
-    let shared_secret = rand::random();
+    let shared_secret: [u8; 16] = rand::random();
     let shared_secret_encrypted = public_key.pkcs1v15_encrypt(&shared_secret)?;
     let verify_token_encrypted = public_key.pkcs1v15_encrypt(verify_token)?;
     let response = login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;

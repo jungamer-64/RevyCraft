@@ -190,7 +190,7 @@ impl BedrockOracle {
             },
             slot,
             selected_slot: slot,
-            container_id: ContainerID::Inventory,
+            container_id: ContainerID::INVENTORY,
         }))])
         .await
     }
