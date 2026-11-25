@@ -16,7 +16,7 @@ pub use arena::{
 pub use socket::{ExportedSocket, SocketTransferError, SocketTransferTarget};
 
 pub const PROTOCOL_MAJOR: u32 = 1;
-pub const PROTOCOL_MINOR: u32 = 2;
+pub const PROTOCOL_MINOR: u32 = 3;
 pub const MAX_ENVELOPE_BYTES: usize = 16 * 1024 * 1024;
 pub const TRANSFER_ID_BYTES: usize = 16;
 pub const ARTIFACT_HASH_BYTES: usize = 32;
@@ -117,15 +117,15 @@ pub struct RuntimeTransferEnvelopeV1 {
     pub sequence: u64,
     #[prost(
         oneof = "runtime_transfer_envelope_v1::Payload",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
     )]
     pub payload: Option<runtime_transfer_envelope_v1::Payload>,
 }
 
 pub mod runtime_transfer_envelope_v1 {
     use super::{
-        AbortV1, BootstrapV1, CommitV1, CommittedV1, ErrorV1, HelloV1, PrestageV1, ReadyV1,
-        StatusV1,
+        AbortV1, BootstrapV1, CommitV1, CommittedV1, CorePrestageV1, ErrorV1, HelloV1, PrestageV1,
+        ReadyV1, StatusV1,
     };
     use prost::Oneof;
 
@@ -149,6 +149,8 @@ pub mod runtime_transfer_envelope_v1 {
         Abort(AbortV1),
         #[prost(message, tag = "18")]
         Error(ErrorV1),
+        #[prost(message, tag = "19")]
+        CorePrestage(CorePrestageV1),
     }
 }
 
@@ -253,6 +255,25 @@ pub enum PrestagePhaseV1 {
     Unspecified = 0,
     Preparing = 1,
     Frozen = 2,
+}
+
+/// One complete core update in a dedicated mapping. The child owns the decoded state
+/// before it acknowledges the update, allowing both processes to close the mapping.
+#[derive(Clone, PartialEq, Message)]
+pub struct CorePrestageV1 {
+    #[prost(uint64, tag = "1")]
+    pub core_revision: u64,
+    #[prost(message, tag = "2")]
+    pub arena: Option<TransferArenaV1>,
+    #[prost(enumeration = "CorePrestageKindV1", tag = "3")]
+    pub kind: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, prost::Enumeration)]
+#[repr(i32)]
+pub enum CorePrestageKindV1 {
+    Snapshot = 0,
+    Journal = 1,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -421,6 +442,12 @@ pub enum TransferProtocolError {
     ArenaCapacityExceeded { capacity: u64, limit: u64 },
     #[error("transfer arena used length {used} exceeds capacity {capacity}")]
     InvalidArenaRange { used: u64, capacity: u64 },
+    #[error("core pre-stage mapping must contain exactly its non-empty payload")]
+    InvalidCorePrestageArena,
+    #[error("invalid core pre-stage kind {kind}")]
+    InvalidCorePrestageKind { kind: i32 },
+    #[error("preparing core updates require a dedicated mapping")]
+    CorePrestageRequiresArena,
     #[error("resource {resource_id} range exceeds the transfer arena")]
     InvalidResourceRange { resource_id: u64 },
     #[error("resource descriptor count {actual} exceeds limit {limit}")]
@@ -514,6 +541,9 @@ impl RuntimeTransferEnvelopeV1 {
             runtime_transfer_envelope_v1::Payload::Hello(hello) => hello.validate()?,
             runtime_transfer_envelope_v1::Payload::Bootstrap(bootstrap) => bootstrap.validate()?,
             runtime_transfer_envelope_v1::Payload::Prestage(prestage) => prestage.validate()?,
+            runtime_transfer_envelope_v1::Payload::CorePrestage(prestage) => {
+                prestage.update()?;
+            }
             runtime_transfer_envelope_v1::Payload::Status(status) => status.validate()?,
             runtime_transfer_envelope_v1::Payload::Abort(abort) => {
                 validate_diagnostic(&abort.reason)?;
@@ -660,6 +690,14 @@ impl PrestageV1 {
         if phase == PrestagePhaseV1::Unspecified {
             return Err(TransferProtocolError::InvalidPrestagePhase { phase: self.phase });
         }
+        if phase == PrestagePhaseV1::Preparing
+            && self.resources.iter().any(|resource| {
+                resource.kind == ResourceKindV1::CoreSnapshot as i32
+                    || resource.kind == ResourceKindV1::CoreJournal as i32
+            })
+        {
+            return Err(TransferProtocolError::CorePrestageRequiresArena);
+        }
         if phase == PrestagePhaseV1::Frozen
             && self
                 .resources
@@ -669,6 +707,26 @@ impl PrestageV1 {
             return Err(TransferProtocolError::FrozenCoreSnapshot);
         }
         validate_resources(&self.resources, Some(self.arena_used), None)
+    }
+}
+
+impl CorePrestageV1 {
+    /// Returns the complete mapping and the interpretation of its payload.
+    ///
+    /// # Errors
+    /// Returns [`TransferProtocolError`] for an invalid kind or mapping descriptor.
+    pub fn update(&self) -> Result<(&TransferArenaV1, CorePrestageKindV1), TransferProtocolError> {
+        let kind = CorePrestageKindV1::try_from(self.kind)
+            .map_err(|_| TransferProtocolError::InvalidCorePrestageKind { kind: self.kind })?;
+        let arena = self
+            .arena
+            .as_ref()
+            .ok_or(TransferProtocolError::MissingArena)?;
+        validate_arena(arena)?;
+        if arena.used == 0 || arena.used != arena.capacity {
+            return Err(TransferProtocolError::InvalidCorePrestageArena);
+        }
+        Ok((arena, kind))
     }
 }
 
@@ -947,7 +1005,7 @@ mod tests {
     }
 
     #[test]
-    fn prestage_limits_full_snapshot_replacement_to_preparing() {
+    fn main_arena_only_carries_the_final_core_delta_during_prestage() {
         let mut update = PrestageV1 {
             core_revision: 5,
             directory_revision: 2,
@@ -962,7 +1020,10 @@ mod tests {
             arena_used: 16,
             phase: PrestagePhaseV1::Preparing as i32,
         };
-        update.validate().unwrap();
+        assert!(matches!(
+            update.validate(),
+            Err(TransferProtocolError::CorePrestageRequiresArena)
+        ));
         update.phase = PrestagePhaseV1::Frozen as i32;
         assert!(matches!(
             update.validate(),
@@ -970,10 +1031,36 @@ mod tests {
         ));
         update.resources[0].kind = ResourceKindV1::CoreJournal as i32;
         update.validate().unwrap();
-        update.phase = 31;
+        update.phase = PrestagePhaseV1::Preparing as i32;
         assert!(matches!(
             update.validate(),
-            Err(TransferProtocolError::InvalidPrestagePhase { phase: 31 })
+            Err(TransferProtocolError::CorePrestageRequiresArena)
+        ));
+    }
+
+    #[test]
+    fn core_prestage_requires_a_complete_bounded_mapping() {
+        let mut update = CorePrestageV1 {
+            core_revision: 5,
+            arena: Some(TransferArenaV1 {
+                capacity: 16,
+                used: 16,
+                generation: 2,
+            }),
+            kind: CorePrestageKindV1::Snapshot as i32,
+        };
+        assert_eq!(update.update().unwrap().1, CorePrestageKindV1::Snapshot);
+        update.arena.as_mut().unwrap().used = 15;
+        assert!(matches!(
+            update.update(),
+            Err(TransferProtocolError::InvalidCorePrestageArena)
+        ));
+        let arena = update.arena.as_mut().unwrap();
+        arena.capacity = MAX_TRANSFER_ARENA_BYTES + 1;
+        arena.used = arena.capacity;
+        assert!(matches!(
+            update.update(),
+            Err(TransferProtocolError::ArenaCapacityExceeded { .. })
         ));
     }
 

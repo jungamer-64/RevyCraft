@@ -596,6 +596,13 @@ mod platform {
             &self.0
         }
 
+        /// Derives another mapping name within the same transfer capability.
+        #[must_use]
+        pub fn with_generation(&self, generation: std::num::NonZeroU64) -> Self {
+            let (capability, _) = self.0.rsplit_once('-').expect("validated mapping name");
+            Self(format!("{capability}-{generation}").into())
+        }
+
         #[must_use]
         /// Reconstructs a mapping capability received over the authenticated control channel.
         ///

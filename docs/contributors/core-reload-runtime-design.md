@@ -106,7 +106,7 @@ parent は freeze 前に child を起動し、次を完了します。
 
 freeze 中は directory revision を再確認し、session/RakNet/core final delta を sealし、child validation、`Commit`、`Committed` handshakeだけを行います。large payload は arena descriptor で参照し、length-limited protobuf control envelopeへ埋め込みません。
 
-prepare 中の core delta は bounded temporary buffer で長さを確定してから、実際の長さだけを arena へ保持します。journal が追い越した試行の未使用スロットは保持しません。freeze 用の final delta は別途最大容量を予約し、freeze 中に buffer を確保し直しません。
+準備中の core 更新は、確定した payload 長の専用 shared mapping を更新ごとに作成して渡します。child はデコード済み状態を所有して mapping を閉じた後に `Ready` を返し、parent は応答を確認して mapping を解放します。メイン arena の final delta slot は freeze 前に最大容量を予約し、freeze 中もその容量を使います。
 
 session state の arena descriptor は connection identity を必須とします。child は descriptor と確認済み directory から import job を割り当て、各 worker が decode、actor identity の照合、plugin / transport import を一続きで完了します。payload 内の identity も同じ directory entry と照合してから plugin を呼ぶため、descriptor は未検証 state を正当化する authority にはなりません。
 

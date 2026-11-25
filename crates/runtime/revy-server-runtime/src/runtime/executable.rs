@@ -25,9 +25,9 @@ use revy_raknet::{
     ValidatedPeerSnapshot, validate_peer_snapshots,
 };
 use revy_runtime_transfer::{
-    ArenaError, ArenaReservation, BootstrapV1, CommitV1, ExportedSocket, PrestageV1,
-    ResourceDescriptorV1, ResourceKindV1, SealedArenaRegion, SharedTransferArena,
-    SharedTransferArenaReader, SocketTransferTarget,
+    ArenaError, ArenaReservation, BootstrapV1, CommitV1, CorePrestageKindV1, ExportedSocket,
+    PrestageV1, ReadyV1, ResourceDescriptorV1, ResourceKindV1, SealedArenaRegion,
+    SharedTransferArena, SharedTransferArenaReader, SocketTransferTarget,
 };
 use revy_voxel_core::{
     ConnectionId, CoreEvent, CoreRevision, CoreTransferDeltaDescriptor, CoreVersion, EntityId,
@@ -79,13 +79,18 @@ pub struct ExecutableUpgradePreparing {
     started_at: Instant,
 }
 
-/// An immutable core update sent while the parent retains data-plane authority. The parent
-/// consumes the acknowledged update at freeze, fixing the base of the final delta.
+/// An immutable core update sent while the parent retains data-plane authority.
 pub struct ExecutableCorePrestage {
     epoch_revision: u64,
     revision: CoreRevision,
-    kind: ResourceKindV1,
-    region: SealedArenaRegion,
+    kind: CorePrestageKindV1,
+    bytes: Vec<u8>,
+}
+
+/// The child owns the decoded core at this revision, which can anchor the final delta.
+pub struct ExecutableCoreAcknowledged {
+    epoch_revision: u64,
+    revision: CoreRevision,
 }
 
 impl ExecutableCorePrestage {
@@ -95,13 +100,35 @@ impl ExecutableCorePrestage {
     }
 
     #[must_use]
-    pub const fn kind(&self) -> ResourceKindV1 {
+    pub const fn kind(&self) -> CorePrestageKindV1 {
         self.kind
     }
 
     #[must_use]
-    pub const fn region(&self) -> &SealedArenaRegion {
-        &self.region
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Accepts the validated child reply and releases the encoded update outside freeze.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] when the child has acknowledged different revisions.
+    pub fn acknowledge(
+        self,
+        directory: &ExecutableDirectoryPrestage,
+        ready: &ReadyV1,
+    ) -> Result<ExecutableCoreAcknowledged, RuntimeError> {
+        if ready.acknowledged_core_revision != self.revision.value()
+            || ready.acknowledged_directory_revision != directory.directory().revision()
+        {
+            return Err(RuntimeError::Config(
+                "child acknowledged different core or session directory revisions".to_string(),
+            ));
+        }
+        Ok(ExecutableCoreAcknowledged {
+            epoch_revision: self.epoch_revision,
+            revision: self.revision,
+        })
     }
 }
 
@@ -1241,6 +1268,29 @@ impl ExecutableChildPrepared {
         })
     }
 
+    /// Imports an owned core update so the caller can close its mapping before replying `Ready`.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] when the payload is invalid or does not reach the stated revision.
+    pub fn prestage_core(
+        &mut self,
+        revision: u64,
+        kind: CorePrestageKindV1,
+        bytes: &[u8],
+    ) -> Result<(), RuntimeError> {
+        let next_core = match kind {
+            CorePrestageKindV1::Snapshot => CoreVersion::import_process_transfer(
+                bytes,
+                super::selection::SelectionResolver::content_behavior(),
+            ),
+            CorePrestageKindV1::Journal => self.pending_core.apply_process_transfer_delta(bytes),
+        }
+        .map_err(RuntimeError::CoreTransfer)?;
+        self.validate_prestaged_core_revision(&next_core, revision)?;
+        self.pending_core = next_core;
+        Ok(())
+    }
+
     /// Validates an immutable child candidate update without acquiring network authority.
     ///
     /// Repeated directory projections and a final core journal can be supplied. Each call is
@@ -1262,45 +1312,18 @@ impl ExecutableChildPrepared {
         arena
             .advance_published(prestage.arena_used)
             .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        let snapshot = optional_resource(
-            &prestage.resources,
-            ResourceKindV1::CoreSnapshot,
-            "core snapshot",
-        )?;
-        let journal = optional_resource(
+        let next_core = match optional_resource(
             &prestage.resources,
             ResourceKindV1::CoreJournal,
             "core journal",
-        )?;
-        let next_core = match (snapshot, journal) {
-            (Some(_), Some(_)) => {
-                return Err(RuntimeError::Config(
-                    "core pre-stage cannot contain both a snapshot and a journal".to_string(),
-                ));
-            }
-            (Some(resource), None) => CoreVersion::import_process_transfer(
-                resource_bytes(arena, resource)?,
-                super::selection::SelectionResolver::content_behavior(),
-            )
-            .map_err(|error| RuntimeError::Config(error.to_string()))?,
-            (None, Some(resource)) => self
+        )? {
+            Some(resource) => self
                 .pending_core
                 .apply_process_transfer_delta(resource_bytes(arena, resource)?)
-                .map_err(|error| RuntimeError::Config(error.to_string()))?,
-            (None, None) => Arc::clone(&self.pending_core),
+                .map_err(RuntimeError::CoreTransfer)?,
+            None => Arc::clone(&self.pending_core),
         };
-        if next_core.revision() < self.pending_core.revision() {
-            return Err(RuntimeError::Config(
-                "core pre-stage revision moved backwards".to_string(),
-            ));
-        }
-        if next_core.revision().value() != prestage.core_revision {
-            return Err(RuntimeError::Config(format!(
-                "pre-staged core revision {} does not match declared revision {}",
-                next_core.revision().value(),
-                prestage.core_revision
-            )));
-        }
+        self.validate_prestaged_core_revision(&next_core, prestage.core_revision)?;
         let next_directory = match optional_resource(
             &prestage.resources,
             ResourceKindV1::SessionDirectory,
@@ -1348,6 +1371,25 @@ impl ExecutableChildPrepared {
         }
         if let Some(peers) = next_raknet_router_peers {
             self.raknet_router_peers = peers;
+        }
+        Ok(())
+    }
+
+    fn validate_prestaged_core_revision(
+        &self,
+        next: &CoreVersion,
+        declared_revision: u64,
+    ) -> Result<(), RuntimeError> {
+        if next.revision() < self.pending_core.revision() {
+            return Err(RuntimeError::Config(
+                "core pre-stage revision moved backwards".to_string(),
+            ));
+        }
+        if next.revision().value() != declared_revision {
+            return Err(RuntimeError::Config(format!(
+                "pre-staged core revision {} does not match declared revision {declared_revision}",
+                next.revision().value(),
+            )));
         }
         Ok(())
     }
@@ -2186,10 +2228,59 @@ impl ExecutableUpgradeStaged {
 }
 
 impl ExecutableUpgradePreparing {
+    /// Encodes an update without closing gameplay admission. A journal that has already
+    /// outpaced the child is replaced with a new snapshot and overlap window.
+    ///
+    /// # Errors
+    /// Returns [`RuntimeError`] for an invalid base revision or a failed encoding or allocation.
+    pub async fn prestage_core(
+        &self,
+        base_revision: u64,
+    ) -> Result<ExecutableCorePrestage, RuntimeError> {
+        let core = &self.staged.runtime.authority.active().core;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(CORE_PROCESS_PRESTAGE_BYTES)
+            .map_err(|_| RuntimeError::Allocation {
+                resource: "core pre-stage delta",
+                requested: CORE_PROCESS_PRESTAGE_BYTES,
+            })?;
+        let delta = core
+            .write_process_delta_since(CoreRevision::from_value(base_revision), &mut bytes)
+            .await
+            .map_err(RuntimeError::CoreTransfer)?;
+        let (revision, kind, bytes) = match delta {
+            CoreProcessDeltaSeal::Ready { descriptor, .. } => (
+                descriptor.final_revision(),
+                CorePrestageKindV1::Journal,
+                bytes,
+            ),
+            CoreProcessDeltaSeal::Outpaced { .. } => {
+                drop(bytes);
+                let precopy = core.process_precopy().await;
+                let snapshot =
+                    tokio::task::spawn_blocking(move || precopy.version.prepare_process_transfer())
+                        .await?
+                        .map_err(RuntimeError::CoreTransfer)?;
+                (
+                    snapshot.revision(),
+                    CorePrestageKindV1::Snapshot,
+                    snapshot.into_bytes(),
+                )
+            }
+        };
+        Ok(ExecutableCorePrestage {
+            epoch_revision: self.staged.epoch_revision,
+            revision,
+            kind,
+            bytes,
+        })
+    }
+
     /// Counts commits made since a prepared update, for pre-freeze catch-up admission. This is
     /// not a freeze barrier: any mutation admitted before gate closure remains in the final delta.
     #[must_use]
-    pub fn core_prestage_lag(&self, update: &ExecutableCorePrestage) -> u64 {
+    pub fn core_prestage_lag(&self, update: &ExecutableCoreAcknowledged) -> u64 {
         self.staged
             .runtime
             .authority
@@ -2198,7 +2289,7 @@ impl ExecutableUpgradePreparing {
             .version()
             .revision()
             .value()
-            .saturating_sub(update.revision())
+            .saturating_sub(update.revision.value())
     }
     #[must_use]
     pub const fn epoch_revision(&self) -> u64 {
@@ -2352,7 +2443,7 @@ impl ExecutableUpgradePreparing {
         mut self,
         network: ExecutableNetworkPrepared,
         acknowledged_directory: ExecutableDirectoryPrestage,
-        acknowledged_core: ExecutableCorePrestage,
+        acknowledged_core: ExecutableCoreAcknowledged,
     ) -> Result<ExecutableUpgradeFrozen, RuntimeError> {
         if acknowledged_core.epoch_revision != self.staged.epoch_revision {
             let cause =

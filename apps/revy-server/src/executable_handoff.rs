@@ -8,7 +8,7 @@ use rand::random;
 use revy_runtime_transfer::runtime_transfer_envelope_v1::Payload;
 use revy_runtime_transfer::status_v1;
 use revy_runtime_transfer::{
-    BootstrapV1, CommitV1, CommittedStatusV1, CommittedV1, ErrorV1, ExportedSocket,
+    BootstrapV1, CommitV1, CommittedStatusV1, CommittedV1, CorePrestageV1, ErrorV1, ExportedSocket,
     FinalizeReportV1, HelloV1, PluginArtifactV1, PrestagePhaseV1, PrestageV1, ReadyV1,
     ResourceDescriptorV1, ResourceKindV1, RuntimeTransferEnvelopeV1, SharedTransferArena,
     SharedTransferArenaReader, SocketTransferTarget, StatusQueryV1, StatusV1, TransferErrorCodeV1,
@@ -23,6 +23,7 @@ use revy_server_runtime::runtime::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,6 +56,44 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSFER_ARENA_CAPACITY: u64 = revy_runtime_transfer::MAX_TRANSFER_ARENA_BYTES;
 const CORE_PRESTAGE_ROUND_LIMIT: usize = 32;
 const CORE_FREEZE_ADMISSION_COMMIT_LAG: u64 = 256;
+
+struct TransferArenaFactory {
+    transfer_id: TransferId,
+    authentication_token: [u8; revy_runtime_transfer::AUTHENTICATION_TOKEN_BYTES],
+}
+
+impl TransferArenaFactory {
+    fn create(&self, capacity: u64, generation: u64) -> Result<SharedTransferArena, RuntimeError> {
+        SharedTransferArena::create(
+            capacity,
+            generation,
+            self.transfer_id,
+            self.authentication_token,
+        )
+        .map_err(transfer_error)
+    }
+
+    fn core_update(
+        &self,
+        main: &SharedTransferArena,
+        generation: u64,
+        bytes: &[u8],
+    ) -> Result<SharedTransferArena, RuntimeError> {
+        let remaining = main.capacity() - main.used();
+        if bytes.len() > remaining {
+            return Err(RuntimeError::BudgetExceeded {
+                resource: "executable transfer arena bytes",
+                requested: bytes.len(),
+                limit: remaining,
+            });
+        }
+        let mapping = self.create(bytes.len() as u64, generation)?;
+        let mut slot = mapping.reserve(bytes.len()).map_err(transfer_error)?;
+        slot.write_all(bytes)?;
+        slot.seal().map_err(transfer_error)?;
+        Ok(mapping)
+    }
+}
 
 #[cfg(unix)]
 const CONTROL_FD_ENV: &str = "REVY_RUNTIME_TRANSFER_CONTROL_FD";
@@ -202,15 +241,11 @@ impl ExecutableHandoffCoordinator {
         let transfer_id = TransferId::from_bytes(random());
         let authentication_token: [u8; revy_runtime_transfer::AUTHENTICATION_TOKEN_BYTES] =
             random();
-        let arena = Arc::new(
-            SharedTransferArena::create(
-                TRANSFER_ARENA_CAPACITY,
-                1,
-                transfer_id,
-                authentication_token,
-            )
-            .map_err(transfer_error)?,
-        );
+        let arenas = TransferArenaFactory {
+            transfer_id,
+            authentication_token,
+        };
+        let arena = Arc::new(arenas.create(TRANSFER_ARENA_CAPACITY, 1)?);
         let staged = self
             .server
             .prepare_executable_upgrade(Arc::clone(&arena))
@@ -319,6 +354,7 @@ impl ExecutableHandoffCoordinator {
                 &paused_surfaces,
                 target,
                 &arena,
+                &arenas,
             )
             .await;
         let (pending_parent, committed) = match transaction {
@@ -401,7 +437,8 @@ impl ExecutableHandoffCoordinator {
         child_sockets: ExecutableChildSocketResources,
         paused_surfaces: &PausedProcessSurfaces,
         target: SocketTransferTarget,
-        arena: &Arc<SharedTransferArena>,
+        arena: &SharedTransferArena,
+        arenas: &TransferArenaFactory,
     ) -> Result<(ExecutableUpgradeOutcomePending, ChildCommitOutcome), PreCommitFailure> {
         macro_rules! with_preparing_authority {
             ($result:expr) => {
@@ -525,26 +562,24 @@ impl ExecutableHandoffCoordinator {
 
         let mut core_revision = preparing.core_snapshot_revision_value();
         let mut acknowledged_core = None;
-        for _ in 0..CORE_PRESTAGE_ROUND_LIMIT {
+        for round in 0..CORE_PRESTAGE_ROUND_LIMIT {
             let update = with_preparing_authority!(preparing.prestage_core(core_revision).await);
-            let prestage = PrestageV1 {
-                phase: PrestagePhaseV1::Preparing as i32,
+            let update_arena = with_preparing_authority!(arenas.core_update(
+                arena,
+                arena.generation() + 1 + round as u64,
+                update.bytes()
+            ));
+            let prestage = CorePrestageV1 {
                 core_revision: update.revision(),
-                directory_revision: current_directory.directory().revision(),
-                resources: vec![arena_resource(
-                    next_resource_id(&mut resource_id),
-                    update.kind(),
-                    update.region(),
-                )],
-                arena_used: arena.descriptor().used,
+                arena: Some(update_arena.descriptor()),
+                kind: update.kind() as i32,
             };
-            with_preparing_authority!(control.send(Payload::Prestage(prestage)).await);
-            with_preparing_authority!(
-                control
-                    .expect_ready(update.revision(), current_directory.directory().revision())
-                    .await
-            );
+            with_preparing_authority!(control.send(Payload::CorePrestage(prestage)).await);
+            with_preparing_authority!(control.send_native(&update_arena, &[]).await);
+            let ready = with_preparing_authority!(control.receive_ready().await);
+            drop(update_arena);
             core_revision = update.revision();
+            let update = with_preparing_authority!(update.acknowledge(&current_directory, &ready));
             if preparing.core_prestage_lag(&update) <= CORE_FREEZE_ADMISSION_COMMIT_LAG {
                 acknowledged_core = Some(update);
                 break;
@@ -927,8 +962,31 @@ async fn prepare_transferred_child(
         }))
         .await?;
 
+    let mut core_mapping_generation = arena.generation();
     let final_prestage = loop {
         let prestage = match control.receive_payload().await? {
+            Payload::CorePrestage(update) => {
+                let (descriptor, kind) = update.update().map_err(transfer_error)?;
+                if descriptor.generation <= core_mapping_generation {
+                    return Err(RuntimeError::Config(
+                        "core pre-stage mapping generation did not advance".to_string(),
+                    ));
+                }
+                let (mapping, _) = control.receive_native(0, descriptor).await?;
+                let bytes = mapping
+                    .region(0, mapping.published())
+                    .map_err(transfer_error)?;
+                child.prestage_core(update.core_revision, kind, bytes)?;
+                drop(mapping);
+                core_mapping_generation = descriptor.generation;
+                control
+                    .send(Payload::Ready(ReadyV1 {
+                        acknowledged_core_revision: child.core_revision().value(),
+                        acknowledged_directory_revision: child.directory_revision(),
+                    }))
+                    .await?;
+                continue;
+            }
             Payload::Prestage(prestage) => prestage,
             Payload::Abort(abort) => return Err(RuntimeError::Config(abort.reason)),
             payload => return Err(unexpected("Prestage", &payload)),
@@ -1269,19 +1327,26 @@ impl ParentControl {
     }
 
     async fn expect_ready(&mut self, core: u64, directory: u64) -> Result<(), RuntimeError> {
+        let ready = self.receive_ready().await?;
+        if ready.acknowledged_core_revision != core
+            || ready.acknowledged_directory_revision != directory
+        {
+            return Err(RuntimeError::Config(
+                "child acknowledged different core or session directory revisions".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn receive_ready(&mut self) -> Result<ReadyV1, RuntimeError> {
         let envelope = tokio::time::timeout(CONTROL_TIMEOUT, self.receive())
             .await
             .map_err(|_| RuntimeError::Config("child readiness timed out".to_string()))??;
         match envelope.payload {
-            Some(Payload::Ready(ready))
-                if ready.acknowledged_core_revision == core
-                    && ready.acknowledged_directory_revision == directory =>
-            {
-                Ok(())
-            }
+            Some(Payload::Ready(ready)) => Ok(ready),
             Some(Payload::Error(error)) => Err(RuntimeError::Config(error.message)),
             payload => Err(RuntimeError::Config(format!(
-                "parent expected matching Ready, received {}",
+                "parent expected Ready, received {}",
                 payload_name(payload.as_ref())
             ))),
         }
@@ -1463,7 +1528,11 @@ impl ChildTransport {
             sockets.push(ExportedSocket::decode(&encoded).map_err(transfer_error)?);
         }
         let reader = SharedTransferArenaReader::open(
-            &self.arena_name,
+            &self.arena_name.with_generation(
+                std::num::NonZeroU64::new(arena.generation).ok_or_else(|| {
+                    transfer_error(revy_runtime_transfer::ArenaError::InvalidGeneration)
+                })?,
+            ),
             arena.capacity,
             arena.used,
             arena.generation,
@@ -1981,6 +2050,7 @@ fn payload_name(payload: Option<&Payload>) -> &'static str {
         Some(Payload::Hello(_)) => "Hello",
         Some(Payload::Bootstrap(_)) => "Bootstrap",
         Some(Payload::Prestage(_)) => "Prestage",
+        Some(Payload::CorePrestage(_)) => "CorePrestage",
         Some(Payload::Ready(_)) => "Ready",
         Some(Payload::Commit(_)) => "Commit",
         Some(Payload::Committed(_)) => "Committed",
@@ -2029,8 +2099,37 @@ fn decode_hex<const N: usize>(encoded: &str) -> Result<[u8; N], RuntimeError> {
     Ok(bytes)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
+    use super::{RuntimeError, TransferArenaFactory, TransferId};
+
+    #[test]
+    fn acknowledged_core_updates_leave_capacity_for_later_rounds() -> Result<(), RuntimeError> {
+        let arenas = TransferArenaFactory {
+            transfer_id: TransferId::from_bytes(rand::random()),
+            authentication_token: rand::random(),
+        };
+        let main = arenas.create(64, 1)?;
+        let _reserved = main.reserve(32).map_err(super::transfer_error)?;
+        for generation in 2..=4 {
+            let update = arenas.core_update(&main, generation, &[1; 32])?;
+            assert_eq!(update.used(), 32);
+            assert_eq!(main.used(), 32);
+        }
+        assert!(matches!(
+            arenas.core_update(&main, 5, &[0; 33]),
+            Err(RuntimeError::BudgetExceeded {
+                requested: 33,
+                limit: 32,
+                ..
+            })
+        ));
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
     use super::{
         receive_rights_chunked, receive_rights_once, send_rights_chunked, send_rights_once,
     };

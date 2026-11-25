@@ -61,6 +61,12 @@ async fn executable_precopy_refreshes_an_outpaced_journal_before_freeze() -> Res
         .await?
         .begin_preparing()
         .await?;
+    // Account for the rest of the transfer's reservations before either kind of core update.
+    let _remaining = arena
+        .reserve(arena.capacity() - (arena.used() + 7) / 8 * 8)
+        .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    let main_arena_used = arena.used();
+    assert_eq!(main_arena_used, arena.capacity());
     let base_revision = preparing.core_snapshot_revision_value();
     let core = &server.runtime.authority.active().core;
     // More committed gameplay mutations than the bounded journal can retain. These are core
@@ -86,27 +92,23 @@ async fn executable_precopy_refreshes_an_outpaced_journal_before_freeze() -> Res
     let update = preparing.prestage_core(base_revision).await?;
     assert_eq!(
         update.kind(),
-        revy_runtime_transfer::ResourceKindV1::CoreSnapshot
+        revy_runtime_transfer::CorePrestageKindV1::Snapshot
     );
     assert!(update.revision() > base_revision);
     let copied = revy_voxel_core::CoreVersion::import_process_transfer(
-        update.region().as_slice(),
+        update.bytes(),
         crate::runtime::selection::SelectionResolver::content_behavior(),
     )
     .map_err(|error| RuntimeError::Config(error.to_string()))?;
     assert_eq!(copied.revision().value(), update.revision());
-    let used_before_delta = arena.used();
     let delta = preparing.prestage_core(update.revision()).await?;
-    assert!(
-        arena.used() - used_before_delta <= delta.region().length() + 7,
-        "preparing retains only the encoded delta plus alignment, not its maximum capacity"
-    );
+    assert_eq!(arena.used(), main_arena_used);
     assert_eq!(
         delta.kind(),
-        revy_runtime_transfer::ResourceKindV1::CoreJournal
+        revy_runtime_transfer::CorePrestageKindV1::Journal
     );
     let copied = copied
-        .apply_process_transfer_delta(delta.region().as_slice())
+        .apply_process_transfer_delta(delta.bytes())
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
     assert_eq!(copied.revision().value(), delta.revision());
     assert!(preparing.prestage_core(u64::MAX).await.is_err());
@@ -304,27 +306,31 @@ async fn executable_stage_precopies_core_and_exposes_only_bounded_final_delta()
         &mut child_arena,
     )?;
     let core_update = preparing.prestage_core(base_revision).await?;
-    child.prestage(
-        &revy_runtime_transfer::PrestageV1 {
-            phase: revy_runtime_transfer::PrestagePhaseV1::Preparing as i32,
-            core_revision: core_update.revision(),
-            directory_revision: current_directory.directory().revision(),
-            resources: vec![transfer_resource(
-                4,
-                core_update.kind(),
-                core_update.region(),
-            )],
-            arena_used: arena.descriptor().used,
-        },
-        &mut child_arena,
+    assert!(
+        child
+            .prestage_core(u64::MAX, core_update.kind(), core_update.bytes())
+            .is_err()
+    );
+    assert_eq!(child.core_revision().value(), base_revision);
+    child.prestage_core(
+        core_update.revision(),
+        core_update.kind(),
+        core_update.bytes(),
     )?;
     let final_base_revision = core_update.revision();
-    let prepared_delta_bytes = core_update.region().as_slice().to_vec();
+    let prepared_delta_bytes = core_update.bytes().to_vec();
     assert_eq!(
         core_update.kind(),
-        revy_runtime_transfer::ResourceKindV1::CoreJournal
+        revy_runtime_transfer::CorePrestageKindV1::Journal
     );
     assert!(final_base_revision > base_revision);
+    let acknowledged_core = core_update.acknowledge(
+        &current_directory,
+        &revy_runtime_transfer::ReadyV1 {
+            acknowledged_core_revision: child.core_revision().value(),
+            acknowledged_directory_revision: child.directory_revision(),
+        },
+    )?;
     write_packet(&mut stream, &codec, &held_item_change(6)).await?;
     let _ = read_until_held_item_change(
         &mut stream,
@@ -336,7 +342,7 @@ async fn executable_stage_precopies_core_and_exposes_only_bounded_final_delta()
     )
     .await?;
     let frozen = preparing
-        .freeze(network, current_directory, core_update)
+        .freeze(network, current_directory, acknowledged_core)
         .await?;
     assert_eq!(frozen.network().sessions().len(), 2);
     let mut frozen_session_transports = frozen
