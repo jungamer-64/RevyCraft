@@ -16,14 +16,14 @@ pub const fn block_face_from_i32(face: i32) -> Option<BlockFace> {
 }
 
 pub fn block_pos_from_network(
-    position: &bedrock_protocol::v662::types::NetworkBlockPosition,
+    position: &bedrock_network_protocol::v662::types::NetworkBlockPosition,
 ) -> BlockPos {
     world::block_pos_from_network(position)
 }
 
 pub fn block_pos_to_network(
     position: BlockPos,
-) -> bedrock_protocol::v662::types::NetworkBlockPosition {
+) -> bedrock_network_protocol::v662::types::NetworkBlockPosition {
     world::block_pos_to_network(position)
 }
 

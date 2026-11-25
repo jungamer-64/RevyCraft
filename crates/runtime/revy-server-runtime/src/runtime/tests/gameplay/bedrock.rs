@@ -1,5 +1,5 @@
 use super::*;
-use bedrock_protocol::V924;
+use bedrock_network_protocol::V924;
 use revy_voxel_semantic::BlockPos;
 
 const BEDROCK_STONE_RUNTIME_ID: u32 = 2_532;

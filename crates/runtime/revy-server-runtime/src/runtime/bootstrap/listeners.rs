@@ -11,7 +11,6 @@ use crate::transport::{
 };
 use mc_plugin_host::registry::ProtocolRegistry;
 use mc_proto_common::TransportKind;
-use rand_core::{OsRng, RngCore};
 use revy_raknet::{
     Frozen as RakNetFrozen, RakNetServer, ReceivePaused as RakNetReceivePaused,
     Serving as RakNetServing,
@@ -90,9 +89,7 @@ pub(in crate::runtime) async fn bind_ephemeral_transport_pair(
     config: &ServerConfig,
 ) -> Result<Vec<BoundTransportListener>, RuntimeError> {
     let mut random_bytes = [0; 2];
-    OsRng
-        .try_fill_bytes(&mut random_bytes)
-        .map_err(|error| RuntimeError::Io(std::io::Error::other(error)))?;
+    getrandom::fill(&mut random_bytes).map_err(std::io::Error::from)?;
     let mut offset = u16::from_ne_bytes(random_bytes) % DYNAMIC_PRIVATE_PORT_COUNT;
     for _ in 0..EPHEMERAL_DUAL_TRANSPORT_BIND_ATTEMPTS {
         let port = DYNAMIC_PRIVATE_PORT_START + offset;

@@ -1,7 +1,7 @@
 use super::*;
 use crate::runtime::RunningServer;
-use bedrock_protocol::ProtoVersion;
-use bedrock_protocol::V924;
+use bedrock_network_protocol::ProtoVersion;
+use bedrock_network_protocol::V924;
 use binary_util::interfaces::{Reader, Writer};
 use mc_proto_be_common::BedrockCompression;
 use rak_rs::client::DEFAULT_MTU;
@@ -19,7 +19,6 @@ use rak_rs::protocol::packet::online::{
 };
 use rak_rs::protocol::reliability::Reliability as RakReliability;
 use revy_voxel_semantic::BlockPos;
-use rsa::rand_core::{OsRng, RngCore};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -604,7 +603,7 @@ impl BedrockTestClient {
 
         let mtu = Self::perform_mtu_discovery(&socket).await?;
         let mut client_id_bytes = [0_u8; 8];
-        OsRng.fill_bytes(&mut client_id_bytes);
+        getrandom::fill(&mut client_id_bytes).map_err(std::io::Error::from)?;
         let client_id = i64::from_le_bytes(client_id_bytes);
 
         Self::send_rak_packet(
@@ -1119,17 +1118,17 @@ pub(crate) async fn perform_online_login(
     let request = read_packet(stream, codec, &mut buffer).await?;
     let (server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;
     assert_eq!(server_id, super::super::super::LOGIN_SERVER_ID);
-    let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
+    let public_key = PublicKey::from_public_key_der(&public_key_der)
         .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
     let mut shared_secret = [0_u8; 16];
-    OsRng.fill_bytes(&mut shared_secret);
+    getrandom::fill(&mut shared_secret).map_err(std::io::Error::from)?;
     let shared_secret_encrypted = public_key
-        .encrypt(&mut OsRng, Pkcs1v15Encrypt, &shared_secret)
+        .pkcs1v15_encrypt(&shared_secret)
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
         })?;
     let verify_token_encrypted = public_key
-        .encrypt(&mut OsRng, Pkcs1v15Encrypt, &verify_token)
+        .pkcs1v15_encrypt(&verify_token)
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
         })?;

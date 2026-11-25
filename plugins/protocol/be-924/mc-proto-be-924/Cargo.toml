@@ -10,8 +10,8 @@ categories.workspace = true
 description = "Bedrock 26.3 baseline protocol adapter for the RevyCraft workspace."
 
 [dependencies]
-bedrock_protocol.workspace = true
-bedrock_protocol_core.workspace = true
+bedrock_network_protocol.workspace = true
+bedrock_network_core.workspace = true
 mc-content-canonical = { path = "../../../../crates/content/mc-content-canonical" }
 mc-proto-be-common = { path = "../../../../crates/protocol/mc-proto-be-common" }
 mc-proto-common = { path = "../../../../crates/protocol/mc-proto-common" }

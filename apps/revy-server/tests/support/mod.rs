@@ -7,9 +7,8 @@ use mc_plugin_contract::plugin::CURRENT_PLUGIN_ABI;
 use mc_plugin_test_support::PackagedPluginHarness;
 use mc_proto_common::{MinecraftWireCodec, PacketReader, PacketWriter, WireCodec};
 use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol};
+use rsa::PublicKey;
 use rsa::pkcs8::DecodePublicKey;
-use rsa::rand_core::{OsRng, RngCore};
-use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 use std::collections::BTreeSet;
 use std::fs;
 use std::fs::File;
@@ -825,7 +824,7 @@ pub fn begin_online_login(
     codec: &MinecraftWireCodec,
     protocol: TestJavaProtocol,
     username: &str,
-) -> TestResult<(BytesMut, RsaPublicKey, Vec<u8>)> {
+) -> TestResult<(BytesMut, PublicKey, Vec<u8>)> {
     write_packet(
         stream,
         codec,
@@ -835,21 +834,19 @@ pub fn begin_online_login(
     let mut buffer = BytesMut::new();
     let request = read_packet(stream, codec, &mut buffer, Duration::from_secs(5))?;
     let (_server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;
-    let public_key = RsaPublicKey::from_public_key_der(&public_key_der)?;
+    let public_key = PublicKey::from_public_key_der(&public_key_der)?;
     Ok((buffer, public_key, verify_token))
 }
 
 pub fn complete_online_login(
     stream: &mut TcpStream,
     codec: &MinecraftWireCodec,
-    public_key: &RsaPublicKey,
+    public_key: &PublicKey,
     verify_token: &[u8],
 ) -> TestResult<ProcessTestClientEncryptionState> {
-    let mut shared_secret = [0_u8; 16];
-    OsRng.fill_bytes(&mut shared_secret);
-    let shared_secret_encrypted =
-        public_key.encrypt(&mut OsRng, Pkcs1v15Encrypt, &shared_secret)?;
-    let verify_token_encrypted = public_key.encrypt(&mut OsRng, Pkcs1v15Encrypt, verify_token)?;
+    let shared_secret = rand::random();
+    let shared_secret_encrypted = public_key.pkcs1v15_encrypt(&shared_secret)?;
+    let verify_token_encrypted = public_key.pkcs1v15_encrypt(verify_token)?;
     let response = login_encryption_response(&shared_secret_encrypted, &verify_token_encrypted)?;
     write_packet(stream, codec, &response)?;
     Ok(ProcessTestClientEncryptionState::new(shared_secret))

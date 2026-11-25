@@ -1,23 +1,22 @@
 use crate::RuntimeError;
 use crate::runtime::LOGIN_VERIFY_TOKEN_LEN;
 use num_bigint::BigInt;
+use rsa::PrivateKey;
 use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
-use rsa::rand_core::{OsRng, RngCore};
-use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use sha1::{Digest, Sha1};
 
 pub(crate) struct OnlineAuthKeys {
-    pub(crate) private_key: RsaPrivateKey,
+    pub(crate) private_key: PrivateKey,
     pub(crate) public_key_der: Vec<u8>,
 }
 
 impl OnlineAuthKeys {
     pub(in crate::runtime) fn generate() -> Result<Self, RuntimeError> {
-        let mut rng = OsRng;
-        let private_key = RsaPrivateKey::new(&mut rng, 1024).map_err(|error| {
+        let private_key = PrivateKey::new(&mut getrandom::SysRng, 1024).map_err(|error| {
             RuntimeError::Auth(format!("failed to generate RSA keypair: {error}"))
         })?;
-        let public_key_der = RsaPublicKey::from(&private_key)
+        let public_key_der = private_key
+            .as_public_key()
             .to_public_key_der()
             .map_err(|error| {
                 RuntimeError::Auth(format!("failed to encode RSA public key: {error}"))
@@ -40,12 +39,13 @@ impl OnlineAuthKeys {
     }
 
     pub(in crate::runtime) fn import_process_transfer(bytes: &[u8]) -> Result<Self, RuntimeError> {
-        let private_key = RsaPrivateKey::from_pkcs8_der(bytes).map_err(|error| {
+        let private_key = PrivateKey::from_pkcs8_der(bytes).map_err(|error| {
             RuntimeError::Auth(format!(
                 "failed to decode transferred RSA private key: {error}"
             ))
         })?;
-        let public_key_der = RsaPublicKey::from(&private_key)
+        let public_key_der = private_key
+            .as_public_key()
             .to_public_key_der()
             .map_err(|error| {
                 RuntimeError::Auth(format!("failed to encode RSA public key: {error}"))
@@ -59,18 +59,18 @@ impl OnlineAuthKeys {
     }
 }
 
-pub(super) fn random_verify_token() -> [u8; LOGIN_VERIFY_TOKEN_LEN] {
+pub(super) fn random_verify_token() -> Result<[u8; LOGIN_VERIFY_TOKEN_LEN], RuntimeError> {
     let mut verify_token = [0_u8; LOGIN_VERIFY_TOKEN_LEN];
-    OsRng.fill_bytes(&mut verify_token);
-    verify_token
+    getrandom::fill(&mut verify_token).map_err(std::io::Error::from)?;
+    Ok(verify_token)
 }
 
 pub(super) fn decrypt_login_blob(
-    private_key: &RsaPrivateKey,
+    private_key: &PrivateKey,
     bytes: &[u8],
 ) -> Result<Vec<u8>, RuntimeError> {
     private_key
-        .decrypt(Pkcs1v15Encrypt, bytes)
+        .pkcs1v15_decrypt(bytes)
         .map_err(|error| RuntimeError::Auth(format!("failed to decrypt login blob: {error}")))
 }
 

@@ -17,27 +17,171 @@ exceptions = [
 confidence-threshold = 0.8
 
 [[licenses.clarify]]
-crate = "bedrock_macros"
+crate = "bedrock_network_core"
 expression = "Apache-2.0"
-license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
+license-files = [{ path = "../../../LICENSE", hash = 0x0a6d4ed6 }]
 
 [[licenses.clarify]]
-crate = "bedrock_protocol"
+crate = "bedrock_network_macros"
 expression = "Apache-2.0"
-license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
+license-files = [{ path = "../../../LICENSE", hash = 0x0a6d4ed6 }]
 
 [[licenses.clarify]]
-crate = "bedrock_protocol_core"
+crate = "bedrock_network_protocol"
 expression = "Apache-2.0"
-license-files = [{ path = "../../LICENSE", hash = 0x0a6d4ed6 }]
+license-files = [{ path = "../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_traits"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_unknown"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v1001"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v2168"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v2168hotfix4"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v2169"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v2193"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v2225"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v2259"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v662"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v671"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v685"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v686"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v712"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v729"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v748"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v766"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v776"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v786"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v800"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v818"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v819"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v827"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v844"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v859"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v898"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v924"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v944"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
+
+[[licenses.clarify]]
+crate = "bedrock_network_version_v975"
+expression = "Apache-2.0"
+license-files = [{ path = "../../../../LICENSE", hash = 0x0a6d4ed6 }]
 
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
-    { id = "RUSTSEC-2023-0071", reason = "revy-server-runtime still relies on the Minecraft online-mode RSA login handshake and no safe upstream replacement is available yet" },
     { id = "RUSTSEC-2024-0436", reason = "bedrock-rs still pulls paste transitively and there is no maintained upgrade path available yet" },
-    { id = "RUSTSEC-2026-0387", allow = ["elliptic-curve@=0.13.8"], reason = "This dependency path handles public inputs only. bedrock-jwt verifies public signatures and bedrock_protocol_core uses jsonwebtoken for its error type." },
+    { id = "RUSTSEC-2026-0387", allow = ["elliptic-curve@=0.13.8"], reason = "bedrock-jwt uses this version to verify public signatures without private keys." },
 ]
 unmaintained = "all"
 yanked = "deny"
@@ -46,4 +190,7 @@ yanked = "deny"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/bedrock-crustaceans/bedrock-rs"]
+allow-git = [
+    "https://github.com/bedrock-crustaceans/bedrock-rs",
+    "https://github.com/bedrock-crustaceans/nbtx",
+]

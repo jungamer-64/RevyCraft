@@ -1,5 +1,5 @@
-use bedrock_protocol_core::error::{PacketCodecError, ProtoCodecError};
-use bedrock_protocol_core::{PacketHeader, Packets, ProtoCodecVAR};
+use bedrock_network_core::error::{PacketCodecError, ProtoCodecError};
+use bedrock_network_core::{PacketHeader, Packets, ProtoCodecVAR};
 use flate2::Compression as FlateCompression;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;

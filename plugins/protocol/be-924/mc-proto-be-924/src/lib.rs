@@ -9,7 +9,7 @@ mod runtime_ids;
 #[cfg(test)]
 mod tests;
 
-use bedrock_protocol::ProtoVersion;
+use bedrock_network_protocol::ProtoVersion;
 use mc_proto_be_common::{BedrockAdapter, BedrockProfile};
 use mc_proto_common::{
     BedrockListenerDescriptor, ConnectionId, ConnectionPhase, CoreEvent, Edition, EntityId,
@@ -146,8 +146,8 @@ impl BedrockProfile for Bedrock924Profile {
 
     fn listener_descriptor(&self) -> BedrockListenerDescriptor {
         BedrockListenerDescriptor {
-            game_version: bedrock_protocol::V924::GAME_VERSION.to_string(),
-            raknet_version: bedrock_protocol::V924::RAKNET_VERSION,
+            game_version: bedrock_network_protocol::V924::GAME_VERSION.to_string(),
+            raknet_version: bedrock_network_protocol::V924::RAKNET_VERSION,
         }
     }
 

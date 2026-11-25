@@ -1,16 +1,16 @@
 use crate::codec::encode_v924;
 use crate::runtime_ids::block_runtime_id;
-use bedrock_protocol::V924;
-use bedrock_protocol::v662::enums::{ContainerEnumName, ContainerID, ContainerType};
-use bedrock_protocol::v662::types::{
+use bedrock_network_core::{ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
+use bedrock_network_protocol::V924;
+use bedrock_network_protocol::v662::enums::{ContainerEnumName, ContainerID, ContainerType};
+use bedrock_network_protocol::v662::types::{
     ActorUniqueID, NetworkItemInstanceDescriptor, NetworkItemStackDescriptor,
 };
-use bedrock_protocol::v685::packets::ContainerClosePacket;
-use bedrock_protocol::v712::types::ItemStackRequestSlotInfo;
-use bedrock_protocol::v729::types::FullContainerName;
-use bedrock_protocol::v748::packets::{InventoryContentPacket, InventorySlotPacket};
-use bedrock_protocol::v776::packets::{CreativeContentPacket, CreativeItemData};
-use bedrock_protocol_core::{ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
+use bedrock_network_protocol::v685::packets::ContainerClosePacket;
+use bedrock_network_protocol::v712::types::ItemStackRequestSlotInfo;
+use bedrock_network_protocol::v729::types::FullContainerName;
+use bedrock_network_protocol::v748::packets::{InventoryContentPacket, InventorySlotPacket};
+use bedrock_network_protocol::v776::packets::{CreativeContentPacket, CreativeItemData};
 use mc_proto_common::ProtocolError;
 use revy_voxel_semantic::{ContainerKindId, ContainerPropertyKey};
 use revy_voxel_semantic::{
@@ -149,7 +149,7 @@ pub(crate) fn encode_selected_hotbar_slot_changed_packets(
     slot: u8,
 ) -> Result<Vec<Vec<u8>>, ProtocolError> {
     Ok(vec![encode_v924(&[V924::PlayerHotbarPacket(Box::new(
-        bedrock_protocol::v662::packets::PlayerHotbarPacket {
+        bedrock_network_protocol::v662::packets::PlayerHotbarPacket {
             selected_slot: u32::from(slot),
             container_id: ContainerID::Inventory,
             should_select_slot: true,
@@ -165,10 +165,14 @@ pub(crate) fn encode_container_opened_packets(
         return Ok(Vec::new());
     }
     Ok(vec![encode_v924(&[V924::ContainerOpenPacket(Box::new(
-        bedrock_protocol::v662::packets::ContainerOpenPacket {
+        bedrock_network_protocol::v662::packets::ContainerOpenPacket {
             container_id: ContainerID::First,
             container_type: container_type(container),
-            position: bedrock_protocol::v662::types::NetworkBlockPosition { x: 0, y: 0, z: 0 },
+            position: bedrock_network_protocol::v662::types::NetworkBlockPosition {
+                x: 0,
+                y: 0,
+                z: 0,
+            },
             target_actor_id: ActorUniqueID(0),
         },
     ))])?])
@@ -201,11 +205,13 @@ pub(crate) fn encode_container_property_changed_packets(
         return Ok(Vec::new());
     };
     Ok(vec![encode_v924(&[V924::ContainerSetDataPacket(
-        Box::new(bedrock_protocol::v662::packets::ContainerSetDataPacket {
-            container_id: ContainerID::First,
-            id: i32::from(property_id),
-            value: i32::from(value),
-        }),
+        Box::new(
+            bedrock_network_protocol::v662::packets::ContainerSetDataPacket {
+                container_id: ContainerID::First,
+                id: i32::from(property_id),
+                value: i32::from(value),
+            },
+        ),
     )])?])
 }
 

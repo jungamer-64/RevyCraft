@@ -1,5 +1,4 @@
 use super::*;
-use rsa::rand_core::{OsRng, RngCore};
 
 fn online_auth_server_config(world_dir: PathBuf, enabled_adapters: &[&str]) -> ServerConfig {
     let mut config = loopback_server_config(world_dir);
@@ -192,17 +191,17 @@ async fn verify_token_mismatch_disconnects_in_online_mode() -> Result<(), Runtim
     let mut buffer = BytesMut::new();
     let request = read_packet(&mut stream, &codec, &mut buffer).await?;
     let (_server_id, public_key_der, _verify_token) = parse_encryption_request(&request)?;
-    let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
+    let public_key = PublicKey::from_public_key_der(&public_key_der)
         .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
     let mut shared_secret = [0_u8; 16];
-    OsRng.fill_bytes(&mut shared_secret);
+    getrandom::fill(&mut shared_secret).map_err(std::io::Error::from)?;
     let shared_secret_encrypted = public_key
-        .encrypt(&mut OsRng, Pkcs1v15Encrypt, &shared_secret)
+        .pkcs1v15_encrypt(&shared_secret)
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
         })?;
     let verify_token_encrypted = public_key
-        .encrypt(&mut OsRng, Pkcs1v15Encrypt, &[9, 9, 9, 9])
+        .pkcs1v15_encrypt(&[9, 9, 9, 9])
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
         })?;

@@ -1,12 +1,12 @@
 use base64::Engine;
-use bedrock_protocol::ProtoVersion;
-use bedrock_protocol::V924;
-use bedrock_protocol::v662::enums::{ContainerID, PlayerPositionMode};
-use bedrock_protocol::v662::packets::{
+use bedrock_network_protocol::ProtoVersion;
+use bedrock_network_protocol::V924;
+use bedrock_network_protocol::v662::enums::{ContainerID, PlayerPositionMode};
+use bedrock_network_protocol::v662::packets::{
     LoginPacket, MobEquipmentPacket, MovePlayerPacket, NetworkStackLatencyPacket,
     RequestNetworkSettingsPacket,
 };
-use bedrock_protocol::v662::types::{ActorRuntimeID, NetworkItemStackDescriptor};
+use bedrock_network_protocol::v662::types::{ActorRuntimeID, NetworkItemStackDescriptor};
 use mc_proto_be_common::{
     BEDROCK_GAME_PACKET_ID, BEDROCK_RAKNET_MAGIC, BedrockCompression, decode_packet_batch,
     encode_packet_batch,
@@ -892,8 +892,8 @@ impl BedrockPacketBatch {
 
 #[test]
 fn application_disconnect_terminates_an_outstanding_gameplay_response() {
-    use bedrock_protocol::v662::enums::ConnectionFailReason;
-    use bedrock_protocol::v712::packets::{DisconnectMessage, DisconnectPacket};
+    use bedrock_network_protocol::v662::enums::ConnectionFailReason;
+    use bedrock_network_protocol::v712::packets::{DisconnectMessage, DisconnectPacket};
 
     let packet = V924::DisconnectPacket(Box::new(DisconnectPacket {
         reason: ConnectionFailReason::Disconnected,

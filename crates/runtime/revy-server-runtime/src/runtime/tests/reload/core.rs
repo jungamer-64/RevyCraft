@@ -1,5 +1,5 @@
 use super::*;
-use bedrock_protocol::V924;
+use bedrock_network_protocol::V924;
 use mc_proto_common::ConnectionPhase;
 use revy_voxel_semantic::BlockPos;
 

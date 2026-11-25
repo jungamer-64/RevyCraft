@@ -23,18 +23,19 @@ categories = ["game-development", "network-programming"]
 aes = "0.9"
 base64 = "0.23"
 bedrock-jwt = "0.1"
-bedrock_protocol = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", rev = "2d9e4087a207bdcbad6e4cdc83de46e94712b2f4", features = ["v924"] }
-bedrock_protocol_core = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", rev = "2d9e4087a207bdcbad6e4cdc83de46e94712b2f4" }
+bedrock_network_protocol = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", rev = "f96e793c22261d8ba616e1c17657887a6fac83f7", default-features = false, features = ["v924"] }
+bedrock_network_core = { git = "https://github.com/bedrock-crustaceans/bedrock-rs.git", rev = "f96e793c22261d8ba616e1c17657887a6fac83f7" }
 bytes = "1.10"
 ciborium = { version = "=0.2.2", default-features = false, features = ["std"] }
 flate2 = "1.1"
+getrandom = { version = "0.4", features = ["std", "sys_rng"] }
 md5 = { package = "md-5", version = "0.11" }
 nbtx = "3.0"
 num-bigint = "0.5"
 num-traits = "0.2"
 p384 = { version = "0.14", features = ["pkcs8"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "query", "rustls"] }
-rsa = "0.9"
+rsa = { version = "0.10", features = ["pkcs1v15"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha1 = "0.11"

@@ -1,6 +1,5 @@
 use super::*;
 use crate::runtime::RunningServer;
-use rsa::rand_core::{OsRng, RngCore};
 
 fn plugin_host_status(
     server: &RunningServer,
@@ -156,7 +155,7 @@ pub(crate) async fn spawn_online_auth_reload_server(
 
 pub(crate) async fn begin_online_auth_handshake(
     server: &RunningServer,
-) -> Result<(tokio::net::TcpStream, BytesMut, RsaPublicKey, Vec<u8>), RuntimeError> {
+) -> Result<(tokio::net::TcpStream, BytesMut, PublicKey, Vec<u8>), RuntimeError> {
     let addr = listener_addr(server);
     let codec = MinecraftWireCodec;
     let mut alpha = connect_tcp(addr).await?;
@@ -170,27 +169,25 @@ pub(crate) async fn begin_online_auth_handshake(
     let mut alpha_buffer = BytesMut::new();
     let request = read_packet(&mut alpha, &codec, &mut alpha_buffer).await?;
     let (_server_id, public_key_der, verify_token) = parse_encryption_request(&request)?;
-    let public_key = RsaPublicKey::from_public_key_der(&public_key_der)
+    let public_key = PublicKey::from_public_key_der(&public_key_der)
         .map_err(|error| RuntimeError::Config(format!("invalid test public key: {error}")))?;
     Ok((alpha, alpha_buffer, public_key, verify_token))
 }
 
 pub(crate) fn encrypt_online_login_challenge_response(
-    public_key: &RsaPublicKey,
+    public_key: &PublicKey,
     verify_token: &[u8],
 ) -> Result<EncryptedLoginChallenge, RuntimeError> {
     let mut shared_secret = [0_u8; 16];
-    OsRng.fill_bytes(&mut shared_secret);
+    getrandom::fill(&mut shared_secret).map_err(std::io::Error::from)?;
     let shared_secret_encrypted = public_key
-        .encrypt(&mut OsRng, Pkcs1v15Encrypt, &shared_secret)
+        .pkcs1v15_encrypt(&shared_secret)
         .map_err(|error| {
             RuntimeError::Config(format!("failed to encrypt shared secret: {error}"))
         })?;
-    let verify_token_encrypted = public_key
-        .encrypt(&mut OsRng, Pkcs1v15Encrypt, verify_token)
-        .map_err(|error| {
-            RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
-        })?;
+    let verify_token_encrypted = public_key.pkcs1v15_encrypt(verify_token).map_err(|error| {
+        RuntimeError::Config(format!("failed to encrypt verify token: {error}"))
+    })?;
     Ok((
         shared_secret,
         shared_secret_encrypted,

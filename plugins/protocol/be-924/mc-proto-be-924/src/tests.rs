@@ -7,28 +7,28 @@ use crate::runtime_ids::{
 };
 use crate::{BE_924_PROTOCOL_NUMBER, Bedrock924Adapter};
 use base64::Engine;
-use bedrock_protocol::V924;
-use bedrock_protocol::v662::enums::{
+use bedrock_network_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
+use bedrock_network_protocol::V924;
+use bedrock_network_protocol::v662::enums::{
     ComplexInventoryTransactionType, ContainerEnumName, InputMode, ItemUseInventoryTransactionType,
     LevelEvent as BedrockLevelEvent, NewInteractionModel, PlayerActionType,
     TextProcessingEventOrigin,
 };
-use bedrock_protocol::v662::packets::{
+use bedrock_network_protocol::v662::packets::{
     ItemStackRequestPacket, LegacySetItemSlotsEntry, LoginPacket, NetworkStackLatencyPacket,
     PlayerActionPacket, RequestNetworkSettingsPacket, RequestsEntry,
 };
-use bedrock_protocol::v662::types::{
+use bedrock_network_protocol::v662::types::{
     ActorRuntimeID, NetworkBlockPosition, NetworkItemStackDescriptor,
 };
-use bedrock_protocol::v712::enums::ItemStackRequestActionType;
-use bedrock_protocol::v712::types::{
+use bedrock_network_protocol::v712::enums::ItemStackRequestActionType;
+use bedrock_network_protocol::v712::types::{
     ItemStackRequestSlotInfo, PackedItemUseLegacyInventoryTransaction, PredictedResult, TriggerType,
 };
-use bedrock_protocol::v729::types::FullContainerName;
-use bedrock_protocol::v766::packets::ClientPlayMode;
-use bedrock_protocol::v766::packets::PlayerAuthInputPacket;
-use bedrock_protocol::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
-use bedrock_protocol_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
+use bedrock_network_protocol::v729::types::FullContainerName;
+use bedrock_network_protocol::v766::packets::ClientPlayMode;
+use bedrock_network_protocol::v766::packets::PlayerAuthInputPacket;
+use bedrock_network_protocol::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
 use mc_proto_be_common::__version_support::world::bedrock_actor_unique_id;
 use mc_proto_be_common::{BEDROCK_RAKNET_MAGIC, decode_packet_batch, encode_packet_batch};
 use mc_proto_common::{
@@ -72,7 +72,7 @@ fn encode_session(context: &PlayEncodingContext) -> ProtocolSessionSnapshot {
 }
 
 fn item_instance_summary(
-    descriptor: &bedrock_protocol::v662::types::NetworkItemInstanceDescriptor,
+    descriptor: &bedrock_network_protocol::v662::types::NetworkItemInstanceDescriptor,
 ) -> Result<(i32, u16, u32, i32), ProtocolError> {
     let mut bytes = Vec::new();
     descriptor
@@ -455,8 +455,8 @@ fn encodes_inventory_and_container_packets() {
     assert!(matches!(
         packets.as_slice(),
         [V924::ContainerOpenPacket(packet)]
-            if matches!(packet.container_id, bedrock_protocol::v662::enums::ContainerID::First)
-                && matches!(packet.container_type, bedrock_protocol::v662::enums::ContainerType::Workbench)
+            if matches!(packet.container_id, bedrock_network_protocol::v662::enums::ContainerID::First)
+                && matches!(packet.container_type, bedrock_network_protocol::v662::enums::ContainerType::Workbench)
     ));
 
     let frames = adapter
@@ -896,7 +896,7 @@ fn sample_item_use_transaction(
     PackedItemUseLegacyInventoryTransaction {
         id: 0,
         container_slots: None,
-        action: bedrock_protocol::v662::types::InventoryTransaction { action: Vec::new() },
+        action: bedrock_network_protocol::v662::types::InventoryTransaction { action: Vec::new() },
         action_type,
         trigger_type: TriggerType::PlayerInput,
         position: NetworkBlockPosition {

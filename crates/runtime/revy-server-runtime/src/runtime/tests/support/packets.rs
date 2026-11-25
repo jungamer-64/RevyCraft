@@ -1,22 +1,22 @@
 use super::*;
 use base64::Engine;
-use bedrock_protocol::V924;
-use bedrock_protocol::v662::enums::{
+use bedrock_network_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
+use bedrock_network_protocol::V924;
+use bedrock_network_protocol::v662::enums::{
     InputMode, ItemUseInventoryTransactionType, NewInteractionModel, PlayerActionType,
 };
-use bedrock_protocol::v662::packets::{
+use bedrock_network_protocol::v662::packets::{
     LoginPacket, PlayerActionPacket, RequestNetworkSettingsPacket,
 };
-use bedrock_protocol::v662::types::{
+use bedrock_network_protocol::v662::types::{
     ActorRuntimeID, NetworkBlockPosition, NetworkItemStackDescriptor,
 };
-use bedrock_protocol::v712::types::{
+use bedrock_network_protocol::v712::types::{
     PackedItemUseLegacyInventoryTransaction, PredictedResult, TriggerType,
 };
-use bedrock_protocol::v766::packets::ClientPlayMode;
-use bedrock_protocol::v766::packets::PlayerAuthInputPacket;
-use bedrock_protocol::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
-use bedrock_protocol_core::{PacketHeader, ProtoCodec, ProtoCodecLE, ProtoCodecVAR};
+use bedrock_network_protocol::v766::packets::ClientPlayMode;
+use bedrock_network_protocol::v766::packets::PlayerAuthInputPacket;
+use bedrock_network_protocol::v766::packets::player_auth_input_packet::PlayerAuthInputFlags;
 use mc_proto_be_924::BE_924_PROTOCOL_NUMBER;
 use mc_proto_be_common::{
     BEDROCK_GAME_PACKET_ID, BedrockCompression, decode_packet_batch, encode_packet_batch,
@@ -562,7 +562,9 @@ fn bedrock_block_interaction_payload(
         item_use_transaction: Some(PackedItemUseLegacyInventoryTransaction {
             id: 0,
             container_slots: None,
-            action: bedrock_protocol::v662::types::InventoryTransaction { action: Vec::new() },
+            action: bedrock_network_protocol::v662::types::InventoryTransaction {
+                action: Vec::new(),
+            },
             action_type,
             trigger_type: TriggerType::PlayerInput,
             position: NetworkBlockPosition {

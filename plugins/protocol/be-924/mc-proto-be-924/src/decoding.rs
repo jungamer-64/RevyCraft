@@ -3,12 +3,11 @@ use crate::inventory::{
     request_transaction, translate_drop_action, translate_place_action, translate_swap_action,
     translate_take_action,
 };
-use bedrock_protocol::V924;
-use bedrock_protocol::v662::enums::{
-    ComplexInventoryTransactionType, ItemUseInventoryTransactionType, PlayerActionType,
+use bedrock_network_protocol::V924;
+use bedrock_network_protocol::v662::enums::{
+    ItemUseInventoryTransactionType, PlayerActionType,
 };
-use bedrock_protocol::v712::enums::ItemStackRequestActionType;
-use bedrock_protocol_core::{PacketHeader, ProtoCodec, ProtoCodecVAR};
+use bedrock_network_protocol::v712::enums::ItemStackRequestActionType;
 use mc_proto_be_common::__version_support::{
     login::parse_bedrock_login_payload,
     world::{block_face_from_i32, block_pos_from_network, protocol_error},
@@ -19,7 +18,6 @@ use mc_proto_common::{
 use revy_voxel_semantic::{
     GameplayCommand, InteractionHand, InventoryClickValidation, InventoryTransactionContext, Vec3,
 };
-use std::io::Cursor;
 
 use crate::BedrockProtocolSessionStore;
 
@@ -60,10 +58,6 @@ pub(crate) fn decode_play_packet(
     let player_id = session.player_id.ok_or(ProtocolError::InvalidPacket(
         "play session is missing player id",
     ))?;
-    if let Some(command) = decode_inventory_transaction_frame(player_id, frame)? {
-        return Ok(Some(RuntimeCommand::Core(command)));
-    }
-
     let packets = decode_v924(frame)?;
     let Some(packet) = packets.into_iter().next() else {
         return Ok(None);
@@ -138,7 +132,7 @@ pub(crate) fn decode_play_packet(
         }
         V924::ContainerClosePacket(packet) => Ok(matches!(
             packet.container_id,
-            bedrock_protocol::v662::enums::ContainerID::First
+            bedrock_network_protocol::v662::enums::ContainerID::First
         )
         .then(|| sessions.active_window_id(session))
         .flatten()
@@ -176,7 +170,9 @@ fn runtime_gameplay(command: GameplayCommand) -> RuntimeCommand {
 
 fn decode_item_use_transaction(
     player_id: PlayerId,
-    transaction: &bedrock_protocol::v712::types::PackedItemUseLegacyInventoryTransaction<V924>,
+    transaction: &bedrock_network_protocol::v712::types::PackedItemUseLegacyInventoryTransaction<
+        V924,
+    >,
 ) -> Result<Option<CoreCommand>, ProtocolError> {
     Ok(Some(gameplay(match transaction.action_type {
         ItemUseInventoryTransactionType::Place => GameplayCommand::PlaceBlock {
@@ -202,58 +198,11 @@ fn decode_item_use_transaction(
     })))
 }
 
-fn decode_inventory_transaction_frame(
-    player_id: PlayerId,
-    frame: &[u8],
-) -> Result<Option<CoreCommand>, ProtocolError> {
-    let mut frame_cursor = Cursor::new(frame);
-    let packet_len = <u32 as ProtoCodecVAR>::deserialize(&mut frame_cursor)
-        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
-    let packet_start = usize::try_from(frame_cursor.position())
-        .expect("frame cursor position should fit into usize");
-    let packet_end = packet_start
-        .checked_add(usize::try_from(packet_len).expect("packet length should fit into usize"))
-        .ok_or_else(|| protocol_error("bedrock packet length overflow"))?;
-    let packet = frame
-        .get(packet_start..packet_end)
-        .ok_or_else(|| protocol_error("bedrock frame truncated"))?;
-
-    let mut packet_cursor = Cursor::new(packet);
-    let header = PacketHeader::deserialize(&mut packet_cursor)
-        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
-    if header.packet_id != 30 {
-        return Ok(None);
-    }
-
-    let _raw_id = <i32 as ProtoCodecVAR>::deserialize(&mut packet_cursor)
-        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
-    let _: Vec<bedrock_protocol::v662::packets::LegacySetItemSlotsEntry> =
-        <Vec<bedrock_protocol::v662::packets::LegacySetItemSlotsEntry> as ProtoCodec>::deserialize(
-            &mut packet_cursor,
-        )
-        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
-    let transaction_type = ComplexInventoryTransactionType::deserialize(&mut packet_cursor)
-        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
-    if !matches!(
-        transaction_type,
-        ComplexInventoryTransactionType::ItemUseTransaction
-    ) {
-        return Ok(None);
-    }
-
-    let transaction =
-        bedrock_protocol::v712::types::PackedItemUseLegacyInventoryTransaction::<V924>::deserialize(
-            &mut packet_cursor,
-        )
-        .map_err(|error| ProtocolError::Plugin(error.to_string()))?;
-    decode_item_use_transaction(player_id, &transaction)
-}
-
 fn decode_item_stack_request_packet(
     session: &ProtocolSessionSnapshot,
     sessions: &BedrockProtocolSessionStore,
     player_id: PlayerId,
-    requests: &[bedrock_protocol::v662::packets::RequestsEntry<V924>],
+    requests: &[bedrock_network_protocol::v662::packets::RequestsEntry<V924>],
 ) -> Result<Option<CoreCommand>, ProtocolError> {
     let Some(request) = requests.first() else {
         return Ok(None);
@@ -272,7 +221,7 @@ fn decode_auth_input_stack_request(
     session: &ProtocolSessionSnapshot,
     sessions: &BedrockProtocolSessionStore,
     player_id: PlayerId,
-    request: &bedrock_protocol::v766::packets::player_auth_input_packet::PerformItemStackRequestData<
+    request: &bedrock_network_protocol::v766::packets::player_auth_input_packet::PerformItemStackRequestData<
         V924,
     >,
 ) -> Result<Option<CoreCommand>, ProtocolError> {

@@ -6,8 +6,8 @@ use revy_voxel_semantic::{BlockFace, BlockPos, Vec3 as ModelVec3};
 #[must_use]
 pub(crate) fn block_pos_to_network(
     position: BlockPos,
-) -> bedrock_protocol::v662::types::NetworkBlockPosition {
-    bedrock_protocol::v662::types::NetworkBlockPosition {
+) -> bedrock_network_protocol::v662::types::NetworkBlockPosition {
+    bedrock_network_protocol::v662::types::NetworkBlockPosition {
         x: position.x,
         y: position.y.max(0).cast_unsigned(),
         z: position.z,
@@ -16,7 +16,7 @@ pub(crate) fn block_pos_to_network(
 
 #[must_use]
 pub(crate) fn block_pos_from_network(
-    position: &bedrock_protocol::v662::types::NetworkBlockPosition,
+    position: &bedrock_network_protocol::v662::types::NetworkBlockPosition,
 ) -> BlockPos {
     BlockPos::new(
         position.x,

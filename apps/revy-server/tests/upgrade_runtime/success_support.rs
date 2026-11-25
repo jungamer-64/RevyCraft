@@ -13,7 +13,7 @@ use bytes::BytesMut;
 use mc_plugin_admin_grpc::admin as proto;
 use mc_proto_common::MinecraftWireCodec;
 use mc_proto_test_support::{TestJavaPacket, TestJavaProtocol};
-use rsa::RsaPublicKey;
+use rsa::PublicKey;
 use std::net::{SocketAddr, TcpStream};
 use std::process::Child;
 use std::time::Duration;
@@ -33,7 +33,7 @@ pub(crate) struct LoggedRuntime {
 pub(crate) struct PendingOnlineLogin {
     stream: TcpStream,
     buffer: BytesMut,
-    public_key: RsaPublicKey,
+    public_key: PublicKey,
     verify_token: Vec<u8>,
 }
 

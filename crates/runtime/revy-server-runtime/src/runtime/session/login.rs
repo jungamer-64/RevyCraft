@@ -154,7 +154,7 @@ impl RuntimeServer {
                     "online-mode=true requires generated auth keys".to_string(),
                 ));
             };
-            let verify_token = random_verify_token();
+            let verify_token = random_verify_token()?;
             let auth_profile = epoch.selection.auth_profile.clone();
             let auth_generation = auth_profile.capture_generation()?;
             let encryption_request = binding.adapter.encode_encryption_request(

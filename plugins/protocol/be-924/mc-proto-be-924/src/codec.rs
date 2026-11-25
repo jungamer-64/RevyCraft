@@ -1,4 +1,4 @@
-use bedrock_protocol::V924;
+use bedrock_network_protocol::V924;
 use mc_proto_be_common::{decode_packet_batch, encode_packet_batch};
 use mc_proto_common::ProtocolError;
 

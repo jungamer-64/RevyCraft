@@ -11,27 +11,27 @@ use crate::inventory::{
     network_item_stack_descriptor,
 };
 use crate::runtime_ids::block_runtime_id;
-use bedrock_protocol::ProtoVersion;
-use bedrock_protocol::V924;
-use bedrock_protocol::v662::enums::{
+use bedrock_network_protocol::ProtoVersion;
+use bedrock_network_protocol::V924;
+use bedrock_network_protocol::v662::enums::{
     ConnectionFailReason, Difficulty, EditorWorldType, EducationEditionOffer, GamePublishSetting,
     GameType, LevelEvent as BedrockLevelEvent, PacketCompressionAlgorithm, PlayStatus,
     PlayerPermissionLevel, SpawnBiomeType,
 };
-use bedrock_protocol::v662::packets::{
+use bedrock_network_protocol::v662::packets::{
     AddItemActorPacket, LevelEventPacket, MovePlayerPacket, NetworkSettingsPacket,
     NetworkStackLatencyPacket, PlayStatusPacket, RemoveActorPacket, UpdateBlockPacket,
 };
-use bedrock_protocol::v662::types::{
+use bedrock_network_protocol::v662::types::{
     ActorRuntimeID, ActorUniqueID, BaseGameVersion, EduSharedUriResource, Experiments,
     NetworkPermissions, SpawnSettings,
 };
-use bedrock_protocol::v712::packets::{DisconnectMessage, DisconnectPacket};
-use bedrock_protocol::v818::packets::ResourcePacksInfoPacket;
-use bedrock_protocol::v818::types::SyncedPlayerMovementSettings;
-use bedrock_protocol::v898::packets::ResourcePackStackPacket;
-use bedrock_protocol::v924::packets::StartGamePacket;
-use bedrock_protocol::v924::types::LevelSettings;
+use bedrock_network_protocol::v712::packets::{DisconnectMessage, DisconnectPacket};
+use bedrock_network_protocol::v818::packets::ResourcePacksInfoPacket;
+use bedrock_network_protocol::v818::types::SyncedPlayerMovementSettings;
+use bedrock_network_protocol::v898::packets::ResourcePackStackPacket;
+use bedrock_network_protocol::v924::packets::StartGamePacket;
+use bedrock_network_protocol::v924::types::LevelSettings;
 use mc_proto_be_common::__version_support::world::{
     bedrock_actor_runtime_id, bedrock_actor_unique_id, block_pos_to_network, vec3_to_bedrock,
 };
@@ -132,7 +132,7 @@ pub(crate) fn encode_play_bootstrap_packets(
                 user_defined_biome_name: String::new(),
                 dimension: 0,
             },
-            generator_type: bedrock_protocol::v662::enums::GeneratorType::Overworld,
+            generator_type: bedrock_network_protocol::v662::enums::GeneratorType::Overworld,
             game_type,
             is_hardcore_enabled: false,
             game_difficulty: Difficulty::Peaceful,
@@ -154,7 +154,9 @@ pub(crate) fn encode_play_bootstrap_packets(
             platform_broadcast_setting: GamePublishSetting::FriendsOnly,
             commands_enabled: true,
             texture_packs_required: false,
-            rule_data: bedrock_protocol::v924::types::GameRuleLegacyData { rules_list: vec![] },
+            rule_data: bedrock_network_protocol::v924::types::GameRuleLegacyData {
+                rules_list: vec![],
+            },
             experiments: Experiments {
                 experiments: vec![],
                 ever_toggled: false,
@@ -182,7 +184,8 @@ pub(crate) fn encode_play_bootstrap_packets(
                 link_uri: String::new(),
             },
             override_force_experimental_gameplay: Some(true),
-            chat_restriction_level: bedrock_protocol::v662::enums::ChatRestrictionLevel::None,
+            chat_restriction_level:
+                bedrock_network_protocol::v662::enums::ChatRestrictionLevel::None,
             disable_player_interactions: false,
         },
         level_id: "RevyCraft".to_string(),
@@ -235,7 +238,7 @@ pub(crate) fn encode_entity_moved_packets(
             position: vec3_to_bedrock(player.position),
             rotation: (player.yaw, player.pitch),
             y_head_rotation: player.yaw,
-            position_mode: bedrock_protocol::v662::enums::PlayerPositionMode::Normal,
+            position_mode: bedrock_network_protocol::v662::enums::PlayerPositionMode::Normal,
             on_ground: player.on_ground,
             riding_runtime_id: ActorRuntimeID(0),
             tick: 0,

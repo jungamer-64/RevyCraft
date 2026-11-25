@@ -1,6 +1,6 @@
-use bedrock_protocol::V924;
-use bedrock_protocol::v662::packets::LevelChunkPacket;
-use bedrock_protocol::v662::types::ChunkPos as BedrockChunkPos;
+use bedrock_network_protocol::V924;
+use bedrock_network_protocol::v662::packets::LevelChunkPacket;
+use bedrock_network_protocol::v662::types::ChunkPos as BedrockChunkPos;
 use mc_content_canonical::catalog;
 use mc_proto_common::ProtocolError;
 use nbtx::Value;
