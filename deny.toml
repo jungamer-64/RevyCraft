@@ -37,6 +37,7 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
     { id = "RUSTSEC-2023-0071", reason = "revy-server-runtime still relies on the Minecraft online-mode RSA login handshake and no safe upstream replacement is available yet" },
     { id = "RUSTSEC-2024-0436", reason = "bedrock-rs still pulls paste transitively and there is no maintained upgrade path available yet" },
+    { id = "RUSTSEC-2026-0387", allow = ["elliptic-curve@=0.13.8"], reason = "This dependency path handles public inputs only. bedrock-jwt verifies public signatures and bedrock_protocol_core uses jsonwebtoken for its error type." },
 ]
 unmaintained = "all"
 yanked = "deny"
